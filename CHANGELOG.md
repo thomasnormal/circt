@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 291 - February 1, 2026
+
+### Test Results Update
+
+| Suite | Pass | Total | Rate | Notes |
+|-------|------|-------|------|-------|
+| sv-tests | 556 | 717 | **77.5%** | 8 chapters at 100% |
+| OpenTitan | 29+ | - | - | IPs compile successfully |
+| verilator-verification | 120 | 141 | **85%** | |
+| yosys-sva | 14 | 14 | **100%** | |
+
+### LEC LLHD Lowering Fixes
+
+- `strip-llhd-interface-signals` now forwards pointer-typed block arguments by
+  loading in predecessors, enabling mem2reg to eliminate allocas in
+  combinational control flow.
+- `llhd-unroll-loops` now promotes LLVM allocas to SSA before loop matching, so
+  loops with memory-based induction variables can be unrolled.
+- `strip-llhd-interface-signals` now bails out on combinational control-flow
+  cycles instead of flattening them, preventing unsound loop collapsing.
+- `lower-lec-llvm` now lowers LLVM struct muxes to HW structs and performs
+  dead-op cleanup to avoid leftover LLVM operations after lowering.
+- `lower-lec-llvm` now lowers `llvm.select` on LLVM structs to comb muxes so
+  LLVM select-based struct control flow can be eliminated.
+- `lower-lec-llvm` now rewrites alloca-backed `llhd.ref` values into `llhd.sig`
+  with initialization, turning `llvm.load`/`llvm.store` into
+  `llhd.prb`/`llhd.drv` so LEC can solve LLHD interface dataflow without LLVM.
+- Added regressions:
+  - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
+  - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux case)
+
+### WaitEventOpConversion Update
+
+Added runtime fallback for `func.func` contexts - when `moore.wait_event` appears inside a `func.func` (rather than an `llhd.process`), the conversion now provides a runtime fallback mechanism. However, this still needs a fix for complex body regions where the event wait logic is more involved.
+
+---
+
 ## Iteration 290 - February 1, 2026
 
 ### Event Wait Rising Edge Fix
@@ -91,6 +128,7 @@ endfunction
 - sv-tests: 23/23 pass (smoke)
 - verilator-verification: 17/17 pass (smoke)
 - yosys-sva: 14/14 pass (2 VHDL skipped)
+- OpenTitan AES S-Box (canright): PASS (smoke)
 
 **sv-tests highlights:**
 - Classes (ch7): 101/105 (96.2%)
@@ -106,11 +144,22 @@ endfunction
 - **OpenTitan LEC runner**: dropped unsupported `--fail-on-inequivalent` flag.
   Current failure is due to LLVM ops (e.g. `llvm.mlir.undef`) remaining in the
   OpenTitan `circt-verilog --ir-hw` output; LEC still rejects non-SMT ops.
-- **LEC LLVM struct lowering**: added `lower-lec-llvm` to rewrite trivial LLVM
-  struct pack/unpack (alloca/store/load + insertvalue + unrealized cast) into
-  HW structs so LEC can proceed without LLVM ops for these patterns.
+- **LEC LLVM struct lowering**: extended `lower-lec-llvm` to resolve partial
+  insertvalue updates that source from a loaded LLVM struct by reconstructing
+  the prior struct value before the load, then re-extracting remaining fields.
   - **Tests**: `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`,
     `unittests/Tools/circt-lec/LowerLECLLVMTest.cpp`
+- **LEC LLVM block-arg loads**: added block-arg load rewriting and loop-safe
+  store tracking to reduce `llvm.struct -> hw.struct` conversion failures in
+  LLHD CFGs, plus dead alloca/store cleanup for unused memory.
+  - OpenTitan AES S-Box canright still fails on a remaining block-arg load case.
+- **LEC LLVM alloca folding**: handle single-block multi-store sequences and
+  unused ptr casts so `lower-lec-llvm` can eliminate local-ref LLVM ops
+  introduced by LLHD stripping.
+  - **Tests**: `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`,
+    `unittests/Tools/circt-lec/LowerLECLLVMTest.cpp`
+- **OpenTitan AES S-Box LEC**: pipeline now reaches solve; current result is
+  `LEC_RESULT=NEQ` with unconstrained 4-state input warning (needs follow-up).
 - **LEC LLHD signal ptr casts**: strip pass now handles `llhd.sig` cast to
   `llvm.ptr` with load/store, rewriting to probes/drives to avoid LEC aborts.
   - **Tests**: `test/Tools/circt-lec/lec-strip-llhd-signal-ptr-cast.mlir`,

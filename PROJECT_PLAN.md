@@ -12,9 +12,22 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Verification/LEC/BMC**
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges are limited to `--resolve-read-write` on 4-state
-- LEC now lowers trivial LLVM struct pack/unpack (`lower-lec-llvm`), but still
-  rejects other LLVM dialect ops in formal inputs (OpenTitan still emits some
-  LLVM ops in `--ir-hw`); widen lowering coverage.
+- LEC now lowers trivial LLVM struct pack/unpack (`lower-lec-llvm`) and
+  single-block multi-store alloca patterns; now also handles LLVM struct muxes,
+  `llvm.select` on structs, partial insertvalue updates sourced from loaded
+  structs, alloca-backed `llhd.ref` lowering to `llhd.sig`, and dead-op cleanup
+  to avoid leftover LLVM ops in LEC flows. Still limited for other LLVM dialect
+  ops in formal inputs; widen lowering coverage.
+- Pointer SSA/memory SSA is still incomplete for non-alloca refs and aliasing
+  across loops or multiple stores with control-flow merges; extend lowering to
+  handle general LLVM ref graphs beyond the alloca-backed cases.
+- LLHD combinational control flow with pointer-typed block args now lowers
+  without abstraction (enables mem2reg + CF removal); loop unrolling now
+  handles memory-backed induction variables and cyclic control flow is rejected
+  in strict LEC to avoid unsound flattening. Keep expanding unroll coverage.
+- OpenTitan AES S-Box LEC now runs through strict solve with no LLHD
+  abstraction, but still reports NEQ; investigate counterexample and close any
+  remaining X-prop / resolution gaps.
 - Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
