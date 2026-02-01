@@ -46,6 +46,45 @@
 
 ---
 
+## Iteration 284 - February 1, 2026
+
+### Major Fixes - 3 Critical Issues Resolved
+
+**1. UVM Phase Termination - FIXED**
+- **Problem**: `llhd.halt` executed at time 0 before forked UVM phases completed
+- **Root Cause**: `run_test()` spawns phases via fork-join_none, parent immediately reaches halt
+- **Fix**: Added `hasActiveChildren()` method to ForkJoinManager, modified `interpretHalt()` to wait
+- **Files**:
+  - `include/circt/Dialect/Sim/ProcessScheduler.h` (hasActiveChildren declaration)
+  - `lib/Dialect/Sim/ProcessScheduler.cpp` (hasActiveChildren impl + markChildComplete fix)
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` (interpretHalt modification)
+- **Test**: `test/Tools/circt-sim/fork-halt-waits-children.mlir`
+
+**2. Struct Ref Selection - FIXED**
+- **Problem**: `arith.select` on `!llhd.ref<!hw.struct<...>>` types not handled
+- **Fix**: Added while loop to unwrap `arith::SelectOp` in both `interpretProbe()` and `interpretDrive()`
+- **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- **Test**: `test/Tools/circt-sim/arith-select-ref.mlir`
+
+**3. Class Member Access from Methods - FIXED**
+- **Problem**: Reading class member variables from methods (not constructor) failed
+- **Root Cause**: Block argument remapping issue in ClassPropertyRefOpConversion
+- **Fix**: Added block argument lookup from function entry block in ClassPropertyRefOpConversion
+- **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (lines 2097-2117)
+- **Test**: `test/Conversion/MooreToCore/class-member-access-method.mlir`
+
+### Test Suite Results
+
+| Suite | Status | Notes |
+|-------|--------|-------|
+| OpenTitan Testbenches | **40/40 (100%)** | All testbenches simulate! |
+| sv-tests (no UVM) | **552/697 (79%)** | High pass rate |
+| sv-tests chapter-16 | **100% with UVM** | All 27 assertions tests pass |
+| yosys SVA | **14/16 (87%)** | 2 bind test failures |
+| ImportVerilog | **219/219 (100%)** | Complete! |
+
+---
+
 ## Iteration 282 - February 1, 2026
 
 ### MooreToCore 4-State Net Initialization
@@ -67,6 +106,17 @@
 - `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` (total=26 pass=16 xfail=3 error=7 skip=1010)
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` (directory missing)
+
+## Iteration 284 - February 1, 2026
+
+### BMC Crash Fix: Null StringAttr in BMC Metadata
+- Avoided `dyn_cast<StringAttr>` on null entries in `bmc_input_names`,
+  `bmc_clock_keys`, and `bmc_reg_clocks` handling.
+- Regression: `test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv`.
+
+**Tests**
+- `build/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv | build/bin/circt-bmc -b 1 --module=top - | build/bin/FileCheck test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` (total=26 pass=23 xfail=3 error=0 skip=1010)
 
 ## Iteration 281 - February 1, 2026
 
