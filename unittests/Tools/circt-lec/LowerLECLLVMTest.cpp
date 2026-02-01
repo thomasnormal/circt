@@ -235,6 +235,48 @@ TEST(LowerLECLLVMTest, LowersLLVMSelectStruct) {
   EXPECT_TRUE(sawMux);
 }
 
+TEST(LowerLECLLVMTest, LowersCombMuxCastStruct) {
+  MLIRContext context;
+  context.loadDialect<circt::comb::CombDialect, circt::hw::HWDialect,
+                      LLVM::LLVMDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @lower_lec_llvm_structs_mux_cast(
+        in %cond : i1,
+        in %lhs : !hw.struct<value: i1, unknown: i1>,
+        in %rhs : !hw.struct<value: i1, unknown: i1>,
+        out out : !hw.struct<value: i1, unknown: i1>) {
+      %lhs_llvm = builtin.unrealized_conversion_cast %lhs : !hw.struct<value: i1, unknown: i1> to !llvm.struct<(i1, i1)>
+      %rhs_llvm = builtin.unrealized_conversion_cast %rhs : !hw.struct<value: i1, unknown: i1> to !llvm.struct<(i1, i1)>
+      %mux = comb.mux %cond, %lhs_llvm, %rhs_llvm : !llvm.struct<(i1, i1)>
+      %cast = builtin.unrealized_conversion_cast %mux : !llvm.struct<(i1, i1)> to !hw.struct<value: i1, unknown: i1>
+      hw.output %cast : !hw.struct<value: i1, unknown: i1>
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createLowerLECLLVM());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLVM = false;
+  module->walk([&](Operation *op) {
+    if (op->getDialect() && op->getDialect()->getNamespace() == "llvm")
+      hasLLVM = true;
+  });
+  EXPECT_FALSE(hasLLVM);
+
+  bool sawStructCreate = false;
+  module->walk([&](circt::hw::StructCreateOp) { sawStructCreate = true; });
+  EXPECT_TRUE(sawStructCreate);
+
+  bool sawMux = false;
+  module->walk([&](circt::comb::MuxOp) { sawMux = true; });
+  EXPECT_TRUE(sawMux);
+}
+
 TEST(LowerLECLLVMTest, LowersAllocaBackedLLHDRef) {
   MLIRContext context;
   context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
@@ -413,4 +455,132 @@ TEST(LowerLECLLVMTest, LowersAllocaBackedLLHDRefWithSelect) {
   bool sawSignal = false;
   module->walk([&](circt::llhd::SignalOp) { sawSignal = true; });
   EXPECT_TRUE(sawSignal);
+}
+
+TEST(LowerLECLLVMTest, LowersBlockArgStructJoin) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
+                      LLVM::LLVMDialect, mlir::cf::ControlFlowDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @lower_lec_llvm_ref_alloca_join(
+        in %cond : i1,
+        in %lhs : !hw.struct<value: i1, unknown: i1>,
+        in %rhs : !hw.struct<value: i1, unknown: i1>,
+        out out : !hw.struct<value: i1, unknown: i1>) {
+      %one = llvm.mlir.constant(1 : i64) : i64
+      %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
+      %lhs_value = hw.struct_extract %lhs["value"] : !hw.struct<value: i1, unknown: i1>
+      %lhs_unknown = hw.struct_extract %lhs["unknown"] : !hw.struct<value: i1, unknown: i1>
+      %lhs0 = llvm.insertvalue %lhs_value, %undef[0] : !llvm.struct<(i1, i1)>
+      %lhs1 = llvm.insertvalue %lhs_unknown, %lhs0[1] : !llvm.struct<(i1, i1)>
+      %rhs_value = hw.struct_extract %rhs["value"] : !hw.struct<value: i1, unknown: i1>
+      %rhs_unknown = hw.struct_extract %rhs["unknown"] : !hw.struct<value: i1, unknown: i1>
+      %rhs0 = llvm.insertvalue %rhs_value, %undef[0] : !llvm.struct<(i1, i1)>
+      %rhs1 = llvm.insertvalue %rhs_unknown, %rhs0[1] : !llvm.struct<(i1, i1)>
+      %outval = llhd.combinational -> !hw.struct<value: i1, unknown: i1> {
+        %ptr = llvm.alloca %one x !llvm.struct<(i1, i1)> : (i64) -> !llvm.ptr
+        cf.cond_br %cond, ^bb_store, ^bb_store2
+
+      ^bb_store:
+        llvm.store %lhs1, %ptr : !llvm.struct<(i1, i1)>, !llvm.ptr
+        cf.br ^bb_join
+
+      ^bb_store2:
+        llvm.store %rhs1, %ptr : !llvm.struct<(i1, i1)>, !llvm.ptr
+        cf.br ^bb_join
+
+      ^bb_join:
+        cf.br ^bb_load(%ptr : !llvm.ptr)
+
+      ^bb_load(%arg0: !llvm.ptr):
+        %load = llvm.load %arg0 : !llvm.ptr -> !llvm.struct<(i1, i1)>
+        %cast = builtin.unrealized_conversion_cast %load : !llvm.struct<(i1, i1)> to !hw.struct<value: i1, unknown: i1>
+        llhd.yield %cast : !hw.struct<value: i1, unknown: i1>
+      }
+      hw.output %outval : !hw.struct<value: i1, unknown: i1>
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createLowerLECLLVM());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLVM = false;
+  module->walk([&](Operation *op) {
+    if (op->getDialect() && op->getDialect()->getNamespace() == "llvm")
+      hasLLVM = true;
+  });
+  EXPECT_FALSE(hasLLVM);
+
+  bool sawStructCreate = false;
+  module->walk([&](circt::hw::StructCreateOp) { sawStructCreate = true; });
+  EXPECT_TRUE(sawStructCreate);
+}
+
+TEST(LowerLECLLVMTest, LowersMixedAllocaJoin) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
+                      LLVM::LLVMDialect, mlir::cf::ControlFlowDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @lower_lec_llvm_ref_alloca_mixed_join(
+        in %cond : i1,
+        in %lhs : !hw.struct<value: i1, unknown: i1>,
+        in %rhs : !hw.struct<value: i1, unknown: i1>,
+        out out : !hw.struct<value: i1, unknown: i1>) {
+      %one = llvm.mlir.constant(1 : i64) : i64
+      %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
+      %lhs_value = hw.struct_extract %lhs["value"] : !hw.struct<value: i1, unknown: i1>
+      %lhs_unknown = hw.struct_extract %lhs["unknown"] : !hw.struct<value: i1, unknown: i1>
+      %lhs0 = llvm.insertvalue %lhs_value, %undef[0] : !llvm.struct<(i1, i1)>
+      %lhs1 = llvm.insertvalue %lhs_unknown, %lhs0[1] : !llvm.struct<(i1, i1)>
+      %rhs_value = hw.struct_extract %rhs["value"] : !hw.struct<value: i1, unknown: i1>
+      %rhs_unknown = hw.struct_extract %rhs["unknown"] : !hw.struct<value: i1, unknown: i1>
+      %rhs0 = llvm.insertvalue %rhs_value, %undef[0] : !llvm.struct<(i1, i1)>
+      %rhs1 = llvm.insertvalue %rhs_unknown, %rhs0[1] : !llvm.struct<(i1, i1)>
+      %outval = llhd.combinational -> !hw.struct<value: i1, unknown: i1> {
+        %ptrA = llvm.alloca %one x !llvm.struct<(i1, i1)> : (i64) -> !llvm.ptr
+        %ptrB = llvm.alloca %one x !llvm.struct<(i1, i1)> : (i64) -> !llvm.ptr
+        %refA = builtin.unrealized_conversion_cast %ptrA : !llvm.ptr to !llhd.ref<!hw.struct<value: i1, unknown: i1>>
+        %refB = builtin.unrealized_conversion_cast %ptrB : !llvm.ptr to !llhd.ref<!hw.struct<value: i1, unknown: i1>>
+        llvm.store %lhs1, %ptrA : !llvm.struct<(i1, i1)>, !llvm.ptr
+        llvm.store %rhs1, %ptrB : !llvm.struct<(i1, i1)>, !llvm.ptr
+        cf.cond_br %cond, ^bb_a, ^bb_b
+
+      ^bb_a:
+        cf.br ^bb_join(%ptrA : !llvm.ptr)
+
+      ^bb_b:
+        cf.br ^bb_join(%ptrB : !llvm.ptr)
+
+      ^bb_join(%arg0: !llvm.ptr):
+        %load = llvm.load %arg0 : !llvm.ptr -> !llvm.struct<(i1, i1)>
+        %cast = builtin.unrealized_conversion_cast %load : !llvm.struct<(i1, i1)> to !hw.struct<value: i1, unknown: i1>
+        llhd.yield %cast : !hw.struct<value: i1, unknown: i1>
+      }
+      hw.output %outval : !hw.struct<value: i1, unknown: i1>
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createLowerLECLLVM());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLVM = false;
+  module->walk([&](Operation *op) {
+    if (op->getDialect() && op->getDialect()->getNamespace() == "llvm")
+      hasLLVM = true;
+  });
+  EXPECT_FALSE(hasLLVM);
+
+  bool sawStructCreate = false;
+  module->walk([&](circt::hw::StructCreateOp) { sawStructCreate = true; });
+  EXPECT_TRUE(sawStructCreate);
 }
