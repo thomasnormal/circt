@@ -8530,8 +8530,69 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
 
   auto *op = resolve(*this, actualSym);
   auto decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(op);
-  if (!decl)
-    return false;
+  if (!decl) {
+    // The class declaration doesn't exist yet. This can happen when slang
+    // creates a specialization (e.g., uvm_sequencer_analysis_fifo_2475) that
+    // references a class we haven't converted yet.
+    //
+    // To handle this, we look up the generic class name and find any other
+    // specialization of that generic class that HAS been converted. Since
+    // all specializations of the same generic class share the same inheritance
+    // chain structure, we can use any converted specialization to check
+    // inheritance.
+    mlir::StringAttr actualName = actualSym.getRootReference();
+    mlir::StringAttr genericName = getGenericClassName(*this, actualName);
+
+    // If the generic name is the same as the actual name, we might have a
+    // specialization that hasn't been mapped yet. Try to infer the generic
+    // class name by stripping a trailing _number suffix.
+    // The name format is "namespace::className_number" where namespace could be
+    // nested (e.g., "uvm_pkg::uvm_sequencer_analysis_fifo_2475").
+    if (genericName == actualName) {
+      llvm::StringRef nameStr = actualName.getValue();
+      // Look for a trailing underscore followed by digits
+      size_t lastUnderscore = nameStr.rfind('_');
+      if (lastUnderscore != llvm::StringRef::npos) {
+        llvm::StringRef suffix = nameStr.substr(lastUnderscore + 1);
+        // Check if the suffix is all digits
+        bool allDigits = !suffix.empty() &&
+                         llvm::all_of(suffix, [](char c) { return llvm::isDigit(c); });
+        if (allDigits) {
+          // This looks like a specialization - extract the base name
+          genericName =
+              builder.getStringAttr(nameStr.substr(0, lastUnderscore));
+          LLVM_DEBUG(llvm::dbgs() << "isClassDerivedFrom: inferred generic "
+                                  << genericName << " from " << actualName
+                                  << "\n");
+        }
+      }
+    }
+
+    // Try to find any other specialization of the same generic class
+    for (auto &[specName, genName] : classSpecializationToGeneric) {
+      if (genName == genericName && specName != actualName) {
+        // Found another specialization of the same generic class
+        mlir::FlatSymbolRefAttr specSym =
+            mlir::FlatSymbolRefAttr::get(specName);
+        auto *specOp = resolve(*this, specSym);
+        decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(specOp);
+        if (decl)
+          break; // Use this specialization to check inheritance
+      }
+    }
+
+    // If we still don't have a decl, try using the generic class itself
+    if (!decl && genericName != actualName) {
+      mlir::FlatSymbolRefAttr genericSym =
+          mlir::FlatSymbolRefAttr::get(genericName);
+      auto *genericOp = resolve(*this, genericSym);
+      decl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(genericOp);
+    }
+
+    // If we still can't find any related class declaration, give up
+    if (!decl)
+      return false;
+  }
 
   // Check implemented interfaces first (IEEE 1800-2017 Section 8.26).
   // A class that implements an interface class can be assigned to a variable
@@ -8545,10 +8606,49 @@ bool Context::isClassDerivedFrom(const moore::ClassHandleType &actualTy,
   }
 
   // Walk up the inheritance chain via ClassDeclOp::$base (SymbolRefAttr).
-  while (decl) {
+  unsigned depth = 0;
+  while (decl && depth < 20) { // Limit depth to avoid infinite loops
+    depth++;
     mlir::SymbolRefAttr curBase = decl.getBaseAttr();
-    if (!curBase)
-      break;
+    if (!curBase) {
+      // If we got here through the fallback path (using a different
+      // specialization), the base attributes might not be set yet.
+      // In this case, try to continue by using the generic class name
+      // to find an alternative base.
+      mlir::StringAttr curName = decl.getSymNameAttr();
+      mlir::StringAttr genericName = getGenericClassName(*this, curName);
+      if (genericName != curName) {
+        // Try to find the generic class and use its base
+        mlir::FlatSymbolRefAttr genericSym =
+            mlir::FlatSymbolRefAttr::get(genericName);
+        auto *genericOp = resolve(*this, genericSym);
+        auto genericDecl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(genericOp);
+        if (genericDecl && genericDecl.getBaseAttr()) {
+          curBase = genericDecl.getBaseAttr();
+        }
+      }
+      // If still no base, try to infer from naming pattern
+      if (!curBase) {
+        llvm::StringRef nameStr = curName.getValue();
+        size_t lastUnderscore = nameStr.rfind('_');
+        if (lastUnderscore != llvm::StringRef::npos) {
+          llvm::StringRef suffix = nameStr.substr(lastUnderscore + 1);
+          if (!suffix.empty() && llvm::all_of(suffix, llvm::isDigit)) {
+            genericName =
+                builder.getStringAttr(nameStr.substr(0, lastUnderscore));
+            mlir::FlatSymbolRefAttr genericSym =
+                mlir::FlatSymbolRefAttr::get(genericName);
+            auto *genericOp = resolve(*this, genericSym);
+            auto genericDecl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(genericOp);
+            if (genericDecl && genericDecl.getBaseAttr()) {
+              curBase = genericDecl.getBaseAttr();
+            }
+          }
+        }
+      }
+      if (!curBase)
+        break;
+    }
     // Use the related class check instead of direct equality
     if (areSameOrRelatedClass(*this, curBase, baseSym))
       return true;
