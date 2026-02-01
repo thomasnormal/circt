@@ -5955,18 +5955,63 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
       // Handle 4-state index - extract just the value part
       Value idx = adaptor.getLowBit();
-      if (isFourStateStructType(idx.getType()))
+      Value idxUnknownCond;
+      if (isFourStateStructType(idx.getType())) {
+        Value idxUnknown = extractFourStateUnknown(rewriter, loc, idx);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, idxUnknown.getType(), 0);
+        idxUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, idxUnknown, zero);
         idx = extractFourStateValue(rewriter, loc, idx);
+      }
+      if (!idxUnknownCond) {
+        idxUnknownCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      }
       idx = adjustIntegerWidth(rewriter, idx, idxWidth, loc);
 
       bool isSingleElementExtract = arrType.getElementType() == resultType;
 
-      if (isSingleElementExtract)
-        rewriter.replaceOpWithNewOp<hw::ArrayGetOp>(op, adaptor.getInput(),
-                                                    idx);
-      else
+      if (isSingleElementExtract) {
+        Value elem =
+            hw::ArrayGetOp::create(rewriter, loc, adaptor.getInput(), idx);
+        if (!isFourStateStructType(resultType)) {
+          rewriter.replaceOp(op, elem);
+          return success();
+        }
+
+        Value outOfBoundsCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+        if (arrType.getNumElements() > 1) {
+          Value maxIdxConst = hw::ConstantOp::create(
+              rewriter, loc, idx.getType(),
+              static_cast<int64_t>(arrType.getNumElements() - 1));
+          outOfBoundsCond = comb::ICmpOp::create(
+              rewriter, loc, comb::ICmpPredicate::ugt, idx, maxIdxConst);
+        }
+        Value cond = outOfBoundsCond;
+        if (idxUnknownCond)
+          cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
+                                    idxUnknownCond);
+
+        Value elemValue = extractFourStateValue(rewriter, loc, elem);
+        Value elemUnknown = extractFourStateUnknown(rewriter, loc, elem);
+        Value zero = hw::ConstantOp::create(rewriter, loc,
+                                            elemValue.getType(), 0);
+        Value allOnes = hw::ConstantOp::create(rewriter, loc,
+                                               elemUnknown.getType(), -1);
+        Value finalValue =
+            comb::MuxOp::create(rewriter, loc, cond, zero, elemValue);
+        Value finalUnknown =
+            comb::MuxOp::create(rewriter, loc, cond, allOnes, elemUnknown);
+        auto result =
+            createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
+        rewriter.replaceOp(op, result);
+        return success();
+      } else {
         rewriter.replaceOpWithNewOp<hw::ArraySliceOp>(op, resultType,
                                                       adaptor.getInput(), idx);
+      }
 
       return success();
     }

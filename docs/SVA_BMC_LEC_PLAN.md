@@ -181,6 +181,7 @@ Key work:
     is X/Z (bitwise X-prop).
   - ✅ 4-state shifts now yield X when the shift amount is X/Z.
   - ✅ 4-state dyn_extract now yields X when the index is X/Z or out-of-bounds.
+  - ✅ 4-state dyn_extract on arrays now yields X for X/Z or out-of-bounds index.
 - ✅ Add BMC cone-of-influence pruning for externalized registers and unused
   outputs so irrelevant state is removed before SMT lowering (including
   transitive reg deps).
