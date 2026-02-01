@@ -14205,4 +14205,59 @@ TEST(MooreRuntimeSequenceTest, HasItemsCheck) {
   __moore_sequencer_destroy(seqr);
 }
 
+//===----------------------------------------------------------------------===//
+// Event Operations Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimeEventTest, EventTriggerAndTriggered) {
+  // Initialize event flag to false
+  bool event = false;
+
+  // Verify event is initially not triggered
+  EXPECT_FALSE(__moore_event_triggered(&event));
+
+  // Trigger the event
+  __moore_event_trigger(&event);
+
+  // Verify event is now triggered
+  EXPECT_TRUE(__moore_event_triggered(&event));
+  EXPECT_TRUE(event); // Direct check of the flag
+}
+
+TEST(MooreRuntimeEventTest, EventTriggerNull) {
+  // Test that triggering a null event doesn't crash
+  __moore_event_trigger(nullptr);
+}
+
+TEST(MooreRuntimeEventTest, EventTriggeredNull) {
+  // Test that checking a null event returns false
+  EXPECT_FALSE(__moore_event_triggered(nullptr));
+}
+
+TEST(MooreRuntimeEventTest, EventMultipleTriggers) {
+  bool event = false;
+
+  // Trigger multiple times
+  __moore_event_trigger(&event);
+  EXPECT_TRUE(__moore_event_triggered(&event));
+
+  __moore_event_trigger(&event);
+  EXPECT_TRUE(__moore_event_triggered(&event));
+
+  // Event should still be triggered
+  EXPECT_TRUE(event);
+}
+
+TEST(MooreRuntimeEventTest, EventReset) {
+  bool event = false;
+
+  // Trigger the event
+  __moore_event_trigger(&event);
+  EXPECT_TRUE(__moore_event_triggered(&event));
+
+  // Manually reset the event (simulating time step advancement)
+  event = false;
+  EXPECT_FALSE(__moore_event_triggered(&event));
+}
+
 } // namespace

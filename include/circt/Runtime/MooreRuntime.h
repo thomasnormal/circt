@@ -393,6 +393,12 @@ void __moore_stream_unpack_bits(MooreQueue *array, int64_t sourceBits,
 // Event Operations
 //===----------------------------------------------------------------------===//
 
+/// Trigger an event.
+/// Implements the SystemVerilog `->event` syntax for triggering an event.
+/// This sets the event flag to true for the current time slot.
+/// @param event Pointer to the event (stored as a boolean flag)
+void __moore_event_trigger(bool *event);
+
 /// Check if an event was triggered in the current time slot.
 /// Implements the SystemVerilog `.triggered` property on events.
 /// @param event Pointer to the event (stored as a boolean flag)
