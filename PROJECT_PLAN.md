@@ -183,13 +183,38 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-bmc/circt-bmc.cpp`
    - **Impact**: sv-tests BMC improved from 5 pass / 18 errors to 23 pass / 0 errors
 
-**Medium Priority:**
-2. **Class Member Access Bug** (UVM blocker):
-   - Reading class member variables from methods (other than constructor) fails
-   - Block argument remapping issue in MooreToCore.cpp
-   - See plan file for detailed fix strategy
+**FIXED (Iteration 284):**
 
-3. **Virtual Method Dispatch**:
+6. **UVM Phase Termination** ✅ FIXED:
+   - `llhd.halt` now waits for forked children via `hasActiveChildren()` method
+   - `markChildComplete()` resumes parent when ALL children complete (not just join condition)
+   - **Files**: `include/circt/Dialect/Sim/ProcessScheduler.h`, `lib/Dialect/Sim/ProcessScheduler.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - **Test**: `test/Tools/circt-sim/fork-halt-waits-children.mlir`
+
+7. **Struct Ref Selection** ✅ FIXED:
+   - `arith.select` on `!llhd.ref` types now handled in interpretProbe/interpretDrive
+   - Evaluates condition and selects appropriate ref, handles X conditions gracefully
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - **Test**: `test/Tools/circt-sim/arith-select-ref.mlir`
+
+8. **Class Member Access Bug** ✅ FIXED:
+   - Reading class member variables from methods now works
+   - Block argument remapping added in ClassPropertyRefOpConversion
+   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` lines 2097-2117
+   - **Test**: `test/Conversion/MooreToCore/class-member-access-method.mlir`
+
+9. **UVM Event Wait Mechanism** ✅ FIXED (Iteration 284):
+   - UVM events stored as boolean fields in class instances can now be waited on
+   - Added `MemoryEventWaiter` struct and memory polling mechanism
+   - Processes wait without consuming CPU until `llvm.store` writes to watched address
+   - `checkMemoryEventWaiters()` called after each memory store
+   - **Impact**: `wait_for_objection(UVM_ALL_DROPPED)` now properly blocks
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `LLHDProcessInterpreter.h`
+   - **Test**: `test/Tools/circt-sim/moore-wait-memory-event.mlir`
+
+**Medium Priority:**
+
+1. **Virtual Method Dispatch**:
    - Class hierarchy not fully simulated
    - UVM relies heavily on polymorphic method calls
 
@@ -337,6 +362,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Clock-root tracing is now centralized to keep BMC/VerifToSMT mappings aligned.
 - `simplifyI1Value` now folds `comb.icmp` against constant i1s for clock
   canonicalization (supports `clk == 1`/`clk != 1` patterns).
+- ImportVerilog now coerces mixed 2-/4-state operands to a common domain before
+  `moore.eq`, fixing `$rose/$fell` comparisons against 2-state literals; added
+  regression coverage in `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`.
+- `circt-bmc` now emits `BMC_RESULT=SAT|UNSAT` tokens alongside legacy messages
+  so harnesses can consume stable result tags.
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)

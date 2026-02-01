@@ -1036,6 +1036,20 @@ void ForkJoinManager::markChildComplete(ProcessId childProcess) {
                               << group->parentProcess << " after fork complete\n");
     }
   }
+
+  // Also check if ALL children have completed - this is needed for processes
+  // that are waiting on llhd.halt with active forked children. For join_none
+  // forks, isComplete() returns true immediately, but we still need to resume
+  // the parent when ALL children actually complete so that the halt can proceed.
+  if (group->allComplete()) {
+    Process *parent = scheduler.getProcess(group->parentProcess);
+    if (parent && parent->getState() == ProcessState::Waiting) {
+      scheduler.resumeProcess(group->parentProcess);
+      LLVM_DEBUG(llvm::dbgs() << "Resuming parent process "
+                              << group->parentProcess
+                              << " - all fork children now complete\n");
+    }
+  }
 }
 
 bool ForkJoinManager::join(ForkId forkId) {
@@ -1135,6 +1149,29 @@ ForkJoinManager::getForksForParent(ProcessId parentProcess) const {
   if (it == parentToForks.end())
     return {};
   return it->second;
+}
+
+bool ForkJoinManager::hasActiveChildren(ProcessId parentProcess) const {
+  auto it = parentToForks.find(parentProcess);
+  if (it == parentToForks.end())
+    return false; // No forks, no active children
+
+  // Check ALL fork groups for any incomplete children
+  for (ForkId forkId : it->second) {
+    const ForkGroup *group = getForkGroup(forkId);
+    if (!group)
+      continue;
+
+    // Check if any children are still active (not all completed)
+    if (!group->allComplete()) {
+      LLVM_DEBUG(llvm::dbgs() << "Fork group " << forkId << " has "
+                              << (group->childProcesses.size() - group->completedCount)
+                              << " active children\n");
+      return true;
+    }
+  }
+
+  return false;
 }
 
 //===----------------------------------------------------------------------===//

@@ -1179,6 +1179,11 @@ public:
   /// Get all fork groups for a parent process.
   llvm::SmallVector<ForkId, 4> getForksForParent(ProcessId parentProcess) const;
 
+  /// Check if a parent process has any active (non-completed) forked children.
+  /// This checks ALL fork groups regardless of join type.
+  /// Returns true if there are active children, false if all children completed.
+  bool hasActiveChildren(ProcessId parentProcess) const;
+
 private:
   ProcessScheduler &scheduler;
   llvm::DenseMap<ForkId, std::unique_ptr<ForkGroup>> forkGroups;

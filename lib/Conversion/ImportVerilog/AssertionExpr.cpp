@@ -133,12 +133,13 @@ static Value lowerSampledValueFunctionWithClocking(
   bool isFell = funcName == "$fell";
   bool isStable = funcName == "$stable";
   bool isChanged = funcName == "$changed";
-  bool reduce = (isRose || isFell) && intType.getBitSize() != 1;
-  auto sampleType = reduce
+  bool boolCast = isRose || isFell;
+  auto sampleType = boolCast
                         ? moore::IntType::get(builder.getContext(), 1,
                                               intType.getDomain())
                         : intType;
-  auto resultType = moore::IntType::getInt(builder.getContext(), 1);
+  auto resultType =
+      moore::IntType::get(builder.getContext(), 1, sampleType.getDomain());
 
   Value prevVar;
   Value resultVar;
@@ -179,8 +180,8 @@ static Value lowerSampledValueFunctionWithClocking(
       mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
       return {};
     }
-    if (reduce)
-      current = moore::ReduceOrOp::create(builder, loc, current);
+    if (boolCast)
+      current = moore::BoolCastOp::create(builder, loc, current);
     if (current.getType() != sampleType)
       current = context.materializeConversion(sampleType, current,
                                               /*isSigned=*/false, loc);
@@ -189,33 +190,20 @@ static Value lowerSampledValueFunctionWithClocking(
     Value result;
     if (isStable || isChanged) {
       auto stable =
-          moore::CaseEqOp::create(builder, loc, current, prev).getResult();
+          moore::EqOp::create(builder, loc, current, prev).getResult();
       result = stable;
       if (isChanged)
         result = moore::NotOp::create(builder, loc, stable).getResult();
     } else {
-      auto zero = moore::ConstantOp::create(builder, loc, sampleType, 0);
-      auto one = moore::ConstantOp::create(builder, loc, sampleType, 1);
-      auto currentIsOne =
-          moore::CaseEqOp::create(builder, loc, current, one).getResult();
-      auto currentIsZero =
-          moore::CaseEqOp::create(builder, loc, current, zero).getResult();
-      auto prevIsOne =
-          moore::CaseEqOp::create(builder, loc, prev, one).getResult();
-      auto prevIsZero =
-          moore::CaseEqOp::create(builder, loc, prev, zero).getResult();
       if (isRose) {
-        auto notPrevOne =
-            moore::NotOp::create(builder, loc, prevIsOne).getResult();
-        result =
-            moore::AndOp::create(builder, loc, currentIsOne, notPrevOne)
-                .getResult();
+        auto notPrev = moore::NotOp::create(builder, loc, prev).getResult();
+        result = moore::AndOp::create(builder, loc, current, notPrev)
+                     .getResult();
       } else {
-        auto notPrevZero =
-            moore::NotOp::create(builder, loc, prevIsZero).getResult();
-        result =
-            moore::AndOp::create(builder, loc, currentIsZero, notPrevZero)
-                .getResult();
+        auto notCurrent =
+            moore::NotOp::create(builder, loc, current).getResult();
+        result = moore::AndOp::create(builder, loc, notCurrent, prev)
+                     .getResult();
       }
     }
 
@@ -1058,7 +1046,7 @@ Value Context::convertAssertionCallExpression(
             moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
       }
       auto stable =
-          moore::CaseEqOp::create(builder, loc, sampled, past).getResult();
+          moore::EqOp::create(builder, loc, sampled, past).getResult();
       Value resultVal = stable;
       if (subroutine.name == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
@@ -1066,8 +1054,7 @@ Value Context::convertAssertionCallExpression(
     }
 
     Value current = value;
-    if (valueType.getBitSize() != 1)
-      current = moore::ReduceOrOp::create(builder, loc, value).getResult();
+    current = moore::BoolCastOp::create(builder, loc, current).getResult();
     Value sampled = current;
     Value past;
     if (inAssertionExpr) {
@@ -1079,30 +1066,16 @@ Value Context::convertAssertionCallExpression(
       past =
           moore::PastOp::create(builder, loc, current, /*delay=*/1).getResult();
     }
-    auto currentTy = cast<moore::IntType>(current.getType());
-    auto zero = moore::ConstantOp::create(builder, loc, currentTy, 0);
-    auto one = moore::ConstantOp::create(builder, loc, currentTy, 1);
-    auto currentIsOne =
-        moore::CaseEqOp::create(builder, loc, sampled, one).getResult();
-    auto pastIsOne =
-        moore::CaseEqOp::create(builder, loc, past, one).getResult();
-    auto currentIsZero =
-        moore::CaseEqOp::create(builder, loc, sampled, zero).getResult();
-    auto pastIsZero =
-        moore::CaseEqOp::create(builder, loc, past, zero).getResult();
     Value resultVal;
     if (subroutine.name == "$rose") {
-      auto notPastOne =
-          moore::NotOp::create(builder, loc, pastIsOne).getResult();
+      auto notPast = moore::NotOp::create(builder, loc, past).getResult();
       resultVal =
-          moore::AndOp::create(builder, loc, currentIsOne, notPastOne)
-              .getResult();
+          moore::AndOp::create(builder, loc, sampled, notPast).getResult();
     } else {
-      auto notPastZero =
-          moore::NotOp::create(builder, loc, pastIsZero).getResult();
+      auto notCurrent =
+          moore::NotOp::create(builder, loc, sampled).getResult();
       resultVal =
-          moore::AndOp::create(builder, loc, currentIsZero, notPastZero)
-              .getResult();
+          moore::AndOp::create(builder, loc, notCurrent, past).getResult();
     }
     return resultVal;
   }

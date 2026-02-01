@@ -201,6 +201,10 @@ struct ProcessExecutionState {
   /// The next block to branch to after a wait.
   mlir::Block *destBlock = nullptr;
 
+  /// If true, resume at the current operation (currentOp) instead of at the
+  /// beginning of destBlock. Used for deferred llhd.halt and sim.terminate.
+  bool resumeAtCurrentOp = false;
+
   /// Operands to pass to the destination block after a wait.
   llvm::SmallVector<InterpretedValue, 4> destOperands;
 
@@ -875,6 +879,26 @@ private:
     InstanceInputMapping inputMap;
   };
   llvm::SmallVector<StaticModuleDrive, 4> staticModuleDrives;
+
+  /// Memory event waiter for polling-based event detection.
+  /// Used for UVM events stored as boolean fields in class instances where
+  /// no signal is available to wait on.
+  struct MemoryEventWaiter {
+    /// The address of the memory location to poll.
+    uint64_t address = 0;
+    /// The last seen value at this address.
+    uint64_t lastValue = 0;
+    /// The size of the value in bytes (1 for bool/i1).
+    unsigned valueSize = 1;
+  };
+
+  /// Map from process IDs to their memory event waiters.
+  /// A process waiting on a memory event will have an entry here.
+  llvm::DenseMap<ProcessId, MemoryEventWaiter> memoryEventWaiters;
+
+  /// Check all memory event waiters and wake processes whose watched
+  /// memory location has changed.
+  void checkMemoryEventWaiters();
 
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
