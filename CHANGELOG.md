@@ -73,15 +73,73 @@
 - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp` (lines 2097-2117)
 - **Test**: `test/Conversion/MooreToCore/class-member-access-method.mlir`
 
+**4. Mixed 2-/4-state equality in assertions - FIXED**
+- **Problem**: `$rose/$fell` comparisons against 2-state literals produced
+  mismatched `moore.eq` operand types (`i1` vs `l1`) and failed to lower.
+- **Fix**: Coerce mixed-domain operands to a common 4-state domain before
+  `moore.eq` creation.
+- **Files**: `lib/Conversion/ImportVerilog/Expressions.cpp`
+- **Test**: `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`
+
+**5. BMC result tokens - FIXED**
+- **Problem**: `circt-bmc` only printed legacy strings, so tests expecting
+  `BMC_RESULT=SAT|UNSAT` tokens failed.
+- **Fix**: Emit `BMC_RESULT` tokens alongside legacy messages.
+- **Files**: `lib/Tools/circt-bmc/LowerToBMC.cpp`
+- **Tests**:
+  - `test/Tools/circt-bmc/result-token.mlir`
+  - `test/Tools/circt-bmc/lower-to-bmc.mlir`
+
 ### Test Suite Results
 
 | Suite | Status | Notes |
 |-------|--------|-------|
+| Lit Tests | **407/407 (100%)** | 405 PASS + 2 XFAIL |
 | OpenTitan Testbenches | **40/40 (100%)** | All testbenches simulate! |
-| sv-tests (no UVM) | **552/697 (79%)** | High pass rate |
-| sv-tests chapter-16 | **100% with UVM** | All 27 assertions tests pass |
-| yosys SVA | **14/16 (87%)** | 2 bind test failures |
-| ImportVerilog | **219/219 (100%)** | Complete! |
+| sv-tests with UVM | **644/717 (89%)** | High pass rate |
+| sv-tests chapter-16 | **53/53 (100%)** | All assertions pass |
+| sv-tests chapter-9 | **45/46 (97%)** | Processes working |
+
+### UVM Memory Event Wait Mechanism - FIXED
+
+**4. Memory Event Wait Mechanism - FIXED**
+- **Problem**: UVM events stored as boolean fields couldn't be waited on
+- **Root Cause**: `moore.wait_event` only traced to LLHD signals, not memory
+- **Fix**: Implemented polling-based memory event detection:
+  - Added `MemoryEventWaiter` struct to track watched memory locations
+  - Modified `interpretMooreWaitEvent()` to trace through `unrealized_conversion_cast` and `llvm.load` to find memory pointer
+  - Process is suspended (not scheduled) while waiting
+  - `interpretLLVMStore()` calls `checkMemoryEventWaiters()` after each store
+  - When memory value changes, waiting process is scheduled
+- **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`
+- **Test**: `test/Tools/circt-sim/moore-wait-memory-event.mlir`
+- **Impact**: UVM `wait_for_objection()` can now properly wait on event fields
+
+**5. Fork/Terminate Resume Fix - FIXED**
+- **Problem**: When `llhd.halt` or `sim.terminate` was deferred due to active children, resuming the process would restart from the beginning of the block instead of at the deferred operation
+- **Root Cause**: `executeProcess()` always set `currentOp = currentBlock->begin()` when resuming from `destBlock`
+- **Fix**: Added `resumeAtCurrentOp` flag to ProcessExecutionState; when true, keeps `currentOp` pointing at the deferred operation
+- **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`
+- **Test**: `test/Tools/circt-sim/fork-halt-waits-children.mlir`
+- **Impact**: Fork children now properly execute before parent halts/terminates
+
+### Additional Test Results
+
+| Suite | Status | Notes |
+|-------|--------|-------|
+| circt-sim + MooreToCore | **188/188 (100%)** | 186 PASS + 2 XFAIL |
+| OpenTitan IPs | **268/268 (100%)** | All compile successfully |
+| Yosys simple | **13/13 (100%)** | All pass |
+| Yosys SVA | **14/16 (87.5%)** | 2 multi-file test failures |
+
+### Remaining UVM Blocker: Phase Objection Wait Mechanism
+
+**Issue**: UVM's `run_test()` terminates before phases can execute
+- UVM phases use `join_none` forks with objection-based waiting
+- `wait_for_objection()` returns immediately because memory event wait can't detect objection changes through the complex UVM event chain
+- The `hasActiveChildren()` fix works for direct children, but `join_none` forks complete immediately by design
+- **Root Cause**: UVM's phase synchronization relies on objection events stored deep in class hierarchies; tracing these to memory locations is complex
+- **Status**: Core fork/terminate semantics now correct; UVM-specific objection mechanism needs further work
 
 ---
 

@@ -1690,6 +1690,10 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
       return resolveSignalId(castOp.getInputs()[0]);
     }
   }
+  // Note: arith.select on ref types is handled dynamically in interpretProbe
+  // and interpretDrive since it requires evaluating the condition at runtime.
+  // resolveSignalId is a const function that cannot evaluate conditions, so
+  // we return 0 here and let the caller handle it.
   return 0;
 }
 
@@ -3339,6 +3343,120 @@ buildSensitivityListFromState(const ProcessExecutionState &state) {
   return list;
 }
 
+void LLHDProcessInterpreter::checkMemoryEventWaiters() {
+  if (memoryEventWaiters.empty())
+    return;
+
+  // Check each memory event waiter to see if the watched value has changed
+  llvm::SmallVector<ProcessId, 4> toWake;
+
+  for (auto &[procId, waiter] : memoryEventWaiters) {
+    // Find the memory block containing this address
+    MemoryBlock *block = nullptr;
+    uint64_t offset = 0;
+    uint64_t addr = waiter.address;
+
+    // Check module-level allocas first (by address)
+    for (auto &[val, memBlock] : moduleLevelAllocas) {
+      auto addrIt = moduleInitValueMap.find(val);
+      if (addrIt != moduleInitValueMap.end()) {
+        uint64_t blockAddr = addrIt->second.getUInt64();
+        if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+          block = &memBlock;
+          offset = addr - blockAddr;
+          break;
+        }
+      }
+    }
+
+    // Check malloc blocks
+    if (!block) {
+      for (auto &entry : mallocBlocks) {
+        uint64_t mallocBaseAddr = entry.first;
+        uint64_t mallocSize = entry.second.size;
+        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+          block = &entry.second;
+          offset = addr - mallocBaseAddr;
+          break;
+        }
+      }
+    }
+
+    // Check global memory blocks
+    if (!block) {
+      for (auto &entry : globalAddresses) {
+        StringRef globalName = entry.first();
+        uint64_t globalBaseAddr = entry.second;
+        auto blockIt = globalMemoryBlocks.find(globalName);
+        if (blockIt != globalMemoryBlocks.end()) {
+          uint64_t globalSize = blockIt->second.size;
+          if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+            block = &blockIt->second;
+            offset = addr - globalBaseAddr;
+            break;
+          }
+        }
+      }
+    }
+
+    // Also check process-local memory blocks
+    if (!block) {
+      auto procStateIt = processStates.find(procId);
+      if (procStateIt != processStates.end()) {
+        auto &procState = procStateIt->second;
+        for (auto &[val, memBlock] : procState.memoryBlocks) {
+          auto addrIt = procState.valueMap.find(val);
+          if (addrIt != procState.valueMap.end()) {
+            uint64_t blockAddr = addrIt->second.getUInt64();
+            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+              block = &memBlock;
+              offset = addr - blockAddr;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!block || !block->initialized) {
+      LLVM_DEBUG(llvm::dbgs() << "  Memory event waiter: block not found for "
+                                 "address 0x"
+                              << llvm::format_hex(addr, 16) << "\n");
+      continue;
+    }
+
+    // Read current value
+    if (offset + waiter.valueSize > block->size)
+      continue;
+
+    uint64_t currentValue = 0;
+    for (unsigned i = 0; i < waiter.valueSize; ++i) {
+      currentValue |=
+          static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+    }
+
+    // Check if value changed
+    if (currentValue != waiter.lastValue) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Memory event triggered for process " << procId
+                 << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
+                 << waiter.lastValue << " -> " << currentValue << "\n");
+      toWake.push_back(procId);
+    }
+  }
+
+  // Wake the processes whose watched memory changed
+  for (ProcessId procId : toWake) {
+    memoryEventWaiters.erase(procId);
+    auto it = processStates.find(procId);
+    if (it != processStates.end()) {
+      it->second.waiting = false;
+      // Schedule the process to run now that the memory event triggered
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    }
+  }
+}
+
 void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   auto it = processStates.find(procId);
   if (it == processStates.end()) {
@@ -3348,6 +3466,111 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   }
 
   ProcessExecutionState &state = it->second;
+
+  // Check if this process is waiting on a memory event.
+  // If so, check if the memory value has changed before proceeding.
+  auto memWaiterIt = memoryEventWaiters.find(procId);
+  if (memWaiterIt != memoryEventWaiters.end()) {
+    MemoryEventWaiter &waiter = memWaiterIt->second;
+    uint64_t addr = waiter.address;
+
+    // Find the memory block containing this address
+    MemoryBlock *block = nullptr;
+    uint64_t offset = 0;
+
+    // Check module-level allocas first (by address)
+    for (auto &[val, memBlock] : moduleLevelAllocas) {
+      auto addrIt = moduleInitValueMap.find(val);
+      if (addrIt != moduleInitValueMap.end()) {
+        uint64_t blockAddr = addrIt->second.getUInt64();
+        if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+          block = &memBlock;
+          offset = addr - blockAddr;
+          break;
+        }
+      }
+    }
+
+    // Check malloc blocks
+    if (!block) {
+      for (auto &entry : mallocBlocks) {
+        uint64_t mallocBaseAddr = entry.first;
+        uint64_t mallocSize = entry.second.size;
+        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+          block = &entry.second;
+          offset = addr - mallocBaseAddr;
+          break;
+        }
+      }
+    }
+
+    // Check global memory blocks
+    if (!block) {
+      for (auto &entry : globalAddresses) {
+        StringRef globalName = entry.first();
+        uint64_t globalBaseAddr = entry.second;
+        auto blockIt = globalMemoryBlocks.find(globalName);
+        if (blockIt != globalMemoryBlocks.end()) {
+          uint64_t globalSize = blockIt->second.size;
+          if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+            block = &blockIt->second;
+            offset = addr - globalBaseAddr;
+            break;
+          }
+        }
+      }
+    }
+
+    // Also check process-local memory blocks
+    if (!block) {
+      auto &procState = processStates[procId];
+      for (auto &[val, memBlock] : procState.memoryBlocks) {
+        auto addrIt = procState.valueMap.find(val);
+        if (addrIt != procState.valueMap.end()) {
+          uint64_t blockAddr = addrIt->second.getUInt64();
+          if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+            block = &memBlock;
+            offset = addr - blockAddr;
+            break;
+          }
+        }
+      }
+    }
+
+    if (block && block->initialized && offset + waiter.valueSize <= block->size) {
+      // Read current value
+      uint64_t currentValue = 0;
+      for (unsigned i = 0; i < waiter.valueSize; ++i) {
+        currentValue |=
+            static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+      }
+
+      if (currentValue == waiter.lastValue) {
+        // Value hasn't changed - keep waiting
+        // Don't re-schedule - process will be checked when memory is written
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Memory event: value unchanged at 0x"
+                   << llvm::format_hex(addr, 16) << " (value=" << currentValue
+                   << "), process " << procId << " remains waiting\n");
+        return;
+      }
+
+      // Value changed - wake up the process
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Memory event triggered for process " << procId
+                 << ": address 0x" << llvm::format_hex(addr, 16) << " changed "
+                 << waiter.lastValue << " -> " << currentValue << "\n");
+      memoryEventWaiters.erase(memWaiterIt);
+      state.waiting = false;
+    } else {
+      // Memory block not accessible - remove waiter and continue
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Memory event: block not accessible, removing waiter\n");
+      memoryEventWaiters.erase(memWaiterIt);
+      state.waiting = false;
+    }
+  }
+
   ScopedInstanceContext instScope(*this, state.instanceId);
   ScopedInputValueMap inputScope(*this, state.inputMap);
 
@@ -3367,7 +3590,12 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   if (state.destBlock) {
     LLVM_DEBUG(llvm::dbgs() << "  Resuming to destination block\n");
     state.currentBlock = state.destBlock;
-    state.currentOp = state.currentBlock->begin();
+
+    // If resumeAtCurrentOp is set, keep currentOp as is (used for deferred
+    // llhd.halt and sim.terminate). Otherwise, start from block beginning.
+    if (!state.resumeAtCurrentOp) {
+      state.currentOp = state.currentBlock->begin();
+    }
 
     // Transfer destination operands to block arguments
     for (auto [arg, val] :
@@ -3378,6 +3606,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     state.waiting = false;
     state.destBlock = nullptr;
     state.destOperands.clear();
+    state.resumeAtCurrentOp = false;
   } else if (state.waiting) {
     // Handle the case where a process was triggered by an event (via
     // triggerSensitiveProcesses) rather than by the delay callback
@@ -6018,6 +6247,17 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
     signal = cond.getUInt64() != 0 ? muxOp.getTrueValue() : muxOp.getFalseValue();
   }
 
+  // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
+  while (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
+    InterpretedValue cond = getValue(procId, selectOp.getCondition());
+    if (cond.isX()) {
+      setValue(procId, probeOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(probeOp.getResult().getType())));
+      return success();
+    }
+    signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
+  }
+
   // Get the signal ID for the probed signal
   SignalId sigId = resolveSignalId(signal);
   if (sigId == 0) {
@@ -6459,13 +6699,24 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                       llhd::DriveOp driveOp) {
+  // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
+  // by evaluating the condition and selecting the appropriate ref.
+  Value signal = driveOp.getSignal();
+  while (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
+    InterpretedValue cond = getValue(procId, selectOp.getCondition());
+    if (cond.isX()) {
+      LLVM_DEBUG(llvm::dbgs() << "  Warning: X condition in arith.select for drive\n");
+      return success(); // Cannot determine which signal to drive
+    }
+    signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
+  }
+
   // Get the signal ID
-  SignalId sigId = getSignalId(driveOp.getSignal());
+  SignalId sigId = getSignalId(signal);
   if (sigId == 0) {
     // Check if this is a local variable access via UnrealizedConversionCastOp
     // This happens when local variables in functions are accessed - they're
     // backed by llvm.alloca and cast to !llhd.ref, not actual LLHD signals.
-    Value signal = driveOp.getSignal();
     if (auto castOp = signal.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
       if (castOp.getInputs().size() == 1) {
         Value input = castOp.getInputs()[0];
@@ -7422,6 +7673,30 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 LogicalResult LLHDProcessInterpreter::interpretHalt(ProcessId procId,
                                                      llhd::HaltOp haltOp) {
   auto &state = processStates[procId];
+
+  // Check if this process has active forked children that haven't completed.
+  // If so, we cannot halt yet - we must wait for all children to complete.
+  // This is critical for UVM phase termination where run_test() spawns UVM
+  // phases via fork-join, and the parent process must not halt until all
+  // forked children complete.
+  if (forkJoinManager.hasActiveChildren(procId)) {
+    LLVM_DEBUG(llvm::dbgs() << "  Halt deferred - process has active forked children\n");
+
+    // Suspend the process instead of halting - it will be resumed when
+    // all children complete (via the fork/join completion mechanism)
+    state.waiting = true;
+
+    // Store the halt operation so we can re-execute it when children complete
+    state.destBlock = haltOp->getBlock();
+    state.currentOp = mlir::Block::iterator(haltOp);
+    state.resumeAtCurrentOp = true; // Resume at halt op, not block beginning
+
+    Process *proc = scheduler.getProcess(procId);
+    if (proc)
+      proc->setState(ProcessState::Waiting);
+
+    return success();
+  }
 
   // Handle yield operands - these become the process result values
   // The yield values are immediately available to the llhd.drv operations
@@ -8445,17 +8720,44 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     ProcessId procId, sim::TerminateOp terminateOp) {
   bool success = terminateOp.getSuccess();
   bool verbose = terminateOp.getVerbose();
+  auto &state = processStates[procId];
 
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.terminate ("
                           << (success ? "success" : "failure") << ", "
                           << (verbose ? "verbose" : "quiet") << ")\n");
 
+  // Check if this process has active forked children that haven't completed.
+  // If so, we cannot terminate yet - we must wait for all children to complete.
+  // This is important for UVM where run_test() forks phase execution and then
+  // calls $finish, but the phases should complete first.
+  if (forkJoinManager.hasActiveChildren(procId)) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Terminate deferred - process has active forked children\n");
+
+    // Suspend the process instead of terminating - it will be resumed when
+    // all children complete (via the fork/join completion mechanism)
+    state.waiting = true;
+
+    // Store the terminate operation so we can re-execute it when children complete
+    state.destBlock = terminateOp->getBlock();
+    state.currentOp = mlir::Block::iterator(terminateOp);
+    state.resumeAtCurrentOp = true; // Resume at terminate op, not block beginning
+
+    Process *proc = scheduler.getProcess(procId);
+    if (proc)
+      proc->setState(ProcessState::Waiting);
+
+    return mlir::success();
+  }
+
   // Print diagnostic info about the termination source for debugging
   // This helps identify where fatal errors occur (e.g., UVM die() -> $finish)
-  llvm::errs() << "[circt-sim] sim.terminate triggered in process ID "
-               << procId << " at ";
-  terminateOp.getLoc().print(llvm::errs());
-  llvm::errs() << "\n";
+  if (verbose) {
+    llvm::errs() << "[circt-sim] sim.terminate triggered in process ID "
+                 << procId << " at ";
+    terminateOp.getLoc().print(llvm::errs());
+    llvm::errs() << "\n";
+  }
 
   // Mark termination requested
   terminationRequested = true;
@@ -8466,7 +8768,6 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   }
 
   // Mark the process as halted
-  auto &state = processStates[procId];
   state.halted = true;
 
   // Terminate the process in the scheduler
@@ -8808,14 +9109,182 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     LLVM_DEBUG(llvm::dbgs() << "    Process suspended waiting on "
                             << waitList.size() << " signals\n");
   } else {
-    // No signals found - treat as a single delta cycle wait
-    // This prevents infinite loops when wait_event body has no detectable signals
-    LLVM_DEBUG(llvm::dbgs() << "    Warning: No signals found in wait_event, "
-                               "doing single delta wait\n");
+    // No signals found - try to set up memory-based event polling.
+    // This is needed for UVM events stored as boolean fields in class instances.
+    //
+    // The pattern we're looking for:
+    //   %ptr = llvm.getelementptr %uvm_obj[0, N] : (!llvm.ptr) -> !llvm.ptr
+    //   %val = llvm.load %ptr : !llvm.ptr -> i1
+    //   %evt = builtin.unrealized_conversion_cast %val : i1 to !moore.event
+    //   moore.detect_event any %evt : event
+    //
+    // We trace backwards from detect_event input to find the memory pointer.
+    bool foundMemoryEvent = false;
 
-    // Just schedule the process to run in the next active region
-    // This will advance at least one delta cycle
-    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    waitEventOp.getBody().walk([&](moore::DetectEventOp detectOp) {
+      if (foundMemoryEvent)
+        return; // Already found one
+
+      Value input = detectOp.getInput();
+
+      // Trace through unrealized_conversion_cast to find llvm.load
+      std::function<Value(Value, int)> traceToMemoryPtr =
+          [&](Value value, int depth) -> Value {
+        if (depth > 10)
+          return nullptr;
+
+        if (Operation *defOp = value.getDefiningOp()) {
+          // If this is a load, return its address operand
+          if (auto loadOp = dyn_cast<LLVM::LoadOp>(defOp)) {
+            return loadOp.getAddr();
+          }
+
+          // Trace through unrealized_conversion_cast
+          if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+            if (!castOp.getInputs().empty()) {
+              return traceToMemoryPtr(castOp.getInputs()[0], depth + 1);
+            }
+          }
+        }
+
+        return nullptr;
+      };
+
+      Value memPtr = traceToMemoryPtr(input, 0);
+      if (!memPtr)
+        return;
+
+      // Get the address value for this pointer
+      InterpretedValue ptrVal = getValue(procId, memPtr);
+      if (ptrVal.isX()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Memory event pointer is X, cannot poll\n");
+        return;
+      }
+
+      uint64_t addr = ptrVal.getUInt64();
+      if (addr == 0) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Memory event pointer is null, cannot poll\n");
+        return;
+      }
+
+      // Find the memory block and read current value
+      MemoryBlock *block = nullptr;
+      uint64_t offset = 0;
+
+      // First try module-level allocas (accessible from all processes)
+      // Check by value directly first
+      auto moduleLevelIt = moduleLevelAllocas.find(memPtr);
+      if (moduleLevelIt != moduleLevelAllocas.end()) {
+        block = &moduleLevelIt->second;
+        offset = 0;
+      }
+
+      // If not found by value, check by address
+      if (!block) {
+        for (auto &[val, memBlock] : moduleLevelAllocas) {
+          auto addrIt = moduleInitValueMap.find(val);
+          if (addrIt != moduleInitValueMap.end()) {
+            uint64_t blockAddr = addrIt->second.getUInt64();
+            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+              block = &memBlock;
+              offset = addr - blockAddr;
+              break;
+            }
+          }
+        }
+      }
+
+      // Check malloc blocks
+      if (!block) {
+        for (auto &entry : mallocBlocks) {
+          uint64_t mallocBaseAddr = entry.first;
+          uint64_t mallocSize = entry.second.size;
+          if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+            block = &entry.second;
+            offset = addr - mallocBaseAddr;
+            break;
+          }
+        }
+      }
+
+      // Check global memory blocks
+      if (!block) {
+        for (auto &entry : globalAddresses) {
+          StringRef globalName = entry.first();
+          uint64_t globalBaseAddr = entry.second;
+          auto blockIt = globalMemoryBlocks.find(globalName);
+          if (blockIt != globalMemoryBlocks.end()) {
+            uint64_t globalSize = blockIt->second.size;
+            if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+              block = &blockIt->second;
+              offset = addr - globalBaseAddr;
+              break;
+            }
+          }
+        }
+      }
+
+      // Also check process-local memory blocks
+      if (!block) {
+        auto &procState = processStates[procId];
+        for (auto &[val, memBlock] : procState.memoryBlocks) {
+          auto addrIt = procState.valueMap.find(val);
+          if (addrIt != procState.valueMap.end()) {
+            uint64_t blockAddr = addrIt->second.getUInt64();
+            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
+              block = &memBlock;
+              offset = addr - blockAddr;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!block || !block->initialized) {
+        LLVM_DEBUG(llvm::dbgs() << "    Memory block not found or not "
+                                   "initialized for address 0x"
+                                << llvm::format_hex(addr, 16) << "\n");
+        return;
+      }
+
+      // Read the current value (assume 1 byte for boolean/event)
+      unsigned valueSize = 1;
+      if (offset + valueSize > block->size)
+        return;
+
+      uint64_t currentValue = 0;
+      for (unsigned i = 0; i < valueSize; ++i) {
+        currentValue |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+      }
+
+      // Set up the memory event waiter
+      MemoryEventWaiter waiter;
+      waiter.address = addr;
+      waiter.lastValue = currentValue;
+      waiter.valueSize = valueSize;
+      memoryEventWaiters[procId] = waiter;
+
+      LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
+                              << llvm::format_hex(addr, 16)
+                              << " with initial value " << currentValue << "\n");
+
+      foundMemoryEvent = true;
+    });
+
+    if (foundMemoryEvent) {
+      // Suspend the process - it will be woken when memory is written
+      state.waiting = true;
+      // Don't schedule - checkMemoryEventWaiters() will be called when
+      // llvm.store writes to memory, and will wake this process if needed
+    } else {
+      // No signals and no memory events found - single delta cycle wait
+      LLVM_DEBUG(llvm::dbgs() << "    Warning: No signals or memory events "
+                                 "found in wait_event, doing single delta "
+                                 "wait\n");
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    }
   }
 
   return success();
@@ -9423,6 +9892,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   LLVM_DEBUG(llvm::dbgs() << "  llvm.store: stored "
                           << (storeVal.isX() ? "X" : std::to_string(storeVal.getUInt64()))
                           << " (" << storeSize << " bytes) at offset " << offset << "\n");
+
+  // Check if any processes are waiting on memory events at this location.
+  // If the stored value changed, wake those processes.
+  checkMemoryEventWaiters();
 
   return success();
 }
