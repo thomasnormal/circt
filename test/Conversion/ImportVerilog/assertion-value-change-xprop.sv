@@ -17,9 +17,12 @@ module AssertionValueChangeRoseFell(input logic clk);
   logic in;
   assign in = 1'bx;
 // CHECK-LABEL: moore.module @AssertionValueChangeRoseFell
-// CHECK: moore.and
 // CHECK: moore.not
+// CHECK: moore.and
+// CHECK: moore.conversion
+// CHECK: moore.eq
 // CHECK-NOT: moore.case_eq
   assert property (@(posedge clk) $rose(in));
+  assert property (@(posedge clk) ($rose(in) == 1'b0));
   assert property (@(posedge clk) $fell(in));
 endmodule

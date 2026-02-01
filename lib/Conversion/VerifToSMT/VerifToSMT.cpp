@@ -3506,6 +3506,14 @@ struct VerifBoundedModelCheckingOpConversion
         }
       }
     }
+    DenseMap<Value, StringAttr> clockValueKeys;
+    op->walk([&](ltl::ClockOp clockOp) {
+      if (auto keyAttr = clockOp->getAttrOfType<StringAttr>("bmc.clock_key")) {
+        if (!keyAttr.getValue().empty())
+          clockValueKeys.try_emplace(clockOp.getClock(), keyAttr);
+      }
+    });
+
     for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
       if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
         continue;
@@ -3575,30 +3583,19 @@ struct VerifBoundedModelCheckingOpConversion
       return ClockPosInfo{it->second.pos, it->second.invert};
     };
 
-    auto makeClockKey =
-        [&](Value clockValue) -> std::optional<std::string> {
-      bool invert = false;
-      Value simplified = simplifyClockValue(clockValue, invert);
-      if (!simplified)
-        return std::nullopt;
-      BlockArgument root;
-      if (!traceClockRoot(simplified, root))
-        return std::nullopt;
-      if (root.getOwner() != &circuitBlock)
-        return std::nullopt;
-      std::string key = ("arg" + Twine(root.getArgNumber())).str();
-      if (invert)
-        key.append(":inv");
-      return key;
-    };
-
     std::function<std::optional<ClockPosInfo>(Value)>
         resolveClockPosInfoSimple =
             [&](Value clockValue) -> std::optional<ClockPosInfo> {
       if (!clockValue)
         return std::nullopt;
       if (!clockKeyToPos.empty()) {
-        if (auto key = makeClockKey(clockValue)) {
+        if (auto itKey = clockValueKeys.find(clockValue);
+            itKey != clockValueKeys.end()) {
+          auto it = clockKeyToPos.find(itKey->second.getValue());
+          if (it != clockKeyToPos.end())
+            return it->second;
+        }
+        if (auto key = getI1ValueKey(clockValue)) {
           auto it = clockKeyToPos.find(*key);
           if (it != clockKeyToPos.end())
             return it->second;

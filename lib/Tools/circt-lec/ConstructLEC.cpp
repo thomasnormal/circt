@@ -67,6 +67,45 @@ hw::HWModuleOp ConstructLECPass::lookupModule(StringRef name) {
   return cast<hw::HWModuleOp>(expectedModule);
 }
 
+static bool portsMatch(ArrayRef<Attribute> aNames, ArrayRef<Type> aTypes,
+                       ArrayRef<Attribute> bNames, ArrayRef<Type> bTypes) {
+  if (aNames.size() != bNames.size() || aTypes.size() != bTypes.size())
+    return false;
+  if (aNames.size() != aTypes.size())
+    return false;
+  for (auto [aName, bName] : llvm::zip(aNames, bNames))
+    if (aName != bName)
+      return false;
+  for (auto [aType, bType] : llvm::zip(aTypes, bTypes))
+    if (aType != bType)
+      return false;
+  return true;
+}
+
+static LogicalResult alignModuleInputs(hw::HWModuleOp shorter,
+                                       hw::HWModuleOp longer) {
+  auto shorterType = shorter.getModuleType();
+  auto longerType = longer.getModuleType();
+  auto shorterNames = shorterType.getInputNames();
+  auto shorterTypes = shorterType.getInputTypes();
+  auto longerNames = longerType.getInputNames();
+  auto longerTypes = longerType.getInputTypes();
+
+  if (shorterNames.size() > longerNames.size())
+    return failure();
+  for (unsigned i = 0, e = shorterNames.size(); i < e; ++i) {
+    if (shorterNames[i] != longerNames[i] ||
+        shorterTypes[i] != longerTypes[i])
+      return failure();
+  }
+
+  for (unsigned i = shorterNames.size(), e = longerNames.size(); i < e; ++i) {
+    shorter.insertInput(shorter.getNumInputPorts(),
+                        cast<StringAttr>(longerNames[i]), longerTypes[i]);
+  }
+  return success();
+}
+
 Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
                                        hw::HWModuleOp moduleA,
                                        hw::HWModuleOp moduleB,
@@ -128,9 +167,23 @@ void ConstructLECPass::runOnOperation() {
     return signalPassFailure();
 
   if (moduleA.getModuleType() != moduleB.getModuleType()) {
-    moduleA.emitError("module's IO types don't match second modules: ")
-        << moduleA.getModuleType() << " vs " << moduleB.getModuleType();
-    return signalPassFailure();
+    if (allowIOAlignment) {
+      auto outputsA = moduleA.getModuleType().getOutputNames();
+      auto outputsATypes = moduleA.getModuleType().getOutputTypes();
+      auto outputsB = moduleB.getModuleType().getOutputNames();
+      auto outputsBTypes = moduleB.getModuleType().getOutputTypes();
+      if (!portsMatch(outputsA, outputsATypes, outputsB, outputsBTypes) ||
+          (failed(alignModuleInputs(moduleA, moduleB)) &&
+           failed(alignModuleInputs(moduleB, moduleA)))) {
+        moduleA.emitError("module's IO types don't match second modules: ")
+            << moduleA.getModuleType() << " vs " << moduleB.getModuleType();
+        return signalPassFailure();
+      }
+    } else {
+      moduleA.emitError("module's IO types don't match second modules: ")
+          << moduleA.getModuleType() << " vs " << moduleB.getModuleType();
+      return signalPassFailure();
+    }
   }
 
   // Only construct the miter with no additional insertions.

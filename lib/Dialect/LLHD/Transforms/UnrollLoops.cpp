@@ -13,10 +13,13 @@
 #include "circt/Support/UnusedOpPruner.h"
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/Mem2Reg.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Support/Debug.h"
 
@@ -354,6 +357,23 @@ void Loop::unroll(CFGLoopInfo &cfgLoopInfo) {
     blocksToPrune.erase(block);
     if (!block->use_empty())
       continue;
+    auto hasUsesOutsideBlock = [](Block *block) {
+      for (auto &op : *block) {
+        for (auto result : op.getResults()) {
+          for (auto &use : result.getUses())
+            if (use.getOwner()->getBlock() != block)
+              return true;
+        }
+      }
+      for (auto arg : block->getArguments()) {
+        for (auto &use : arg.getUses())
+          if (use.getOwner()->getBlock() != block)
+            return true;
+      }
+      return false;
+    };
+    if (hasUsesOutsideBlock(block))
+      continue;
     for (auto *succ : block->getSuccessors())
       if (cfgLoop.contains(succ))
         blocksToPrune.insert(succ);
@@ -411,6 +431,52 @@ void UnrollLoopsPass::runOnOperation(CombinationalOp op) {
   // compute a dominator tree in that case.
   if (op.getBody().hasOneBlock())
     return;
+
+  // Hoist allocas to the entry block and then promote them to block arguments
+  // before matching loops. This enables unrolling of loops that use memory-
+  // based induction variables.
+  if (!op.getBody().empty()) {
+    SmallVector<PromotableAllocationOpInterface> allocators;
+    Block &entry = op.getBody().front();
+    for (auto alloca :
+         llvm::make_early_inc_range(op.getBody().getOps<LLVM::AllocaOp>())) {
+      if (alloca->getBlock() == &entry)
+        continue;
+      bool canHoist = true;
+      for (Value operand : alloca->getOperands()) {
+        if (auto def = operand.getDefiningOp()) {
+          if (def->getParentRegion() != &op.getBody())
+            continue;
+          if (def->getBlock() != &entry) {
+            if (def->hasTrait<OpTrait::ConstantLike>())
+              def->moveBefore(&entry, entry.begin());
+            else {
+              canHoist = false;
+              break;
+            }
+          }
+        } else if (auto arg = dyn_cast<BlockArgument>(operand)) {
+          if (arg.getOwner()->getParent() != &op.getBody())
+            continue;
+          if (arg.getOwner() != &entry) {
+            canHoist = false;
+            break;
+          }
+        }
+      }
+      if (canHoist)
+        alloca->moveBefore(&entry, entry.begin());
+    }
+    op.walk([&](PromotableAllocationOpInterface allocator) {
+      allocators.push_back(allocator);
+    });
+    if (!allocators.empty()) {
+      OpBuilder builder(&entry, entry.begin());
+      DataLayout dataLayout = DataLayout::closest(op);
+      DominanceInfo dominance(op);
+      (void)tryToPromoteMemorySlots(allocators, builder, dataLayout, dominance);
+    }
+  }
 
   // Find the loops.
   LLVM_DEBUG(llvm::dbgs() << "Unrolling loops in " << op.getLoc() << "\n");

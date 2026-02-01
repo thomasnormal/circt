@@ -15,6 +15,7 @@
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/CommutativeValueEquivalence.h"
+#include "circt/Support/FourStateUtils.h"
 #include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
@@ -29,6 +30,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/SymbolTable.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/LogicalResult.h"
 #include <optional>
 
@@ -203,14 +205,103 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
             nestedRegions.push_back({&nested, childReorder});
         }
 
+        DenseMap<Value, SmallVector<llhd::DriveOp>> drivesBySignal;
+        SmallVector<llhd::DriveOp> orphanDrives;
+        drivesBySignal.reserve(drives.size());
         for (auto drive : drives) {
-          auto sigOp = drive.getSignal().getDefiningOp<llhd::SignalOp>();
-          if (sigOp) {
+          if (auto sigOp = drive.getSignal().getDefiningOp<llhd::SignalOp>())
+            drivesBySignal[sigOp.getResult()].push_back(drive);
+          else
+            orphanDrives.push_back(drive);
+        }
+
+        for (auto &entry : drivesBySignal) {
+          auto signalValueKey = entry.first;
+          auto sigOp = signalValueKey.getDefiningOp<llhd::SignalOp>();
+          auto &sigDrives = entry.second;
+          if (!sigOp)
+            continue;
+
+          bool anyEnable =
+              llvm::any_of(sigDrives,
+                           [](llhd::DriveOp d) { return d.getEnable(); });
+          bool anyStrength = llvm::any_of(sigDrives, [](llhd::DriveOp d) {
+            return d->getAttr("strength0") || d->getAttr("strength1");
+          });
+          auto isConstantTime = [](llhd::DriveOp d) {
+            Value time = d->getOperand(2);
+            if (time.getDefiningOp<llhd::ConstantTimeOp>())
+              return true;
+            return getConstI1Value(time).has_value();
+          };
+          bool allConstTime =
+              llvm::all_of(sigDrives, [&](llhd::DriveOp d) {
+                return isConstantTime(d);
+              });
+
+          if (sigDrives.size() > 1 && allConstTime) {
+            OpBuilder resolveBuilder(sigDrives.front());
+            SmallVector<Value> driveValues;
+            SmallVector<Value> driveEnables;
+            SmallVector<unsigned> driveStrength0;
+            SmallVector<unsigned> driveStrength1;
+            driveValues.reserve(sigDrives.size());
+            driveEnables.reserve(sigDrives.size());
+            driveStrength0.reserve(sigDrives.size());
+            driveStrength1.reserve(sigDrives.size());
+            Value enableTrue;
+            for (auto drive : sigDrives)
+              driveValues.push_back(drive.getValue());
+            if (anyEnable || anyStrength) {
+              enableTrue = hw::ConstantOp::create(
+                               resolveBuilder, sigDrives.front().getLoc(),
+                               resolveBuilder.getI1Type(), 1)
+                               .getResult();
+              for (auto drive : sigDrives)
+                driveEnables.push_back(drive.getEnable() ? drive.getEnable()
+                                                         : enableTrue);
+              unsigned defaultStrength =
+                  static_cast<unsigned>(llhd::DriveStrength::Strong);
+              for (auto drive : sigDrives) {
+                auto s0Attr =
+                    drive->getAttrOfType<llhd::DriveStrengthAttr>("strength0");
+                auto s1Attr =
+                    drive->getAttrOfType<llhd::DriveStrengthAttr>("strength1");
+                driveStrength0.push_back(
+                    s0Attr ? static_cast<unsigned>(s0Attr.getValue())
+                           : defaultStrength);
+                driveStrength1.push_back(
+                    s1Attr ? static_cast<unsigned>(s1Attr.getValue())
+                           : defaultStrength);
+              }
+            }
+            Value resolved =
+                (anyEnable || anyStrength)
+                    ? resolveFourStateValuesWithStrength(
+                          resolveBuilder, sigDrives.front().getLoc(),
+                          driveValues, driveEnables, driveStrength0,
+                          driveStrength1,
+                          static_cast<unsigned>(llhd::DriveStrength::HighZ))
+                    : resolveFourStateValues(
+                          resolveBuilder, sigDrives.front().getLoc(),
+                          driveValues);
+            if (resolved) {
+              updateSignal(sigOp, resolved, nullptr);
+              for (auto drive : sigDrives)
+                drive.erase();
+              continue;
+            }
+          }
+
+          for (auto drive : sigDrives) {
             Value enable = drive.getEnable();
             updateSignal(sigOp, drive.getValue(), enable);
+            drive.erase();
           }
-          drive.erase();
         }
+
+        for (auto drive : orphanDrives)
+          drive.erase();
 
         for (auto probe : probes) {
           auto sigOp = probe.getSignal().getDefiningOp<llhd::SignalOp>();
@@ -439,6 +530,7 @@ void LowerToBMCPass::runOnOperation() {
       Value canonical;
       bool invert = false;
       Value fourStateBase;
+      std::optional<std::string> inputKey;
     };
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
@@ -494,18 +586,23 @@ void LowerToBMCPass::runOnOperation() {
       Value base = getFourStateClockBase(canonical);
       if (!base)
         base = getFourStateClockBase(input);
+      auto inputKey = getI1ValueKey(input);
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
       // errors.
       if (llvm::any_of(clockInputs, [&](const ClockInputInfo &existing) {
-            return invert == existing.invert &&
-                   (equivalence.isEquivalent(canonical, existing.canonical) ||
-                    (base && existing.fourStateBase &&
-                     base == existing.fourStateBase));
+            if (invert != existing.invert)
+              return false;
+            if (inputKey && existing.inputKey &&
+                *inputKey == *existing.inputKey)
+              return true;
+            return equivalence.isEquivalent(canonical, existing.canonical) ||
+                   (base && existing.fourStateBase &&
+                    base == existing.fourStateBase);
           }))
         return;
-      clockInputs.push_back({input, canonical, invert, base});
+      clockInputs.push_back({input, canonical, invert, base, inputKey});
     };
     for (auto toClockOp : toClockOps)
       maybeAddClockInput(toClockOp.getInput());
@@ -594,18 +691,10 @@ void LowerToBMCPass::runOnOperation() {
         return {};
       };
 
-      auto makeClockKey = [&](const ClockInputInfo &input) -> StringAttr {
-        BlockArgument root;
-        if (!(traceRoot(input.canonical, root) ||
-              traceRoot(input.value, root)))
-          return StringAttr{};
-        if (root.getOwner() != hwModule.getBodyBlock())
-          return StringAttr{};
-        std::string key =
-            ("arg" + Twine(root.getArgNumber())).str();
-        if (input.invert)
-          key.append(":inv");
-        return builder.getStringAttr(key);
+      auto makeClockKey = [&](Value clockValue) -> StringAttr {
+        if (auto key = getI1ValueKey(clockValue))
+          return builder.getStringAttr(*key);
+        return StringAttr{};
       };
 
       {
@@ -656,12 +745,16 @@ void LowerToBMCPass::runOnOperation() {
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
         bool invert = false;
         Value canonical = canonicalizeClockValue(input, invert);
+        auto inputKey = getI1ValueKey(input);
         Value base = getFourStateClockBase(canonical);
         if (!base)
           base = getFourStateClockBase(input);
         for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
           if (invert != existing.invert)
             continue;
+          if (inputKey && existing.inputKey &&
+              *inputKey == *existing.inputKey)
+            return idx;
           if (equivalence.isEquivalent(canonical, existing.canonical) ||
               (base && existing.fourStateBase &&
                base == existing.fourStateBase))
@@ -740,8 +833,10 @@ void LowerToBMCPass::runOnOperation() {
 
       clockKeyAttrs.clear();
       clockKeyAttrs.reserve(clockInputs.size());
-      for (const auto &input : clockInputs)
-        clockKeyAttrs.push_back(makeClockKey(input));
+      for (const auto &input : clockInputs) {
+        auto keyValue = input.canonical ? input.canonical : input.value;
+        clockKeyAttrs.push_back(makeClockKey(keyValue));
+      }
 
       if (!clockInputs.empty()) {
         DenseSet<unsigned> seenSourceArgs;
@@ -797,6 +892,8 @@ void LowerToBMCPass::runOnOperation() {
       // input. This avoids treating structurally equivalent clock expressions
       // as unrelated to the inserted clock ports.
       for (auto clockOp : ltlClockOps) {
+        if (auto key = getI1ValueKey(clockOp.getClock()))
+          clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
           clockOp.emitError("failed to map clocked property input");
@@ -808,6 +905,8 @@ void LowerToBMCPass::runOnOperation() {
             seq::FromClockOp::create(builder, loc, newClocks[*idx]);
         auto rebuilt = ltl::ClockOp::create(builder, loc, clockOp.getInput(),
                                             clockOp.getEdge(), fromClk);
+        if (auto keyAttr = clockOp->getAttr("bmc.clock_key"))
+          rebuilt->setAttr("bmc.clock_key", keyAttr);
         clockOp.replaceAllUsesWith(rebuilt.getResult());
         clockOp.erase();
       }
@@ -1261,10 +1360,10 @@ void LowerToBMCPass::runOnOperation() {
         LLVM::AddressOfOp::create(builder, loc, global)->getResult(0));
   };
 
-  auto successStrAddr =
-      createUniqueStringGlobal("Bound reached with no violations!\n");
+  auto successStrAddr = createUniqueStringGlobal(
+      "BMC_RESULT=UNSAT\nBound reached with no violations!\n");
   auto failureStrAddr =
-      createUniqueStringGlobal("Assertion can be violated!\n");
+      createUniqueStringGlobal("BMC_RESULT=SAT\nAssertion can be violated!\n");
 
   if (failed(successStrAddr) || failed(failureStrAddr)) {
     moduleOp->emitOpError("could not create result message strings");

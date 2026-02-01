@@ -24,7 +24,7 @@ hw.module @SimpleLoop(out x : i42) {
     // CHECK-NEXT:   [[X1:%.+]] = comb.add [[X0]], %c42_i42
     // CHECK-NEXT:   [[X2:%.+]] = comb.add [[X1]], %c42_i42
     // CHECK-NEXT:   [[X3:%.+]] = comb.add [[X2]], %c42_i42
-    // CHECK-NEXT:   cf.br [[EXIT:\^.+]]
+    // CHECK-NEXT:   cf.br [[EXIT:\^bb[0-9]+]]
     %2 = comb.add %x, %c42_i42 : i42
     %ip = comb.add %i, %c1_i42 : i42
     cf.br ^header(%ip, %2 : i42, i42)
@@ -59,14 +59,14 @@ hw.module @TwoNestedLoops(out x : i42) {
     %2 = comb.icmp slt %j, %c3_i42 : i42
     cf.cond_br %2, ^innerBody, ^innerExit
   ^innerBody:  // pred: ^innerHeader
-    // CHECK-NEXT: [[ENTRY]]([[X0:%.+]]: i42):
+    // CHECK: [[ENTRY]]([[X0:%.+]]: i42):
     // CHECK-NEXT:   [[X1:%.+]] = comb.add [[X0]], %c42_i42
     // CHECK-NEXT:   [[X2:%.+]] = comb.add [[X1]], %c42_i42
     // CHECK-NEXT:   [[X3:%.+]] = comb.add [[X2]], %c42_i42
     // CHECK-NEXT:   [[X4:%.+]] = comb.add [[X3]], %c42_i42
     // CHECK-NEXT:   [[X5:%.+]] = comb.add [[X4]], %c42_i42
     // CHECK-NEXT:   [[X6:%.+]] = comb.add [[X5]], %c42_i42
-    // CHECK-NEXT:   cf.br [[EXIT:\^.+]]
+    // CHECK-NEXT:   cf.br [[EXIT:\^bb[0-9]+]]
     %7 = comb.add %x2, %c42_i42 : i42
     %jp = comb.add %j, %c1_i42 : i42
     cf.br ^innerHeader(%jp, %7 : i42, i42)
@@ -74,8 +74,10 @@ hw.module @TwoNestedLoops(out x : i42) {
     %ip = comb.add %i, %c1_i42 : i42
     cf.br ^outerHeader(%ip, %x2 : i42, i42)
   ^outerExit:  // pred: ^outerHeader
-    // CHECK-NEXT: [[EXIT]]:
-    // CHECK-NEXT:   llhd.yield [[X6]]
+    // CHECK: [[EXIT]]([[EXITVAL:%.+]]: i42):
+    // CHECK-NEXT:   cf.br [[YIELD:\^bb[0-9]+]]
+    // CHECK: [[YIELD]]:
+    // CHECK-NEXT:   llhd.yield [[EXITVAL]]
     llhd.yield %x1 : i42
   }
   hw.output %0 : i42
@@ -215,6 +217,30 @@ hw.module @SkipLoopWithUnsupportedInductionVariable1() {
   }
 }
 
+// CHECK-LABEL: @LoopWithAlloca
+hw.module @LoopWithAlloca(out x : i32) {
+  %c0_i32 = hw.constant 0 : i32
+  %c1_i32 = hw.constant 1 : i32
+  %c2_i32 = hw.constant 2 : i32
+  %c1_i64 = llvm.mlir.constant(1 : i64) : i64
+  %0 = llhd.combinational -> i32 {
+    cf.br ^header(%c0_i32, %c0_i32 : i32, i32)
+  ^header(%i: i32, %acc: i32):  // 2 preds: ^bb0, ^body
+    %cond = comb.icmp slt %i, %c2_i32 : i32
+    cf.cond_br %cond, ^body, ^exit
+  ^body:  // pred: ^header
+    %ptr = llvm.alloca %c1_i64 x i32 : (i64) -> !llvm.ptr
+    llvm.store %c0_i32, %ptr : i32, !llvm.ptr
+    %tmp = llvm.load %ptr : !llvm.ptr -> i32
+    %acc2 = comb.add %acc, %tmp : i32
+    %ip = comb.add %i, %c1_i32 : i32
+    cf.br ^header(%ip, %acc2 : i32, i32)
+  ^exit:  // pred: ^header
+    llhd.yield %acc : i32
+  }
+  hw.output %0 : i32
+}
+
 // CHECK-LABEL: @SkipLoopWithUnsupportedInductionVariable2
 hw.module @SkipLoopWithUnsupportedInductionVariable2(in %i: i42) {
   %c0_i42 = hw.constant 0 : i42
@@ -235,6 +261,35 @@ hw.module @SkipLoopWithUnsupportedInductionVariable2(in %i: i42) {
   ^exit:
     llhd.yield
   }
+}
+
+// CHECK-LABEL: @LoopWithAllocaInduction
+hw.module @LoopWithAllocaInduction(out x : i32) {
+  %c0_i32 = hw.constant 0 : i32
+  %c1_i32 = hw.constant 1 : i32
+  %c3_i32 = hw.constant 3 : i32
+  %c1_i64 = llvm.mlir.constant(1 : i64) : i64
+  %0 = llhd.combinational -> i32 {
+    %ptr = llvm.alloca %c1_i64 x i32 : (i64) -> !llvm.ptr
+    llvm.store %c0_i32, %ptr : i32, !llvm.ptr
+    cf.br ^header
+  ^header:
+    %i = llvm.load %ptr : !llvm.ptr -> i32
+    %cond = comb.icmp slt %i, %c3_i32 : i32
+    cf.cond_br %cond, ^body, ^exit
+  ^body:
+    %ip = comb.add %i, %c1_i32 : i32
+    llvm.store %ip, %ptr : i32, !llvm.ptr
+    cf.br ^header
+  ^exit:
+    llhd.yield %i : i32
+  }
+  // CHECK: llhd.combinational
+  // CHECK-NOT: llvm.alloca
+  // CHECK-NOT: llvm.load
+  // CHECK-NOT: llvm.store
+  // CHECK-NOT: cf.cond_br
+  hw.output %0 : i32
 }
 
 // CHECK-LABEL: @SkipLoopWithMultipleInitialInductionVariableValue
