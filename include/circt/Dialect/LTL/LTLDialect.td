@@ -17,9 +17,11 @@ def LTLDialect : Dialect {
   // See `docs/Dialect/LTL.md` for detailed dialect documentation.
   let cppNamespace = "circt::ltl";
   let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
   let dependentDialects = ["hw::HWDialect", "comb::CombDialect"];
 
   let hasConstantMaterializer = 1;
+
 }
 
 #endif // CIRCT_DIALECT_LTL_LTLDIALECT_TD

@@ -8,6 +8,11 @@ mlir_tablegen(LTLEnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(CIRCTLTLEnumsIncGen)
 add_dependencies(circt-headers CIRCTLTLEnumsIncGen)
 
+mlir_tablegen(LTLAttributes.h.inc -gen-attrdef-decls --attrdefs-dialect=ltl)
+mlir_tablegen(LTLAttributes.cpp.inc -gen-attrdef-defs --attrdefs-dialect=ltl)
+add_public_tablegen_target(CIRCTLTLAttributesIncGen)
+add_dependencies(circt-headers CIRCTLTLAttributesIncGen)
+
 mlir_tablegen(LTLFolds.cpp.inc -gen-rewriters)
 add_public_tablegen_target(CIRCTLTLFoldsIncGen)
 add_dependencies(circt-headers CIRCTLTLFoldsIncGen)

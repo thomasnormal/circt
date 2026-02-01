@@ -12,6 +12,7 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 
 #include "circt/Dialect/LTL/LTLDialect.h"
+#include "circt/Dialect/LTL/LTLAttributes.h"
 #include "circt/Dialect/LTL/LTLTypes.h"
 
 #define GET_OP_CLASSES
