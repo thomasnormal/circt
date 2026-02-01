@@ -270,6 +270,18 @@ func.func @test_queue_push_front() {
   return
 }
 
+// CHECK-LABEL: func @test_queue_insert
+// CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
+// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK: llvm.call @__moore_queue_insert([[QPTR]], {{.*}}, {{.*}}, [[SIZE]]) : (!llvm.ptr, i32, !llvm.ptr, i64) -> ()
+func.func @test_queue_insert() {
+  %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
+  %index = moore.constant 1 : i32
+  %elem = moore.constant 42 : i32
+  moore.queue.insert %queue_ref, %index, %elem : !moore.ref<queue<!moore.i32, 0>>, !moore.i32, !moore.i32
+  return
+}
+
 // CHECK-LABEL: func @test_queue_pop_back
 // CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
 // CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr

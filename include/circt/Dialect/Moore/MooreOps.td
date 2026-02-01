@@ -6070,6 +6070,22 @@ def QueuePushFrontOp : QueueBuiltin<"push_front"> {
   let assemblyFormat = "$queue `,` $element `:` type($queue) `,` type($element) attr-dict";
 }
 
+def QueueInsertOp : QueueBuiltin<"insert"> {
+  let summary = "Insert an element into a queue";
+  let description = [{
+    Inserts an element into a queue at the given index, shifting any subsequent
+    elements. This corresponds to the SystemVerilog `.insert(index, element)`
+    built-in method on queues.
+
+    Example:
+    ```mlir
+    moore.queue.insert %queue, %idx, %elem : !moore.ref<!moore.queue<i32, 0>>, i32, i32
+    ```
+  }];
+  let arguments = (ins RefType:$queue, IntType:$index, UnpackedType:$element);
+  let assemblyFormat = "$queue `,` $index `,` $element `:` type($queue) `,` type($index) `,` type($element) attr-dict";
+}
+
 def QueuePopBackOp : QueueBuiltin<"pop_back"> {
   let summary = "Pop an element from the back of a queue";
   let description = [{

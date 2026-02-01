@@ -36,6 +36,14 @@ func.func @QueuePushPop(%queue: !moore.ref<queue<i32, 0>>, %elem: !moore.i32) {
   return
 }
 
+// CHECK-LABEL: func.func @QueueInsert
+// CHECK-SAME: ([[QUEUE:%.+]]: !moore.ref<queue<i32, 0>>, [[INDEX:%.+]]: !moore.i32, [[ELEM:%.+]]: !moore.i32)
+func.func @QueueInsert(%queue: !moore.ref<queue<i32, 0>>, %index: !moore.i32, %elem: !moore.i32) {
+  // CHECK: moore.queue.insert [[QUEUE]], [[INDEX]], [[ELEM]] : <queue<i32, 0>>, i32, i32
+  moore.queue.insert %queue, %index, %elem : <queue<i32, 0>>, i32, i32
+  return
+}
+
 //===----------------------------------------------------------------------===//
 // Queue Sort and Delete Operations
 //===----------------------------------------------------------------------===//
