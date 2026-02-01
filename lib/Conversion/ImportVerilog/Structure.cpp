@@ -364,9 +364,25 @@ struct BaseVisitor {
 
   // GenericClassDefSymbol represents parameterized (template) classes, which
   // per IEEE 1800-2023 §8.25 are abstract and not instantiable. Slang models
-  // concrete specializations as ClassType, so we skip GenericClassDefSymbol
-  // entirely.
-  LogicalResult visit(const slang::ast::GenericClassDefSymbol &) {
+  // concrete specializations as ClassType, so we iterate over all
+  // specializations and convert each one. This ensures that static member
+  // initializers for parameterized class specializations (like UVM factory
+  // registrations) are properly generated.
+  LogicalResult visit(const slang::ast::GenericClassDefSymbol &generic) {
+    // Iterate over all specializations of this generic class and convert them.
+    // This is critical for UVM-style factory registration patterns where
+    // static member initializers like:
+    //   local static bit m__initialized = __deferred_init();
+    // need to be generated for each specialization.
+    for (const slang::ast::Type &spec : generic.specializations()) {
+      if (const auto *classType = spec.as_if<slang::ast::ClassType>()) {
+        // Skip uninstantiated specializations (these are placeholders).
+        if (classType->isUninstantiated)
+          continue;
+        if (failed(context.convertClassDeclaration(*classType)))
+          return failure();
+      }
+    }
     return success();
   }
 
@@ -4536,8 +4552,18 @@ struct ClassDeclVisitor {
     return success();
   }
 
-  // Nested class definition, skip
-  LogicalResult visit(const slang::ast::GenericClassDefSymbol &) {
+  // Nested generic class definition - convert all specializations.
+  // This ensures static member initializers for nested parameterized classes
+  // are properly generated.
+  LogicalResult visit(const slang::ast::GenericClassDefSymbol &generic) {
+    for (const slang::ast::Type &spec : generic.specializations()) {
+      if (const auto *classType = spec.as_if<slang::ast::ClassType>()) {
+        if (classType->isUninstantiated)
+          continue;
+        if (failed(context.convertClassDeclaration(*classType)))
+          return failure();
+      }
+    }
     return success();
   }
 
