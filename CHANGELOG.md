@@ -134,6 +134,8 @@
 - `LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir OUT=/tmp/yosys-sva-lec-results.txt utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` (extnets now passes with new ordering)
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
 - `build/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-conflict.mlir`
+- `build/bin/circt-opt --externalize-registers test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir | build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir`
+- `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir`
 
 ## Iteration 279 - February 1, 2026
 
