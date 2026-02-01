@@ -29,6 +29,14 @@ When UVM called with `init=1`, CIRCT tried to use `1` as a pointer address, caus
 
 **Result**: UVM cmdline processor now works correctly.
 
+### CRITICAL BUG IDENTIFIED - Static Associative Arrays
+
+Static associative arrays (class static variables with string keys) do not persist values across static function calls. Values added in one call are not found in subsequent calls.
+
+**Impact**: Breaks UVM's `uvm_domain::m_domains` causing `get_common_domain()` to return null. Without domains, UVM phases cannot run.
+
+**Test case**: `/tmp/test_static_assoc.sv` demonstrates the bug.
+
 ### AVIP Simulation Progress - APB/AHB/I2S/I3C Initialize UVM!
 
 APB and AHB AVIPs now compile and simulate with uvm-core. UVM infrastructure initializes:
@@ -37,7 +45,7 @@ APB and AHB AVIPs now compile and simulate with uvm-core. UVM infrastructure ini
 - BFM components (master/slave) are created
 - Config DB entries are set
 
-Simulation runs but phases may stall after initialization.
+Simulation runs but phases stall due to the static associative array bug above.
 
 ### Test Status
 
@@ -307,9 +315,13 @@ The CIRCT toolchain did not generate initialization code for static members in p
 - `lower-lec-llvm` now resolves block-argument loads by merging predecessor
   stores when no single dominating store exists, eliminating leftover LLVM
   struct loads in control-flow joins.
+- `strip-llhd-interface-signals` now resolves overlapping conditional interface
+  stores for 4-state fields using enable-based 4-state resolution in strict
+  mode, avoiding unnecessary abstraction.
 - Added regressions:
   - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
   - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux + cast case)
+  - `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-overlap-4state.mlir`
 
 ### WaitEventOpConversion Update
 
