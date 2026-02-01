@@ -19,11 +19,14 @@
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/RegionGraphTraits.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/Mem2Reg.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -203,10 +206,27 @@ void CFRemover::run() {
   if (sortedBlocks.size() != region.getBlocks().size())
     return;
 
+  DenseMap<Block *, unsigned> blockOrder;
+  blockOrder.reserve(sortedBlocks.size());
+  for (auto [index, block] : llvm::enumerate(sortedBlocks))
+    blockOrder[block] = index;
+  for (auto *block : sortedBlocks) {
+    auto blockIndex = blockOrder.lookup(block);
+    for (auto *pred : block->getPredecessors()) {
+      auto it = blockOrder.find(pred);
+      if (it == blockOrder.end())
+        return;
+      if (it->second >= blockIndex)
+        return;
+    }
+  }
+
   for (auto *block : sortedBlocks) {
     for (auto &op : *block) {
       if (!isMemoryEffectFree(&op) &&
-          !isa<llhd::ProbeOp, llhd::DriveOp, llhd::SignalOp>(op)) {
+          !isa<llhd::ProbeOp, llhd::DriveOp, llhd::SignalOp, LLVM::AllocaOp,
+               UnrealizedConversionCastOp, LLVM::UndefOp, LLVM::InsertValueOp,
+               LLVM::ConstantOp>(op)) {
         return;
       }
     }
@@ -447,24 +467,7 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   if (!module)
     return combOp.emitError("expected llhd.combinational in hw.module for LEC");
 
-  if (!llvm::hasSingleElement(combOp.getBody())) {
-    CFRemover(combOp.getBody()).run();
-  }
-
-  if (!llvm::hasSingleElement(combOp.getBody())) {
-    if (strictMode)
-      return combOp.emitError(
-          "LLHD combinational control flow requires abstraction; rerun without "
-          "--strict-llhd");
-    SmallVector<Value> inputs;
-    for (Type resultType : combOp.getResultTypes())
-      inputs.push_back(state.addInput(module, "llhd_comb", resultType));
-    combOp.replaceAllUsesWith(inputs);
-    combOp.erase();
-    return success();
-  }
-
-  Block &body = combOp.getBody().front();
+  Region &region = combOp.getBody();
 
   auto getLocalRefPtr = [](Value ref) -> Value {
     if (ref.getDefiningOp<llhd::SignalOp>())
@@ -503,7 +506,7 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   };
 
   SmallVector<llhd::ProbeOp> localProbes;
-  body.walk([&](llhd::ProbeOp probe) {
+  region.walk([&](llhd::ProbeOp probe) {
     if (getLocalRefPtr(probe.getSignal()))
       localProbes.push_back(probe);
   });
@@ -527,7 +530,7 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   }
 
   SmallVector<llhd::DriveOp> localDrives;
-  body.walk([&](llhd::DriveOp drive) {
+  region.walk([&](llhd::DriveOp drive) {
     if (getLocalRefPtr(drive.getSignal()))
       localDrives.push_back(drive);
   });
@@ -556,7 +559,7 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   }
 
   SmallVector<comb::MuxOp> refMuxes;
-  body.walk([&](comb::MuxOp mux) {
+  region.walk([&](comb::MuxOp mux) {
     if (isa<llhd::RefType>(mux.getType()))
       refMuxes.push_back(mux);
   });
@@ -582,6 +585,135 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
     }
     mux.erase();
   }
+
+  // Clean up dead casts so they don't block mem2reg.
+  SmallVector<UnrealizedConversionCastOp> deadCasts;
+  region.walk([&](UnrealizedConversionCastOp castOp) {
+    if (castOp->use_empty())
+      deadCasts.push_back(castOp);
+  });
+  for (auto castOp : deadCasts)
+    castOp.erase();
+
+  if (!region.empty()) {
+    Block &entryBlock = region.front();
+    for (auto alloca :
+         llvm::make_early_inc_range(region.getOps<LLVM::AllocaOp>())) {
+      if (alloca->getBlock() == &entryBlock)
+        continue;
+      bool canHoist = true;
+      for (Value operand : alloca->getOperands()) {
+        if (auto def = operand.getDefiningOp()) {
+          if (def->getParentRegion() != &region)
+            continue;
+          if (def->getBlock() != &entryBlock) {
+            if (def->hasTrait<OpTrait::ConstantLike>())
+              def->moveBefore(&entryBlock, entryBlock.begin());
+            else {
+              canHoist = false;
+              break;
+            }
+          }
+        } else if (auto arg = dyn_cast<BlockArgument>(operand)) {
+          if (arg.getOwner()->getParent() != &region)
+            continue;
+          if (arg.getOwner() != &entryBlock) {
+            canHoist = false;
+            break;
+          }
+        }
+      }
+      if (canHoist)
+        alloca->moveBefore(&entryBlock, entryBlock.begin());
+    }
+
+    for (Block &block : region) {
+      for (unsigned argIndex = 0; argIndex < block.getNumArguments();
+           ++argIndex) {
+        BlockArgument arg = block.getArgument(argIndex);
+        if (!isa<LLVM::LLVMPointerType>(arg.getType()))
+          continue;
+
+        SmallVector<LLVM::LoadOp> loads;
+        bool hasOtherUses = false;
+        for (OpOperand &use : arg.getUses()) {
+          auto load = dyn_cast<LLVM::LoadOp>(use.getOwner());
+          if (!load || load.getAddr() != arg) {
+            hasOtherUses = true;
+            break;
+          }
+          loads.push_back(load);
+        }
+        if (hasOtherUses || loads.empty())
+          continue;
+
+        Type loadType = loads.front().getType();
+        if (llvm::any_of(loads,
+                         [&](LLVM::LoadOp load) {
+                           return load.getType() != loadType;
+                         }))
+          continue;
+
+        arg.setType(loadType);
+        for (LLVM::LoadOp load : loads) {
+          load.replaceAllUsesWith(arg);
+          load.erase();
+        }
+
+        for (Block *pred : block.getPredecessors()) {
+          auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+          if (!branch)
+            continue;
+          OpBuilder builder(pred->getTerminator());
+          for (unsigned succIndex = 0; succIndex < branch->getNumSuccessors();
+               ++succIndex) {
+            if (branch->getSuccessor(succIndex) != &block)
+              continue;
+            auto succOperands = branch.getSuccessorOperands(succIndex);
+            if (argIndex >= succOperands.size())
+              continue;
+            if (succOperands.isOperandProduced(argIndex))
+              continue;
+            unsigned operandIndex = succOperands.getOperandIndex(argIndex);
+            Value ptrValue = branch->getOperand(operandIndex);
+            Value loaded =
+                LLVM::LoadOp::create(builder, branch.getLoc(), loadType,
+                                     ptrValue);
+            branch->setOperand(operandIndex, loaded);
+          }
+        }
+      }
+    }
+
+    OpBuilder builder(&entryBlock, entryBlock.begin());
+    SmallVector<PromotableAllocationOpInterface> allocators;
+    region.walk([&](PromotableAllocationOpInterface allocator) {
+      allocators.push_back(allocator);
+    });
+    if (!allocators.empty()) {
+      DataLayout dataLayout = DataLayout::closest(combOp);
+      DominanceInfo dominance(combOp);
+      (void)tryToPromoteMemorySlots(allocators, builder, dataLayout, dominance);
+    }
+  }
+
+  if (!llvm::hasSingleElement(region)) {
+    CFRemover(region).run();
+  }
+
+  if (!llvm::hasSingleElement(region)) {
+    if (strictMode)
+      return combOp.emitError(
+          "LLHD combinational control flow requires abstraction; rerun without "
+          "--strict-llhd");
+    SmallVector<Value> inputs;
+    for (Type resultType : combOp.getResultTypes())
+      inputs.push_back(state.addInput(module, "llhd_comb", resultType));
+    combOp.replaceAllUsesWith(inputs);
+    combOp.erase();
+    return success();
+  }
+  Block &body = combOp.getBody().front();
   auto *terminator = body.getTerminator();
   auto yieldOp = dyn_cast<llhd::YieldOp>(terminator);
   if (!yieldOp)

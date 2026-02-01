@@ -5098,16 +5098,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     while (parent && !isa<ModuleOp>(parent))
       parent = parent->getParentOp();
 
-    if (!parent) {
-      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: could not find module\n");
-      for (Value result : callIndirectOp.getResults()) {
-        setValue(procId, result,
-                 InterpretedValue::makeX(getTypeWidth(result.getType())));
-      }
-      return success();
-    }
-
-    auto moduleOp = cast<ModuleOp>(parent);
+    // Use rootModule as fallback for global constructors
+    ModuleOp moduleOp = parent ? cast<ModuleOp>(parent) : rootModule;
     auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
     if (!funcOp) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: function '" << calleeName

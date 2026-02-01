@@ -2288,6 +2288,23 @@ struct RvalueExprVisitor : public ExprVisitor {
     rhs = context.convertToSimpleBitVector(rhs);
     if (!rhs)
       return {};
+    if (lhs.getType() != rhs.getType()) {
+      auto lhsInt = dyn_cast<moore::IntType>(lhs.getType());
+      auto rhsInt = dyn_cast<moore::IntType>(rhs.getType());
+      if (lhsInt && rhsInt && lhsInt.getWidth() == rhsInt.getWidth()) {
+        auto targetDomain =
+            (lhsInt.getDomain() == moore::Domain::FourValued ||
+             rhsInt.getDomain() == moore::Domain::FourValued)
+                ? moore::Domain::FourValued
+                : moore::Domain::TwoValued;
+        auto targetType = moore::IntType::get(context.getContext(),
+                                              lhsInt.getWidth(), targetDomain);
+        if (lhs.getType() != targetType)
+          lhs = moore::ConversionOp::create(builder, loc, targetType, lhs);
+        if (rhs.getType() != targetType)
+          rhs = moore::ConversionOp::create(builder, loc, targetType, rhs);
+      }
+    }
     return ConcreteOp::create(builder, loc, lhs, rhs);
   }
 

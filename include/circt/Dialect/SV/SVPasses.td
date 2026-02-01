@@ -165,7 +165,9 @@ def HWEliminateInOutPorts : Pass<"hw-eliminate-inout-ports",
             "Suffix to be used for the port when the inout port has writers">,
     Option<"allowMultipleWritersSameValue", "allow-multiple-writers-same-value",
            "bool", "false",
-           "Allow multiple writers if all drive the same value">
+           "Allow multiple writers if all drive the same value">,
+    Option<"resolveReadWrite", "resolve-read-write", "bool", "false",
+           "Resolve inout reads against internal writes for 4-state values">
   ];
 }
 
