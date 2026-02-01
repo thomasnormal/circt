@@ -1679,9 +1679,12 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
       return resolveSignalId(mappedValue);
     }
   }
-  if (auto probeOp = value.getDefiningOp<llhd::ProbeOp>()) {
-    return resolveSignalId(probeOp.getSignal());
-  }
+  // NOTE: We explicitly do NOT trace through llhd::ProbeOp here.
+  // The result of a probe is a VALUE (not a signal reference).
+  // Operations on probe results should treat them as values, not signals.
+  // This is important for cases like:
+  //   %ptr = llhd.prb %sig : !llvm.ptr  // %ptr is a VALUE (pointer address)
+  //   llvm.store %val, %ptr            // Should write to MEMORY, not drive %sig
   // Trace through UnrealizedConversionCastOp - these are used to convert
   // between !llhd.ref types and LLVM pointer types when passing signals
   // as function arguments.
