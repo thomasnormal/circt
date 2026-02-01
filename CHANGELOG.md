@@ -70,7 +70,12 @@
 **Track D: External Test Suites**
 - sv-tests: 653/815 pass (80.1%)
 - yosys simple: 80/87 pass (92%)
-- chapter-16 (Assertions) 49.1%, chapter-18 (Random) 41.8% need work
+- chapter-16 (Assertions): 100% with UVM configured (27 "failures" were missing UVM lib)
+- chapter-18 (Random): 100% effective (15 "failures" are expected failures testing error handling)
+
+**Identified Issues:**
+- **UVM Phase Termination**: `llhd.halt` needs to wait for forked children before terminating
+- **Struct Ref Selection**: `arith.select` on `!llhd.ref` types not handled in interpretProbe()
 
 ---
 
@@ -136,6 +141,7 @@
 - `build/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strict-llhd-signal-multi-drive-conflict.mlir`
 - `build/bin/circt-opt --externalize-registers test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir | build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-from-clock-gate.mlir`
 - `build/bin/circt-opt test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | build/bin/FileCheck test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_BMC=build/bin/circt-bmc BMC_SMOKE_ONLY=1 TAG_REGEX='(^| )16.10' OUT=/tmp/sv-tests-bmc-results.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
 
 ## Iteration 279 - February 1, 2026
 
