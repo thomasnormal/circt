@@ -2,41 +2,42 @@
 
 ## Final Session Summary - February 1, 2026
 
-### Final Achievement
-- **ImportVerilog**: 218/219 pass (99.54%)
-- **XFAIL reduction**: 18 → 1 (94% reduction!)
-- **Tests fixed this session**: 17
-- **Only remaining XFAIL**: bind-interface-port.sv
+### Final Achievement - 100% ImportVerilog Pass Rate!
+- **ImportVerilog**: **219/219 pass (100%!)** ← COMPLETE
+- **XFAIL reduction**: 18 → 0 (100% reduction!)
+- **Tests fixed this session**: 18 (all XFAILs eliminated)
 - **OpenTitan**: TL-UL timing fix applied
 - **AVIP**: All 6 protocols compile and simulate with UVM
 
 ### Key Fixes This Session
-1. **17 XFAIL tests fixed** - Reduced from 18 to 1
-2. **bind-nested-definition.sv** - Created slang patch for nested bind scope lookup
-3. **circt-sim abort check** - Fixed timeout handling for graceful termination
-4. **queue.insert operation** - Added Moore dialect queue insert support
-5. **BMC four-state clock handling** - Improved 4-state clock gate simplification
-6. **dynamic-nonprocedural.sv** - Fixed setSeverity ordering issue
-7. **sva-procedural-hoist-no-clock.sv** - Fixed assertion hoisting without clock context
-8. **4 UVM tests** - Fixed with uvm-core library integration
-9. **tlul-bfm-include.sv** - Added complete stubs for TL-UL BFM infrastructure
-10. **SignalValue comparison** - Fixed operator== for simulation correctness
-11. **Stack overflow in collectSignalIds** - Fixed infinite recursion
-12. **Delta step tracking** - Fixed EventQueue behavior
-
-### Remaining Work
-- **1 bind directive XFAIL** (bind-interface-port.sv - architectural limitation)
-- **TL-UL a_ready signal propagation** for OpenTitan IP simulation
-- **circt-sim timeout mechanism** (2 hanging tests need graceful termination)
+1. **18 XFAIL tests fixed** - Reduced from 18 to 0
+2. **bind-interface-port.sv** - Fixed interface port threading across bind scopes
+3. **bind-nested-definition.sv** - Created slang patch for nested bind scope lookup
+4. **circt-sim abort check** - Fixed timeout handling for graceful termination
+5. **queue.insert operation** - Added Moore dialect queue insert support
+6. **BMC four-state clock handling** - Improved 4-state clock gate simplification
+7. **dynamic-nonprocedural.sv** - Fixed setSeverity ordering issue
+8. **sva-procedural-hoist-no-clock.sv** - Fixed assertion hoisting without clock context
+9. **4 UVM tests** - Fixed with uvm-core library integration
+10. **tlul-bfm-include.sv** - Added complete stubs for TL-UL BFM infrastructure
+11. **SignalValue comparison** - Fixed operator== for simulation correctness
+12. **Stack overflow in collectSignalIds** - Fixed infinite recursion
+13. **Delta step tracking** - Fixed EventQueue behavior
+14. **BindScopeInterfacePortInfo** - New struct for tracking interface ports in bind scope
 
 ### Test Suite Summary
 | Suite | Status | Notes |
 |-------|--------|-------|
-| ImportVerilog | **218/219 (99.54%)** | Only 1 XFAIL remains |
+| ImportVerilog | **219/219 (100%)** | ALL TESTS PASS! |
 | OpenTitan IPs | **17+/21 (81%+)** | TL-UL init timing identified |
 | AVIP Protocols | **6/6 (100%)** | APB, AHB, UART, I2S, AXI4, I3C |
 | BMC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
 | LEC Verification | **54/54 pass** | sv-tests + yosys-sva + verilator |
+
+### Remaining Work
+- **TL-UL a_ready signal propagation** for OpenTitan IP simulation
+- **Class member access bug** - Reading class member variables from methods
+- **Virtual method dispatch** - Class hierarchy simulation
 
 ---
 
@@ -80,9 +81,13 @@
    - VerifToSMT now traces clock roots through `hw.struct_explode` when
      resolving `bmc_clock_sources`, so clocked properties continue to map
      through aggregate lowering.
+   - LowerToBMC now emits `bmc_clock_keys` and VerifToSMT consumes them to
+     provide stable clock IDs for derived-clock mapping without relying on
+     structural equivalence.
    - **Tests**: `unittests/Support/I1ValueSimplifierTest.cpp`,
      `test/Tools/circt-bmc/circt-bmc-struct-clock-gate-equivalence.mlir`,
-     `test/Conversion/VerifToSMT/bmc-clock-source-struct-explode.mlir`.
+     `test/Conversion/VerifToSMT/bmc-clock-source-struct-explode.mlir`,
+     `test/Conversion/VerifToSMT/bmc-clock-keys-i1-source.mlir`.
 
 ## Iteration 277 - January 31, 2026
 

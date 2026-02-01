@@ -426,6 +426,7 @@ void LowerToBMCPass::runOnOperation() {
   bool hasExplicitClockInput = !explicitClocks.empty();
   bool hasClk = hasExplicitClockInput;
   SmallVector<Attribute> clockSourceAttrs;
+  SmallVector<Attribute> clockKeyAttrs;
   if (!hasExplicitClockInput) {
     SmallVector<seq::ToClockOp> toClockOps;
     SmallVector<ltl::ClockOp> ltlClockOps;
@@ -670,6 +671,20 @@ void LowerToBMCPass::runOnOperation() {
         return {};
       };
 
+      auto makeClockKey = [&](const ClockInputInfo &input) -> StringAttr {
+        BlockArgument root;
+        if (!(traceRoot(input.canonical, root) ||
+              traceRoot(input.value, root)))
+          return StringAttr{};
+        if (root.getOwner() != hwModule.getBodyBlock())
+          return StringAttr{};
+        std::string key =
+            ("arg" + Twine(root.getArgNumber())).str();
+        if (input.invert)
+          key.append(":inv");
+        return builder.getStringAttr(key);
+      };
+
       {
         DenseMap<std::pair<BlockArgument, unsigned>, size_t> rootToIndex;
         SmallVector<ClockInputInfo> deduped;
@@ -799,6 +814,11 @@ void LowerToBMCPass::runOnOperation() {
         if (nameAttr && !nameAttr.getValue().empty())
           validClockNames.insert(nameAttr.getValue());
       }
+
+      clockKeyAttrs.clear();
+      clockKeyAttrs.reserve(clockInputs.size());
+      for (const auto &input : clockInputs)
+        clockKeyAttrs.push_back(makeClockKey(input));
 
       if (!clockInputs.empty()) {
         DenseSet<unsigned> seenSourceArgs;
@@ -981,6 +1001,8 @@ void LowerToBMCPass::runOnOperation() {
   if (!clockSourceAttrs.empty())
     bmcOp->setAttr("bmc_clock_sources",
                    builder.getArrayAttr(clockSourceAttrs));
+  if (!clockKeyAttrs.empty())
+    bmcOp->setAttr("bmc_clock_keys", builder.getArrayAttr(clockKeyAttrs));
   if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
     bmcOp->setAttr("bmc_reg_clocks", regClocks);
   if (ignoreAssertionsUntil) {

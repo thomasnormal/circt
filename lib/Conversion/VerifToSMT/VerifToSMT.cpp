@@ -3487,7 +3487,25 @@ struct VerifBoundedModelCheckingOpConversion
     };
     DenseMap<Value, ClockPosInfo> clockValueToPos;
     DenseMap<Value, ClockPosInfo> clockRootToPos;
+    DenseMap<StringRef, ClockPosInfo> clockKeyToPos;
     CommutativeValueEquivalence clockEquivalence;
+    if (auto keys = op->getAttrOfType<ArrayAttr>("bmc_clock_keys")) {
+      for (auto [idx, attr] : llvm::enumerate(keys)) {
+        if (idx >= clockIndexes.size())
+          break;
+        auto keyAttr = dyn_cast<StringAttr>(attr);
+        if (!keyAttr || keyAttr.getValue().empty())
+          continue;
+        ClockPosInfo info{static_cast<unsigned>(idx), false};
+        auto insert = clockKeyToPos.try_emplace(keyAttr.getValue(), info);
+        if (!insert.second &&
+            (insert.first->second.pos != info.pos ||
+             insert.first->second.invert != info.invert)) {
+          op.emitError("bmc_clock_keys maps to multiple BMC clock inputs");
+          return failure();
+        }
+      }
+    }
     for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
       if (clockIdx >= static_cast<int>(circuitBlock.getNumArguments()))
         continue;
@@ -3610,11 +3628,35 @@ struct VerifBoundedModelCheckingOpConversion
       return ClockPosInfo{it->second.pos, it->second.invert};
     };
 
+    auto makeClockKey =
+        [&](Value clockValue) -> std::optional<std::string> {
+      bool invert = false;
+      Value simplified = simplifyClockValue(clockValue, invert);
+      if (!simplified)
+        return std::nullopt;
+      BlockArgument root;
+      if (!traceClockRoot(simplified, root))
+        return std::nullopt;
+      if (root.getOwner() != &circuitBlock)
+        return std::nullopt;
+      std::string key = ("arg" + Twine(root.getArgNumber())).str();
+      if (invert)
+        key.append(":inv");
+      return key;
+    };
+
     std::function<std::optional<ClockPosInfo>(Value)>
         resolveClockPosInfoSimple =
             [&](Value clockValue) -> std::optional<ClockPosInfo> {
       if (!clockValue)
         return std::nullopt;
+      if (!clockKeyToPos.empty()) {
+        if (auto key = makeClockKey(clockValue)) {
+          auto it = clockKeyToPos.find(*key);
+          if (it != clockKeyToPos.end())
+            return it->second;
+        }
+      }
       bool invert = false;
       Value simplified = simplifyClockValue(clockValue, invert);
       if (!simplified)
