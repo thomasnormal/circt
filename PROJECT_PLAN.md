@@ -248,7 +248,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **BMC LLHD zero-delay folding**: zero-time `llhd.delay` now folds to its input,
   and ExternalizeRegisters traces through zero-delay clocks.
 - **ExternalizeRegisters i1 root tracing**: reuse shared i1 tracing for
-  `seq.from_clock`-derived gating paths to keep clock legalization consistent.
+  `seq.from_clock`-derived gating paths and record `bmc_reg_clocks` names for
+  derived clocks tied to inputs.
 - **Yosys SVA BMC harness**: defaults to `BMC_ASSUME_KNOWN_INPUTS=1` for 2-state
   yosys SVA runs.
 - **Derived clock simplifier**: collapses XOR constant parity so equivalent

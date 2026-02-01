@@ -459,8 +459,9 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   // Replace the register with newInput and newOutput
   auto newInput = module.appendInput(newInputName, regType).second;
   result.replaceAllUsesWith(newInput);
-  regClockNames[module.getSymNameAttr()].push_back(
-      getClockPortName(module, clock));
+  auto clockName =
+      getClockPortName(module, root ? root : clock);
+  regClockNames[module.getSymNameAttr()].push_back(clockName);
   if (reset) {
     if (isAsync) {
       // Async reset
