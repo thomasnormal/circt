@@ -160,6 +160,15 @@
 **Tests**
 - `build/bin/circt-opt test/Conversion/MooreToCore/conditional-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/conditional-xprop.mlir`
 
+## Iteration 289 - February 1, 2026
+
+### MooreToCore 4-State Shift Amount X-Prop
+- 4-state shifts now yield X when the shift amount contains X/Z.
+- Regression: `test/Conversion/MooreToCore/shift-amount-xprop.mlir`.
+
+**Tests**
+- `build/bin/circt-opt test/Conversion/MooreToCore/shift-amount-xprop.mlir --convert-moore-to-core | build/bin/FileCheck test/Conversion/MooreToCore/shift-amount-xprop.mlir`
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
