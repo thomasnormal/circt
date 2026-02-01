@@ -13,12 +13,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges are limited to `--resolve-read-write` on 4-state
 - LEC now lowers trivial LLVM struct pack/unpack (`lower-lec-llvm`) and
-  single-block multi-store alloca patterns; now also handles LLVM struct muxes,
+  single-block multi-store alloca patterns; now also handles LLVM struct muxes
+  (including comb.mux fed by HW-to-LLVM casts),
   `llvm.select` on structs, partial insertvalue updates sourced from loaded
   structs, alloca-backed `llhd.ref` lowering to `llhd.sig` (including pointer
   cast chains, select joins, and block-argument forwarding), and dead-op cleanup
   to avoid leftover LLVM ops in LEC flows. Still limited for other LLVM dialect
   ops in formal inputs; widen lowering coverage.
+  - Remaining gap: non-alloca ref graphs with aliasing/GEP and loop-carried
+    memory SSA still need a general solution.
 - Pointer SSA/memory SSA is still incomplete for non-alloca refs and aliasing
   across loops or multiple stores with control-flow merges; extend lowering to
   handle general LLVM ref graphs beyond the alloca-backed cases.
@@ -67,7 +70,29 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
    - **Test**: `test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir`
 
-### CRITICAL: UVM Parity Blockers (Updated Iteration 280)
+### CRITICAL: UVM Parity Blockers (Updated Iteration 294)
+
+**CURRENT BLOCKER - UVM Factory Registration (Iteration 294):**
+
+The **#1 blocker** preventing UVM testbenches from running is that **parameterized class specializations don't have their static member initializers generated**.
+
+**Problem**: UVM uses this pattern for factory registration:
+```systemverilog
+class uvm_registry_common #(type T, string Tname);
+  local static bit m__initialized = __deferred_init();  // MISSING!
+endclass
+```
+
+When user creates `class my_test extends uvm_test`, the specialization `uvm_registry_common#(uvm_component_registry#(my_test, "my_test"), ...)` should have its `m__initialized` static member initialized, which calls `__deferred_init()` to register with the factory.
+
+**Impact**: Without factory registration:
+- `run_test("my_test")` cannot find the test class
+- UVM phases never start
+- All UVM testbenches fail at time 0
+
+**Fix Location**: `lib/Conversion/ImportVerilog/` - need to generate global constructors for parameterized class static member initializers.
+
+---
 
 **For UVM testbenches to run properly, we need:**
 
@@ -265,13 +290,70 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
     - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp` (5 handlers updated)
     - **Impact**: UVM `m_children` arrays created in constructors now accessible
 
-**Immediate Blockers (Updated Iteration 289):**
+**Immediate Blockers (Updated Iteration 294):**
 
-1. **UVM Event Wait Semantic** 🔴 CRITICAL:
-   - `@(event)` not properly waiting for trigger
-   - Event-based semantics differ from `wait(condition)` polling
-   - `moore.detect_event any` on boolean event flags needs work
-   - **Impact**: UVM phase synchronization fails
+1. **UVM Factory Registration** 🔴 CRITICAL (NEW):
+   - Parameterized class specializations missing static member initializers
+   - `uvm_registry_common#(...)::m__initialized` not generated
+   - **Impact**: All UVM testbenches fail - factory can't find test classes
+   - **Fix needed**: `lib/Conversion/ImportVerilog/` - generate global ctors for parameterized class statics
+   - **Status**: Root cause identified, fix not yet implemented
+
+2. ~~**UVM Event Wait Semantic**~~ ✅ FIXED (Iteration 294):
+   - Added `waitForRisingEdge` flag for UVM event triggers (0→1 only)
+   - `__moore_wait_event` runtime handler with polling fallback
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+3. ~~**UVM Re-entrancy**~~ ✅ FIXED (Iteration 294):
+   - `m_uvm_get_root()` call depth tracking added
+   - Re-entrant calls return `m_inst` directly
+   - **Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+---
+
+## Current Workstreams (Iteration 294)
+
+### Track 1: UVM Factory Registration (CRITICAL)
+**Goal**: Fix parameterized class static member initialization
+**Status**: Root cause identified - `uvm_registry_common#(...)::m__initialized` not generated
+**Next Task**: Implement generation of global constructors for parameterized class static members
+**Files**: `lib/Conversion/ImportVerilog/`
+
+### Track 2: External Test Suites
+**Goal**: Maintain and improve test coverage
+**Status**:
+- sv-tests: 556/717 (77.5%)
+- verilator-verification: 120/141 (85%)
+- yosys-sva: 14/14 (100%)
+- AVIP compilation: 6/9 (67%)
+**Next Task**: Run regression tests, identify failure patterns
+
+### Track 3: LEC/BMC Infrastructure
+**Goal**: Improve formal verification tools
+**Status**: 33 failing LEC/BMC tests, many improvements today
+**Next Task**: Fix `prune-bmc-*.mlir` and conditional store tests
+
+### Track 4: OpenTitan Support
+**Goal**: Compile and simulate OpenTitan IPs
+**Status**: 29+ primitive IPs compile successfully
+**Next Task**: Test uart_reg_top, gpio_reg_top with full dependencies
+
+---
+
+## Test Suite Status (Iteration 294)
+
+| Suite | Pass | Total | Rate |
+|-------|------|-------|------|
+| ImportVerilog | 220 | 220 | **100%** |
+| MooreToCore | 102 | 103 | **99%** |
+| circt-sim | 89 | 90 | **99%** |
+| LLHD/HW/Comb/Seq | 85 | 85 | **100%** |
+| sv-tests | 556 | 717 | 77.5% |
+| verilator-verification | 120 | 141 | 85% |
+| yosys-sva | 14 | 14 | **100%** |
+| AVIP compilation | 6 | 9 | 67% |
+
+---
 
 2. **UVM Factory Registration Timing** 🔴 CRITICAL:
    - Test classes not registered with factory before `run_test()` is called
@@ -291,14 +373,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (Iteration 289 - 2026-02-01)
+### Test Suite Status (Iteration 290 - 2026-02-01)
 
 **Repository Status**: 400+ commits ahead of upstream CIRCT
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1378/1378 (100%) | All pass |
-| Lit Tests | **400/402 (99.5%)** | 2 expected failures |
+| Lit Tests | **409/413 (99%)** | 4 expected failures |
 | ImportVerilog | **218/220 (99%)** | 2 remaining issues |
 | circt-sim | **87/87 (100%)** | All pass |
 | MooreToCore | **102/102 (100%)** | All pass |
@@ -310,31 +392,40 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | yosys-sva BMC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | yosys-sva LEC | **14/14 (100%)** | All pass, 2 VHDL skipped |
 | OpenTitan IPs | **4/4 tested (100%)** | timer_core, gpio, uart_reg_top, spi_host all pass |
-| AVIPs | **4/9 compile+simulate** | APB, UART, I3C, I2S working |
+| AVIPs | **6/9 compile (67%)** | APB, AHB, UART, I2S, AXI4, I3C compile |
 | sv-tests | **755/829 (91%)** | Elaboration baseline |
 | verilator-verification | **53/56 (94.6%)** | 3 errors |
-| **UVM with uvm-core** | **BLOCKED** | Event wait and factory registration issues |
+| **UVM with uvm-core** | **BLOCKED** | Static class variable initialization issue |
 
-**Current Workstreams (Iteration 289):**
+**Current Workstreams (Iteration 290):**
 
 | Track | Focus | Status | Next Task |
 |-------|-------|--------|-----------|
-| **Track 1: UVM Runtime** | Event wait semantic | 🔴 Investigating | Fix `@(event)` wait mechanism |
-| **Track 2: Factory Registration** | Test class registration | 🔴 Investigating | Fix registration timing before `run_test()` |
-| **Track 3: AVIP** | UVM test execution | 🟡 4/9 working | Debug remaining protocol issues |
+| **Track 1: UVM Runtime** | Static class vars | 🔴 Investigating | Fix `uvm_root::m_inst` initialization |
+| **Track 2: Factory Registration** | Test class registration | 🔴 Blocked by Track 1 | Fix registration timing before `run_test()` |
+| **Track 3: AVIP** | UVM test execution | 🟡 6/9 compile | Debug remaining protocol issues |
 | **Track 4: External Tests** | Regression testing | ✅ Maintained | Continue sv-tests/verilator coverage |
 
-**FIXED in Iteration 289:**
+**UVM Blocker Identified (Iteration 290):**
+- **Static class variable for `uvm_root::m_inst` not properly initialized**
+- UVM singleton pattern relies on static class member `m_inst` being initialized before first access
+- This affects factory registration and phase execution
 
-14. **Static Function-Local Variables** ✅ FIXED:
+**FIXED in Iteration 290:**
+
+16. **Static Function-Local Variables** ✅ FIXED:
     - Explicit `static` keyword on function-local variables now creates global variables
     - Previously, all function-local variables were stack-allocated regardless of `static` keyword
     - **Impact**: Static local variable persistence across function calls now works correctly
 
-15. **moore.wait_event Memory Tracing** ✅ FIXED:
+17. **Event Wait Improvements** ✅ FIXED:
     - GEP/load on-demand evaluation for heap addresses now works
     - Memory event waiters can now trace through pointer arithmetic (GEP) and loads
     - **Impact**: `@(event)` patterns that reference class member events now properly wait
+
+18. **Runtime Event Trigger** ✅ FIXED:
+    - `__moore_event_trigger` runtime function implementation improvements
+    - Event triggering now properly wakes waiting processes
 
 **FINAL STATUS (Iteration 280 - 2026-02-01) - FULL UVM SIMULATION ACHIEVED!**
 
