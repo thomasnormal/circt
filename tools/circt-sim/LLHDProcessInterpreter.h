@@ -905,6 +905,9 @@ private:
     uint64_t lastValue = 0;
     /// The size of the value in bytes (1 for bool/i1).
     unsigned valueSize = 1;
+    /// True if we're waiting for a rising edge (0→1) trigger.
+    /// For event types (!moore.event), we only wake on 0→1 transitions.
+    bool waitForRisingEdge = false;
   };
 
   /// Map from process IDs to their memory event waiters.
