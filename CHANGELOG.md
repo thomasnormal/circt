@@ -127,6 +127,18 @@
 **Tests**
 - `build/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | build/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
 
+## Iteration 286 - February 1, 2026
+
+### External Suite Smoke Runs
+- AVIP compile: APB VIP via `utils/run_avip_circt_verilog.sh`.
+- OpenTitan compile: `prim_flop` via `utils/run_opentitan_circt_verilog.sh --ir-hw`.
+- Verilator-verification: directory missing at `/home/thomas-ahle/verilator-verification`.
+
+**Tests**
+- `env CIRCT_VERILOG=build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip` (log: `avip-circt-verilog.log`)
+- `utils/run_opentitan_circt_verilog.sh prim_flop --ir-hw` (log: `opentitan-prim_flop.log`)
+- `ls /home/thomas-ahle/verilator-verification` (missing)
+
 ## Iteration 281 - February 1, 2026
 
 ### Track Status Updates
