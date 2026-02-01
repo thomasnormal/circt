@@ -1733,6 +1733,14 @@ __moore_stream_unpack_mixed_extract(MooreQueue *srcPtr, int32_t prefixBits,
 // Event Operations
 //===----------------------------------------------------------------------===//
 
+extern "C" void __moore_event_trigger(bool *event) {
+  // Trigger the event by setting its flag to true.
+  // In SystemVerilog, ->event triggers the event for the current time slot.
+  // Processes waiting on this event will be activated.
+  if (event)
+    *event = true;
+}
+
 extern "C" bool __moore_event_triggered(bool *event) {
   // Check if the event was triggered in the current time slot.
   // Events are represented as boolean flags. The triggered property returns
