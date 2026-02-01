@@ -5531,14 +5531,19 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
         int32_t resultWidth = cast<IntegerType>(resultValueType).getWidth();
         int32_t high = low + resultWidth;
 
-        // Helper to extract bits from a component with proper bounds handling
-        auto extractBits = [&](Value component) -> Value {
+        // Helper to extract bits from a component with proper bounds handling.
+        // For unknown masks, out-of-bounds bits should become unknown (=1).
+        auto extractBits = [&](Value component, bool fillUnknown) -> Value {
           SmallVector<Value> toConcat;
 
           // Handle negative low index - prepend zeros
-          if (low < 0)
+          if (low < 0) {
+            int32_t fillWidth = std::min(-low, resultWidth);
+            APInt fillBits = fillUnknown ? APInt::getAllOnes(fillWidth)
+                                         : APInt(fillWidth, 0);
             toConcat.push_back(hw::ConstantOp::create(
-                rewriter, loc, APInt(std::min(-low, resultWidth), 0)));
+                rewriter, loc, fillBits));
+          }
 
           // Extract the middle portion that's within bounds
           if (low < inputWidth && high > 0) {
@@ -5553,15 +5558,18 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
 
           // Handle out-of-bounds high - append zeros
           int32_t diff = high - inputWidth;
-          if (diff > 0)
+          if (diff > 0) {
+            APInt fillBits = fillUnknown ? APInt::getAllOnes(diff)
+                                         : APInt(diff, 0);
             toConcat.push_back(
-                hw::ConstantOp::create(rewriter, loc, APInt(diff, 0)));
+                hw::ConstantOp::create(rewriter, loc, fillBits));
+          }
 
           return rewriter.createOrFold<comb::ConcatOp>(loc, toConcat);
         };
 
-        Value extractedValue = extractBits(inputValue);
-        Value extractedUnknown = extractBits(inputUnknown);
+        Value extractedValue = extractBits(inputValue, /*fillUnknown=*/false);
+        Value extractedUnknown = extractBits(inputUnknown, /*fillUnknown=*/true);
 
         // Create the result 4-state struct
         auto result = createFourStateStruct(rewriter, loc, extractedValue,
