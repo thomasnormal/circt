@@ -15,10 +15,17 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "circt/Support/FourStateUtils.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include <optional>
+#include <string>
 
 namespace circt {
 
@@ -120,20 +127,6 @@ inline bool traceI1ValueRoot(mlir::Value value, mlir::BlockArgument &root) {
   return false;
 }
 
-inline bool isFourStateStructType(mlir::Type type) {
-  auto structTy = llvm::dyn_cast<hw::StructType>(type);
-  if (!structTy)
-    return false;
-  auto elements = structTy.getElements();
-  if (elements.size() != 2)
-    return false;
-  if (elements[0].name.getValue() != "value")
-    return false;
-  if (elements[1].name.getValue() != "unknown")
-    return false;
-  return true;
-}
-
 inline mlir::Value getConcatOperandForExtract(comb::ExtractOp extractOp) {
   auto concat = extractOp.getInput().getDefiningOp<comb::ConcatOp>();
   if (!concat)
@@ -230,6 +223,51 @@ inline mlir::Value matchFourStateClockGate(mlir::Value lhs, mlir::Value rhs) {
   return lhs;
 }
 
+inline mlir::Value unwrapClockToI1(mlir::Value clock, bool &invert) {
+  while (clock) {
+    if (auto inv = clock.getDefiningOp<seq::ClockInverterOp>()) {
+      invert = !invert;
+      clock = inv.getInput();
+      continue;
+    }
+    if (auto gate = clock.getDefiningOp<seq::ClockGateOp>()) {
+      bool enableOn = false;
+      if (auto literal = getConstI1Value(gate.getEnable()))
+        enableOn |= *literal;
+      if (auto testEnable = gate.getTestEnable()) {
+        if (auto literal = getConstI1Value(testEnable))
+          enableOn |= *literal;
+      }
+      if (!enableOn)
+        return mlir::Value();
+      clock = gate.getInput();
+      continue;
+    }
+    if (auto mux = clock.getDefiningOp<seq::ClockMuxOp>()) {
+      if (auto literal = getConstI1Value(mux.getCond())) {
+        clock = *literal ? mux.getTrueClock() : mux.getFalseClock();
+        continue;
+      }
+      if (mux.getTrueClock() == mux.getFalseClock()) {
+        clock = mux.getTrueClock();
+        continue;
+      }
+      return mlir::Value();
+    }
+    if (auto div = clock.getDefiningOp<seq::ClockDividerOp>()) {
+      if (div.getPow2() == 0) {
+        clock = div.getInput();
+        continue;
+      }
+      return mlir::Value();
+    }
+    if (auto toClock = clock.getDefiningOp<seq::ToClockOp>())
+      return toClock.getInput();
+    return mlir::Value();
+  }
+  return mlir::Value();
+}
+
 struct SimplifiedI1Value {
   mlir::Value value;
   bool invert = false;
@@ -245,9 +283,11 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
       }
     }
     if (auto fromClock = value.getDefiningOp<seq::FromClockOp>()) {
-      if (auto toClock =
-              fromClock.getInput().getDefiningOp<seq::ToClockOp>()) {
-        value = toClock.getInput();
+      bool clockInvert = false;
+      if (auto unwrapped =
+              unwrapClockToI1(fromClock.getInput(), clockInvert)) {
+        invert ^= clockInvert;
+        value = unwrapped;
         continue;
       }
     }
@@ -412,6 +452,180 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
     break;
   }
   return {value, invert};
+}
+
+inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
+  if (!value)
+    return std::nullopt;
+  auto simplified = simplifyI1Value(value);
+  value = simplified.value;
+  bool invert = simplified.invert;
+  if (!value)
+    return std::nullopt;
+
+  if (auto literal = getConstI1Value(value)) {
+    bool bit = *literal ^ invert;
+    return std::string(bit ? "const1" : "const0");
+  }
+
+  mlir::BlockArgument root;
+  if (traceI1ValueRoot(value, root) && root) {
+    std::string key = ("arg" + llvm::Twine(root.getArgNumber())).str();
+    if (invert)
+      key.append(":inv");
+    return key;
+  }
+
+  llvm::DenseMap<mlir::Value, llvm::hash_code> memo;
+  llvm::SmallPtrSet<mlir::Value, 8> visiting;
+
+  auto combineHashList = [&](llvm::StringRef tag,
+                             llvm::ArrayRef<llvm::hash_code> hashes)
+      -> llvm::hash_code {
+    llvm::hash_code result = llvm::hash_value(tag);
+    for (auto hash : hashes)
+      result = llvm::hash_combine(result, hash);
+    return result;
+  };
+
+  std::function<llvm::hash_code(mlir::Value)> hashValue =
+      [&](mlir::Value v) -> llvm::hash_code {
+    if (!v)
+      return llvm::hash_code{};
+    if (auto it = memo.find(v); it != memo.end())
+      return it->second;
+    if (visiting.contains(v))
+      return llvm::hash_value(0x9e3779b97f4a7c15ULL);
+    visiting.insert(v);
+
+    llvm::hash_code result = llvm::hash_code{};
+    if (auto arg = llvm::dyn_cast<mlir::BlockArgument>(v)) {
+      result = llvm::hash_combine("arg", arg.getArgNumber());
+    } else if (auto literal = getConstI1Value(v)) {
+      result = llvm::hash_combine("const", *literal ? 1 : 0);
+    } else if (auto *op = v.getDefiningOp()) {
+      if (auto cast = mlir::dyn_cast<mlir::UnrealizedConversionCastOp>(op)) {
+        if (cast->getNumOperands() == 1) {
+          result = hashValue(cast->getOperand(0));
+        }
+      } else if (auto fromClock = mlir::dyn_cast<seq::FromClockOp>(op)) {
+        result = hashValue(fromClock.getInput());
+      } else if (auto toClock = mlir::dyn_cast<seq::ToClockOp>(op)) {
+        result = hashValue(toClock.getInput());
+      } else if (auto bitcast = mlir::dyn_cast<hw::BitcastOp>(op)) {
+        result = hashValue(bitcast.getInput());
+      } else if (auto extract = mlir::dyn_cast<hw::StructExtractOp>(op)) {
+        auto field = extract.getFieldNameAttr();
+        if (field)
+          result = llvm::hash_combine("struct_extract", field.getValue(),
+                                      hashValue(extract.getInput()));
+        else
+          result = llvm::hash_combine("struct_extract",
+                                      hashValue(extract.getInput()));
+      } else if (auto extract = mlir::dyn_cast<comb::ExtractOp>(op)) {
+        result = llvm::hash_combine(
+            "extract", extract.getLowBit(), hashValue(extract.getInput()));
+      } else if (auto andOp = mlir::dyn_cast<comb::AndOp>(op)) {
+        llvm::SmallVector<llvm::hash_code> hashes;
+        std::function<void(mlir::Value)> collect = [&](mlir::Value operand) {
+          if (auto *def = operand.getDefiningOp()) {
+            if (def->getName() == op->getName()) {
+              for (auto nested : def->getOperands())
+                collect(nested);
+              return;
+            }
+          }
+          hashes.push_back(hashValue(operand));
+        };
+        for (auto operand : andOp.getOperands())
+          collect(operand);
+        llvm::sort(hashes, [](llvm::hash_code a, llvm::hash_code b) {
+          return static_cast<size_t>(a) < static_cast<size_t>(b);
+        });
+        result = combineHashList("and", hashes);
+      } else if (auto orOp = mlir::dyn_cast<comb::OrOp>(op)) {
+        llvm::SmallVector<llvm::hash_code> hashes;
+        std::function<void(mlir::Value)> collect = [&](mlir::Value operand) {
+          if (auto *def = operand.getDefiningOp()) {
+            if (def->getName() == op->getName()) {
+              for (auto nested : def->getOperands())
+                collect(nested);
+              return;
+            }
+          }
+          hashes.push_back(hashValue(operand));
+        };
+        for (auto operand : orOp.getOperands())
+          collect(operand);
+        llvm::sort(hashes, [](llvm::hash_code a, llvm::hash_code b) {
+          return static_cast<size_t>(a) < static_cast<size_t>(b);
+        });
+        result = combineHashList("or", hashes);
+      } else if (auto xorOp = mlir::dyn_cast<comb::XorOp>(op)) {
+        llvm::SmallVector<llvm::hash_code> hashes;
+        std::function<void(mlir::Value)> collect = [&](mlir::Value operand) {
+          if (auto *def = operand.getDefiningOp()) {
+            if (def->getName() == op->getName()) {
+              for (auto nested : def->getOperands())
+                collect(nested);
+              return;
+            }
+          }
+          hashes.push_back(hashValue(operand));
+        };
+        for (auto operand : xorOp.getOperands())
+          collect(operand);
+        llvm::sort(hashes, [](llvm::hash_code a, llvm::hash_code b) {
+          return static_cast<size_t>(a) < static_cast<size_t>(b);
+        });
+        result = combineHashList("xor", hashes);
+      } else if (auto icmpOp = mlir::dyn_cast<comb::ICmpOp>(op)) {
+        auto lhsHash = hashValue(icmpOp.getLhs());
+        auto rhsHash = hashValue(icmpOp.getRhs());
+        bool commutative = false;
+        switch (icmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+        case comb::ICmpPredicate::ne:
+        case comb::ICmpPredicate::ceq:
+        case comb::ICmpPredicate::cne:
+        case comb::ICmpPredicate::weq:
+        case comb::ICmpPredicate::wne:
+          commutative = true;
+          break;
+        default:
+          break;
+        }
+        if (commutative &&
+            static_cast<size_t>(rhsHash) < static_cast<size_t>(lhsHash))
+          std::swap(lhsHash, rhsHash);
+        result = llvm::hash_combine("icmp",
+                                    static_cast<int>(icmpOp.getPredicate()),
+                                    lhsHash, rhsHash);
+      } else if (auto muxOp = mlir::dyn_cast<comb::MuxOp>(op)) {
+        result = llvm::hash_combine(
+            "mux", hashValue(muxOp.getCond()),
+            hashValue(muxOp.getTrueValue()),
+            hashValue(muxOp.getFalseValue()));
+      } else {
+        result = llvm::hash_combine(op->getName().getStringRef());
+        for (auto operand : op->getOperands())
+          result = llvm::hash_combine(result, hashValue(operand));
+      }
+    }
+
+    visiting.erase(v);
+    memo[v] = result;
+    return result;
+  };
+
+  auto hash = hashValue(value);
+  if (invert)
+    hash = llvm::hash_combine(hash, 0x1u);
+  auto hashValueInt = static_cast<uint64_t>(hash);
+  std::string key = "expr:" + llvm::utohexstr(hashValueInt);
+  if (invert)
+    key.append(":inv");
+  return key;
 }
 
 } // namespace circt

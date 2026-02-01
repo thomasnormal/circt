@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 289 - February 1, 2026
+
+### UVM run_test() Fixes Implemented - MAJOR MILESTONE
+
+**Both root causes from Iteration 288 have been fixed!**
+
+#### Fix 1: Static Function-Local Variables (UVM Factory Registration)
+
+**Problem**: `uvm_component_registry::get()` used a local stack variable instead of a global static singleton, so `initialize()` was never called to register the component type with the UVM factory.
+
+**Solution**: Modified `lib/Conversion/ImportVerilog/Statements.cpp` to detect explicit `static` keyword on function-local variables and convert them to `moore.global_variable` operations.
+
+**Files Modified**:
+- `lib/Conversion/ImportVerilog/Statements.cpp` - Detect static locals, create global variables
+- `lib/Conversion/ImportVerilog/Structure.cpp` - Include function names in global symbol paths
+- `test/Conversion/ImportVerilog/static-function-local.sv` - New test file
+
+**How it works**:
+```systemverilog
+static function uvm_component_registry get();
+  static m_inst;  // Now becomes moore.global_variable
+  if (m_inst == null) begin
+    m_inst = new();
+    m_inst.initialize();  // Now actually registers with factory!
+  end
+  return m_inst;
+endfunction
+```
+
+#### Fix 2: moore.wait_event Memory Event Tracing
+
+**Problem**: The interpreter couldn't trace events stored in heap-allocated class members, causing `wait_for_objection()` to return immediately.
+
+**Solution**: Enhanced `LLHDProcessInterpreter.cpp` to:
+1. Evaluate GEP operations on-demand in `getValue()` for computing heap addresses
+2. Evaluate load operations on-demand for tracing through pointer chains
+3. Search module-level allocas by address in `interpretLLVMStore()`
+
+**Files Modified**:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - On-demand GEP/load evaluation, alloca search
+- `test/Tools/circt-sim/wait-event-class-member.mlir` - New test file
+
+**Result**: All 88 circt-sim tests pass!
+
+### External Test Suite Results (Iteration 289)
+
+| Suite | Pass | Total | Rate |
+|-------|------|-------|------|
+| sv-tests (full) | 457 | 957 | 47.8% |
+| verilator-verification | 53 | 56 | **94.6%** |
+| yosys-sva | 14 | 14 | **100%** |
+
+**sv-tests highlights:**
+- Classes (ch7): 101/105 (96.2%)
+- Operators (ch11): 85/88 (96.6%)
+- SVA (ch16): 23/26 (88.5%)
+- Interfaces (ch15): 5/5 (100%)
+- System tasks (ch21): 29/29 (100%)
+
+---
+
 ## Iteration 288 - February 1, 2026
 
 ### UVM run_test() Root Cause Analysis Complete
@@ -20,17 +81,6 @@
    - Result: `run_phases()` returns immediately → `sim.terminate` at time 0
 
 **Class Member Access Bug**: Confirmed FIXED (already in codebase at `ClassPropertyRefOpConversion` lines 2191-2211)
-
-**Current Investigation (4 parallel agents):**
-1. **Fork/Join Analysis** - Investigating `sim.fork` join types and parent suspension logic
-2. **AVIP Protocol Testing** - APB AVIP terminates at time 0 with same UVM issue
-3. **External Test Suites** - sv-tests ch7+16 BMC: 124/131 pass, verilator asserts: 9/10 pass
-4. **Class Member Access Bug** - Investigating block argument remapping in MooreToCore.cpp
-
-**Hypothesis**: Multiple potential root causes being investigated in parallel:
-- Class member variable access from methods may fail due to block argument remapping
-- Fork/join type handling may incorrectly suspend parent processes
-- UVM component registration may fail to track children properly
 
 **OpenTitan IPs Verified (4/4 pass):**
 - timer_core - ✅ Pass at 100ms
@@ -538,9 +588,13 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 ### BMC: Deduplicate Derived Clocks Using Value Keys
 - Lower-to-BMC now uses `getI1ValueKey` to deduplicate and map equivalent
   derived clocks that appear as distinct SSA values in graph regions.
+- Simplify `seq.clock_gate`, `seq.clock_mux`, and `seq.clock_inv` (when driven
+  by constant enables or constant selects) so derived clocks map to the same
+  BMC clock input when they are effectively transparent.
 - Regressions:
   - `test/Tools/circt-bmc/circt-bmc-derived-clock-keys.mlir`
   - `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir`
+  - `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-seq-ops.mlir`
 
 ### BMC: X-Prop $stable/$changed E2E Reinstated
 - Added end-to-end X-prop checks for `$stable` and `$changed` after clock-key
@@ -606,6 +660,11 @@ if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValid
 - `ninja -C build circt-opt CIRCTSVTests`
 - `build/bin/circt-opt --hw-eliminate-inout-ports test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir | build/bin/FileCheck test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-array-index.mlir`
 - `build/bin/circt-opt --hw-eliminate-inout-ports="resolve-read-write" test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-dynamic-multi-writer.mlir | build/bin/FileCheck test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-dynamic-multi-writer.mlir`
+- `ninja -C build circt-bmc CIRCTSupportTests`
+- `build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=I1ValueSimplifierTest.FromClockDerivedSimplifies`
+- `build/bin/circt-bmc --emit-mlir -b 1 --module clock_gate_const test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-seq-ops.mlir | build/bin/FileCheck test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-seq-ops.mlir --check-prefix=GATE`
+- `build/bin/circt-bmc --emit-mlir -b 1 --module clock_mux_const test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-seq-ops.mlir | build/bin/FileCheck test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-seq-ops.mlir --check-prefix=MUX`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
 - `OUT=/home/thomas-ahle/circt/avip-ahb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-apb_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`
 - `OUT=/home/thomas-ahle/circt/avip-axi4_avip.log utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4_avip`
