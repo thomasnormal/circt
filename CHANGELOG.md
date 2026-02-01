@@ -45,6 +45,7 @@
 
 ### Tests Run
 - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010
+- yosys-sva BMC: 14 tests, failures=0, skipped=2
 
 ## Iteration 278 - January 31, 2026
 
