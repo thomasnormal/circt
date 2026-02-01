@@ -54,9 +54,13 @@ APB and AHB AVIPs now compile and run with uvm-core. UVM infrastructure initiali
 **CRITICAL BLOCKER FOUND - Static Associative Arrays**:
 Static associative arrays (class static variables with string keys) do not persist values across function calls. When entries are added in one static function call, they are not found in subsequent calls.
 
+**Root cause**: `GlobalVariableOpConversion` in `lib/Conversion/MooreToCore/MooreToCore.cpp:5083` creates globals with zero initialization. For associative arrays, this means the global pointer is null. Unlike local variables (which call `__moore_assoc_create` at line 4623), globals never get initialized.
+
+**Fix needed**: Add special handling in `GlobalVariableOpConversion` for associative array types to create a global constructor that calls `__moore_assoc_create` and stores the result in the global.
+
 **Impact**: This breaks UVM's `uvm_domain::m_domains` static variable, causing `get_common_domain()` to return null. Without domains, UVM phases cannot run.
 
-**Test case**: `/tmp/test_static_assoc.sv` demonstrates the bug.
+**Test case**: `test/Tools/circt-sim/static-assoc-array-bug.sv` demonstrates the bug.
 
 **Other Identified Issues**:
 1. **Automatic Variables in Fork Loops**: When a fork is inside a loop, `automatic` variable declarations don't capture the current loop value.
