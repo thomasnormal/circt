@@ -305,6 +305,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - LEC harnesses now use `circt-verilog --ir-hw` plus LLHD interface stripping
   passes to avoid LLHD process ops in circt-lec flows.
 - Added a yosys SVA LEC smoke regression with a sequential `always` block.
+- Re-ordered LLHD stripping passes so extnets can legalize before LEC.
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)

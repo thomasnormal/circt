@@ -55,11 +55,23 @@
      `test/Tools/circt-lec/Inputs/yosys-sva-mini/basic_seq.sv`,
      `test/Tools/circt-lec/yosys-lec-smoke-seq.mlir`.
 
+2. **LEC extnets smoke fix**:
+   - Re-ordered LLHD stripping passes so `strip-llhd-processes` runs before
+     `strip-llhd-interface-signals`, allowing extnets to legalize for LEC.
+   - Added extnets to the yosys SVA mini inputs and a dedicated smoke test.
+   - **Files**: `utils/run_yosys_sva_circt_lec.sh`,
+     `utils/run_sv_tests_circt_lec.sh`,
+     `utils/run_verilator_verification_circt_lec.sh`,
+     `test/Tools/circt-lec/Inputs/yosys-sva-mini/extnets.sv`,
+     `test/Tools/circt-lec/yosys-lec-smoke-extnets.mlir`.
+
 ### Tests Run
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic00 utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic_seq utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec OUT=/tmp/sv-tests-lec-results.txt TAG_REGEX='16.10' TEST_FILTER=parsing FORCE_LEC=1 LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir utils/run_sv_tests_circt_lec.sh test/Tools/circt-lec/Inputs/sv-tests-mini`
 - `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec OUT=/tmp/verilator-lec-results.txt LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir utils/run_verilator_verification_circt_lec.sh test/Tools/circt-lec/Inputs/verilator-mini`
+- `LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir OUT=/tmp/yosys-sva-lec-results.txt utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` (extnets now passes with new ordering)
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
 
 ## Iteration 279 - February 1, 2026
 
