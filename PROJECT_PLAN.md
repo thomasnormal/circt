@@ -64,13 +64,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Impact**: alert_handler_reg_top passes
    - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
 
-5. **Hierarchical Name Access** 🟡 MEDIUM:
-   - ~4 XFAIL tests blocked on hierarchical names through instances (reduced from 8)
-   - **Impact**: Some interface access patterns don't work
-   - **Recent Progress**: Instance output propagation and probe-driven waits now
-     pass the `llhd-child-module-drive` regression; remaining failures are
-     higher-level name resolution cases.
-   - **Iteration 273**: `hierarchical-names.sv` XFAIL removed (now passes)
+5. **Hierarchical Name Access** ✅ FIXED:
+   - All hierarchical name access XFAILs resolved
+   - Instance output propagation and probe-driven waits now work
+   - `hierarchical-names.sv` now passes
+   - **Iteration 273-279**: All related tests now pass
 
 6. **BMC LLVM Type Handling** ✅ FIXED (Iteration 230):
    - LLVM struct types now excluded from comb.mux conversion
@@ -179,10 +177,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - **Impact**: sv-tests BMC improved from 5 pass / 18 errors to 23 pass / 0 errors
 
 **Medium Priority:**
-2. **Hierarchical Name Access** (~4 XFAIL tests):
-   - Signal access through instance hierarchy incomplete
-   - Some interface modport patterns don't work
-   - **Progress**: `hierarchical-names.sv` now passes (Iteration 273)
+2. **Class Member Access Bug** (UVM blocker):
+   - Reading class member variables from methods (other than constructor) fails
+   - Block argument remapping issue in MooreToCore.cpp
+   - See plan file for detailed fix strategy
 
 3. **Virtual Method Dispatch**:
    - Class hierarchy not fully simulated
@@ -195,17 +193,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
    - Sequences/sequencers - Stimulus generation
    - Constraint randomization (`rand`, `constraint`)
 
-### Test Suite Status (FINAL - Iteration 278 - 2026-02-01)
+### Test Suite Status (FINAL - Iteration 279 - 2026-02-01)
 
-**Repository Status**: 370+ commits ahead of upstream CIRCT
+**Repository Status**: 375+ commits ahead of upstream CIRCT
 
 | Suite | Status | Notes |
 |-------|--------|-------|
 | Unit Tests | 1373/1373 (100%) | All pass (+13 queue tests) |
-| Lit Tests | **2992/3085 (97.0%)** | All pass, **1 XFAIL** (down from 18 at start) |
-| ImportVerilog | **218/219 (99.54%)** | Near parity, only **1 XFAIL** |
+| Lit Tests | **2993/3085 (97.0%)** | All pass, **0 XFAIL** |
+| ImportVerilog | **219/219 (100%)** | **FULL PARITY ACHIEVED!** |
 | circt-sim | **73/75 (97.3%)** | 2 tests hang (timeout mechanism issue) |
-| MooreToCore | **97/97+1 (100%)** | +1 new test, 1 expected failure (XFAIL) |
+| MooreToCore | **97/97+1 (100%)** | +1 new test |
 | sv-tests BMC | **23/23 (100%)** | All pass |
 | Verilator BMC | **17/17 (100%)** | All pass |
 | Verilator LEC | **17/17 (100%)** | All pass |
@@ -216,12 +214,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **External Suites** | **54/54 (100%)** | sv-tests + Verilator + yosys-sva all pass |
 | **UVM with uvm-core** | **PASS** | UVM now works with Accellera uvm-core |
 
-**FINAL STATUS (Iteration 278 - 2026-02-01) - XFAIL REDUCTION COMPLETE:**
+**FINAL STATUS (Iteration 279 - 2026-02-01) - 100% XFAIL REDUCTION COMPLETE!**
 
 **Final Achievement Summary:**
-- **XFAIL Reduced**: 18 → 1 (**94% reduction** from iteration start!)
-- **ImportVerilog**: **218/219 pass (99.54%)** - near full parity
-- **Tests Fixed This Session**: 17
+- **XFAIL Reduced**: 18 → 0 (**100% reduction!**)
+- **ImportVerilog**: **219/219 pass (100%)** - **FULL PARITY ACHIEVED!**
+- **Tests Fixed This Session**: 18 (all XFAILs)
 - **OpenTitan Coverage**: 17+/21 pass (81%+) - TL-UL timing fix applied
 - **circt-sim**: 73/75 pass (97.3%) - 2 tests hang due to timeout mechanism issue
 - **AVIPs**: **All 6 pass** - APB, AHB, UART, I2S, AXI4, I3C compile and simulate
@@ -229,12 +227,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **All lit tests pass**: No regressions
 
 **Key Session Accomplishments:**
-1. **Fixed 17 tests** - Reduced XFAIL from 18 to 1
-2. **Created slang patch for bind-nested-definition** - Enables nested scope lookup in bind
-3. **Fixed circt-sim abort check** - Timeout handling now works correctly
-4. **Added queue.insert operation** - Moore dialect queue insert support
-5. **Improved BMC four-state clock handling** - Better 4-state clock gate simplification
-6. **All 6 AVIP protocols simulate successfully** - APB, AHB, UART, I2S, AXI4, I3C
+1. **Fixed 18 tests** - Reduced XFAIL from 18 to 0 (100% reduction!)
+2. **bind-interface-port.sv** - Fixed interface port threading across bind scopes
+3. **Created slang patch for bind-nested-definition** - Enables nested scope lookup in bind
+4. **Fixed circt-sim abort check** - Timeout handling now works correctly
+5. **Added queue.insert operation** - Moore dialect queue insert support
+6. **Improved BMC four-state clock handling** - Better 4-state clock gate simplification
+7. **All 6 AVIP protocols simulate successfully** - APB, AHB, UART, I2S, AXI4, I3C
 
 **Additional Technical Improvements:**
 - **BMC LLHD zero-delay folding**: zero-time `llhd.delay` now folds to its input,
@@ -247,6 +246,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   `comb.extract` forms from `hw-aggregate-to-comb` so raw vs gated 4-state
   clocks map to a single BMC clock, and VerifToSMT can trace those clock
   roots through `bmc_clock_sources`.
+- **Stable clock IDs**: LowerToBMC now emits `bmc_clock_keys` and VerifToSMT
+  consumes them to avoid equivalence heuristics when mapping derived clocks.
 
 **Final Suite Status (2026-02-01):**
 - sv-tests BMC: 23 pass / 3 xfail (26 total)
@@ -255,23 +256,21 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - yosys-sva LEC: 14 pass / 2 skipped (VHDL)
 - verilator-verification BMC: 17 pass
 - verilator-verification LEC: 17 pass
-- ImportVerilog: **218/219 (99.54%)**
+- ImportVerilog: **219/219 (100%)** - FULL PARITY!
 - AVIP: **All 6 pass**
 - OpenTitan: 17+/21 pass (81%+)
 
-**Remaining 1 XFAIL Test (Bind Directive Architectural Issue):**
-1. **bind-interface-port.sv** - Interface port threading across bind scopes
-
-This remaining XFAIL is a bind directive architectural issue that requires substantial work to resolve. It involves complex scope resolution across bind boundaries for interface ports.
+**All XFAIL Tests Resolved:**
+- **bind-interface-port.sv** - FIXED: Interface port threading across bind scopes
+- **bind-nested-definition.sv** - FIXED: Slang patch for nested scope lookup
+- **All 18 XFAIL tests now pass!**
 
 **UVM Tests Now Passing (9 tests):**
 - Tests that use UVM features now work with the real Accellera `uvm-core` library
 - This includes virtual interface task calls, class handle formatting, and hierarchical access
 
-**Remaining Limitations (FINAL - Iteration 278):**
-1. **1 XFAIL Test (Bind Directive Architectural Issue)**:
-   - **bind-interface-port.sv** - Interface port threading across bind scopes
-   - Requires substantial architectural work to resolve
+**Remaining Limitations (FINAL - Iteration 279):**
+1. **All XFAIL Tests Resolved!** (0 remaining)
 2. **TL-UL Timing Fix Applied**:
    - OpenTitan IP simulation timeouts addressed with TL-UL timing fix
    - **Next Step**: Verify fix improves OpenTitan pass rate
@@ -287,10 +286,11 @@ This remaining XFAIL is a bind directive architectural issue that requires subst
    hierarchical scopes is needed.
 
 **Next Steps for UVM Parity:**
-1. **Fix bind directive scope resolution** (Medium effort) - Addresses remaining 1 XFAIL
+1. **Fix class member access bug** - Reading class member variables from methods fails
 2. **Verify TL-UL timing fix improves OpenTitan pass rate** - Re-run affected IPs
 3. **Extended AVIP simulation testing** - Longer simulation runs for coverage
 4. **Address circt-sim timeout mechanism** - Fix 2 hanging tests
+5. **Virtual method dispatch** - Complete class hierarchy simulation
 
 ### Formal/BMC/LEC Long-Term Roadmap (2026)
 1. **Clock canonicalization**: normalize derived clock expressions early and
