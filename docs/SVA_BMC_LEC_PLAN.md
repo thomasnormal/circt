@@ -177,6 +177,8 @@ Key work:
   - ✅ 4-state out-of-bounds extracts now yield X in MooreToCore lowering.
   - ✅ 4-state out-of-bounds extract_ref and dyn_extract_ref now yield X in
     MooreToCore lowering.
+  - ✅ 4-state conditional (?:) now merges true/false values when the condition
+    is X/Z (bitwise X-prop).
 - ✅ Add BMC cone-of-influence pruning for externalized registers and unused
   outputs so irrelevant state is removed before SMT lowering (including
   transitive reg deps).
