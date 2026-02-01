@@ -8919,10 +8919,21 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
     if (isFourStateStructType(inputValue.getType())) {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+      Value amountUnknownCond;
 
       // Handle 4-state amount - extract just the value
-      if (isFourStateStructType(amount.getType()))
+      if (isFourStateStructType(amount.getType())) {
+        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
+        amountUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
         amount = extractFourStateValue(rewriter, loc, amount);
+      }
+      if (!amountUnknownCond) {
+        amountUnknownCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
@@ -8931,7 +8942,17 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
       Value shiftedValue = comb::ShlOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShlOp::create(rewriter, loc, unknownComp, amount, false);
 
-      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      Value zeroVal =
+          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                             zeroVal, shiftedValue);
+      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                               allOnes, shiftedUnknown);
+
+      auto result =
+          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -8968,10 +8989,21 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
     if (isFourStateStructType(inputValue.getType())) {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+      Value amountUnknownCond;
 
       // Handle 4-state amount - extract just the value
-      if (isFourStateStructType(amount.getType()))
+      if (isFourStateStructType(amount.getType())) {
+        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
+        amountUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
         amount = extractFourStateValue(rewriter, loc, amount);
+      }
+      if (!amountUnknownCond) {
+        amountUnknownCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
@@ -8980,7 +9012,17 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
       Value shiftedValue = comb::ShrUOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
 
-      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      Value zeroVal =
+          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                             zeroVal, shiftedValue);
+      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                               allOnes, shiftedUnknown);
+
+      auto result =
+          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -9137,10 +9179,21 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
     if (isFourStateStructType(inputValue.getType())) {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
+      Value amountUnknownCond;
 
       // Handle 4-state amount - extract just the value
-      if (isFourStateStructType(amount.getType()))
+      if (isFourStateStructType(amount.getType())) {
+        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
+        amountUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
         amount = extractFourStateValue(rewriter, loc, amount);
+      }
+      if (!amountUnknownCond) {
+        amountUnknownCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
@@ -9149,7 +9202,17 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
       Value shiftedValue = comb::ShrSOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
 
-      auto result = createFourStateStruct(rewriter, loc, shiftedValue, shiftedUnknown);
+      Value zeroVal =
+          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+      Value allOnes =
+          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                             zeroVal, shiftedValue);
+      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                               allOnes, shiftedUnknown);
+
+      auto result =
+          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }

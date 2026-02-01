@@ -179,6 +179,7 @@ Key work:
     MooreToCore lowering.
   - ✅ 4-state conditional (?:) now merges true/false values when the condition
     is X/Z (bitwise X-prop).
+  - ✅ 4-state shifts now yield X when the shift amount is X/Z.
 - ✅ Add BMC cone-of-influence pruning for externalized registers and unused
   outputs so irrelevant state is removed before SMT lowering (including
   transitive reg deps).
