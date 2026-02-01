@@ -1,6 +1,19 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 299 - February 1, 2026 (Current Status)
+## Iteration 300 - February 1, 2026 (Current Status)
+
+### Commits This Session
+
+| Commit | Description |
+|--------|-------------|
+| `8980fdd6c` | Fix fork branch delays and wait condition signal invalidation |
+| `a01b84ad1` | Fix uvm_dpi_get_next_arg_c signature to match UVM DPI spec |
+| `e6c5b8a07` | Identify critical UVM blocker: static associative arrays |
+| `97d99295c` | Add root cause and fix location for static assoc array bug |
+
+---
+
+## Iteration 299 - February 1, 2026
 
 ### Multiple Delays in Fork Branches - FIXED
 
