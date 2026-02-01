@@ -49,11 +49,18 @@ APB and AHB AVIPs now compile and run with uvm-core. UVM infrastructure initiali
 
 ### Remaining Work
 
-**UVM `run_test()` Phase Machinery**: UVM cmdline processing now works (DPI fix). Remaining blockers:
+**UVM `run_test()` Phase Machinery**: UVM cmdline processing now works (DPI fix).
 
-1. **Automatic Variables in Fork Loops**: When a fork is inside a loop, `automatic` variable declarations don't capture the current loop value - they reference the original variable instead.
+**CRITICAL BLOCKER FOUND - Static Associative Arrays**:
+Static associative arrays (class static variables with string keys) do not persist values across function calls. When entries are added in one static function call, they are not found in subsequent calls.
 
-2. **Event Trigger Not Waking Waiters**: When an event is triggered with `->event` inside a fork, processes waiting on `@(event)` are not woken up. The trigger writes to a temp alloca instead of driving the LLHD signal.
+**Impact**: This breaks UVM's `uvm_domain::m_domains` static variable, causing `get_common_domain()` to return null. Without domains, UVM phases cannot run.
+
+**Test case**: `/tmp/test_static_assoc.sv` demonstrates the bug.
+
+**Other Identified Issues**:
+1. **Automatic Variables in Fork Loops**: When a fork is inside a loop, `automatic` variable declarations don't capture the current loop value.
+2. **Event Trigger Not Waking Waiters**: Event trigger inside fork doesn't wake waiting processes.
 
 **Class Member Access**: VERIFIED WORKING (Iteration 260 fix). Not a current blocker.
 
@@ -74,6 +81,9 @@ APB and AHB AVIPs now compile and run with uvm-core. UVM infrastructure initiali
   ops in formal inputs; widen lowering coverage.
   - Remaining gap: non-alloca ref graphs with aliasing/GEP and loop-carried
     memory SSA still need a general solution.
+- Strict LEC now resolves overlapping conditional interface stores for 4-state
+  inout fields using enable-based resolution; 2-state multi-driver cases still
+  require abstraction.
 - Pointer SSA/memory SSA is still incomplete for non-alloca refs and aliasing
   across loops or multiple stores with control-flow merges; extend lowering to
   handle general LLVM ref graphs beyond the alloca-backed cases.
