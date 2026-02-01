@@ -437,26 +437,74 @@ void LowerToBMCPass::runOnOperation() {
       Value value;
       Value canonical;
       bool invert = false;
+      Value fourStateBase;
     };
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+    auto canonicalizeClockValue = [&](Value value, bool &invert) -> Value {
+      auto simplified = simplifyI1Value(value);
+      invert = simplified.invert;
+      Value canonical = simplified.value ? simplified.value : value;
+      if (auto andOp = canonical.getDefiningOp<comb::AndOp>()) {
+        if (andOp.getNumOperands() == 2) {
+          if (auto gated =
+                  matchFourStateClockGate(andOp.getOperand(0),
+                                          andOp.getOperand(1)))
+            canonical = gated;
+          else if (auto gated =
+                       matchFourStateClockGate(andOp.getOperand(1),
+                                               andOp.getOperand(0)))
+            canonical = gated;
+        }
+      }
+      return canonical;
+    };
+    auto getFourStateClockBase = [&](Value input) -> Value {
+      if (!input)
+        return Value();
+      if (auto extract = input.getDefiningOp<hw::StructExtractOp>()) {
+        if (auto fieldAttr = extract.getFieldNameAttr()) {
+          if (fieldAttr.getValue() == "value" &&
+              isFourStateStructType(extract.getInput().getType()))
+            return extract.getInput();
+        }
+      }
+      if (auto andOp = input.getDefiningOp<comb::AndOp>()) {
+        if (andOp.getNumOperands() == 2) {
+          if (auto gated = matchFourStateClockGate(andOp.getOperand(0),
+                                                   andOp.getOperand(1))) {
+            return getStructFieldBase(gated, "value");
+          }
+          if (auto gated = matchFourStateClockGate(andOp.getOperand(1),
+                                                   andOp.getOperand(0))) {
+            return getStructFieldBase(gated, "value");
+          }
+        }
+      }
+      return Value();
+    };
+
     auto maybeAddClockInput = [&](Value input) {
       if (!input || input.getType() != builder.getI1Type())
         return;
-      auto simplified = simplifyI1Value(input);
-      bool invert = simplified.invert;
-      Value canonical = simplified.value ? simplified.value : input;
+      bool invert = false;
+      Value canonical = canonicalizeClockValue(input, invert);
+      Value base = getFourStateClockBase(canonical);
+      if (!base)
+        base = getFourStateClockBase(input);
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
       // errors.
       if (llvm::any_of(clockInputs, [&](const ClockInputInfo &existing) {
             return invert == existing.invert &&
-                   equivalence.isEquivalent(canonical, existing.canonical);
+                   (equivalence.isEquivalent(canonical, existing.canonical) ||
+                    (base && existing.fourStateBase &&
+                     base == existing.fourStateBase));
           }))
         return;
-      clockInputs.push_back({input, canonical, invert});
+      clockInputs.push_back({input, canonical, invert, base});
     };
     for (auto toClockOp : toClockOps)
       maybeAddClockInput(toClockOp.getInput());
@@ -617,14 +665,63 @@ void LowerToBMCPass::runOnOperation() {
         return {};
       };
 
+      {
+        DenseMap<std::pair<BlockArgument, unsigned>, size_t> rootToIndex;
+        SmallVector<ClockInputInfo> deduped;
+        deduped.reserve(clockInputs.size());
+        for (const auto &input : clockInputs) {
+          BlockArgument root;
+          if ((traceRoot(input.canonical, root) ||
+               traceRoot(input.value, root)) &&
+              root && root.getOwner() == hwModule.getBodyBlock()) {
+            auto key = std::make_pair(root, input.invert ? 1u : 0u);
+            if (rootToIndex.contains(key))
+              continue;
+            rootToIndex.try_emplace(key, deduped.size());
+          }
+          deduped.push_back(input);
+        }
+        clockInputs.swap(deduped);
+      }
+
+      {
+        if (clockInputs.size() > 1) {
+          BlockArgument firstRoot;
+          bool firstInvert = clockInputs.front().invert;
+          if (traceRoot(clockInputs.front().canonical, firstRoot) ||
+              traceRoot(clockInputs.front().value, firstRoot)) {
+            bool allSame = true;
+            for (const auto &input : clockInputs) {
+              if (input.invert != firstInvert) {
+                allSame = false;
+                break;
+              }
+              BlockArgument root;
+              if (!(traceRoot(input.canonical, root) ||
+                    traceRoot(input.value, root)) ||
+                  root != firstRoot) {
+                allSame = false;
+                break;
+              }
+            }
+            if (allSame)
+              clockInputs.resize(1);
+          }
+        }
+      }
+
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
-        auto simplified = simplifyI1Value(input);
-        bool invert = simplified.invert;
-        Value canonical = simplified.value ? simplified.value : input;
+        bool invert = false;
+        Value canonical = canonicalizeClockValue(input, invert);
+        Value base = getFourStateClockBase(canonical);
+        if (!base)
+          base = getFourStateClockBase(input);
         for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
           if (invert != existing.invert)
             continue;
-          if (equivalence.isEquivalent(canonical, existing.canonical))
+          if (equivalence.isEquivalent(canonical, existing.canonical) ||
+              (base && existing.fourStateBase &&
+               base == existing.fourStateBase))
             return idx;
         }
         return std::nullopt;
@@ -832,8 +929,13 @@ void LowerToBMCPass::runOnOperation() {
             if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
               return;
             auto nameAttr = op->getAttrOfType<StringAttr>("bmc.clock");
-            if (!nameAttr)
+            if (!nameAttr) {
+              // If a clocked check lacks a resolved clock name, map it to the
+              // single derived BMC clock input to avoid rejecting it later.
+              if (op->getAttr("bmc.clock_edge"))
+                op->setAttr("bmc.clock", defaultClockName);
               return;
+            }
             auto updated = remapIfUnknown(nameAttr);
             if (updated && updated != nameAttr)
               op->setAttr("bmc.clock", updated);
@@ -844,7 +946,7 @@ void LowerToBMCPass::runOnOperation() {
     }
   }
   // Also check for i1 inputs that are converted to clocks via ToClockOp
-    if (!hasClk) {
+  if (!hasClk) {
     hwModule.walk([&](seq::ToClockOp toClockOp) {
       if (auto blockArg = dyn_cast<BlockArgument>(toClockOp.getInput())) {
         if (blockArg.getOwner() == &hwModule.getBody().front()) {
