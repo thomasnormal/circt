@@ -32,6 +32,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include <optional>
 
@@ -126,6 +127,35 @@ private:
   llvm::APInt value;
   bool isUnknown;
   unsigned width;
+};
+
+//===----------------------------------------------------------------------===//
+// CallStackFrame - Saved function call context for suspend/resume
+//===----------------------------------------------------------------------===//
+
+/// Represents a saved function call frame for resuming execution after a wait.
+/// When a wait occurs inside a nested function call, we need to save the
+/// function's execution context so we can resume from the correct point.
+struct CallStackFrame {
+  /// The function being executed.
+  mlir::func::FuncOp funcOp;
+
+  /// The block within the function where execution should resume.
+  mlir::Block *resumeBlock = nullptr;
+
+  /// The operation iterator within the block where execution should resume.
+  mlir::Block::iterator resumeOp;
+
+  /// The call operation that invoked this function (for setting results).
+  mlir::Operation *callOp = nullptr;
+
+  /// Arguments passed to the function (for re-entry if needed).
+  llvm::SmallVector<InterpretedValue, 4> args;
+
+  CallStackFrame() = default;
+  CallStackFrame(mlir::func::FuncOp func, mlir::Block *block,
+                 mlir::Block::iterator op, mlir::Operation *call)
+      : funcOp(func), resumeBlock(block), resumeOp(op), callOp(call) {}
 };
 
 //===----------------------------------------------------------------------===//
@@ -268,6 +298,13 @@ struct ProcessExecutionState {
   /// These are SSA values that feed into the condition and need to be
   /// recomputed when the condition is re-checked.
   llvm::SmallVector<mlir::Value, 8> waitConditionValuesToInvalidate;
+
+  /// Call stack for resuming execution after a wait inside a function.
+  /// When a wait (e.g., sim.fork with blocking join) occurs inside a nested
+  /// function call, we push the function's context onto this stack so that
+  /// when the process resumes, we can continue from the correct point inside
+  /// the function rather than skipping to the next process-level operation.
+  llvm::SmallVector<CallStackFrame, 4> callStack;
 
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
@@ -638,10 +675,23 @@ private:
                                          mlir::func::CallOp callOp);
 
   /// Interpret a function body.
+  /// @param procId The process ID executing this function.
+  /// @param funcOp The function to execute.
+  /// @param args Arguments to pass to the function.
+  /// @param results Output: return values from the function.
+  /// @param callOp The call operation that invoked this function (for saving
+  ///               in call stack frames when waiting).
+  /// @param resumeBlock If not null, resume execution from this block instead
+  ///                    of the entry block.
+  /// @param resumeOp If resumeBlock is set, resume from this operation within
+  ///                 the block.
   mlir::LogicalResult
   interpretFuncBody(ProcessId procId, mlir::func::FuncOp funcOp,
                     llvm::ArrayRef<InterpretedValue> args,
-                    llvm::SmallVectorImpl<InterpretedValue> &results);
+                    llvm::SmallVectorImpl<InterpretedValue> &results,
+                    mlir::Operation *callOp = nullptr,
+                    mlir::Block *resumeBlock = nullptr,
+                    mlir::Block::iterator resumeOp = {});
 
   //===--------------------------------------------------------------------===//
   // Sim Dialect Operation Handlers
