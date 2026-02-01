@@ -35,6 +35,19 @@ module QueuePushTest;
     end
 endmodule
 
+/// Test queue insert method
+// CHECK-LABEL: moore.module @QueueInsertTest() {
+module QueueInsertTest;
+    int q[$];
+
+    initial begin
+        q.push_back(1);
+        q.push_back(3);
+        // CHECK: moore.queue.insert
+        q.insert(1, 2);
+    end
+endmodule
+
 /// Test queue pop_back and pop_front methods
 // CHECK-LABEL: moore.module @QueuePopTest() {
 module QueuePopTest;
