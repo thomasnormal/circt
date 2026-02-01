@@ -330,6 +330,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   `--lec-approx`) to toggle LLHD abstraction behavior.
 - VerifToSMT now recognizes `comb.icmp`-derived clocks for BMC clock mapping.
 - Clock-root tracing is now centralized to keep BMC/VerifToSMT mappings aligned.
+- `simplifyI1Value` now folds `comb.icmp` against constant i1s for clock
+  canonicalization (supports `clk == 1`/`clk != 1` patterns).
 
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)
