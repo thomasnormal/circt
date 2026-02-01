@@ -5640,6 +5640,50 @@ uint64_t __moore_uvm_get_time(void);
 /// @param time Current simulation time
 void __moore_uvm_set_time(uint64_t time);
 
+//===----------------------------------------------------------------------===//
+// UVM Root Re-entrancy Support
+//===----------------------------------------------------------------------===//
+//
+// These functions help handle the re-entrancy issue in UVM where
+// uvm_component::new() calls get_root(), but during uvm_root::new(),
+// m_inst is set before uvm_top. This causes a false mismatch warning.
+//
+// The fix works by:
+// 1. Setting a flag when m_uvm_get_root() starts constructing uvm_root
+// 2. Re-entrant calls to get_root() during construction return m_inst directly
+// 3. The flag is cleared after construction completes
+//
+
+/// Mark that uvm_root construction has started.
+/// This should be called at the beginning of m_uvm_get_root() before
+/// calling uvm_root::new(). It sets a flag to indicate that re-entrant
+/// calls to get_root() should return m_inst directly without comparing
+/// to uvm_top (which isn't set yet).
+void __moore_uvm_root_constructing_start(void);
+
+/// Mark that uvm_root construction has completed.
+/// This should be called after m_uvm_get_root() finishes setting uvm_top.
+/// It clears the construction-in-progress flag.
+void __moore_uvm_root_constructing_end(void);
+
+/// Check if uvm_root is currently being constructed.
+/// Used by re-entrant code paths to skip the m_inst != uvm_top check.
+///
+/// @return true if root construction is in progress, false otherwise
+bool __moore_uvm_is_root_constructing(void);
+
+/// Set the uvm_root instance pointer during construction.
+/// This is called to set m_inst atomically with the constructing flag.
+///
+/// @param inst Pointer to the uvm_root instance being constructed
+void __moore_uvm_set_root_inst(void *inst);
+
+/// Get the uvm_root instance pointer.
+/// During construction, returns the partially constructed instance.
+///
+/// @return Pointer to the uvm_root instance (may be partially constructed)
+void *__moore_uvm_get_root_inst(void);
+
 #ifdef __cplusplus
 }
 #endif

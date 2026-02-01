@@ -8054,6 +8054,38 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
 
+  // Track UVM root construction for re-entrancy handling
+  // When m_uvm_get_root is called, we need to mark root construction as started
+  // so that re-entrant calls (via uvm_component::new -> get_root) can skip
+  // the m_inst != uvm_top comparison that fails during construction.
+  StringRef calleeName = callOp.getCallee();
+  bool isGetRoot = calleeName == "m_uvm_get_root";
+  if (isGetRoot) {
+    ++uvmGetRootDepth;
+    if (uvmGetRootDepth == 1) {
+      // First call - mark root construction as starting
+      __moore_uvm_root_constructing_start();
+      LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root entry (depth=1), "
+                              << "marking root construction started\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root re-entry (depth="
+                              << uvmGetRootDepth << ")\n");
+    }
+  }
+
+  // Use RAII to ensure depth is decremented even on early returns
+  auto decrementDepthOnExit = llvm::make_scope_exit([&]() {
+    if (isGetRoot) {
+      --uvmGetRootDepth;
+      if (uvmGetRootDepth == 0) {
+        // Last call completed - mark root construction as finished
+        __moore_uvm_root_constructing_end();
+        LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root exit (depth=0), "
+                                << "marking root construction ended\n");
+      }
+    }
+  });
+
   // Find the called function
   auto *symbolOp = mlir::SymbolTable::lookupNearestSymbolFrom(
       callOp.getOperation(), callOp.getCalleeAttr());
@@ -10299,6 +10331,37 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   StringRef calleeName = resolvedCalleeName;
 
+  // Track UVM root construction for re-entrancy handling
+  // When m_uvm_get_root is called, we need to mark root construction as started
+  // so that re-entrant calls (via uvm_component::new -> get_root) can skip
+  // the m_inst != uvm_top comparison that fails during construction.
+  bool isGetRoot = calleeName == "m_uvm_get_root";
+  if (isGetRoot) {
+    ++uvmGetRootDepth;
+    if (uvmGetRootDepth == 1) {
+      // First call - mark root construction as starting
+      __moore_uvm_root_constructing_start();
+      LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root entry (depth=1), "
+                              << "marking root construction started\n");
+    } else {
+      LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root re-entry (depth="
+                              << uvmGetRootDepth << ")\n");
+    }
+  }
+
+  // Use RAII to ensure depth is decremented even on early returns
+  auto decrementDepthOnExit = llvm::make_scope_exit([&]() {
+    if (isGetRoot) {
+      --uvmGetRootDepth;
+      if (uvmGetRootDepth == 0) {
+        // Last call completed - mark root construction as finished
+        __moore_uvm_root_constructing_end();
+        LLVM_DEBUG(llvm::dbgs() << "  UVM: m_uvm_get_root exit (depth=0), "
+                                << "marking root construction ended\n");
+      }
+    }
+  });
+
   // Look up the function in the module
   // Safe access: check if process state exists before accessing
   auto stateIt = processStates.find(procId);
@@ -10687,6 +10750,50 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_uvm_report_summarize") {
       __moore_uvm_report_summarize();
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_report_summarize()\n");
+      return success();
+    }
+
+    // Handle UVM root re-entrancy runtime functions
+    if (calleeName == "__moore_uvm_root_constructing_start") {
+      __moore_uvm_root_constructing_start();
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_root_constructing_start()\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_uvm_root_constructing_end") {
+      __moore_uvm_root_constructing_end();
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_root_constructing_end()\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_uvm_is_root_constructing") {
+      bool result = __moore_uvm_is_root_constructing();
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(result ? 1ULL : 0ULL, 1));
+      }
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_is_root_constructing() = "
+                              << (result ? "true" : "false") << "\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_uvm_set_root_inst") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t inst = getValue(procId, callOp.getOperand(0)).getUInt64();
+        __moore_uvm_set_root_inst(reinterpret_cast<void *>(inst));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_set_root_inst(0x"
+                                << llvm::format_hex(inst, 16) << ")\n");
+      }
+      return success();
+    }
+
+    if (calleeName == "__moore_uvm_get_root_inst") {
+      void *inst = __moore_uvm_get_root_inst();
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(reinterpret_cast<uint64_t>(inst), 64));
+      }
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_uvm_get_root_inst() = 0x"
+                              << llvm::format_hex(reinterpret_cast<uint64_t>(inst), 16) << "\n");
       return success();
     }
 

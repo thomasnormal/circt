@@ -17901,3 +17901,62 @@ extern "C" int32_t __moore_semaphore_get_key_count(MooreSemaphoreHandle sem) {
   std::lock_guard<std::mutex> lock(semaphore->mutex);
   return semaphore->keyCount;
 }
+
+//===----------------------------------------------------------------------===//
+// UVM Root Re-entrancy Support
+//===----------------------------------------------------------------------===//
+//
+// The UVM library has a re-entrancy issue in the uvm_root singleton pattern:
+//
+// 1. m_uvm_get_root() checks if m_inst == null
+// 2. If null, it calls new uvm_root()
+// 3. uvm_root::new() sets m_inst = this BEFORE returning
+// 4. uvm_root::new() calls uvm_component::new()
+// 5. uvm_component::new() calls cs.get_root() which calls m_uvm_get_root()
+// 6. m_uvm_get_root() sees m_inst != null, so returns m_inst
+// 7. Then it checks if m_inst != uvm_top and reports an error
+//
+// The problem is that uvm_top is not set until AFTER uvm_root::new() returns,
+// but m_inst is set at the START of uvm_root::new(). So during the re-entrant
+// call, m_inst != uvm_top always, causing a false warning.
+//
+// Our fix: track when root construction is in progress and skip the check.
+//
+
+namespace {
+
+/// State for UVM root re-entrancy tracking.
+struct UvmRootConstructionState {
+  /// Flag indicating root construction is in progress.
+  std::atomic<bool> constructing{false};
+
+  /// The root instance being constructed (or null).
+  std::atomic<void *> rootInst{nullptr};
+};
+
+UvmRootConstructionState &getUvmRootState() {
+  static UvmRootConstructionState state;
+  return state;
+}
+
+} // anonymous namespace
+
+extern "C" void __moore_uvm_root_constructing_start(void) {
+  getUvmRootState().constructing.store(true);
+}
+
+extern "C" void __moore_uvm_root_constructing_end(void) {
+  getUvmRootState().constructing.store(false);
+}
+
+extern "C" bool __moore_uvm_is_root_constructing(void) {
+  return getUvmRootState().constructing.load();
+}
+
+extern "C" void __moore_uvm_set_root_inst(void *inst) {
+  getUvmRootState().rootInst.store(inst);
+}
+
+extern "C" void *__moore_uvm_get_root_inst(void) {
+  return getUvmRootState().rootInst.load();
+}
