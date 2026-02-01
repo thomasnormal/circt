@@ -3436,15 +3436,6 @@ struct VerifBoundedModelCheckingOpConversion
     for (; initIndex < initVals.size(); ++initIndex)
       inputDecls.push_back(initVals[initIndex]);
 
-    DenseMap<StringRef, unsigned> clockNameToPos;
-    for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
-      if (clockIdx < static_cast<int>(inputNamePrefixes.size())) {
-        auto nameAttr = inputNamePrefixes[clockIdx];
-        if (nameAttr && !nameAttr.getValue().empty())
-          clockNameToPos[nameAttr.getValue()] = pos;
-      }
-    }
-
     struct ClockSourceInfo {
       unsigned pos = 0;
       bool invert = false;
@@ -3478,6 +3469,15 @@ struct VerifBoundedModelCheckingOpConversion
           op.emitError("clock source maps to multiple BMC clock inputs");
           return failure();
         }
+      }
+    }
+
+    DenseMap<StringRef, unsigned> clockNameToPos;
+    for (auto [pos, clockIdx] : llvm::enumerate(clockIndexes)) {
+      if (clockIdx < static_cast<int>(inputNamePrefixes.size())) {
+        auto nameAttr = inputNamePrefixes[clockIdx];
+        if (nameAttr && !nameAttr.getValue().empty())
+          clockNameToPos[nameAttr.getValue()] = pos;
       }
     }
 
@@ -3945,9 +3945,16 @@ struct VerifBoundedModelCheckingOpConversion
         !risingClocksOnly && clockIndexes.size() > 1 && numRegs > 0;
     if (usePerRegClocks) {
       auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
-      if (!regClocksAttr || regClocksAttr.size() != numRegs) {
-        op.emitError("multi-clock BMC requires bmc_reg_clocks with one entry "
-                     "per register");
+      auto regClockSourcesAttr =
+          op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources");
+      bool regClocksValid =
+          regClocksAttr && regClocksAttr.size() == numRegs;
+      bool regSourcesValid =
+          regClockSourcesAttr && regClockSourcesAttr.size() == numRegs;
+      if (!regClocksValid && !regSourcesValid) {
+        op.emitError(
+            "multi-clock BMC requires bmc_reg_clocks or bmc_reg_clock_sources "
+            "with one entry per register");
         return failure();
       }
       DenseMap<StringRef, unsigned> inputNameToIndex;
@@ -3955,28 +3962,62 @@ struct VerifBoundedModelCheckingOpConversion
         if (nameAttr && !nameAttr.getValue().empty())
           inputNameToIndex[nameAttr.getValue()] = idx;
       }
-      regClockToLoopIndex.reserve(numRegs);
-      for (auto attr : regClocksAttr) {
-        auto nameAttr = dyn_cast<StringAttr>(attr);
-        if (!nameAttr || nameAttr.getValue().empty()) {
-          op.emitError("multi-clock BMC requires named clock entries in "
-                       "bmc_reg_clocks");
-          return failure();
-        }
-        auto nameIt = inputNameToIndex.find(nameAttr.getValue());
-        if (nameIt == inputNameToIndex.end()) {
-          op.emitError("bmc_reg_clocks entry does not match any input name");
-          return failure();
-        }
-        unsigned clockInputIndex = nameIt->second;
+      auto mapArgIndexToClockPos = [&](unsigned argIndex)
+          -> std::optional<unsigned> {
+        if (auto it = clockSourceInputs.find(argIndex);
+            it != clockSourceInputs.end())
+          return it->second.pos;
         auto clockIt =
-            llvm::find(clockIndexes, static_cast<int>(clockInputIndex));
-        if (clockIt == clockIndexes.end()) {
-          op.emitError("bmc_reg_clocks entry does not name a clock input");
+            llvm::find(clockIndexes, static_cast<int>(argIndex));
+        if (clockIt == clockIndexes.end())
+          return std::nullopt;
+        return static_cast<unsigned>(clockIt - clockIndexes.begin());
+      };
+      regClockToLoopIndex.reserve(numRegs);
+      for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
+        bool mapped = false;
+        if (regClocksValid) {
+          auto nameAttr =
+              dyn_cast<StringAttr>(regClocksAttr[regIndex]);
+          if (nameAttr && !nameAttr.getValue().empty()) {
+            auto nameIt = inputNameToIndex.find(nameAttr.getValue());
+            if (nameIt == inputNameToIndex.end()) {
+              op.emitError("bmc_reg_clocks entry does not match any input name");
+              return failure();
+            }
+            unsigned clockInputIndex = nameIt->second;
+            auto clockIt =
+                llvm::find(clockIndexes, static_cast<int>(clockInputIndex));
+            if (clockIt == clockIndexes.end()) {
+              op.emitError("bmc_reg_clocks entry does not name a clock input");
+              return failure();
+            }
+            regClockToLoopIndex.push_back(
+                static_cast<unsigned>(clockIt - clockIndexes.begin()));
+            mapped = true;
+          }
+        }
+        if (!mapped && regSourcesValid) {
+          auto dict = dyn_cast<DictionaryAttr>(
+              regClockSourcesAttr[regIndex]);
+          if (dict) {
+            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
+            if (argAttr && invertAttr) {
+              unsigned argIndex = argAttr.getValue().getZExtValue();
+              if (auto pos = mapArgIndexToClockPos(argIndex)) {
+                regClockToLoopIndex.push_back(*pos);
+                mapped = true;
+              }
+            }
+          }
+        }
+        if (!mapped) {
+          op.emitError("multi-clock BMC requires named clock entries in "
+                       "bmc_reg_clocks or valid entries in "
+                       "bmc_reg_clock_sources");
           return failure();
         }
-        regClockToLoopIndex.push_back(
-            static_cast<unsigned>(clockIt - clockIndexes.begin()));
       }
     }
 
@@ -5452,13 +5493,19 @@ void ConvertVerifToSMTPass::runOnOperation() {
             unsigned numRegs = bmcOp.getNumRegs();
             auto regClocks =
                 bmcOp->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
-            if (numRegs > 0 &&
-                (!regClocks || regClocks.size() != numRegs)) {
-              op->emitError("multi-clock BMC requires bmc_reg_clocks with one "
-                            "entry per register");
+            auto regClockSources =
+                bmcOp->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources");
+            bool regClocksValid =
+                regClocks && regClocks.size() == numRegs;
+            bool regSourcesValid =
+                regClockSources && regClockSources.size() == numRegs;
+            if (numRegs > 0 && !regClocksValid && !regSourcesValid) {
+              op->emitError("multi-clock BMC requires bmc_reg_clocks or "
+                            "bmc_reg_clock_sources with one entry per "
+                            "register");
               return WalkResult::interrupt();
             }
-            if (numRegs > 0 &&
+            if (numRegs > 0 && !regSourcesValid &&
                 !bmcOp->getAttrOfType<ArrayAttr>("bmc_input_names")) {
               op->emitError(
                   "multi-clock BMC requires bmc_input_names for clock mapping");

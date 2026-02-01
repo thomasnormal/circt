@@ -15,6 +15,7 @@ hw.module @from_clock_gate(in %clk: !seq.clock, in %in: i1, out out: i1) {
 // CHECK-SAME: in %reg_state : i1
 // CHECK-SAME: out out : i1
 // CHECK-SAME: out reg_next : i1
-// CHECK-SAME: attributes {{{.*}}bmc_reg_clocks = ["clk"]
+// CHECK-SAME: attributes {{{.*}}bmc_reg_clock_sources = [{arg_index = 0 : i32, invert = false}]
+// CHECK-SAME: bmc_reg_clocks = ["clk"]
 // CHECK-SAME: initial_values = [unit], num_regs = 1 : i32}
 // CHECK-NOT: seq.compreg
