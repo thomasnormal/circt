@@ -13,6 +13,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
+#include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
@@ -164,6 +165,16 @@ static bool traceClockRoot(Value value, Value &root) {
     if (sawDrive)
       return false;
     return traceClockRootFromMemory(signal, root);
+  }
+  if (value.getType().isInteger(1)) {
+    BlockArgument i1Root;
+    if (traceI1ValueRoot(value, i1Root)) {
+      if (!i1Root)
+        return true;
+      if (!root)
+        root = i1Root;
+      return root == i1Root;
+    }
   }
   if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
     for (auto operand : andOp.getOperands())
