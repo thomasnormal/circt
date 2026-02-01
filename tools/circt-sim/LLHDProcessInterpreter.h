@@ -254,6 +254,21 @@ struct ProcessExecutionState {
   /// and the total is used when the process actually suspends.
   int64_t pendingDelayFs = 0;
 
+  /// Operation to restart from when resuming after a wait_condition with false.
+  /// When a wait(condition) is called with a false condition, we need to
+  /// restart from a point that allows the condition to be re-evaluated.
+  /// This stores the iterator to the first operation in the condition
+  /// computation chain.
+  mlir::Block::iterator waitConditionRestartOp;
+
+  /// Block containing the restart operation.
+  mlir::Block *waitConditionRestartBlock = nullptr;
+
+  /// Values to invalidate when restarting for wait_condition re-evaluation.
+  /// These are SSA values that feed into the condition and need to be
+  /// recomputed when the condition is re-checked.
+  llvm::SmallVector<mlir::Value, 8> waitConditionValuesToInvalidate;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
