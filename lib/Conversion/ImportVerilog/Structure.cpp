@@ -5681,6 +5681,12 @@ mlir::StringAttr circt::ImportVerilog::fullyQualifiedSymbolName(
         parts.push_back(parentSym.name);
       break;
     }
+    case slang::ast::SymbolKind::Subroutine:
+      // Include function/task names in the path to ensure unique names for
+      // static function-local variables across different functions.
+      if (!parentSym.name.empty())
+        parts.push_back(parentSym.name);
+      break;
     default:
       break;
     }
