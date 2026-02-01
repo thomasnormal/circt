@@ -24,6 +24,7 @@
 12. **Stack overflow in collectSignalIds** - Fixed infinite recursion
 13. **Delta step tracking** - Fixed EventQueue behavior
 14. **BindScopeInterfacePortInfo** - New struct for tracking interface ports in bind scope
+15. **Dynamic array index drive/probe** - Added `llhd.sig.array_get` handling in interpretDrive/interpretProbe for both LLHD signals and memory-backed arrays (APB AVIP now fully simulates!)
 
 ### Test Suite Summary
 | Suite | Status | Notes |
@@ -40,6 +41,25 @@
 - **Virtual method dispatch** - Class hierarchy simulation
 
 ---
+
+## Iteration 280 - February 1, 2026
+
+### Fixed in this Iteration
+1. **LEC harness LLHD removal**:
+   - Switched yosys/sv-tests/verilator LEC scripts to `circt-verilog --ir-hw` and
+     LLHD interface stripping passes to avoid LLHD process ops in circt-lec runs.
+   - Added a yosys SVA LEC smoke regression with a sequential `always` block.
+   - **Files**: `utils/run_yosys_sva_circt_lec.sh`,
+     `utils/run_sv_tests_circt_lec.sh`,
+     `utils/run_verilator_verification_circt_lec.sh`,
+     `test/Tools/circt-lec/Inputs/yosys-sva-mini/basic_seq.sv`,
+     `test/Tools/circt-lec/yosys-lec-smoke-seq.mlir`.
+
+### Tests Run
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic00 utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=basic_seq utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec OUT=/tmp/sv-tests-lec-results.txt TAG_REGEX='16.10' TEST_FILTER=parsing FORCE_LEC=1 LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir utils/run_sv_tests_circt_lec.sh test/Tools/circt-lec/Inputs/sv-tests-mini`
+- `env CIRCT_VERILOG=build/bin/circt-verilog CIRCT_OPT=build/bin/circt-opt CIRCT_LEC=build/bin/circt-lec OUT=/tmp/verilator-lec-results.txt LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir utils/run_verilator_verification_circt_lec.sh test/Tools/circt-lec/Inputs/verilator-mini`
 
 ## Iteration 279 - February 1, 2026
 

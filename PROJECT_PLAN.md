@@ -301,6 +301,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 3. **LEC strict resolution**: implement sound multi-driver/inout resolution
    semantics (tri-state merging + diagnostics) for strict equivalence.
 
+**Recent Formal Updates (Feb 1, 2026):**
+- LEC harnesses now use `circt-verilog --ir-hw` plus LLHD interface stripping
+  passes to avoid LLHD process ops in circt-lec flows.
+- Added a yosys SVA LEC smoke regression with a sequential `always` block.
+
 **Iteration 278 FINAL Achievements:**
 - **XFAIL Reduced to 1**: Down from 18 at iteration start (**94% reduction!**)
 - **ImportVerilog**: **218/219 pass (99.54%)** - near full parity
