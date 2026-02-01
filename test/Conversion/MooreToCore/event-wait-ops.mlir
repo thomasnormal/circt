@@ -40,10 +40,12 @@ moore.module @test_event_trigger_in_procedure(in %event: !moore.event) {
 moore.module @test_event_trigger_with_read(in %event_ref: !moore.ref<event>) {
   moore.procedure initial {
     // Read the event and trigger it
-    // The fix ensures we pass the actual ref address, not a temporary
+    // The lowering probes the ref, allocates memory, stores, then calls
     %event = moore.read %event_ref : <event>
-    // CHECK: [[PTR:%.*]] = builtin.unrealized_conversion_cast %event_ref : !llhd.ref<i1> to !llvm.ptr
-    // CHECK: llvm.call @__moore_event_trigger([[PTR]]) : (!llvm.ptr) -> ()
+    // CHECK: llhd.prb %event_ref : i1
+    // CHECK: llvm.alloca
+    // CHECK: llvm.store
+    // CHECK: llvm.call @__moore_event_trigger
     moore.event_trigger %event : !moore.event
     moore.return
   }
