@@ -24,6 +24,27 @@ maintaining test coverage across all suites. Launched parallel testing agents fo
 3. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
 4. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
 
+### Key Discovery: SyncPrimitivesManager Already Exists!
+
+Research found that `SyncPrimitivesManager` with `Mailbox` class is already implemented in
+`lib/Dialect/Sim/ProcessScheduler.cpp` but **NOT INTEGRATED** with LLHDProcessInterpreter.
+
+**Existing infrastructure** (ProcessScheduler.h:1273-1423):
+- `Mailbox` class with `put()/get()` operations
+- `putWaitQueue` and `getWaitQueue` for blocked processes
+- `trySatisfyGetWaiter()` to wake processes
+
+**Required work**: Instantiate SyncPrimitivesManager in LLHDProcessInterpreter and add DPI hooks
+for queue operations that use it.
+
+### Test Results - Iteration 305
+
+| Test Suite | Pass | Total | Rate | Notes |
+|------------|------|-------|------|-------|
+| **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
+| **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, timer_core, gpio, prim_fifo_sync |
+| **AVIP Compilation** | 7+ | 9 | **78%+** | APB, AHB, AXI4, I2S, I3C compile |
+
 ---
 
 ## Iteration 304 - February 2, 2026
