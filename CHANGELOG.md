@@ -1,6 +1,33 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 315 - February 2, 2026 (Current Status)
+## Iteration 316 - February 2, 2026 (Current Status)
+
+### Summary
+
+Iteration 316: **Urandom parse fix, uvm_config_db signal propagation, AVIP compile expanded.**
+- Fixed `moore.builtin.urandom` greedy parse with `seed` keyword disambiguator
+- Added signal mapping propagation through function calls for uvm_config_db::set
+- AXI4 and I3C AVIPs now compile using vendor filelists (8/9 total, up from 6/8)
+- 4-state LLVM global type conversion fix with unit test
+- Full regression: circt-lec 74/118, circt-sim 98/100, ImportVerilog 221/224
+
+### Accomplishments
+
+1. **Urandom parse fix** - Changed assembly format for `RandomBIOp` and `UrandomBIOp` from
+   `($seed^)? attr-dict` to `(\`seed\` $seed^)? attr-dict` to prevent greedy parser from
+   consuming tokens from subsequent operations. SPI AVIP MLIR now parseable.
+2. **uvm_config_db signal propagation** - Added 4 changes to LLHDProcessInterpreter.cpp:
+   signal mapping propagation in function calls, GEP/addressof-based drive, memory-backed
+   BlockArgument drive and probe. AHB AVIP simulation runs to completion.
+3. **4-state LLVM global type fix** - `GlobalVariableOpConversion` now converts
+   `hw::StructType` to `LLVM::LLVMStructType` using `convertToLLVMType()`.
+4. **AXI4 AVIP compile** - Uses vendor filelist, produces 572K lines MLIR.
+5. **I3C AVIP compile** - Uses vendor filelist, produces 356K lines MLIR.
+6. **AXI4Lite filelist** - Created consolidated `Axi4LiteCompileAll.f` (1 remaining bind error).
+
+---
+
+## Iteration 315 - February 2, 2026
 
 ### Summary
 
@@ -42,8 +69,9 @@ Unit test added for ProcessStatesReferenceStability (17/17 pass).
   a concrete counterexample: `op_i=4'h8` (CIPH_INV), `data_i=16'h2700` → LUT `data_o=16'h3D00`,
   canright `data_o=16'h00FF` (unknown mask all ones). SMT check with fixed inputs shows the
   canright unknown mask is *forced* nonzero for `op_i=4'h8`, `data_i=16'h2700`
-  (asserting unknown=0 is UNSAT), so this is not just an unconstrained output. Root cause still
-  under investigation.
+  (asserting unknown=0 is UNSAT), so this is not just an unconstrained output. A global SMT
+  check shows the canright output unknown mask is always `0xFF` regardless of inputs. Root
+  cause still under investigation.
 
 ### Full Regression Results (Iteration 315)
 
