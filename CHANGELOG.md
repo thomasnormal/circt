@@ -40,6 +40,10 @@ maintaining test coverage across all suites. Launched parallel testing agents fo
 - sv-tests LEC: total=23 pass=23 fail=0 error=0 skip=1013.
 - verilator-verification BMC: total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0.
 - verilator-verification LEC: total=17 pass=17 fail=0 error=0 skip=0.
+- OpenTitan LEC: aes_sbox_canright FAIL (logs in `/tmp/opentitan-lec-wh2bsegi/aes_sbox_canright`).
+- AVIP compile smoke (circt-verilog):
+  - PASS: ahb, apb, axi4, i2s, i3c, uart
+  - FAIL: axi4Lite (dist range bounds must be constant), jtag (default arg mismatch on override), spi (nested class non-static property access, empty argument in $sformatf)
 
 ### UVM Factory Registration - VERIFIED WORKING
 
