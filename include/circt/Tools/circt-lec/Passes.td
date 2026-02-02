@@ -93,6 +93,19 @@ def LowerLECLLVM : Pass<"lower-lec-llvm", "::mlir::ModuleOp"> {
   ];
 }
 
+def DumpLECUnknowns : Pass<"dump-lec-unknowns", "::mlir::ModuleOp"> {
+  let summary = "Dump backward slices for 4-state unknown outputs";
+  let description = [{
+    Collects a backward slice for each 4-state hw.output operand and prints the
+    operations that contribute to its unknown mask. Intended for debugging
+    unexpected X propagation in LEC flows.
+  }];
+
+  let dependentDialects = [
+    "circt::hw::HWDialect"
+  ];
+}
+
 def LowerLLHDRefPorts
     : Pass<"lower-llhd-ref-ports", "::mlir::ModuleOp"> {
   let summary = "Lower LLHD ref ports to value ports for LEC";

@@ -34,6 +34,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include <map>
 #include <optional>
 
 // Forward declarations for SCF, Func, and LLVM dialects
@@ -927,7 +928,13 @@ private:
   llvm::DenseMap<SignalId, InterpretedValue> pendingEpsilonDrives;
 
   /// Map from process IDs to execution states.
-  llvm::DenseMap<ProcessId, ProcessExecutionState> processStates;
+  /// NOTE: This uses std::map rather than DenseMap to guarantee reference
+  /// stability.  evaluateCombinationalOp inserts and erases temporary entries
+  /// during getValue calls; with DenseMap this can trigger a rehash and
+  /// invalidate references held by callers (e.g., interpretWait's
+  /// `auto &state = processStates[procId]`).  std::map provides stable
+  /// references across inserts and erases.
+  std::map<ProcessId, ProcessExecutionState> processStates;
 
   /// Next temporary process ID used for combinational evaluation.
   ProcessId nextTempProcId = 1ull << 60;

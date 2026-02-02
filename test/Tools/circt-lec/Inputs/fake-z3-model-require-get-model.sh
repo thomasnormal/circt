@@ -29,6 +29,10 @@ cat <<'MODEL'
     (_ bv5 8))
   (define-fun in3 () (_ BitVec 72)
     (_ bv18446744073709551617 72))
+  (define-fun c1_out0 () (_ BitVec 8)
+    (_ bv165 8))
+  (define-fun c2_out0 () (_ BitVec 8)
+    (_ bv5 8))
 )
 model: ok
 MODEL

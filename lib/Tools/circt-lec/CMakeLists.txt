@@ -1,5 +1,6 @@
 add_circt_library(CIRCTLECTransforms
   ConstructLEC.cpp
+  DumpLECUnknowns.cpp
   LowerLECLLVM.cpp
   LowerLLHDRefPorts.cpp
   StripLLHDInterfaceSignals.cpp

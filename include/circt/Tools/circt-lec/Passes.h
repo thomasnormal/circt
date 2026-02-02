@@ -32,6 +32,7 @@ enum class InsertAdditionalModeEnum {
 
 /// Generate the code for registering passes.
 #define GEN_PASS_DECL_CONSTRUCTLEC
+#define GEN_PASS_DECL_DUMPLECUNKNOWNS
 #define GEN_PASS_DECL_LOWERLECLLVM
 #define GEN_PASS_DECL_LOWERLLHDREFPORTS
 #define GEN_PASS_DECL_STRIPLLHDINTERFACESIGNALS
