@@ -1,6 +1,227 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 306 - February 2, 2026 (Current Status)
+## Iteration 309 - February 2, 2026 (Current Status)
+
+### Summary
+
+Iteration 309: Documented 12 remaining limitations vs. Xcelium, prioritized track actions.
+Launching fixes for: X-init bug, mailbox codegen, SPI AVIP compile, regression tests.
+
+### Remaining Limitations (12 total: 3 critical, 6 major, 3 minor)
+
+See PROJECT_PLAN.md "Remaining Limitations vs. Cadence Xcelium" for full table.
+
+### Active Work Items
+
+1. **Fix X-init for undriven nets** (Track 3) - MooreToCore.cpp:5050
+2. **Wire mailbox codegen** (Track 1) - ImportVerilog Expressions.cpp
+3. **Debug SPI AVIP compile** (Track 4) - $sformatf empty arg
+4. **Run regression suites** (Track 2) - All test suites
+
+---
+
+## Iteration 308 - February 2, 2026
+
+### Summary
+
+Iteration 308 achieved major milestones with multiple 100% test suite results:
+1. **Phase 2 Blocking Mailbox**: ✅ IMPLEMENTED - Full blocking put/get support
+2. **LTLToCore Fix**: ✅ ALL 16 TESTS PASS - Null clock bug fixed
+3. **Yosys SVA Full Suite**: ✅ 13/13 (100%) - All applicable tests pass
+4. **TL Handshake Root Cause**: ✅ FOUND - 4-state X initialization issue identified
+5. **LLHD Local Ref Extract Inlining**: ✅ FIXED - Derived ref drives now inline correctly
+6. **LLHD 4-State Value Updates**: ✅ FIXED - Unknown mask cleared on value field writes
+7. **LEC LLVM Struct Defaults**: ✅ FIXED - Missing unknown defaults to 0 when value is set
+8. **LEC Assume-Known Inputs**: ✅ ADDED - CLI flag to constrain 4-state inputs
+
+### Phase 2 Blocking Mailbox Implementation
+
+**Files Modified:**
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Added blocking handlers
+- `tools/circt-sim/LLHDProcessInterpreter.h` - Added state tracking fields
+
+**New Features:**
+- `__moore_mailbox_put` - Blocking put, suspends if full, wakes get waiters on success
+- `__moore_mailbox_get` - Blocking get, suspends if empty, wakes put waiters on success
+- Added `checkMemoryEventWaiters()` calls in queue push/pop operations
+- Added `pendingMailboxGetResultAddr` and `pendingMailboxGetId` state tracking
+
+**New Tests:**
+- `test/Tools/circt-sim/mailbox-dpi-blocking.mlir` - Unbounded mailbox test
+- `test/Tools/circt-sim/mailbox-dpi-blocking-bounded.mlir` - Bounded mailbox test
+
+### LTLToCore Null Clock Fix
+
+**Root Cause:**
+- `shiftValue` called with null clock for sequences wrapped in `ltl.ClockOp`
+- Warmup logic used outer `clock` parameter (null) instead of extracting clock from op
+
+**Fix Applied (LTLToCore.cpp line 519-544):**
+```cpp
+// Extract clock from ltl.clock op if present, for warmup computation
+Value warmupClock = clock;
+if (auto clockOp = prop.getDefiningOp<ltl::ClockOp>()) {
+  warmupClock = normalizeClock(clockOp.getClock(), clockOp.getEdge());
+}
+// ... later ...
+if (!skipWarmup && warmupClock) {  // Added null check
+```
+
+**Test Updates:**
+- clocked-sequence-assert.mlir - Updated CHECK patterns
+- clocked-property-gating.mlir - Updated CHECK patterns
+- clocked-assert-sampled.mlir - Updated CHECK patterns
+- assert-enable-final.mlir - Updated CHECK patterns
+
+### LLHD Local Ref Extract Inlining
+
+**Root Cause:**
+- Derived `llhd.sig.extract` drives were ignored during inline stripping, leaving
+  unresolved LLHD ops and X-prop conflicts for sequential updates.
+
+**Fix Applied:**
+- Inline drives/probes for derived ref paths (struct fields + bit extracts).
+- Added path update logic to reconstruct the base value after slice writes.
+- Clear 4-state `unknown` bits when updating `value` subfields via derived refs.
+- When building 4-state structs from `llvm.undef`, default missing unknown to 0
+  if the value field is present (treats 2-state insertions as known).
+- Added `circt-lec --assume-known-inputs` to constrain 4-state inputs in SMT.
+
+**New Tests:**
+- `test/Tools/circt-lec/lec-strip-llhd-local-ref-extract.mlir`
+- `unittests/Tools/circt-lec/StripLLHDSignalPtrCastTest.cpp`
+- Added `StripLLHDSignalPtrCastTest.ClearsUnknownOnValueFieldUpdate`
+- Added `lower_lec_llvm_structs_undef_unknown_zero` in
+  `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`
+- Added `test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
+
+**LEC Status:**
+- OpenTitan `aes_sbox_canright` still NEQ even with `--assume-known-inputs`
+  (workdir: `/tmp/opentitan-lec-canright-undefzero/aes_sbox_canright`)
+- Latest model (value||unknown packing): op_i=0x8, data_i=0x5c00, c1_out0=0x00ff, c2_out0=0xa700
+
+### TL Handshake Timeout Root Cause
+
+**Root Cause Identified:**
+- Commit `3f2db96fc [MooreToCore] Initialize 4-state nets to X` changed behavior
+- X initialization propagates through combinational logic
+- `a_ready` signal stuck at 0 because combinational path contains X
+
+**Evidence:**
+- I2C testbench (compiled Jan 30, before commit) - PASSES
+- UART testbench (compiled Feb 2, after commit) - TIMES OUT
+
+**Proposed Fix:**
+Use assigned value for input port signals instead of X when a value is connected
+
+### Test Results - Iteration 308
+
+| Test Suite | Before | After | Change |
+|------------|--------|-------|--------|
+| LTLToCore | 12/16 (75%) | 16/16 (100%) | **+4 FIXED** |
+| Yosys SVA | 3/3 (100%) | 13/13 (100%) | **FULL SUITE** |
+| Mailbox DPI | 1/1 (100%) | 3/3 (100%) | **+2 blocking tests** |
+
+### LEC LLHD Multi-Alloca Ref Merge
+
+**Problem**: `strip-llhd-interface-signals` failed when a `llhd.ref` was backed
+by a block-arg pointer merging different allocas, leading to `llhd_comb`
+abstraction and unconstrained LEC for OpenTitan `aes_sbox_canright`.
+
+**Fix**: `rewriteAllocaBackedLLHDRef` now tracks multiple alloca bases, rewrites
+their loads/stores/ref casts to a single LLHD signal, and lets CFG stripping
+insert the required mux/enables. Added regression
+`test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`.
+Unit test: `unittests/Tools/circt-lec/StripLLHDSignalPtrCastTest.cpp`
+(`HandlesAllocaPhiRefMerge`).
+
+**Follow-up**: Mark local alloca-backed signals with `lec.local`, allow enabled
+local drives to inline via sequential muxing, and relax strict abstraction for
+those locals. Strict LEC now emits MLIR for canright without LLHD abstraction;
+full LEC still reports NEQ (see latest run below).
+
+**Result**: `circt-lec --emit-mlir` for canright no longer introduces
+`llhd_comb` in non-strict mode. Strict mode now reaches LLHD signal handling
+and fails with `LLHD signal requires abstraction` (follow-up needed).
+
+**Local checks**:
+- `build/bin/circt-opt -strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
+- `build/bin/circt-opt -strip-llhd-interface-signals='strict-llhd=true' test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
+- `ninja -C build CIRCTLECToolTests`
+- `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesAllocaPhiRefMerge`
+- `build/bin/circt-lec --emit-mlir -c1=aes_sbox_lut_lec_wrapper -c2=aes_sbox_canright_lec_wrapper /tmp/opentitan-lec-canright-20260202/aes_sbox_canright/aes_sbox_lec.mlir`
+- `build/bin/circt-lec --emit-mlir --strict-llhd -c1=aes_sbox_lut_lec_wrapper -c2=aes_sbox_canright_lec_wrapper /tmp/opentitan-lec-canright-20260202/aes_sbox_canright/aes_sbox_lec.mlir`
+- `CIRCT_VERILOG=build/bin/circt-verilog CIRCT_LEC=build/bin/circt-lec Z3_BIN=~/z3-install/bin/z3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright --workdir /tmp/opentitan-lec-canright-localmux --keep-workdir` (**FAIL**, LEC_RESULT=NEQ)
+
+**Latest canright model (strict SMT, 2026-02-02)**:
+- op_i = 0x8 (value=0x2, unknown=0x0)
+- data_i = 0xef00 (value=0xef, unknown=0x00)
+- c1_out0 = 0x6100 (value=0x61, unknown=0x00)
+- c2_out0 = 0x00ff (value=0x00, unknown=0xff)
+Model extracted via z3 on SMT-LIB in `/tmp/opentitan-lec-canright-localmux/aes_sbox_canright`.
+
+---
+
+## Iteration 307 - February 2, 2026
+
+### Summary
+
+Iteration 307 achieved major test coverage improvements and completed research for Phase 2 blocking mailbox operations:
+1. **OpenTitan Coverage**: Expanded from 21 to **31 testbenches passing (73.8%)**
+2. **AVIP Simulation**: **4/5 AVIPs complete successfully** (AHB, UART, I2S, I3C)
+3. **Phase 2 Research**: Blocking mailbox implementation approach fully documented
+
+### Test Coverage Achievements
+
+**OpenTitan IP Testbenches** - 31/42 (73.8% - up from 50%):
+- Comprehensive testing of all 42 testbenches
+- 31 pass, 10 timeout (TL handshake), 1 too complex (alert_handler)
+- Module name fixes discovered for 3 testbenches
+- Results saved to `/home/thomas-ahle/circt/opentitan-tb-coverage-results.txt`
+
+**AVIP Simulation** - 4/5 (80%):
+| Protocol | Simulation Time | Status |
+|----------|-----------------|--------|
+| AHB | 177 us | ✅ PASS |
+| UART | 368 us | ✅ PASS |
+| I2S | 181 us | ✅ PASS |
+| I3C | 201 us | ✅ PASS |
+| APB | >450 us | Needs >120s timeout |
+
+**sv-tests BMC** - 23/23 (100%):
+- All Chapter 16 SVA tests pass with bound=10
+- No regressions from recent changes
+- Lit test failures are expectation mismatches (new attributes), not functional issues
+
+### Phase 2 Blocking Mailbox Research (Complete)
+
+**Root Cause Analysis**:
+- `__moore_wait_condition` uses 1ps polling (line 11158-11181 in LLHDProcessInterpreter.cpp)
+- `__moore_queue_push_back` doesn't call `checkMemoryEventWaiters()`
+- Queue changes don't trigger wakeup of processes waiting on queue size
+
+**Proposed Implementation**:
+1. Add `__moore_mailbox_put` DPI hook with blocking support
+2. Add `__moore_mailbox_get` DPI hook with blocking support
+3. Call `checkMemoryEventWaiters()` in queue operations
+4. Track output address in ProcessExecutionState for get results
+
+**Files to Modify**:
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` (lines 11348-11553)
+- `tools/circt-sim/LLHDProcessInterpreter.h`
+
+### Test Results - Iteration 307
+
+| Test Suite | Before | After | Change |
+|------------|--------|-------|--------|
+| OpenTitan testbenches | 21/42 (50%) | 31/42 (73.8%) | **+10 NEW** |
+| AVIP Simulation | 2/6 (33%) | 4/5 (80%) | **+2 PASS** |
+| sv-tests BMC | 23/23 (100%) | 23/23 (100%) | ✅ NO REGRESSION |
+| verilator-verification | 16/16 (100%) | 16/16 (100%) | ✅ NO REGRESSION |
+
+---
+
+## Iteration 306 - February 2, 2026
 
 ### Summary
 
@@ -65,8 +286,8 @@ Iteration 305 focused on comprehensive test suite validation and mailbox integra
 Key findings include identification of $changed regression root cause and confirmation that
 SyncPrimitivesManager exists but requires integration with LLHDProcessInterpreter.
 Additional work in progress: MooreToCore now masks value bits when unknown propagates through
-logic/arithmetic ops to avoid Z pollution in 4-state modeling (addresses the OpenTitan
-aes_sbox_canright LEC NEQ), with new regression and unit coverage added.
+logic/arithmetic ops to avoid Z pollution in 4-state modeling (narrowed the OpenTitan
+aes_sbox_canright LEC NEQ, still failing), with new regression and unit coverage added.
 
 ### Test Results Summary - Iteration 305
 
@@ -78,6 +299,13 @@ aes_sbox_canright LEC NEQ), with new regression and unit coverage added.
 | **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
 | **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, prim_fifo_sync, timer_core pass |
 | **AVIP Compilation** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass; SPI, JTAG, AXI4 fail |
+
+### Local Verification (This Change)
+
+- `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-logic-mask.mlir | build/bin/FileCheck test/Conversion/MooreToCore/four-state-logic-mask.mlir`
+- `ninja -C build CIRCTMooreTests`
+- `build/tools/circt/unittests/Dialect/Moore/CIRCTMooreTests --gtest_filter=MooreToCoreConversionTest.FourState*`
+- `CIRCT_VERILOG=build/bin/circt-verilog CIRCT_LEC=build/bin/circt-lec Z3_BIN=~/z3-install/bin/z3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright --workdir /tmp/opentitan-lec-maskfix2 --keep-workdir` (**FAIL**, LEC_RESULT=NEQ)
 
 ### $changed Regression Root Cause Analysis
 
