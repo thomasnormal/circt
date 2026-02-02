@@ -16,6 +16,7 @@
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/CommutativeValueEquivalence.h"
 #include "circt/Support/FourStateUtils.h"
+#include "circt/Support/TwoStateUtils.h"
 #include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
@@ -100,7 +101,8 @@ inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
   return success();
 }
 
-static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
+static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp,
+                                     Namespace &names) {
   // Hoist simple top-level drives so probes see current combinational inputs.
   if (!bmcOp.getCircuit().empty()) {
     Block &circuitBlock = bmcOp.getCircuit().front();
@@ -165,6 +167,36 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
     }
     signalValue[op.getResult()] = mergedVal;
     signalEnable[op.getResult()] = enable;
+  };
+
+  DenseMap<Value, Value> signalUnknownInput;
+  auto getUnknownInput = [&](llhd::SignalOp sigOp, Type valueType) -> Value {
+    Value key = sigOp.getResult();
+    if (auto existing = signalUnknownInput.lookup(key))
+      return existing;
+    auto &circuitBlock = bmcOp.getCircuit().front();
+    unsigned insertIndex = circuitBlock.getNumArguments();
+    unsigned numRegs = bmcOp.getNumRegs();
+    if (numRegs <= circuitBlock.getNumArguments())
+      insertIndex = circuitBlock.getNumArguments() - numRegs;
+    Value arg = circuitBlock.insertArgument(insertIndex, valueType,
+                                            sigOp.getLoc());
+
+    std::string baseName = "llhd_sig_unknown";
+    if (auto nameAttr = sigOp.getNameAttr())
+      baseName = (nameAttr.getValue() + "_unknown").str();
+    auto name = names.newName(baseName);
+    SmallVector<Attribute> inputNames;
+    if (auto attr = bmcOp->getAttrOfType<ArrayAttr>("bmc_input_names"))
+      inputNames.assign(attr.begin(), attr.end());
+    if (insertIndex > inputNames.size())
+      inputNames.resize(insertIndex);
+    inputNames.insert(inputNames.begin() + insertIndex,
+                      StringAttr::get(bmcOp.getContext(), name));
+    bmcOp->setAttr("bmc_input_names",
+                   ArrayAttr::get(bmcOp.getContext(), inputNames));
+    signalUnknownInput[key] = arg;
+    return arg;
   };
 
   auto processRegion =
@@ -275,16 +307,42 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp) {
                            : defaultStrength);
               }
             }
-            Value resolved =
-                (anyEnable || anyStrength)
-                    ? resolveFourStateValuesWithStrength(
-                          resolveBuilder, sigDrives.front().getLoc(),
-                          driveValues, driveEnables, driveStrength0,
-                          driveStrength1,
-                          static_cast<unsigned>(llhd::DriveStrength::HighZ))
-                    : resolveFourStateValues(
-                          resolveBuilder, sigDrives.front().getLoc(),
-                          driveValues);
+            Type valueType = driveValues.front().getType();
+            bool isFourState = isFourStateStructType(valueType);
+            bool isTwoState = getTwoStateValueWidth(valueType).has_value();
+            if (isTwoState && driveEnables.empty()) {
+              enableTrue = hw::ConstantOp::create(
+                               resolveBuilder, sigDrives.front().getLoc(),
+                               resolveBuilder.getI1Type(), 1)
+                               .getResult();
+              for (size_t idx = 0; idx < sigDrives.size(); ++idx)
+                driveEnables.push_back(enableTrue);
+            }
+            Value resolved;
+            if (isFourState) {
+              resolved =
+                  (anyEnable || anyStrength)
+                      ? resolveFourStateValuesWithStrength(
+                            resolveBuilder, sigDrives.front().getLoc(),
+                            driveValues, driveEnables, driveStrength0,
+                            driveStrength1,
+                            static_cast<unsigned>(llhd::DriveStrength::HighZ))
+                      : resolveFourStateValues(
+                            resolveBuilder, sigDrives.front().getLoc(),
+                            driveValues);
+            } else if (isTwoState) {
+              Value unknownValue = getUnknownInput(sigOp, valueType);
+              resolved =
+                  anyStrength
+                      ? resolveTwoStateValuesWithStrength(
+                            resolveBuilder, sigDrives.front().getLoc(),
+                            driveValues, driveEnables, driveStrength0,
+                            driveStrength1, unknownValue,
+                            static_cast<unsigned>(llhd::DriveStrength::HighZ))
+                      : resolveTwoStateValuesWithEnable(
+                            resolveBuilder, sigDrives.front().getLoc(),
+                            driveValues, driveEnables, unknownValue);
+            }
             if (resolved) {
               updateSignal(sigOp, resolved, nullptr);
               for (auto drive : sigDrives)
@@ -402,6 +460,12 @@ void LowerToBMCPass::runOnOperation() {
     moduleOp.emitError("hw.module named '") << topModule << "' not found";
     return signalPassFailure();
   }
+  for (auto nameAttr : hwModule.getInputNames())
+    if (auto str = dyn_cast<StringAttr>(nameAttr))
+      names.add(str.getValue());
+  for (auto nameAttr : hwModule.getOutputNames())
+    if (auto str = dyn_cast<StringAttr>(nameAttr))
+      names.add(str.getValue());
 
   if (!sortTopologically(&hwModule.getBodyRegion().front())) {
     hwModule->emitError("could not resolve cycles in module");
@@ -1150,7 +1214,7 @@ void LowerToBMCPass::runOnOperation() {
     yieldOp->setOperands(newOperands);
   });
 
-  if (failed(lowerLlhdForBMC(bmcOp)))
+  if (failed(lowerLlhdForBMC(bmcOp, names)))
     return signalPassFailure();
   if (failed(inlineLlhdCombinationalOps(bmcOp)))
     return signalPassFailure();
