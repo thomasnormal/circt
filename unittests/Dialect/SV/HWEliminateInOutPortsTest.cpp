@@ -11,6 +11,7 @@
 #include "circt/Dialect/SV/SVDialect.h"
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/SV/SVPasses.h"
+#include "circt/Dialect/Verif/VerifDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
@@ -78,6 +79,59 @@ module {
 
   EXPECT_TRUE(top.getBodyBlock()->getOps<sv::AssignOp>().empty());
   EXPECT_TRUE(top.getBodyBlock()->getOps<sv::ArrayIndexInOutOp>().empty());
+}
+
+TEST(HWEliminateInOutPortsTest, ResolveReadWrite2State) {
+  static constexpr const char *kIR = R"mlir(
+module {
+  hw.module @top(inout %io : i1, out o : i1) {
+    %c0 = hw.constant 0 : i1
+    sv.assign %io, %c0 : i1
+    %read = sv.read_inout %io : !hw.inout<i1>
+    hw.output %read : i1
+  }
+}
+)mlir";
+
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, sv::SVDialect, verif::VerifDialect>();
+  auto module = parseSourceString<ModuleOp>(kIR, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  sv::HWEliminateInOutPortsOptions options;
+  options.resolveReadWrite = true;
+  pm.addPass(sv::createHWEliminateInOutPortsPass(options));
+  ASSERT_TRUE(succeeded(pm.run(module.get())));
+
+  auto top = module->lookupSymbol<hw::HWModuleOp>("top");
+  ASSERT_TRUE(top);
+
+  unsigned inoutCount = 0;
+  unsigned readInputs = 0;
+  unsigned unknownInputs = 0;
+  unsigned writeOutputs = 0;
+  for (auto &port : top.getPortList()) {
+    if (port.dir == hw::ModulePort::Direction::InOut)
+      ++inoutCount;
+    if (port.dir == hw::ModulePort::Direction::Input &&
+        port.name.getValue().starts_with("io_rd"))
+      ++readInputs;
+    if (port.dir == hw::ModulePort::Direction::Input &&
+        port.name.getValue().starts_with("io_unknown"))
+      ++unknownInputs;
+    if (port.dir == hw::ModulePort::Direction::Output &&
+        port.name.getValue().starts_with("io_wr"))
+      ++writeOutputs;
+  }
+
+  EXPECT_EQ(inoutCount, 0u);
+  EXPECT_EQ(readInputs, 1u);
+  EXPECT_EQ(unknownInputs, 1u);
+  EXPECT_EQ(writeOutputs, 1u);
+
+  EXPECT_TRUE(top.getBodyBlock()->getOps<sv::AssignOp>().empty());
+  EXPECT_TRUE(top.getBodyBlock()->getOps<sv::ReadInOutOp>().empty());
 }
 
 } // namespace

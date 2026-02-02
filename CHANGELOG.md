@@ -1,6 +1,35 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 300 - February 1, 2026 (Current Status)
+## Iteration 301 - February 1, 2026 (Current Status)
+
+### Static Associative Arrays - VERIFIED WORKING
+
+The static associative array fix was already implemented and is working correctly:
+
+```
+./build/bin/circt-verilog /tmp/test_static_assoc.sv --ir-hw  # Shows global_ctors
+./build/bin/circt-sim /tmp/test_static_assoc.mlir           # All entries persist!
+```
+
+The MLIR shows proper initialization:
+```mlir
+llvm.mlir.global_ctors ctors = [@"__moore_global_init_Container::arr"]
+llvm.func internal @"__moore_global_init_Container::arr"() {
+  %ptr = llvm.call @__moore_assoc_create(%keySize, %valSize) -> !llvm.ptr
+  llvm.store %ptr, @"Container::arr"
+}
+```
+
+### UVM Phase Creation - VERIFIED WORKING
+
+UVM phases can now be created with uvm-core:
+```
+$ ./build/bin/circt-sim /tmp/test_phase_new.mlir
+Step 1: Try to create phase
+  my_phase::new() completed for test_phase
+  Success! Phase name = test_phase
+Done
+```
 
 ### Commits This Session
 
@@ -8,12 +37,10 @@
 |--------|-------------|
 | `8980fdd6c` | Fix fork branch delays and wait condition signal invalidation |
 | `a01b84ad1` | Fix uvm_dpi_get_next_arg_c signature to match UVM DPI spec |
-| `e6c5b8a07` | Identify critical UVM blocker: static associative arrays |
-| `97d99295c` | Add root cause and fix location for static assoc array bug |
 
 ---
 
-## Iteration 299 - February 1, 2026
+## Iteration 300 - February 1, 2026
 
 ### Multiple Delays in Fork Branches - FIXED
 
@@ -331,10 +358,17 @@ The CIRCT toolchain did not generate initialization code for static members in p
 - `strip-llhd-interface-signals` now resolves overlapping conditional interface
   stores for 4-state fields using enable-based 4-state resolution in strict
   mode, avoiding unnecessary abstraction.
+- `strip-llhd-interface-signals` now resolves overlapping conditional interface
+  stores for 2-state fields by injecting an explicit unknown input when
+  conflicts are possible (strict mode).
+- `hw-eliminate-inout-ports` now resolves 2-state inout read/write conflicts in
+  strict LEC by introducing explicit unknown inputs instead of erroring.
 - Added regressions:
   - `test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi.mlir`
   - `test/Tools/circt-lec/lower-lec-llvm-structs.mlir` (mux + cast case)
   - `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-overlap-4state.mlir`
+  - `test/Tools/circt-lec/lec-strict-llhd-interface-conditional-store-overlap-2state.mlir`
+  - `test/Dialect/SV/EliminateInOutPorts/hw-eliminate-inout-ports-resolve-read-write-2state.mlir`
 
 ### WaitEventOpConversion Update
 

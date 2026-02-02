@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/PortConverter.h"
@@ -14,6 +15,7 @@
 #include "circt/Dialect/SV/SVOps.h"
 #include "circt/Dialect/SV/SVPasses.h"
 #include "circt/Support/FourStateUtils.h"
+#include "circt/Dialect/Verif/VerifOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Pass/Pass.h"
@@ -23,6 +25,8 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/MathExtras.h"
+#include <algorithm>
 #include <optional>
 
 namespace circt {
@@ -63,8 +67,10 @@ struct AccessGroup {
   SmallVector<sv::AssignOp, 4> writers;
   hw::PortInfo readPort;
   hw::PortInfo writePort;
+  hw::PortInfo unknownPort;
   Value internalDrive;
   Value readValue;
+  Value unknownValue;
   std::optional<Location> driveLoc;
   Type portType;
   Type elementType;
@@ -207,6 +213,112 @@ static bool allWritersSameValue(ArrayRef<sv::AssignOp> writers) {
 
 static bool isFourStateType(Type type) {
   return circt::isFourStateStructType(type);
+}
+
+static bool isTwoStateResolvable(Type type) {
+  if (isFourStateType(type))
+    return false;
+  if (auto intTy = dyn_cast<IntegerType>(type))
+    return intTy.getWidth() > 0;
+  if (auto arrayTy = dyn_cast<hw::ArrayType>(type))
+    return isTwoStateResolvable(arrayTy.getElementType());
+  if (auto structTy = dyn_cast<hw::StructType>(type)) {
+    for (auto field : structTy.getElements())
+      if (!isTwoStateResolvable(field.type))
+        return false;
+    return true;
+  }
+  return false;
+}
+
+static Value resolveTwoStateValuesWithUnknown(OpBuilder &builder, Location loc,
+                                              ArrayRef<Value> values,
+                                              Value unknownValue) {
+  if (values.empty())
+    return Value();
+  Type valueType = values.front().getType();
+  if (unknownValue.getType() != valueType)
+    return Value();
+  for (Value value : values)
+    if (value.getType() != valueType)
+      return Value();
+
+  if (auto intTy = dyn_cast<IntegerType>(valueType)) {
+    unsigned width = intTy.getWidth();
+    if (width == 0)
+      return Value();
+    Value ones =
+        hw::ConstantOp::create(builder, loc,
+                               llvm::APInt::getAllOnes(width))
+            .getResult();
+    Value knownOnes = values.front();
+    Value knownZeros =
+        comb::XorOp::create(builder, loc, values.front(), ones, true);
+    for (Value value : values.drop_front()) {
+      knownOnes = comb::OrOp::create(builder, loc, knownOnes, value, true);
+      Value valueNot = comb::XorOp::create(builder, loc, value, ones, true);
+      knownZeros = comb::OrOp::create(builder, loc, knownZeros, valueNot, true);
+    }
+    Value conflict =
+        comb::AndOp::create(builder, loc, knownOnes, knownZeros, true);
+    Value notConflict =
+        comb::XorOp::create(builder, loc, conflict, ones, true);
+    Value resolved =
+        comb::AndOp::create(builder, loc, knownOnes, notConflict, true);
+    Value maskedUnknown =
+        comb::AndOp::create(builder, loc, unknownValue, conflict, true);
+    return comb::OrOp::create(
+        builder, loc, llvm::ArrayRef<Value>{resolved, maskedUnknown}, true);
+  }
+
+  if (auto structTy = dyn_cast<hw::StructType>(valueType)) {
+    SmallVector<Value, 4> resolvedFields;
+    resolvedFields.reserve(structTy.getElements().size());
+    for (auto field : structTy.getElements()) {
+      SmallVector<Value, 4> fieldValues;
+      fieldValues.reserve(values.size());
+      for (Value value : values)
+        fieldValues.push_back(
+            hw::StructExtractOp::create(builder, loc, value, field.name));
+      Value unknownField = hw::StructExtractOp::create(
+          builder, loc, unknownValue, field.name);
+      Value resolvedField =
+          resolveTwoStateValuesWithUnknown(builder, loc, fieldValues,
+                                           unknownField);
+      if (!resolvedField)
+        return Value();
+      resolvedFields.push_back(resolvedField);
+    }
+    return hw::StructCreateOp::create(builder, loc, structTy, resolvedFields);
+  }
+
+  if (auto arrayTy = dyn_cast<hw::ArrayType>(valueType)) {
+    unsigned numElements = arrayTy.getNumElements();
+    unsigned indexWidth = std::max(1u, llvm::Log2_64_Ceil(numElements));
+    auto indexType = builder.getIntegerType(indexWidth);
+    SmallVector<Value, 4> resolvedElements;
+    resolvedElements.reserve(numElements);
+    for (int idx = static_cast<int>(numElements) - 1; idx >= 0; --idx) {
+      Value index =
+          hw::ConstantOp::create(builder, loc, indexType, idx).getResult();
+      SmallVector<Value, 4> elementValues;
+      elementValues.reserve(values.size());
+      for (Value value : values)
+        elementValues.push_back(
+            hw::ArrayGetOp::create(builder, loc, value, index));
+      Value unknownElement =
+          hw::ArrayGetOp::create(builder, loc, unknownValue, index);
+      Value resolvedElement =
+          resolveTwoStateValuesWithUnknown(builder, loc, elementValues,
+                                           unknownElement);
+      if (!resolvedElement)
+        return Value();
+      resolvedElements.push_back(resolvedElement);
+    }
+    return hw::ArrayCreateOp::create(builder, loc, resolvedElements);
+  }
+
+  return Value();
 }
 
 static bool dependsOnAny(Value value,
@@ -382,14 +494,17 @@ LogicalResult HWInOutPortConversion::init() {
   for (auto &group : accessGroups) {
     bool hasReaders = !group.readers.empty();
     bool hasWriters = !group.writers.empty();
+    bool canResolveReadWriteType =
+        isFourStateType(group.elementType) ||
+        isTwoStateResolvable(group.elementType);
     bool canResolveMultipleWriters =
-        resolveReadWrite && isFourStateType(group.elementType);
+        resolveReadWrite && canResolveReadWriteType;
 
     if (resolveReadWrite && hasReaders && hasWriters &&
-        !isFourStateType(group.elementType))
+        !canResolveReadWriteType)
       return converter.getModule()->emitOpError()
              << "inout port " << accessLabel(group)
-             << " requires 4-state type for read/write resolution.";
+             << " requires 2-state or 4-state type for read/write resolution.";
 
     if (resolveReadWrite && hasReaders && hasWriters) {
       llvm::SmallPtrSet<Value, 8> readValues;
@@ -414,7 +529,7 @@ LogicalResult HWInOutPortConversion::init() {
     if (group.dynamicIndex && hasWriters) {
       std::string baseKey = dynamicBaseKey(group);
       dynamicWriterCounts[baseKey]++;
-      if (!isFourStateType(group.elementType))
+      if (!canResolveReadWriteType)
         dynamicWriterNeedsResolve[baseKey] = true;
     }
   }
@@ -426,7 +541,7 @@ LogicalResult HWInOutPortConversion::init() {
         return converter.getModule()->emitOpError()
                << "multiple dynamic writers of inout port "
                << (baseKey.empty() ? origPort.name.getValue() : baseKey)
-               << " require 4-state resolution; rerun with "
+               << " require 2-state or 4-state resolution; rerun with "
                   "--resolve-read-write";
     }
     for (auto &group : accessGroups) {
@@ -549,6 +664,15 @@ void HWInOutPortConversion::buildInputSignals() {
     return inserted->second;
   };
 
+  auto getUnknownValue = [&](AccessGroup &group) -> Value {
+    if (group.unknownValue)
+      return group.unknownValue;
+    group.unknownValue = converter.createNewInput(
+        origPort, buildSuffix("_unknown", group), group.elementType,
+        group.unknownPort);
+    return group.unknownValue;
+  };
+
   auto applySuffixExtract =
       [&](Value base, ArrayRef<AccessGroup::Step> suffix,
           Location loc) -> Value {
@@ -604,8 +728,10 @@ void HWInOutPortConversion::buildInputSignals() {
     bool hasReaders = !group.readers.empty();
     bool hasWriters = !group.writers.empty();
     bool needsReadPort = hasReaders || (group.dynamicIndex && hasWriters);
+    bool isFourState = isFourStateType(group.elementType);
+    bool isTwoState = isTwoStateResolvable(group.elementType);
     bool canResolveMultipleWriters =
-        resolveReadWrite && isFourStateType(group.elementType);
+        resolveReadWrite && (isFourState || isTwoState);
     group.internalDrive = Value();
     group.readValue = Value();
     group.driveLoc.reset();
@@ -618,10 +744,19 @@ void HWInOutPortConversion::buildInputSignals() {
         driveValues.reserve(group.writers.size());
         for (auto writer : group.writers)
           driveValues.push_back(writer.getSrc());
-        group.internalDrive = resolveFourStateValues(
-            builder, group.writers.front().getLoc(), driveValues);
-        assert(group.internalDrive &&
-               "expected resolved 4-state inout drive value");
+        if (isFourState) {
+          group.internalDrive = resolveFourStateValues(
+              builder, group.writers.front().getLoc(), driveValues);
+          assert(group.internalDrive &&
+                 "expected resolved 4-state inout drive value");
+        } else if (isTwoState) {
+          Value unknownValue = getUnknownValue(group);
+          group.internalDrive = resolveTwoStateValuesWithUnknown(
+              builder, group.writers.front().getLoc(), driveValues,
+              unknownValue);
+          assert(group.internalDrive &&
+                 "expected resolved 2-state inout drive value");
+        }
       } else {
         group.internalDrive = group.writers.front().getSrc();
       }
@@ -667,10 +802,18 @@ void HWInOutPortConversion::buildInputSignals() {
             SmallVector<Value, 2> resolveValues;
             resolveValues.push_back(element);
             resolveValues.push_back(group.internalDrive);
-            Value resolved = resolveFourStateValues(builder, reader.getLoc(),
-                                                    resolveValues);
-            assert(resolved && "expected resolved 4-state inout read value");
-            element = resolved;
+            if (isFourState) {
+              Value resolved = resolveFourStateValues(builder, reader.getLoc(),
+                                                      resolveValues);
+              assert(resolved && "expected resolved 4-state inout read value");
+              element = resolved;
+            } else if (isTwoState) {
+              Value unknownValue = getUnknownValue(group);
+              Value resolved = resolveTwoStateValuesWithUnknown(
+                  builder, reader.getLoc(), resolveValues, unknownValue);
+              assert(resolved && "expected resolved 2-state inout read value");
+              element = resolved;
+            }
           }
           reader.replaceAllUsesWith(element);
           reader.erase();
@@ -696,10 +839,18 @@ void HWInOutPortConversion::buildInputSignals() {
         SmallVector<Value, 2> resolveValues;
         resolveValues.push_back(readValue);
         resolveValues.push_back(group.internalDrive);
-        Value resolved =
-            resolveFourStateValues(builder, readValue.getLoc(), resolveValues);
-        assert(resolved && "expected resolved 4-state inout read value");
-        element = resolved;
+        if (isFourState) {
+          Value resolved = resolveFourStateValues(builder, readValue.getLoc(),
+                                                  resolveValues);
+          assert(resolved && "expected resolved 4-state inout read value");
+          element = resolved;
+        } else if (isTwoState) {
+          Value unknownValue = getUnknownValue(group);
+          Value resolved = resolveTwoStateValuesWithUnknown(
+              builder, readValue.getLoc(), resolveValues, unknownValue);
+          assert(resolved && "expected resolved 2-state inout read value");
+          element = resolved;
+        }
       }
       for (auto reader : group.readers) {
         reader.replaceAllUsesWith(element);
@@ -723,9 +874,11 @@ void HWInOutPortConversion::buildInputSignals() {
       continue;
     AccessGroup *baseGroup = groups.front();
     Value currentArray = baseGroup->readValue;
-    bool resolveDynamicWrites =
-        resolveReadWrite && isFourStateType(baseGroup->elementType) &&
-        groups.size() > 1;
+    bool baseIsFourState = isFourStateType(baseGroup->elementType);
+    bool baseIsTwoState = isTwoStateResolvable(baseGroup->elementType);
+    bool resolveDynamicWrites = resolveReadWrite &&
+                                (baseIsFourState || baseIsTwoState) &&
+                                groups.size() > 1;
     for (AccessGroup *group : groups) {
       assert(group->dynamicPathIndex >= 0 && "dynamic path index not set");
       const auto &dynamicStep = group->path[group->dynamicPathIndex];
@@ -740,9 +893,20 @@ void HWInOutPortConversion::buildInputSignals() {
       Value updatedElement;
       if (resolveDynamicWrites) {
         Value existingLeaf = applySuffixExtract(element, suffix, loc);
-        Value resolvedLeaf = resolveFourStateValues(
-            builder, loc, {existingLeaf, group->internalDrive});
-        assert(resolvedLeaf && "expected resolved dynamic inout drive value");
+        Value resolvedLeaf;
+        if (baseIsFourState) {
+          resolvedLeaf = resolveFourStateValues(
+              builder, loc, {existingLeaf, group->internalDrive});
+          assert(resolvedLeaf &&
+                 "expected resolved 4-state dynamic inout drive value");
+        } else if (baseIsTwoState) {
+          Value unknownValue = getUnknownValue(*group);
+          resolvedLeaf = resolveTwoStateValuesWithUnknown(
+              builder, loc, {existingLeaf, group->internalDrive},
+              unknownValue);
+          assert(resolvedLeaf &&
+                 "expected resolved 2-state dynamic inout drive value");
+        }
         updatedElement =
             applySuffixInject(applySuffixInject, element, suffix, resolvedLeaf,
                               loc);
@@ -782,6 +946,7 @@ void HWInOutPortConversion::mapInputSignals(OpBuilder &b, Operation *inst,
                                             ArrayRef<Backedge> newResults) {
   llvm::DenseSet<unsigned> assignedWritePorts;
   llvm::DenseSet<unsigned> assignedReadPorts;
+  llvm::DenseSet<unsigned> assignedUnknownPorts;
   for (auto &group : accessGroups) {
     Value targetInOut = instValue;
     ArrayRef<AccessGroup::Step> prefixPath = group.path;
@@ -803,6 +968,16 @@ void HWInOutPortConversion::mapInputSignals(OpBuilder &b, Operation *inst,
       if (assignedReadPorts.insert(argNum).second)
         newOperands[argNum] =
             ReadInOutOp::create(b, inst->getLoc(), targetInOut).getResult();
+    }
+
+    if (group.unknownValue) {
+      unsigned argNum = group.unknownPort.argNum;
+      if (assignedUnknownPorts.insert(argNum).second) {
+        newOperands[argNum] =
+            verif::SymbolicValueOp::create(b, inst->getLoc(),
+                                           group.unknownPort.type)
+                .getResult();
+      }
     }
 
     if (!group.writers.empty()) {

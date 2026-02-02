@@ -13,6 +13,7 @@
 #ifndef CIRCT_DIALECT_SV_SVPASSES_H
 #define CIRCT_DIALECT_SV_SVPASSES_H
 
+#include "circt/Dialect/Verif/VerifDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/StringRef.h"
 

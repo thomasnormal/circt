@@ -123,7 +123,8 @@ def SVTraceIVerilog : Pass<"sv-trace-iverilog", "ModuleOp"> {
   }];
 
   let constructor = "circt::sv::createSVTraceIVerilogPass()";
-  let dependentDialects = ["circt::sv::SVDialect"];
+  let dependentDialects = ["circt::sv::SVDialect",
+                           "circt::verif::VerifDialect"];
   let options = [
     Option<"topOnly", "top-only", "bool", "true",
             "If true, will only add tracing to the top-level module.">,
@@ -167,7 +168,7 @@ def HWEliminateInOutPorts : Pass<"hw-eliminate-inout-ports",
            "bool", "false",
            "Allow multiple writers if all drive the same value">,
     Option<"resolveReadWrite", "resolve-read-write", "bool", "false",
-           "Resolve inout reads against internal writes for 4-state values">
+           "Resolve inout reads against internal writes (4-state or 2-state with explicit unknowns)">
   ];
 }
 
