@@ -26,6 +26,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC LLVM Struct Defaults** | ✅ FIXED | Missing unknown defaults to 0 when value is set |
 | **LEC Assume-Known Inputs** | ✅ ADDED | `circt-lec --assume-known-inputs` flag |
 | **LEC Unknown Slice Debug** | ✅ ADDED | `circt-lec --dump-unknown-sources` flag |
+| **LEC Local Signal Init** | ✅ UPDATED | Local LLHD signal init uses unknown=0 in non-strict stripping |
+| **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
 | **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%), expect ~41/42 after X-init fix |
@@ -110,9 +112,11 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-logic-mask.mlir | build/bin/FileCheck test/Conversion/MooreToCore/four-state-logic-mask.mlir`
 - `build/bin/circt-opt -strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
 - `build/bin/circt-opt -strip-llhd-interface-signals='strict-llhd=true' test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
+- `build/bin/circt-opt -strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-local-init-4state.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-local-init-4state.mlir`
 - `build/bin/circt-opt -lower-lec-llvm test/Tools/circt-lec/lower-lec-llvm-structs.mlir | build/bin/FileCheck test/Tools/circt-lec/lower-lec-llvm-structs.mlir`
 - `build/bin/circt-lec --emit-smtlib --assume-known-inputs -c1=known_a -c2=known_b test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
 - `build/bin/circt-lec --emit-mlir -o /dev/null --dump-unknown-sources -c1=unknown_a -c2=unknown_b test/Tools/circt-lec/lec-dump-unknown-sources.mlir test/Tools/circt-lec/lec-dump-unknown-sources.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-dump-unknown-sources.mlir`
+- `build/bin/circt-lec --run-smtlib --print-counterexample --z3-path=test/Tools/circt-lec/Inputs/fake-z3-model-require-get-model.sh -c1=modA -c2=modB test/Tools/circt-lec/lec-run-smtlib-get-model.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-run-smtlib-get-model.mlir`
 - `ninja -C build CIRCTLECToolTests`
 - `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesAllocaPhiRefMerge`
 - `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesLocalRefExtractUpdate`
@@ -127,6 +131,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-unknownclr --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-undefzero --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `build/bin/circt-lec --run-smtlib --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, LEC_RESULT=NEQ)
+- `build/bin/circt-lec --run-smtlib --print-solver-output --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, model: op_i=4'h8 data_i=16'h9700 c1_out0=16'h00ff c2_out0=16'h8500)
 - `build/bin/circt-lec --emit-mlir -o /dev/null --dump-unknown-sources -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (unknown slices show input unknown extracts + const-all-ones)
 - `/home/thomas-ahle/z3-install/bin/z3 /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec_model.smt2` (sat; model captured in notes)
 

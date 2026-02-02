@@ -1,48 +1,60 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 312 - February 2, 2026 (Current Status)
+## Iteration 313 - February 2, 2026 (Current Status)
 
 ### Summary
 
-Iteration 312: **Fork automatic variable capture fixed.** Fixed `interpretSimFork` to copy
-`memoryBlocks` from parent to child, implementing proper SystemVerilog automatic variable
-capture semantics. Added 9 unit tests for mailbox getOrCreateMailbox. OpenTitan regression
-confirmed: 2 tests regressed due to MLIR recompilation after MooreToCore X-init change.
-TL adapter a_ready=0 root cause narrowed to `evaluateContinuousValue` not evaluating
-`hw.struct_create` for cross-instance block args.
+Iteration 313: **Critical DAG evaluation bug fixed.** `evaluateContinuousValueImpl` had false
+cycle detection that treated shared DAG nodes as cycles, causing dependent combinational values
+to fall back to X. The `inProgress` set was replaced with a `pushCount` map allowing values to
+be pushed up to 2 times (for shared dependencies). This fixes OpenTitan TL adapter `a_ready=0`
+bug where `outstanding_q` was used both directly and indirectly in `tl_o_pre`.
 
 ### Accomplishments
 
-1. **✅ Fork Automatic Variable Capture Fix** - `interpretSimFork` now copies `memoryBlocks`
-   from parent to child process states. Previously, `llvm.alloca`-based automatic variables
-   were inaccessible in fork branches (child's `findMemoryBlock` returned nullptr → X value).
-   Now each fork iteration gets a deep copy snapshot of automatic variables.
-2. **✅ Mailbox Unit Tests** - Added 9 new tests to SyncPrimitivesTest covering:
-   `getOrCreateMailbox` auto-creation for unknown IDs, idempotency, FIFO ordering on
-   auto-created mailboxes, tryGet on empty, tryPut on bounded full, num/peek on auto-created.
-   All 26 SyncPrimitivesTest pass.
-3. **✅ OpenTitan Regression Confirmed** - 27/39 tests PASS, 2 regressions (csrng_reg_top,
-   i2c_reg_top). Root cause: MLIR files recompiled on Feb 2 after MooreToCore X-init change
-   (`cccb3395c`). Pre-change MLIR files (Jan 26-31) all still pass. Runtime has no regressions.
-4. **🔍 TL Adapter a_ready=0 Root Cause** - Debug instrumentation shows `tl_o_pre` struct_create
-   evaluates to all-zeros (132 bits). `evaluateContinuousValueImpl` never reaches the
-   `StructCreate` case for cross-instance block arg resolution. Instance output signals mapped
-   but combinational re-evaluation not triggered after register value changes.
+1. **✅ DAG False Cycle Detection Fix** - `evaluateContinuousValueImpl` replaced `inProgress`
+   DenseSet with `pushCount` DenseMap. Previously, when a value appeared in both direct and
+   indirect dependency paths (a DAG, not a cycle), the second push was silently dropped,
+   causing `getCached()` to return X. Now shared nodes are correctly re-evaluated. The TL
+   adapter `a_ready` changes from 0 to 1 after reset, unblocking all OpenTitan TL-UL handshakes.
+2. **✅ Fork Automatic Variable Capture Fix** (from Iter 312) - `interpretSimFork` copies
+   `memoryBlocks` from parent to child. Verified: `captured = 0, 10, 20`.
+3. **✅ Mailbox Unit Tests** (from Iter 312) - 9 new tests for getOrCreateMailbox. All 26 pass.
+4. **✅ No Regressions** - All existing tests pass: sv-tests BMC 23/23, verilator 17/17,
+   fork capture correct, mailbox correct, 1463/1471 unit tests pass (8 pre-existing failures).
 
 ### Remaining Limitations
 
-- **OpenTitan a_ready=0 + regression**: evaluateContinuousValue doesn't re-evaluate struct_create
-  for cross-instance block args after signal changes. Agent a4da550 traced the issue to the
-  block arg mapping path where `tl_o_pre` is resolved as `hw.struct_create` but returns all-0.
+- **OpenTitan d_valid still 0**: `a_ready=1` now correct, but register read response path
+  (`d_valid`) doesn't assert. May be a separate issue in the response generation logic.
 - **SPI AVIP**: Trailing comma fixed, but still needs timescale and nested class access fixes.
 - **OpenTitan AES S-Box LEC NEQ**: `aes_sbox_canright` still mismatches LUT under LEC.
 
 ### Active Work Items
 
-1. **Fix evaluateContinuousValue cross-instance struct_create** (Track 3) - The root cause
-2. **Re-evaluate MooreToCore X-init change** (Track 2) - May need to revert or refine cccb3395c
+1. **Full OpenTitan regression with DAG fix** (Track 3) - Testing all 39 testbenches
+2. **Debug d_valid=0 in TL adapter** (Track 3) - Next blocker after a_ready fix
 3. **SPI AVIP timescale + nested class** (Track 4) - Remaining compile blockers
-4. **Run full regression with fixed fork capture** (Track 1) - Verify AVIP test improvements
+4. **sv-tests/verilator regression check** (Track 1) - Ongoing
+
+---
+
+## Iteration 312 - February 2, 2026
+
+### Summary
+
+Iteration 312: Fork automatic variable capture fixed. Mailbox unit tests added. OpenTitan
+regression confirmed. TL adapter root cause found: false cycle detection in DAG evaluation.
+
+### Accomplishments
+
+1. **✅ Fork Automatic Variable Capture Fix** - `interpretSimFork` now copies `memoryBlocks`
+   from parent to child process states.
+2. **✅ Mailbox Unit Tests** - Added 9 new tests to SyncPrimitivesTest. All 26 pass.
+3. **✅ OpenTitan Regression Confirmed** - 27/39 tests PASS, 2 regressions from X-init change.
+4. **🔍 TL Adapter a_ready=0 Root Cause** - False cycle detection in evaluateContinuousValueImpl
+   DAG evaluation. `inProgress` set treats shared nodes as cycles.
+5. **✅ LEC Local Signal Init (4-state)** and **✅ LEC SMT Counterexample Model**.
 
 ---
 

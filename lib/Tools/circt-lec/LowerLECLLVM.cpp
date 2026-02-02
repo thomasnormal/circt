@@ -16,6 +16,7 @@
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDTypes.h"
+#include "circt/Support/FourStateUtils.h"
 #include "circt/Support/LLVM.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -297,6 +298,11 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
                                    ArrayRef<int64_t> prefix,
                                    DominanceInfo *domInfo,
                                    DenseMap<Value, Value> *allocaSignals) {
+  auto isUndefContainer = [](Value value) -> bool {
+    while (auto insert = value.getDefiningOp<LLVM::InsertValueOp>())
+      value = insert.getContainer();
+    return value.getDefiningOp<LLVM::UndefOp>() != nullptr;
+  };
   if (auto cast = llvmStruct.getDefiningOp<UnrealizedConversionCastOp>()) {
     if (cast->getNumOperands() == 1 &&
         cast->getOperand(0).getType() == hwType)
@@ -369,8 +375,29 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
     }
     Value leaf = findInsertedValue(llvmStruct, hwType, path, domInfo, builder,
                                    loc, allocaSignals);
-    if (!leaf || leaf.getType() != field.type)
-      return {};
+    if (!leaf || leaf.getType() != field.type) {
+      if (!isUndefContainer(llvmStruct))
+        return {};
+      auto fieldInt = dyn_cast<IntegerType>(field.type);
+      if (!fieldInt)
+        return {};
+      bool isUnknownField =
+          field.name && field.name.getValue() == "unknown";
+      bool useZeroUnknown = false;
+      if (isUnknownField && isFourStateStructType(hwType)) {
+        SmallVector<int64_t, 4> valuePath(prefix.begin(), prefix.end());
+        valuePath.push_back(0);
+        Value valueLeaf = findInsertedValue(
+            llvmStruct, hwType, valuePath, domInfo, builder, loc, allocaSignals);
+        if (valueLeaf && isa<IntegerType>(valueLeaf.getType()))
+          useZeroUnknown = true;
+      }
+      APInt value = isUnknownField && !useZeroUnknown
+                        ? APInt::getAllOnes(fieldInt.getWidth())
+                        : APInt(fieldInt.getWidth(), 0);
+      leaf = hw::ConstantOp::create(
+          builder, loc, builder.getIntegerAttr(fieldInt, value));
+    }
     fields.push_back(leaf);
   }
   return hw::StructCreateOp::create(builder, loc, hwType, fields);
@@ -505,6 +532,39 @@ static Value getDominatingStoredValue(Operation *op, Value ptr,
     return {};
   return buildHWStructFromLLVM(bestStore.getValue(), hwType, builder, loc, {},
                                &domInfo, nullptr);
+}
+
+static Value probeLLHDRefForPtr(Value ptr, hw::StructType hwType,
+                                OpBuilder &builder, Location loc) {
+  auto findRefTypeForValue = [&](Value value) -> llhd::RefType {
+    for (Operation *user : value.getUsers()) {
+      auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!cast || cast.getInputs().size() != 1 ||
+          cast.getResults().size() != 1 || cast.getInputs().front() != value)
+        continue;
+      auto refType = dyn_cast<llhd::RefType>(cast.getResult(0).getType());
+      if (!refType || refType.getNestedType() != hwType)
+        continue;
+      return refType;
+    }
+    return {};
+  };
+
+  llhd::RefType refType = findRefTypeForValue(ptr);
+  if (!refType) {
+    llvm::SmallPtrSet<Value, 8> visited;
+    if (auto alloca = resolveAllocaBase(ptr, visited))
+      refType = findRefTypeForValue(alloca.getResult());
+  }
+  if (!refType)
+    return {};
+
+  auto cast = UnrealizedConversionCastOp::create(
+      builder, loc, TypeRange{refType}, ValueRange{ptr});
+  Value probe = llhd::ProbeOp::create(builder, loc, cast.getResult(0));
+  if (probe.getType() != hwType)
+    return {};
+  return probe;
 }
 
 static Value computeHWValueAtBlockEntry(
@@ -870,7 +930,8 @@ static bool dropUnusedBlockArguments(Region &region) {
   return changed;
 }
 
-static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc) {
+static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc,
+                               bool zeroUnknown) {
   if (auto intType = dyn_cast<IntegerType>(type))
     return hw::ConstantOp::create(
         builder, loc,
@@ -880,7 +941,8 @@ static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc) {
     fields.reserve(structType.getElements().size());
     for (const auto &field : structType.getElements()) {
       if (auto nestedStruct = dyn_cast<hw::StructType>(field.type)) {
-        Value nested = buildDefaultValue(nestedStruct, builder, loc);
+        Value nested =
+            buildDefaultValue(nestedStruct, builder, loc, zeroUnknown);
         if (!nested)
           return {};
         fields.push_back(nested);
@@ -891,8 +953,9 @@ static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc) {
         return {};
       bool isUnknownField =
           field.name && field.name.getValue() == "unknown";
-      APInt value = isUnknownField ? APInt::getAllOnes(fieldInt.getWidth())
-                                   : APInt(fieldInt.getWidth(), 0);
+      APInt value = (isUnknownField && !zeroUnknown)
+                        ? APInt::getAllOnes(fieldInt.getWidth())
+                        : APInt(fieldInt.getWidth(), 0);
       fields.push_back(hw::ConstantOp::create(
           builder, loc, builder.getIntegerAttr(fieldInt, value)));
     }
@@ -1047,7 +1110,10 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
 
   Type nestedType = refType.getNestedType();
   OpBuilder sigBuilder(alloca);
-  Value init = buildDefaultValue(nestedType, sigBuilder, castOp.getLoc());
+  // Local ref allocas act like temporary wires; initialize unknowns to 0.
+  Value init =
+      buildDefaultValue(nestedType, sigBuilder, castOp.getLoc(),
+                        /*zeroUnknown=*/true);
   if (!init)
     return false;
   auto sig =
@@ -1141,6 +1207,9 @@ static bool rewriteLLVMStructCast(UnrealizedConversionCastOp castOp,
       replacement = computeHWValueBeforeOp(load, load.getAddr(), hwType,
                                             domInfo, builder, castOp.getLoc(),
                                             &allocaSignals);
+      if (!replacement)
+        replacement = probeLLHDRefForPtr(load.getAddr(), hwType, builder,
+                                         castOp.getLoc());
     }
   }
   if (!replacement)
@@ -1398,12 +1467,15 @@ void LowerLECLLVMPass::runOnOperation() {
   runCleanup();
 
   Operation *firstLLVM = nullptr;
+  bool hasLLHD = false;
   module.walk([&](Operation *op) {
     if (op->getDialect() &&
         op->getDialect()->getNamespace() == "llvm" && !firstLLVM)
       firstLLVM = op;
+    if (isa<llhd::LLHDDialect>(op->getDialect()))
+      hasLLHD = true;
   });
-  if (firstLLVM) {
+  if (firstLLVM && !hasLLHD) {
     firstLLVM->emitError(
         "LEC LLVM lowering left unsupported LLVM operations");
     signalPassFailure();
