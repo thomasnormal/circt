@@ -13,7 +13,6 @@ hw.module @sig_strength_2state(out o: i1) {
 
 // CHECK-LABEL: hw.module @sig_strength_2state
 // CHECK: in %[[UNK:[^ ]+]]{{ *}}: i1
-// CHECK: comb.and bin %[[UNK]], %{{.*}} : i1
-// CHECK: hw.output %{{.*}} : i1
+// CHECK: hw.output %[[UNK]] : i1
 // CHECK-NOT: llhd.drv
 // CHECK-NOT: llhd.prb

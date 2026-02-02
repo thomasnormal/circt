@@ -22,8 +22,8 @@ module {
 }
 
 // CHECK: declare-const data_i
-// CHECK: declare-const c1_data_o
-// CHECK: declare-const c2_data_o
-// CHECK: (= c1_data_o
-// CHECK: (= c2_data_o data_i
-// CHECK: distinct c1_data_o c2_data_o
+// CHECK: declare-const c1_out0
+// CHECK: declare-const c2_out0
+// CHECK: (= c1_out0
+// CHECK: (= c2_out0 data_i
+// CHECK: distinct c1_out0 c2_out0

@@ -1,6 +1,11 @@
-// RUN: not circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s 2>&1 | FileCheck %s
+// RUN: circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s | FileCheck %s
 
-// CHECK: LLHD interface signal read before dominating store; rerun without --strict-llhd
+// Verify that interface signal read-before-store with zero init is now
+// handled by the pass (using zero as initial value).
+
+// CHECK: smt.solver
+// CHECK-NOT: llhd.sig
+// CHECK-NOT: llhd.prb
 
 module {
   llvm.mlir.global internal @iface_storage(#llvm.zero) : !llvm.struct<(i1)>
