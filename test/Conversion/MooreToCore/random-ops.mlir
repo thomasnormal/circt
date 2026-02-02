@@ -25,7 +25,7 @@ moore.module @test_urandom(out result: !moore.i32) {
 // CHECK-LABEL: hw.module @test_urandom_seeded
 moore.module @test_urandom_seeded(in %seed: !moore.i32, out result: !moore.i32) {
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_urandom_seeded(%{{.*}}) : (i32) -> i32
-  %urandom = moore.builtin.urandom %seed
+  %urandom = moore.builtin.urandom seed %seed
   moore.output %urandom : !moore.i32
 }
 
@@ -70,7 +70,7 @@ moore.module @test_random(out result: !moore.i32) {
 // CHECK-LABEL: hw.module @test_random_seeded
 moore.module @test_random_seeded(in %seed: !moore.i32, out result: !moore.i32) {
   // CHECK: %[[RESULT:.*]] = llvm.call @__moore_random_seeded(%{{.*}}) : (i32) -> i32
-  %random = moore.builtin.random %seed
+  %random = moore.builtin.random seed %seed
   moore.output %random : !moore.i32
 }
 

@@ -31,12 +31,12 @@ module TestEmptyArguments;
     c = $urandom_range(100, 50);
 
     // $random with explicit seed (for comparison)
-    // CHECK: [[V5:%[0-9]+]] = moore.builtin.random %{{[0-9]+}}
+    // CHECK: [[V5:%[0-9]+]] = moore.builtin.random seed %{{[0-9]+}}
     // CHECK-NEXT: moore.blocking_assign %a, [[V5]]
     a = $random(x);
 
     // $urandom with explicit seed (for comparison)
-    // CHECK: [[V6:%[0-9]+]] = moore.builtin.urandom %{{[0-9]+}}
+    // CHECK: [[V6:%[0-9]+]] = moore.builtin.urandom seed %{{[0-9]+}}
     // CHECK-NEXT: moore.blocking_assign %b, [[V6]]
     b = $urandom(y);
   end

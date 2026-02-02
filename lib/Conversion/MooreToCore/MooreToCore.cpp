@@ -8586,6 +8586,46 @@ struct UnrealizedCastToBoolConversion
   }
 };
 
+struct UnrealizedCastFourStateConversion
+    : public OpConversionPattern<UnrealizedConversionCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(UnrealizedConversionCastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getOperands().size() != 1 || op.getNumResults() != 1)
+      return failure();
+    Value input = adaptor.getOperands()[0];
+    Type srcType = input.getType();
+    Type dstType = op.getResult(0).getType();
+    Location loc = op.getLoc();
+
+    // 2-state integer -> 4-state struct: wrap with unknown=0.
+    if (isFourStateStructType(dstType) && isa<IntegerType>(srcType)) {
+      auto structType = cast<hw::StructType>(dstType);
+      auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+      Value value = input;
+      if (value.getType() != valueType)
+        value = rewriter.createOrFold<hw::BitcastOp>(loc, valueType, value);
+      Value zero = hw::ConstantOp::create(rewriter, loc, valueType, 0);
+      Value result = createFourStateStruct(rewriter, loc, value, zero);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // 4-state struct -> integer (non-bool): extract the value component.
+    if (isFourStateStructType(srcType) && isa<IntegerType>(dstType) &&
+        !dstType.isInteger(1)) {
+      Value value = extractFourStateValue(rewriter, loc, input);
+      if (value.getType() != dstType)
+        value = rewriter.createOrFold<hw::BitcastOp>(loc, dstType, value);
+      rewriter.replaceOp(op, value);
+      return success();
+    }
+
+    return failure();
+  }
+};
+
 struct UnrealizedCastToBoolRewrite
     : public OpRewritePattern<UnrealizedConversionCastOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -8612,6 +8652,56 @@ struct UnrealizedCastToBoolRewrite
     Value result = comb::AndOp::create(
         rewriter, op.getLoc(), ValueRange{value, notUnknown}, true);
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct LLHDProbeToLLVMRewrite : public OpRewritePattern<llhd::ProbeOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(llhd::ProbeOp op,
+                                PatternRewriter &rewriter) const override {
+    Value signal = op.getSignal();
+    Value base = signal;
+    while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() != 1)
+        break;
+      base = castOp.getInputs()[0];
+    }
+    if (!isa<LLVM::LLVMPointerType>(base.getType()))
+      return failure();
+
+    Type resultType = op.getResult().getType();
+    Type llvmResultType = convertToLLVMType(resultType);
+    Value loaded =
+        LLVM::LoadOp::create(rewriter, op.getLoc(), llvmResultType, base);
+    if (llvmResultType != resultType) {
+      loaded = UnrealizedConversionCastOp::create(rewriter, op.getLoc(),
+                                                  resultType, loaded)
+                   .getResult(0);
+    }
+    rewriter.replaceOp(op, loaded);
+    return success();
+  }
+};
+
+struct LLHDDriveToLLVMRewrite : public OpRewritePattern<llhd::DriveOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(llhd::DriveOp op,
+                                PatternRewriter &rewriter) const override {
+    Value signal = op.getSignal();
+    Value base = signal;
+    while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() != 1)
+        break;
+      base = castOp.getInputs()[0];
+    }
+    if (!isa<LLVM::LLVMPointerType>(base.getType()))
+      return failure();
+
+    Value storeVal =
+        convertValueToLLVMType(op.getValue(), op.getLoc(), rewriter);
+    LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, base);
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -20965,6 +21055,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Patterns for conversion operations.
     ConversionOpConversion,
     ConcatRefOpConversion,
+    UnrealizedCastFourStateConversion,
     UnrealizedCastToBoolConversion,
     BitcastConversion<PackedToSBVOp>,
     BitcastConversion<SBVToPackedOp>,
@@ -21342,7 +21433,8 @@ void MooreToCorePass::runOnOperation() {
     signalPassFailure();
 
   RewritePatternSet cleanupPatterns(&context);
-  cleanupPatterns.add<UnrealizedCastToBoolRewrite>(&context);
+  cleanupPatterns.add<UnrealizedCastToBoolRewrite, LLHDProbeToLLVMRewrite,
+                      LLHDDriveToLLVMRewrite>(&context);
   if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
     signalPassFailure();
 

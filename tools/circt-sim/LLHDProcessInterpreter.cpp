@@ -6798,6 +6798,87 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       return success();
     }
 
+    // Handle memory-backed ref arguments (e.g., !llhd.ref passed through
+    // function calls). The interpreted value of the ref is the memory address.
+    // This mirrors the same handling in interpretDrive.
+    if (isa<BlockArgument>(signal) && isa<llhd::RefType>(signal.getType())) {
+      InterpretedValue addrVal = getValue(procId, signal);
+      unsigned width = getTypeWidth(probeOp.getResult().getType());
+      unsigned loadSize = (width + 7) / 8;
+
+      if (!addrVal.isX() && addrVal.getUInt64() != 0) {
+        uint64_t addr = addrVal.getUInt64();
+        uint64_t offset = 0;
+        MemoryBlock *block = nullptr;
+
+        // Check global memory blocks
+        for (auto &entry : globalAddresses) {
+          StringRef globalName = entry.first();
+          uint64_t globalBaseAddr = entry.second;
+          auto blockIt = globalMemoryBlocks.find(globalName);
+          if (blockIt != globalMemoryBlocks.end()) {
+            uint64_t globalSize = blockIt->second.size;
+            if (addr >= globalBaseAddr &&
+                addr < globalBaseAddr + globalSize) {
+              block = &blockIt->second;
+              offset = addr - globalBaseAddr;
+              break;
+            }
+          }
+        }
+
+        // Check malloc blocks (class instances)
+        if (!block) {
+          for (auto &entry : mallocBlocks) {
+            uint64_t mallocBaseAddr = entry.first;
+            uint64_t mallocSize = entry.second.size;
+            if (addr >= mallocBaseAddr &&
+                addr < mallocBaseAddr + mallocSize) {
+              block = &entry.second;
+              offset = addr - mallocBaseAddr;
+              break;
+            }
+          }
+        }
+
+        if (block && offset + loadSize <= block->size) {
+          if (!block->initialized) {
+            setValue(procId, probeOp.getResult(),
+                     InterpretedValue::makeX(width));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of memory-backed ref at 0x"
+                       << llvm::format_hex(addr, 16) << ": X (uninitialized)\n");
+            return success();
+          }
+
+          APInt memValue = APInt::getZero(width);
+          for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
+            unsigned bitsToInsert = std::min(8u, width - i * 8);
+            APInt byteVal(bitsToInsert,
+                          block->data[offset + i] &
+                              ((1u << bitsToInsert) - 1));
+            memValue.insertBits(byteVal, i * 8);
+          }
+
+          setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Probe of memory-backed ref at 0x"
+                     << llvm::format_hex(addr, 16) << " offset " << offset
+                     << " = 0x"
+                     << llvm::format_hex(memValue.getZExtValue(), 0)
+                     << " (width=" << width << ")\n");
+          return success();
+        }
+      }
+
+      // Address is X or 0 or memory not found - return X
+      setValue(procId, probeOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(probeOp.getResult().getType())));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Probe of memory-backed ref: X (address unavailable)\n");
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in probe\n");
     return failure();
   }
@@ -6912,6 +6993,146 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                      << (driveVal.isX() ? "X" : std::to_string(driveVal.getUInt64()))
                      << " (width=" << width << ")\n");
           return success();
+        }
+
+        // Handle GEP-based memory access (class member fields).
+        // This happens when class properties are driven via
+        // unrealized_conversion_cast from a GEP pointer to !llhd.ref.
+        // Mirrors the probe handler at interpretProbe.
+        if (auto gepOp = input.getDefiningOp<LLVM::GEPOp>()) {
+          InterpretedValue ptrVal = getValue(procId, gepOp.getResult());
+          InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+          auto refType = cast<llhd::RefType>(signal.getType());
+          unsigned width = getTypeWidth(refType.getNestedType());
+          unsigned storeSize = (width + 7) / 8;
+
+          if (ptrVal.isX()) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive to GEP pointer: X (uninitialized)\n");
+            return success();
+          }
+
+          uint64_t addr = ptrVal.getUInt64();
+          uint64_t offset = 0;
+          MemoryBlock *block = findMemoryBlock(procId, gepOp);
+
+          if (block) {
+            InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+            if (!baseVal.isX())
+              offset = addr - baseVal.getUInt64();
+          } else {
+            // Check globals
+            for (auto &entry : globalAddresses) {
+              StringRef globalName = entry.first();
+              uint64_t globalBaseAddr = entry.second;
+              auto blockIt = globalMemoryBlocks.find(globalName);
+              if (blockIt != globalMemoryBlocks.end()) {
+                uint64_t globalSize = blockIt->second.size;
+                if (addr >= globalBaseAddr &&
+                    addr < globalBaseAddr + globalSize) {
+                  block = &blockIt->second;
+                  offset = addr - globalBaseAddr;
+                  break;
+                }
+              }
+            }
+            // Check malloc blocks
+            if (!block) {
+              for (auto &entry : mallocBlocks) {
+                uint64_t mallocBaseAddr = entry.first;
+                uint64_t mallocSize = entry.second.size;
+                if (addr >= mallocBaseAddr &&
+                    addr < mallocBaseAddr + mallocSize) {
+                  block = &entry.second;
+                  offset = addr - mallocBaseAddr;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (block && offset + storeSize <= block->size) {
+            if (driveVal.isX()) {
+              for (unsigned i = 0; i < storeSize; ++i)
+                block->data[offset + i] = 0xFF;
+            } else {
+              APInt val = driveVal.getAPInt();
+              if (val.getBitWidth() < width)
+                val = val.zext(width);
+              else if (val.getBitWidth() > width)
+                val = val.trunc(width);
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned bitPos = i * 8;
+                unsigned bitsToWrite = std::min(8u, width - bitPos);
+                if (bitsToWrite > 0 && bitPos < width)
+                  block->data[offset + i] =
+                      val.extractBits(bitsToWrite, bitPos).getZExtValue();
+                else
+                  block->data[offset + i] = 0;
+              }
+            }
+            block->initialized = !driveVal.isX();
+
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive to GEP memory at 0x"
+                       << llvm::format_hex(addr, 16) << " offset " << offset
+                       << " width " << width << "\n");
+            return success();
+          }
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Drive to GEP pointer 0x"
+                     << llvm::format_hex(addr, 0)
+                     << " failed - memory not found\n");
+          // Fall through to other handlers
+        }
+
+        // Handle addressof-based global variable access.
+        // This happens when static class properties are driven via
+        // unrealized_conversion_cast from addressof to !llhd.ref.
+        if (auto addrOfOp = input.getDefiningOp<LLVM::AddressOfOp>()) {
+          StringRef globalName = addrOfOp.getGlobalName();
+          InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+          auto refType = cast<llhd::RefType>(signal.getType());
+          unsigned width = getTypeWidth(refType.getNestedType());
+          unsigned storeSize = (width + 7) / 8;
+
+          auto blockIt = globalMemoryBlocks.find(globalName);
+          if (blockIt != globalMemoryBlocks.end()) {
+            MemoryBlock &block = blockIt->second;
+            if (storeSize <= block.size) {
+              if (driveVal.isX()) {
+                for (unsigned i = 0; i < storeSize; ++i)
+                  block.data[i] = 0xFF;
+                block.initialized = false;
+              } else {
+                APInt val = driveVal.getAPInt();
+                if (val.getBitWidth() < width)
+                  val = val.zext(width);
+                else if (val.getBitWidth() > width)
+                  val = val.trunc(width);
+                for (unsigned i = 0; i < storeSize; ++i) {
+                  unsigned bitPos = i * 8;
+                  unsigned bitsToWrite = std::min(8u, width - bitPos);
+                  if (bitsToWrite > 0 && bitPos < width)
+                    block.data[i] =
+                        val.extractBits(bitsToWrite, bitPos).getZExtValue();
+                  else
+                    block.data[i] = 0;
+                }
+                block.initialized = true;
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to global '" << globalName << "' width "
+                         << width << "\n");
+              return success();
+            }
+          }
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Drive to global '" << globalName
+                     << "' failed - memory not found\n");
+          // Fall through
         }
       }
     }
@@ -7402,6 +7623,93 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           }));
 
       return success();
+    }
+
+    // Handle memory-backed ref arguments (e.g., !llhd.ref passed through
+    // function calls from UnrealizedConversionCastOp of GEP/addressof).
+    // These refs are backed by LLVM memory locations (class fields, globals),
+    // not LLHD signals. The interpreted value of the ref is the memory address.
+    // This is critical for uvm_config_db::set which stores values into
+    // associative arrays via ref arguments passed through multiple call layers.
+    if (isa<BlockArgument>(signal) && isa<llhd::RefType>(signal.getType())) {
+      InterpretedValue addrVal = getValue(procId, signal);
+      if (!addrVal.isX() && addrVal.getUInt64() != 0) {
+        uint64_t addr = addrVal.getUInt64();
+        InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+        // Get the type being driven
+        auto refType = cast<llhd::RefType>(signal.getType());
+        unsigned width = getTypeWidth(refType.getNestedType());
+        unsigned storeSize = (width + 7) / 8;
+
+        // Find the memory block at this address
+        uint64_t offset = 0;
+        MemoryBlock *block = nullptr;
+
+        // Check global memory blocks
+        for (auto &entry : globalAddresses) {
+          StringRef globalName = entry.first();
+          uint64_t globalBaseAddr = entry.second;
+          auto blockIt = globalMemoryBlocks.find(globalName);
+          if (blockIt != globalMemoryBlocks.end()) {
+            uint64_t globalSize = blockIt->second.size;
+            if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+              block = &blockIt->second;
+              offset = addr - globalBaseAddr;
+              break;
+            }
+          }
+        }
+
+        // Check malloc blocks (class instances)
+        if (!block) {
+          for (auto &entry : mallocBlocks) {
+            uint64_t mallocBaseAddr = entry.first;
+            uint64_t mallocSize = entry.second.size;
+            if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+              block = &entry.second;
+              offset = addr - mallocBaseAddr;
+              break;
+            }
+          }
+        }
+
+        if (block && offset + storeSize <= block->size) {
+          if (driveVal.isX()) {
+            // Write X pattern
+            for (unsigned i = 0; i < storeSize; ++i)
+              block->data[offset + i] = 0xFF;
+          } else {
+            APInt val = driveVal.getAPInt();
+            if (val.getBitWidth() < width)
+              val = val.zext(width);
+            else if (val.getBitWidth() > width)
+              val = val.trunc(width);
+            for (unsigned i = 0; i < storeSize; ++i) {
+              unsigned bitPos = i * 8;
+              unsigned bitsToWrite = std::min(8u, width - bitPos);
+              if (bitsToWrite > 0 && bitPos < width)
+                block->data[offset + i] =
+                    val.extractBits(bitsToWrite, bitPos).getZExtValue();
+              else
+                block->data[offset + i] = 0;
+            }
+          }
+          block->initialized = !driveVal.isX();
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Drive to memory-backed ref at 0x"
+                     << llvm::format_hex(addr, 16) << " offset " << offset
+                     << " width " << width << "\n");
+          return success();
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Drive to memory-backed ref at 0x"
+                   << llvm::format_hex(addr, 16)
+                   << " failed - memory not found\n");
+        // Fall through to resolveSignalId as last resort
+      }
     }
 
     // Try resolveSignalId which handles more cases like tracing through
@@ -8305,12 +8613,55 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
   Block &entryBlock = funcOp.getBody().front();
 
+  // Track temporary signal mappings created for !llhd.ref function arguments.
+  // When a function receives an !llhd.ref argument (e.g., from uvm_config_db),
+  // we need to propagate the signal mapping from the caller so that llhd.drv
+  // and llhd.prb inside the function can resolve the signal ID.
+  llvm::SmallVector<Value, 4> tempSignalMappings;
+
   // Set function arguments (only if not resuming from a saved position)
   if (!resumeBlock) {
+    // Get the call operands so we can trace signal refs through function args.
+    // For func.call, getOperands() returns just the arguments.
+    // For func.call_indirect, the first operand is the callee; use
+    // getArgOperands() to skip it and get only the function arguments.
+    llvm::SmallVector<Value, 8> callOperands;
+    if (callOp) {
+      if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(callOp)) {
+        for (Value operand : callIndirectOp.getArgOperands())
+          callOperands.push_back(operand);
+      } else {
+        for (Value operand : callOp->getOperands())
+          callOperands.push_back(operand);
+      }
+    }
+
+    unsigned idx = 0;
     for (auto [arg, val] : llvm::zip(entryBlock.getArguments(), args)) {
       setValue(procId, arg, val);
+
+      // If the argument type is !llhd.ref<...>, try to propagate signal mapping
+      // from the caller. This enables llhd.drv/llhd.prb on ref arguments
+      // passed through function calls (e.g., uvm_config_db::set stores values
+      // into associative arrays via ref arguments).
+      if (isa<llhd::RefType>(arg.getType()) && idx < callOperands.size()) {
+        if (SignalId sigId = resolveSignalId(callOperands[idx])) {
+          valueToSignal[arg] = sigId;
+          tempSignalMappings.push_back(arg);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Created temp signal mapping for func arg " << idx
+                     << " -> signal " << sigId << "\n");
+        }
+      }
+      ++idx;
     }
   }
+
+  // Helper to clean up temporary signal mappings before returning.
+  auto cleanupTempMappings = [&]() {
+    for (Value v : tempSignalMappings)
+      valueToSignal.erase(v);
+  };
 
   // Execute operations until we hit a return
   Block *currentBlock = resumeBlock ? resumeBlock : &entryBlock;
@@ -8341,6 +8692,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       ++opCount;
       if (opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: Function reached max operations\n");
+        cleanupTempMappings();
         return failure();
       }
 
@@ -8349,6 +8701,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         for (Value operand : returnOp.getOperands()) {
           results.push_back(getValue(procId, operand));
         }
+        cleanupTempMappings();
         return success();
       }
 
@@ -8396,6 +8749,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
         llvm::errs() << "\n";
         llvm::errs() << "  Location: " << op.getLoc() << "\n";
+        cleanupTempMappings();
         return failure();
       }
 
@@ -8429,6 +8783,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           }
         }
 
+        cleanupTempMappings();
         return success();
       }
     }
@@ -8438,6 +8793,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       currentBlock = nullptr;
   }
 
+  cleanupTempMappings();
   return failure();
 }
 

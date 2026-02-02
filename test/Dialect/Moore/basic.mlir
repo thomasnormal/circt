@@ -447,6 +447,22 @@ func.func @SimulationControlBuiltins() {
   moore.unreachable
 }
 
+// CHECK-LABEL: func.func @RandomBuiltins
+func.func @RandomBuiltins(%seed: !moore.i32, %max: !moore.i32, %min: !moore.i32) -> (!moore.i32, !moore.i32, !moore.i32, !moore.i32, !moore.i32) {
+  // CHECK: moore.builtin.urandom
+  %0 = moore.builtin.urandom
+  // Verify consecutive urandom ops parse correctly (regression test).
+  // CHECK: moore.builtin.urandom
+  %1 = moore.builtin.urandom
+  // CHECK: moore.builtin.urandom seed %arg0
+  %2 = moore.builtin.urandom seed %seed
+  // CHECK: moore.builtin.random
+  %3 = moore.builtin.random
+  // CHECK: moore.builtin.random seed %arg0
+  %4 = moore.builtin.random seed %seed
+  return %0, %1, %2, %3, %4 : !moore.i32, !moore.i32, !moore.i32, !moore.i32, !moore.i32
+}
+
 // CHECK-LABEL: func.func @SeverityAndDisplayBuiltins
 func.func @SeverityAndDisplayBuiltins(%arg0: !moore.format_string) {
   // CHECK: moore.builtin.display %arg0
