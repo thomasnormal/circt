@@ -53,19 +53,20 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 **Location**: `lib/Conversion/ImportVerilog/Structure.cpp` - line ~4395
 
-### Test Suite Status (Iteration 303 - Verified NO REGRESSIONS)
+### Test Suite Status (Iteration 305 - Updated)
 
 | Suite | Pass | Total | Rate | Status |
 |-------|------|-------|------|--------|
 | **sv-tests BMC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
 | **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
-| **verilator-verification** | 120 | 141 | **85.1%** | ✅ NO REGRESSION |
-| **verilator (adjusted)** | 120 | 128 | **93.8%** | ✅ (excl. test bugs) |
+| **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
+| **verilator-verification BMC** | 16 | 16 | **100%** | ✅ All pass |
+| **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
 | **ImportVerilog** | 221 | 221 | **100%** | ✅ |
-| **AVIP Compile** | 5 | 5 | **100%** | ✅ |
-| **AVIP Simulation** | 2 | 5 | **40%** | 🔄 Testing |
+| **AVIP Compile** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass |
+| **AVIP Simulation** | 2 | 6 | **33%** | 🔄 Testing |
 | **OpenTitan reg_top** | 11 | 11 | **100%** | ✅ |
-| **OpenTitan primitives** | 4 | 4 | **100%** | ✅ |
+| **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, prim_fifo_sync, timer_core |
 
 ### AVIP Status
 
@@ -73,9 +74,12 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 |----------|---------|----------|-------|
 | APB | ✅ | ✅ RUNS | Simulation completes at 352.9 us |
 | AHB | ✅ | 🔄 Testing | Static arrays FIXED |
+| UART | ✅ | - | Now compiles |
 | I2S | ✅ | - | Not yet tested |
-| UART | ❌ | - | Source bug: virtual method default arg mismatch |
 | I3C | ✅ | - | Not yet tested |
+| SPI | ❌ | - | Nested class non-static property access |
+| JTAG | ❌ | - | Default arg mismatch on virtual override |
+| AXI4 | ❌ | - | dist range bounds must be constant |
 
 ---
 
@@ -86,24 +90,41 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 **Verified**: Factory registration works, phase hopper architecture analyzed
 **Discovery**: `lib/Dialect/Sim/ProcessScheduler.cpp` already has Mailbox with put/get/waitQueue
 **Issue**: Phase hopper forever loop + queue blocking doesn't interleave with parent wait
+
+**Mailbox Integration Plan**:
+- **Phase 1**: Implement non-blocking API first (tryPut, tryGet)
+  - Simpler to integrate, no ProcessId context needed
+  - Can test basic queue operations without full process coordination
+- **Phase 2**: Blocking operations (requires ProcessId context)
+  - `put()`: Block if mailbox full
+  - `get()`: Block if mailbox empty
+  - Needs coordination between DPI layer and ProcessScheduler
+
 **Next Tasks**:
-- **Integrate SyncPrimitivesManager** into LLHDProcessInterpreter
-- Add DPI hooks for `__moore_mailbox_get()` that use existing Mailbox class
-- Add DPI hooks for `__moore_mailbox_put()` to wake blocked getters
-- Test with minimal UVM phase execution pattern
-- Add unit tests for blocking mailbox operations
+- Instantiate SyncPrimitivesManager in LLHDProcessInterpreter
+- Add DPI hooks for `__moore_mailbox_tryget()` / `__moore_mailbox_tryput()`
+- Test with minimal non-blocking pattern first
+- Then add blocking DPI hooks for `__moore_mailbox_get()` / `__moore_mailbox_put()`
+- Add unit tests for mailbox operations
 
 ### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests BMC 100%, yosys SVA 85.7% (12/14), verilator 85.1%
+**Status**: ✅ sv-tests BMC 100%, verilator BMC 100%, yosys SVA 85.7% (12/14)
 **Tested**: Yosys SVA suite - 12/14 pass, 2 regressions with `$changed` sequence assumptions
+
+**$changed Regression Root Cause**:
+- circt-bmc treats sequence assumptions with delays as state machines
+- NFA doesn't constrain initial cycles (cycle 0)
+- Yosys with `-early -assume` applies constraints from cycle 0
+- **Fix**: Distinguish assume vs. assert handling in sequence lowering
+
 **Next Tasks**:
-- Fix `$changed` sequence assumption initialization (cycle 0 vs cycle 1)
+- Fix `$changed` sequence assumption semantics (assume vs assert)
 - Fix remaining verilator issues: pre/post_randomize, coverpoint iff
 - Target: 99%+ on all suites
 - Create unit tests for any fixes
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 4/4 testbenches pass (prim_count, timer_core, gpio, prim_fifo_sync)
+**Status**: ✅ 4/4 testbenches pass (prim_count, prim_fifo_sync, timer_core)
 **Verified**: All tested IPs run without extractBits crashes or scope errors
 **Blocking Issues**:
 - $readmemh task scope access for some IPs (i2c, spi_device)
@@ -113,12 +134,18 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - Create unit test for $readmemh fix
 
 ### Track 4: AVIP Full Simulation
-**Status**: ✅ 7+ AVIPs compile (APB, AHB, AXI4, AXI4Lite, I2S, I3C, JTAG)
-**Verified**: I2S and I3C compile successfully with uvm-core
+**Status**: ✅ 6/9 AVIPs compile (APB, AHB, UART, I2S, I3C pass; SPI, JTAG, AXI4 fail)
+**Verified**: UART now compiles (was incorrectly marked as failing)
 **Blocking**: UVM phase execution needed for full simulation
+
+**AVIP Compile Failures**:
+- SPI: Nested class non-static property access, empty $sformatf arg
+- JTAG: Default arg mismatch on virtual method override
+- AXI4: dist range bounds must be constant
+
 **Next Tasks**:
 - Test AVIP simulation once Track 1 blocking mailbox is fixed
-- Document any source bugs in AVIPs (UART: virtual method default arg)
+- File slang issues for compile blockers
 - Test with simplified UVM test that doesn't need phase hopper
 
 ---
@@ -143,13 +170,17 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ## Other Known Issues
 
-1. **Automatic Variables in Fork Loops**: `automatic` variables in loops don't capture current iteration value
-2. **Event Trigger Not Waking Waiters**: `->event` inside fork doesn't wake `@(event)` waiters
-3. **AVIP Compile Blockers** (from `~/mbit/*avip*` smoke runs):
-   - `dist` range bounds must be constant (e.g. `[0:$]` in `dist`).
-   - Override method default argument mismatch vs superclass signature.
-   - Nested class access to non-static outer properties in `randomize() with`.
-   - Empty argument in `$sformatf` rejected.
+1. **Automatic Variables in Fork Loops**: ✅ FIXED (commit `c63b5b88`) - automatic vars evaluated at fork time
+2. **Event Trigger Not Waking Waiters**: ✅ FIXED (commit `51030af6`) - EventTriggerOp uses EventRefType
+3. **$changed Sequence Assumption Semantics**: circt-bmc NFA doesn't constrain cycle 0 for assumptions
+   - Yosys with `-early -assume` applies constraints from cycle 0
+   - Causes 2 regressions in yosys SVA suite
+   - **Fix**: Distinguish assume vs. assert handling in sequence lowering
+4. **AVIP Compile Blockers** (from `~/mbit/*avip*` smoke runs):
+   - `dist` range bounds must be constant (e.g. `[0:$]` in `dist`) - blocks AXI4
+   - Override method default argument mismatch vs superclass signature - blocks JTAG
+   - Nested class access to non-static outer properties in `randomize() with` - blocks SPI
+   - Empty argument in `$sformatf` rejected - blocks SPI
 
 ---
 
