@@ -38,7 +38,7 @@
 // Safety assertion for each cycle
 // CHECK-LTL: verif.assert
 // Final assertion with bmc.final attribute for liveness checking
-// CHECK-LTL: verif.assert{{.*}}{bmc.final}
+// CHECK-LTL: verif.assert{{.*}}bmc.final
 
 // CHECK-BMC-LABEL: func.func @ltl_delay_property
 // CHECK-BMC: verif.bmc bound 20
