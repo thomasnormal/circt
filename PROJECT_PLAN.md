@@ -82,43 +82,44 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 ## Workstreams & Next Tasks
 
 ### Track 1: UVM Phase Execution (PRIORITY)
-**Status**: 🔄 ROOT CAUSE IDENTIFIED - Need circt-sim process scheduler enhancement
+**Status**: 🔄 KEY DISCOVERY - SyncPrimitivesManager with Mailbox exists but NOT INTEGRATED!
 **Verified**: Factory registration works, phase hopper architecture analyzed
+**Discovery**: `lib/Dialect/Sim/ProcessScheduler.cpp` already has Mailbox with put/get/waitQueue
 **Issue**: Phase hopper forever loop + queue blocking doesn't interleave with parent wait
 **Next Tasks**:
-- Implement concurrent task-based process support in LLHDProcessInterpreter
-- Add blocking queue operation support (`mailbox.get()`, `queue.get()`)
+- **Integrate SyncPrimitivesManager** into LLHDProcessInterpreter
+- Add DPI hooks for `__moore_mailbox_get()` that use existing Mailbox class
+- Add DPI hooks for `__moore_mailbox_put()` to wake blocked getters
 - Test with minimal UVM phase execution pattern
-- Add unit tests for concurrent process scheduling
+- Add unit tests for blocking mailbox operations
 
 ### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests BMC 100% (23/23), verilator 85.1% (120/141)
+**Status**: ✅ sv-tests BMC 100%, yosys SVA 85.7% (12/14), verilator 85.1%
+**Tested**: Yosys SVA suite - 12/14 pass, 2 regressions with `$changed` sequence assumptions
 **Next Tasks**:
-- Run yosys/tests suite for additional coverage
+- Fix `$changed` sequence assumption initialization (cycle 0 vs cycle 1)
 - Fix remaining verilator issues: pre/post_randomize, coverpoint iff
-- Fix 8 slang issues (non-standard `1'z` syntax)
 - Target: 99%+ on all suites
 - Create unit tests for any fixes
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 15+ IPs compile, some simulate successfully
+**Status**: ✅ 4/4 testbenches pass (prim_count, timer_core, gpio, prim_fifo_sync)
+**Verified**: All tested IPs run without extractBits crashes or scope errors
 **Blocking Issues**:
-- $readmemh task scope access - tasks accessing parent module scope fail
-- Missing include paths for some IPs
+- $readmemh task scope access for some IPs (i2c, spi_device)
 **Next Tasks**:
 - Fix $readmemh scope verification error
-- Test simulation on prim_count, timer_core, gpio testbenches
-- Run full OpenTitan IP compilation sweep
+- Run more OpenTitan testbenches
 - Create unit test for $readmemh fix
 
 ### Track 4: AVIP Full Simulation
-**Status**: 🔄 Factory fix verified, phase execution blocks full testing
-**Verified**: `uvm_component_registry` specializations generated correctly
+**Status**: ✅ 7+ AVIPs compile (APB, AHB, AXI4, AXI4Lite, I2S, I3C, JTAG)
+**Verified**: I2S and I3C compile successfully with uvm-core
+**Blocking**: UVM phase execution needed for full simulation
 **Next Tasks**:
-- Test APB/AHB/I2S/I3C AVIP compilation with latest fixes
-- Investigate phase execution in AVIP context
-- Test with simplified UVM test that doesn't need phase hopper
+- Test AVIP simulation once Track 1 blocking mailbox is fixed
 - Document any source bugs in AVIPs (UART: virtual method default arg)
+- Test with simplified UVM test that doesn't need phase hopper
 
 ---
 
