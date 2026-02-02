@@ -34,13 +34,16 @@ Unit test added for ProcessStatesReferenceStability (17/17 pass).
 
 ### In Progress
 
-- **TL adapter read data layout** - Fix applied and verified. OpenTitan **23/23 pass** (100%).
-  All 3 previous failures (gpio_no_alerts, flash_ctrl_reg_top, otp_ctrl_reg_top) fixed by struct layout commit.
+- **TL adapter read data layout** - Fix applied and verified. OpenTitan **31/31 pass** (100%).
+  All 3 previous failures (gpio_no_alerts, flash_ctrl_reg_top, otp_ctrl_reg_top) fixed by struct layout commit. Expanded from 23 to 31 tracked tests.
 - **OpenTitan AES S-Box LEC NEQ** - `aes_sbox_canright` still fails with `--assume-known-inputs`.
   Latest `--dump-unknown-sources` run reports `unknown-xor-inversions=16` and
   `input-unknown-inversions=229` in the canright LEC MLIR. `--print-solver-output` yields
   a concrete counterexample: `op_i=4'h8` (CIPH_INV), `data_i=16'h2700` → LUT `data_o=16'h3D00`,
-  canright `data_o=16'h00FF` (unknown mask all ones). Root cause still under investigation.
+  canright `data_o=16'h00FF` (unknown mask all ones). SMT check with fixed inputs shows the
+  canright unknown mask is *forced* nonzero for `op_i=4'h8`, `data_i=16'h2700`
+  (asserting unknown=0 is UNSAT), so this is not just an unconstrained output. Root cause still
+  under investigation.
 
 ### Full Regression Results (Iteration 315)
 
@@ -54,14 +57,29 @@ Unit test added for ProcessStatesReferenceStability (17/17 pass).
 | yosys/tests/sva | LEC | 14/14 pass, 2 skip (VHDL) | Yes |
 | circt-sim lit | - | 98/100 pass, 1 xfail, 1 intermittent | N/A |
 | Unit tests | - | 17/17 pass | OK (+1) |
-| OpenTitan sim | - | **23/23 pass (100%)** | +3 improvement |
-| AVIP sim | - | 4/4 pass | Match |
+| OpenTitan sim | - | **31/31 pass (100%)** | +8 expanded |
+| AVIP sim | - | 4/4 pass (APB, UART, I2S, AHB) | Match |
+| AVIP compile | - | 6/8 pass | +2 (SPI, JTAG) |
 
 ### Active Work Items
 
-1. **Investigate gpio_no_alerts, flash_ctrl_reg_top, otp_ctrl_reg_top failures** - 3/23 OpenTitan fails
+1. ~~**Investigate gpio_no_alerts, flash_ctrl_reg_top, otp_ctrl_reg_top failures**~~ ✅ All fixed by struct layout commit
 2. **Debug alert_handler_tb timeout** - 336 processes, needs optimization or timeout increase
-3. **Commit all layout conversion fixes** - 25 files, ~870 lines changed
+3. ~~**Commit all layout conversion fixes**~~ ✅ Committed as `9189fb5aa` (23 files, 864 ins, 114 del)
+4. ~~**Expand AVIP coverage**~~ ✅ 3 new slang patches written and applied for SPI/JTAG:
+   - `slang-nested-block-comment.patch` - Downgrade NestedBlockComment to warning (SPI)
+   - `slang-virtual-arg-default.patch` - Downgrade VirtualArgNoParentDefault to warning (JTAG)
+   - `slang-randomize-with-scope.patch` - Allow randomize-with caller scope access (SPI)
+5. ~~**Fix 4-state LLVM global type**~~ ✅ FIXED - `GlobalVariableOpConversion` now converts
+   `hw::StructType` to `LLVM::LLVMStructType`. All 12 Moore unit tests pass.
+6. **Unit tests** - 21/21 pass (+4 layout conversion tests in `64e6e04eb`)
+7. **Patch ordering fix** - `allow-virtual-iface-override` applied first (superset of `class-handle-bool`)
+8. ~~**SPI AVIP compile**~~ ✅ Now compiles cleanly with 3 new slang patches
+9. ~~**JTAG AVIP compile**~~ ✅ Now compiles cleanly with virtual-arg-default patch
+10. **AVIP compile status**: 6/8 compile (up from 4/8). AXI4, AXI4Lite, I3C still need investigation.
+11. **OpenTitan regression expanded**: **31/31 PASS** (expanded from 23 to 31 tracked tests)
+12. **AVIP regression**: APB, UART, I2S, AHB all PASS (no regressions)
+13. **Remaining work**: AXI4/AXI4Lite/I3C AVIP compilation, SPI/JTAG AVIP simulation testing
 
 ---
 
