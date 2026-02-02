@@ -1,0 +1,13 @@
+diff --git a/scripts/diagnostics.txt b/scripts/diagnostics.txt
+index b8886ff..af17f7f 100644
+--- a/scripts/diagnostics.txt
++++ b/scripts/diagnostics.txt
+@@ -387,7 +387,7 @@ error VirtualReturnMismatch "return type {} of virtual method '{}' does not matc
+ error VirtualArgCountMismatch "virtual method '{}' has different number of arguments from its superclass method"
+ error VirtualArgNameMismatch "virtual method argument name '{}' doesn't match '{}' given in its superclass method"
+ error VirtualArgTypeMismatch "virtual method argument '{}' is of type {} which differs from {} given in its superclass method"
+-error VirtualArgNoParentDefault "virtual method argument '{}' provides a default value but its superclass method argument does not"
++warning virtual-arg-no-parent-default VirtualArgNoParentDefault "virtual method argument '{}' provides a default value but its superclass method argument does not"
+ error VirtualArgNoDerivedDefault "virtual method argument '{}' does not provide a default value but its superclass method argument does"
+ error VirtualArgDirectionMismatch "direction of virtual method argument '{}' differs from the direction given in its superclass method"
+ error BaseConstructorDuplicate "cannot provide both 'super.new' as well as class constructor arguments in 'extends' clause"

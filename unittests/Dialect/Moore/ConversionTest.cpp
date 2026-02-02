@@ -187,6 +187,47 @@ TEST(MooreToCoreConversionTest, FourStateAddMasksUnknownValue) {
   EXPECT_TRUE(hasMaskedUnknownStructCreate(*module));
 }
 
+TEST(MooreToCoreConversionTest, FourStateGlobalVariableUsesLLVMType) {
+  MLIRContext context;
+  context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,
+                      seq::SeqDialect, llhd::LLHDDialect, ltl::LTLDialect,
+                      verif::VerifDialect, LLVM::LLVMDialect,
+                      arith::ArithDialect>();
+
+  // A 4-state global variable (l8) should produce an LLVM global with
+  // llvm.struct<(i8, i8)> rather than hw.struct<value: i8, unknown: i8>.
+  const char *ir = R"mlir(
+    moore.global_variable @fourStateGlobal : !moore.l8
+    moore.module @useFourStateGlobal() {
+      %g = moore.get_global_variable @fourStateGlobal : <l8>
+      moore.output
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createConvertMooreToCorePass());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  // Verify that the LLVM global has an LLVM struct type, not hw::StructType.
+  bool foundLLVMGlobal = false;
+  bool hasHWStructType = false;
+  module->walk([&](LLVM::GlobalOp globalOp) {
+    if (globalOp.getSymName() == "fourStateGlobal") {
+      foundLLVMGlobal = true;
+      Type globalType = globalOp.getGlobalType();
+      // Should be LLVM struct type, not hw struct type.
+      if (isa<hw::StructType>(globalType))
+        hasHWStructType = true;
+    }
+  });
+
+  EXPECT_TRUE(foundLLVMGlobal);
+  EXPECT_FALSE(hasHWStructType);
+}
+
 TEST(MooreToCoreConversionTest, FourStateConditionalMasksUnknownValue) {
   MLIRContext context;
   context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,

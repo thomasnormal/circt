@@ -1,0 +1,14 @@
+diff --git a/source/ast/Lookup.cpp b/source/ast/Lookup.cpp
+index 5920ead..b70b410 100644
+--- a/source/ast/Lookup.cpp
++++ b/source/ast/Lookup.cpp
+@@ -1568,7 +1568,8 @@ bool Lookup::ensureAccessible(const Symbol& symbol, const ASTContext& context,
+     }
+ 
+     auto [parent, inStatic] = getContainingClass(*context.scope);
+-    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope)) {
++    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope) &&
++        !context.randomizeDetails) {
+         if (sourceRange) {
+             auto& diag = context.addDiag(diag::NestedNonStaticClassProperty, *sourceRange);
+             diag << symbol.name << parent->name;
