@@ -47,7 +47,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Patch Ordering Fix** | ✅ FIXED | allow-virtual-iface-override applied first (superset of class-handle-bool) |
 | **OpenTitan Coverage** | ✅ **100%** | **31/31** testbenches pass (expanded from 23 to 31 tracked tests) |
 | **AVIP Simulation** | ✅ **4/4** | APB, UART, I2S, AHB pass (no regressions) |
-| **AVIP Compile** | ✅ **6/8** | SPI, JTAG now compile (up from 4/8). AXI4, AXI4Lite, I3C remain. |
+| **Urandom Parse Fix** | ✅ FIXED | `seed` keyword in MooreOps.td prevents greedy parse. SPI AVIP unblocked. |
+| **uvm_config_db Signal Propagation** | ✅ FIXED | Signal mapping through call chains + memory-backed ref drive/probe |
+| **AVIP Compile** | ✅ **8/9** | AXI4, I3C now compile (vendor filelists). AXI4Lite partial (1 bind error). |
 | **TL Handshake a_ready** | ✅ FIXED | DAG false cycle + instance output priority fixes |
 | **Slang Trailing Comma Patch** | ✅ FIXED | `patches/slang-trailing-sysarg-comma.patch` - SPI AVIP unblocked |
 | **Mailbox Full E2E** | ✅ WORKING | All 5 methods work from SV; fork producer/consumer correct |
@@ -68,9 +70,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Major (blocking specific testbenches):**
 4. ~~**SPI AVIP compile**~~: ✅ FIXED - All 3 slang patches applied, compiles cleanly. Simulation testing needed.
 5. ~~**JTAG AVIP compile**~~: ✅ FIXED - virtual-arg-default slang patch applied, compiles cleanly. Simulation testing needed.
-6. **AXI4/AXI4Lite AVIP compile**: `dist` constraints, needs investigation
-7. **I3C AVIP compile**: Needs investigation
-7. **pre/post_randomize** - Not yet implemented in ImportVerilog
+6. ~~**AXI4 AVIP compile**~~: ✅ FIXED - Vendor filelist compiles (572K lines MLIR)
+7. ~~**I3C AVIP compile**~~: ✅ FIXED - Vendor filelist compiles (356K lines MLIR)
+8. **AXI4Lite AVIP compile**: 1 remaining bind+include error in consolidated filelist
+9. **pre/post_randomize** - Not yet implemented in ImportVerilog
 8. **coverpoint `iff`** - Not yet lowered
 9. **`dist` constraint ranges** - Bounds must be constant (dynamic not supported)
 
@@ -87,7 +90,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   `/tmp/opentitan-lec-unkinv4/aes_sbox_canright/circt-lec.log`.
   `--print-solver-output` counterexample: `op_i=4'h8` (CIPH_INV), `data_i=16'h2700` →
   LUT `data_o=16'h3D00`, canright `data_o=16'h00FF` (unknown mask all ones).
-  Root cause not yet isolated.
+  SMT fixed-input check shows canright unknown is forced nonzero for that case:
+  `/tmp/opentitan-lec-unkinv4/aes_sbox_canright/lec_c2_fixed_unknown0.smt` is UNSAT
+  when asserting output unknown=0, while `lec_c2_fixed_unknown1.smt` is SAT
+  (unknown!=0). Global check also shows the canright output unknown mask is
+  always `0xFF` regardless of inputs (`lec_c2_unknown_any0.smt` UNSAT,
+  `lec_c2_unknown_notff.smt` UNSAT). Root cause not yet isolated.
 
 ### Full Regression Results (2026-02-02, Iteration 315)
 
