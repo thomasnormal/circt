@@ -68,31 +68,41 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ## Workstreams & Next Tasks
 
-### Track 1: UVM Factory Registration - ✅ FIXED
-**Status**: ✅ FIXED - Nested typedef specializations now work
-**Fix**: TypeAliasType visitor in ClassDeclVisitor triggers conversion of specialized classes
-**Next**: Verify factory creates correct component types (not just uvm_component)
+### Track 1: UVM Phase Execution
+**Status**: 🔄 IN PROGRESS - Factory registration FIXED, phase execution needs work
+**Verified**: TypeAliasType visitor generates correct registry specializations with m__initialized
+**Issue**: Minimal UVM test completes at time 0 instead of running phases
+**Next Tasks**:
+- Investigate why `run_test("my_test")` returns early
+- Check `uvm_coreservice_t::get()` initialization
+- Verify `uvm_root.run_test()` starts phase machinery
+- Add unit test for UVM factory registration
 
 ### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests 98.6%, verilator 93.8%
+**Status**: ✅ sv-tests BMC 100% (23/23), verilator BMC 100% (17/17)
 **Next Tasks**:
-- Fix remaining sv-tests failures (LLHD event in fork)
-- Fix verilator issues: pre/post_randomize, coverpoint iff
-- Target: 99%+ on both suites
+- Run yosys/tests suite for additional coverage
+- Fix remaining verilator issues: pre/post_randomize, coverpoint iff
+- Target: 99%+ on all suites
+- Create unit tests for any fixes
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 45+ IPs parse successfully
+**Status**: ✅ 15+ IPs compile successfully
+**Blocking Issues**:
+- $readmemh task scope access - tasks accessing parent module scope fail
+- Missing include paths for some IPs
 **Next Tasks**:
-- Fix $readmemh verification error in prim_ram_1p
-- Test more primitives beyond the 9 that compile
-- Run simulation on simple OpenTitan modules
+- Fix $readmemh scope verification error
+- Test simulation on simple OpenTitan modules (prim_count, timer_core)
+- Create unit test for $readmemh fix
 
 ### Track 4: AVIP Full Simulation
-**Status**: ✅ APB AVIP runs with uvm-core (completes at 352940000000 fs)
+**Status**: 🔄 Factory fix verified, need full simulation testing
+**Verified**: `uvm_component_registry` specializations generated correctly
 **Next Tasks**:
 - Test APB AVIP with factory fix - verify correct test class instantiation
-- Test AHB, I2S, I3C AVIPs with full simulation
-- Fix source bugs in AVIPs (UART: virtual method default arg mismatch)
+- Test AHB, I2S, I3C AVIPs compilation and simulation
+- Investigate UVM phase execution in AVIP context
 
 ---
 
