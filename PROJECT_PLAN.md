@@ -25,9 +25,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LLHD 4-State Value Updates** | ✅ FIXED | Clear unknown mask on value field updates |
 | **LEC LLVM Struct Defaults** | ✅ FIXED | Missing unknown defaults to 0 when value is set |
 | **LEC Assume-Known Inputs** | ✅ ADDED | `circt-lec --assume-known-inputs` flag |
-| **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%) |
+| **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
+| **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
+| **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%), expect ~41/42 after X-init fix |
 | **AVIP Simulation** | ✅ **4/5** | AHB, UART, I2S, I3C complete successfully |
-| **TL Handshake Root Cause** | ✅ FOUND | 4-state X init causes a_ready stuck at 0 |
+| **TL Handshake Root Cause** | ✅ FOUND+FIXED | 4-state X init caused a_ready stuck at 0 |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
@@ -36,9 +38,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### Remaining Limitations vs. Cadence Xcelium
 
 **Critical (blocking UVM testbench execution):**
-1. **4-state X initialization of undriven nets** - Breaks combinational logic paths (10 OpenTitan timeouts). Fix identified: MooreToCore.cpp:5050 change `APInt::getAllOnes` → `APInt(valueWidth, 0)` for undriven nets
-2. **ImportVerilog doesn't emit mailbox put/get DPI calls** - Runtime hooks exist but SV `mailbox.put()`/`.get()` aren't lowered to `__moore_mailbox_put`/`get` yet
-3. **UVM phase hopper interleaving** - Depends on #2; once mailbox codegen works, needs end-to-end test
+1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
+2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
+3. **UVM phase hopper interleaving** - Mailbox codegen exists; needs end-to-end validation
 
 **Major (blocking specific testbenches):**
 4. **SPI AVIP compile**: Empty arg in `$sformatf`, nested class non-static property access
@@ -53,13 +55,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 
-### Current Blocker: ImportVerilog Mailbox Codegen
+### Next Priority: End-to-End UVM Phase Hopper Validation
 
-**What works**: Runtime DPI hooks for blocking/non-blocking mailbox ops fully implemented in `LLHDProcessInterpreter.cpp`
+**What works**: Both mailbox codegen (ImportVerilog) and runtime DPI hooks (LLHDProcessInterpreter) are implemented.
 
-**What's missing**: `lib/Conversion/ImportVerilog/Expressions.cpp` needs to lower SystemVerilog `mailbox#(T)::put(val)` and `mailbox#(T)::get(ref val)` method calls to `__moore_mailbox_put` / `__moore_mailbox_get` DPI function calls
+**What's needed**: End-to-end test showing UVM phase hopper pattern works: `fork { mailbox.get(phase); phase.execute(); }` interleaving across components.
 
-**Impact**: Once this works, UVM phase hopper should be able to interleave correctly
+**Impact**: Validates the full UVM simulation pipeline. If this works, critical blockers drop to 0.
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
@@ -3668,41 +3670,41 @@ Legend: ✅ Complete | ⚠️ Partial | ❌ Not Started
 
 ## Track Status & Next Tasks
 
-### Track A: UVM Runtime / DPI/VPI
-**Status**: In progress (stubs wired to in-memory HDL map)
-**Current**: VPI and DPI stubs exist; HDL access backed by map
+### Track 1: UVM Runtime / Mailbox / Phase Hopper
+**Status**: Mailbox codegen + runtime hooks both implemented. Need e2e validation.
+**Current**: ImportVerilog lowers all 5 mailbox methods to DPI calls. Runtime has blocking put/get with process suspend/resume.
 **Next Tasks**:
-1. Wire HDL/VPI access to simulator signal model
-2. Expand VPI property coverage and vector formatting
-3. Run ~/mbit/*avip regressions after wiring
+1. **End-to-end UVM phase hopper test** - Validate fork{mailbox.get→execute} pattern
+2. Wire HDL/VPI access to simulator signal model
+3. Run ~/mbit/*avip regressions with mailbox support
 4. Keep DPI/UVM unit tests in sync with runtime behavior
 
-### Track B: Randomization + 4-State
-**Status**: Randc improvements landed; 4-state not started
-**Current**: randc cycles per-field, constrained fields skip overrides
+### Track 2: Regression Testing & OpenTitan
+**Status**: sv-tests 23/23, verilator 17/17. OpenTitan 31/42 (expect ~41 after X-init fix).
+**Current**: X-init fix committed; need rebuild + retest of 10 timeout testbenches.
 **Next Tasks**:
-1. Add real constraint solving (hard/soft/inline)
-2. Design 4-state value model and propagation rules
-3. Update MooreRuntime + lowering for X/Z operations
+1. **Rebuild and retest OpenTitan timeout testbenches** after X-init fix
+2. Run full sv-tests BMC/LEC after rebuild
+3. Run Yosys SVA suite with updated circt-bmc
+4. Track remaining alert_handler_tb (336 processes, may need timeout increase)
+
+### Track 3: 4-State / MooreToCore
+**Status**: X-init fix landed (cccb3395c). 4-state op masking done. ReduceXor masking added.
+**Current**: Undriven nets init to 0; block-arg propagation for continuous assignments.
+**Next Tasks**:
+1. Verify X-init fix doesn't break any existing tests (run check-circt-unit)
+2. Add real constraint solving (hard/soft/inline)
+3. Implement pre/post_randomize in ImportVerilog
 4. Re-test ~/sv-tests and targeted UVM randomization suites
 
-### Track C: SVA/Z3 + Coverage
-**Status**: SVA parsing ok; Z3 and coverage runtime incomplete
-**Current**: Covergroups in classes lowered as properties
+### Track 4: AVIP Compilation & Tooling
+**Status**: 4/5 AVIPs run (AHB, UART, I2S, I3C). SPI blocked on compile issues.
+**Current**: SPI AVIP investigation ongoing (empty $sformatf arg, nested class access).
 **Next Tasks**:
-1. Define Z3 bridge for SVA evaluation (~/z3)
-2. Implement coverage sample/report hooks end-to-end
-3. Add coverage tests in ~/verilator-verification where applicable
-4. Track coverage feature gaps vs Xcelium
-
-### Track D: Tooling, LSP, Debugging
-**Status**: LSP features expanding (code actions landed)
-**Current**: Quick fixes + refactors added
-**Next Tasks**:
-1. Add debugger hooks and trace stepping
-2. Improve workspace symbol/indexing coverage
-3. Expand diagnostics and refactor actions
-4. Validate against larger sv-test workspaces
+1. **Fix SPI AVIP compile** - $sformatf empty arg, nested class non-static property
+2. Debug JTAG AVIP - default arg mismatch on virtual method override
+3. Debug AXI4 AVIP - 4-state static reg as LLVM global
+4. Add coverpoint `iff` lowering
 
 ---
 

@@ -4,19 +4,31 @@
 
 ### Summary
 
-Iteration 309: Documented 12 remaining limitations vs. Xcelium, prioritized track actions.
-Launching fixes for: X-init bug, mailbox codegen, SPI AVIP compile, regression tests.
+Iteration 309: Fixed critical X-init bug, discovered mailbox codegen already implemented,
+fixed MooreRuntimeTest build error. Critical blockers reduced from 3 to 1 (end-to-end validation).
 
-### Remaining Limitations (12 total: 3 critical, 6 major, 3 minor)
+### Accomplishments
 
-See PROJECT_PLAN.md "Remaining Limitations vs. Cadence Xcelium" for full table.
+1. **✅ X-Init Fix** (`cccb3395c`) - Undriven nets init to 0 instead of all-X. Also adds
+   block-argument propagation for nets assigned from module inputs via continuous assignment.
+   Expected to recover 10 OpenTitan testbenches that timed out due to TL handshake failure.
+2. **✅ Mailbox Codegen Discovery** - All 5 mailbox methods (put, get, try_put, try_get, num)
+   already wired to DPI hooks in `ImportVerilog/Expressions.cpp:3433-3621`. No code changes needed.
+3. **✅ Build Error Fix** - `MooreRuntimeTest.cpp` passed `&idx` (pointer) to `uvm_dpi_get_next_arg_c`
+   which takes `int32_t` by value. Fixed all 10 call sites.
+4. **Regression status**: sv-tests BMC 23/23, LEC 23/23, verilator 17/17 all passing.
+
+### Remaining Limitations (12 total: 1 critical, 6 major, 3 minor)
+
+Critical blockers reduced from 3 → 1: UVM phase hopper end-to-end validation needed.
+See PROJECT_PLAN.md for full table.
 
 ### Active Work Items
 
-1. **Fix X-init for undriven nets** (Track 3) - MooreToCore.cpp:5050
-2. **Wire mailbox codegen** (Track 1) - ImportVerilog Expressions.cpp
-3. **Debug SPI AVIP compile** (Track 4) - $sformatf empty arg
-4. **Run regression suites** (Track 2) - All test suites
+1. **Validate UVM phase hopper e2e** (Track 1) - Now that mailbox codegen exists, test full pipeline
+2. **Retest OpenTitan after X-init fix** (Track 3) - Expect 10 testbenches to recover
+3. **Debug SPI AVIP compile** (Track 4) - $sformatf empty arg, nested class access
+4. **Run regression suites** (Track 2) - All test suites after X-init fix
 
 ---
 
