@@ -2504,6 +2504,23 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           markErase(cast);
           continue;
         }
+        if (auto load = dyn_cast<LLVM::LoadOp>(gepUser)) {
+          // Convert llvm.load into the equivalent cast+probe pattern that
+          // the rest of the code already handles.
+          auto loadType = load.getResult().getType();
+          OpBuilder builder(load);
+          auto refType = llhd::RefType::get(builder.getContext(), loadType);
+          auto cast = builder.create<UnrealizedConversionCastOp>(
+              load.getLoc(), TypeRange{refType}, ValueRange{gep.getResult()});
+          auto probeOp = builder.create<llhd::ProbeOp>(load.getLoc(), loadType,
+                                                        cast.getResult(0));
+          load.getResult().replaceAllUsesWith(probeOp.getResult());
+          field.reads.push_back(probeOp);
+          markErase(probeOp);
+          markErase(cast);
+          markErase(load);
+          continue;
+        }
         return gep.emitError("unsupported interface signal use in LEC");
       }
       markErase(gep);
@@ -3068,9 +3085,24 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   if (sigOp->use_empty()) {
     Value init = sigOp.getInit();
     sigOp.erase();
-    if (auto *def = init.getDefiningOp())
-      if (def->use_empty())
-        def->erase();
+    if (auto *def = init.getDefiningOp()) {
+      if (def->use_empty()) {
+        // If the init is an addressof, also erase the global if unused.
+        if (auto addr = dyn_cast<LLVM::AddressOfOp>(def)) {
+          if (auto mod = addr->getParentOfType<ModuleOp>()) {
+            auto global = mod.lookupSymbol<LLVM::GlobalOp>(
+                addr.getGlobalNameAttr().getValue());
+            def->erase();
+            if (global && global.getSymbolUses(mod)->empty())
+              global.erase();
+          } else {
+            def->erase();
+          }
+        } else {
+          def->erase();
+        }
+      }
+    }
   }
 
   return success();

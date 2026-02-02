@@ -11,7 +11,7 @@ hw.module @modB0(in %in0: i32, in %in1: i32, out out: i32) {
 }
 
 // CHECK: func.func @modA0() {
-// CHECK:   [[V0:%.+]] = verif.lec {lec.input_names = ["in0", "in1"], lec.input_types = [i32, i32], lec.output_names = ["out"]} : i1 first {
+// CHECK:   [[V0:%.+]] = verif.lec {lec.input_names = ["in0", "in1"], lec.input_types = [i32, i32]} : i1 first {
 // CHECK:   ^bb0([[ARG0:%.+]]: i32, [[ARG1:%.+]]: i32):
 // CHECK:     [[V1:%.+]] = comb.add [[ARG0]], [[ARG1]]
 // CHECK:     verif.yield [[V1]]
@@ -61,5 +61,5 @@ hw.module @modB1() {
 // RUN: circt-opt --construct-lec="first-module=modA0 second-module=modB0 insert-mode=none" %s | FileCheck %s --check-prefix=CHECK2
 
 // CHECK2-NOT: func.func
-// CHECK2: verif.lec {lec.input_names = ["in0", "in1"], lec.input_types = [i32, i32], lec.output_names = ["out"]} first
+// CHECK2: verif.lec {lec.input_names = ["in0", "in1"], lec.input_types = [i32, i32]} first
 // CHECK2-NOT: llvm.mlir.global

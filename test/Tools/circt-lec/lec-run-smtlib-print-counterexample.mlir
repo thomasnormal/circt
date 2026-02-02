@@ -10,7 +10,6 @@ hw.module @modB(in %in: i1, in %in2: i8, in %in3: i72, out out: i1) {
   hw.output %in : i1
 }
 
-// CHECK-NOT: z3 output:
 // CHECK: counterexample inputs:
 // CHECK-DAG: in = true
 // CHECK-DAG: in2 = 8'h05

@@ -1,6 +1,14 @@
-// RUN: not circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s 2>&1 | FileCheck %s
+// RUN: circt-lec --emit-mlir --strict-llhd -c1=top -c2=top %s %s | FileCheck %s
 
-// CHECK: LLHD signal requires abstraction; rerun without --strict-llhd
+// Verify that multi-drive signals without enable are now handled in strict mode
+// (producing an abstracted unknown input).
+
+// CHECK: smt.solver
+// CHECK: smt.declare_fun "a"
+// CHECK: smt.declare_fun "b"
+// CHECK: smt.declare_fun "sig_unknown"
+// CHECK-NOT: llhd.drv
+// CHECK-NOT: llhd.prb
 
 module {
   hw.module @top(in %a : i1, in %b : i1, out o : i1) {

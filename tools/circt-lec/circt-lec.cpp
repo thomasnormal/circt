@@ -143,6 +143,11 @@ static cl::opt<bool> printCounterexample(
     cl::desc("Alias for --print-solver-output (deprecated)"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> failOnInequivalent(
+    "fail-on-inequivalent",
+    cl::desc("Return non-zero exit code when circuits are not equivalent"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<bool> flattenHWModules(
     "flatten-hw",
     cl::desc("Inline private hw.modules before equivalence checking"),
@@ -555,7 +560,6 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     // Hoist assertions before LLHD process lowering removes them.
     pm.addPass(createStripLLHDProcesses());
-
     StripLLHDInterfaceSignalsOptions stripLLHDOpts;
     stripLLHDOpts.strict = strictLLHDEnabled;
     pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
@@ -845,6 +849,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
       return failure();
     }
     outputFile.value()->keep();
+    if (failOnInequivalent && token && (*token == "sat" || *token == "unknown"))
+      return failure();
     return success();
   }
 

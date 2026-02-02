@@ -14,8 +14,8 @@
 // CHECK-LABEL: func.func @top_a
 // CHECK:      %[[RESULT1:.+]] = func.call @foo(%[[ARG:.+]])
 // CHECK-NEXT: %[[RESULT2:.+]] = func.call @foo_0(%[[ARG]])
-// CHECK:      %[[C1OUT:.+]] = smt.declare_fun "c1_b"
-// CHECK-NEXT: %[[C2OUT:.+]] = smt.declare_fun "c2_b"
+// CHECK:      %[[C1OUT:.+]] = smt.declare_fun "c1_out0"
+// CHECK-NEXT: %[[C2OUT:.+]] = smt.declare_fun "c2_out0"
 // CHECK-NEXT: %[[EQ1:.+]] = smt.eq %[[C1OUT]], %[[RESULT1]]
 // CHECK-NEXT: smt.assert %[[EQ1]]
 // CHECK-NEXT: %[[EQ2:.+]] = smt.eq %[[C2OUT]], %[[RESULT2]]

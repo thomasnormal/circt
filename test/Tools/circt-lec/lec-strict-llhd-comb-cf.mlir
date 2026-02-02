@@ -1,6 +1,12 @@
-// RUN: not circt-lec --emit-mlir --strict-llhd -c1=m -c2=m %s %s 2>&1 | FileCheck %s
+// RUN: circt-lec --emit-mlir --strict-llhd -c1=m -c2=m %s %s | FileCheck %s
 
-// CHECK: LLHD combinational control flow requires abstraction; rerun without --strict-llhd
+// Verify that LLHD combinational control flow is now handled in strict mode.
+
+// CHECK: smt.solver
+// CHECK: smt.declare_fun "a"
+// CHECK: smt.declare_fun "sel"
+// CHECK-NOT: llhd.combinational
+// CHECK-NOT: llhd.drv
 
 module {
   hw.module @m(in %a : i1, in %b : i1, in %sel : i1, out out_o : i1) {
