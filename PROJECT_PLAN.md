@@ -7,23 +7,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 303)
+## Current Status - February 2, 2026 (Iteration 305)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| **Parameterized class nested typedef** | ✅ FIXED | Each class gets own registry specialization |
-| **Regression testing** | ✅ NO REGRESSIONS | All test suites stable |
-| Static associative arrays | ✅ VERIFIED WORKING | `global_ctors` calls `__moore_assoc_create` |
+| **UVM Factory Registration** | ✅ FIXED | Registry specializations generated correctly |
+| **Fork loop variable capture** | ✅ FIXED | commit `c63b5b88` - automatic vars evaluated at fork time |
+| **EventRefType for triggers** | ✅ FIXED | commit `51030af6` - EventTriggerOp uses EventRefType |
+| **UVM phase execution** | 🔄 ROOT CAUSE | Needs concurrent task-based process coordination |
+| Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
-| UVM DPI functions | ✅ FIXED | `uvm_dpi_get_next_arg_c` signature |
-| Fork multiple delays | ✅ FIXED | commit `8980fdd6c` |
-| wait(condition) signals | ✅ FIXED | commit `8980fdd6c` |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
 | OpenTitan IP Parsing | ✅ 45+ IPs | Parse successfully with correct dependencies |
 
-### Blocking Issue: UVM Factory Registration - ✅ FIXED
+### Current Blocker: UVM Phase Execution
+
+**Root Cause**: circt-sim's LLHD process interpreter doesn't support the concurrent process coordination pattern used by UVM phases:
+- Phase hopper uses a forever loop in forked process blocking on queue `.get(ph)`
+- Parent process blocks on objection wait
+- Both must execute concurrently with proper interleaving
+
+**Required Fix**: Enhance circt-sim process scheduler to support:
+1. Multiple concurrent task-based processes with different wait mechanisms
+2. Blocking queue operations concurrent with other waits
+3. Proper interleaving for phase scheduling
+
+**Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `~/uvm-core/src/base/uvm_phase_hopper.svh`
+
+### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
 **Root Cause**: Parameterized class `uvm_component_registry #(T, Tname)` specializations referenced via nested typedefs were not being converted.
 
@@ -68,41 +81,44 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ## Workstreams & Next Tasks
 
-### Track 1: UVM Phase Execution
-**Status**: 🔄 IN PROGRESS - Factory registration FIXED, phase execution needs work
-**Verified**: TypeAliasType visitor generates correct registry specializations with m__initialized
-**Issue**: Minimal UVM test completes at time 0 instead of running phases
+### Track 1: UVM Phase Execution (PRIORITY)
+**Status**: 🔄 ROOT CAUSE IDENTIFIED - Need circt-sim process scheduler enhancement
+**Verified**: Factory registration works, phase hopper architecture analyzed
+**Issue**: Phase hopper forever loop + queue blocking doesn't interleave with parent wait
 **Next Tasks**:
-- Investigate why `run_test("my_test")` returns early
-- Check `uvm_coreservice_t::get()` initialization
-- Verify `uvm_root.run_test()` starts phase machinery
-- Add unit test for UVM factory registration
+- Implement concurrent task-based process support in LLHDProcessInterpreter
+- Add blocking queue operation support (`mailbox.get()`, `queue.get()`)
+- Test with minimal UVM phase execution pattern
+- Add unit tests for concurrent process scheduling
 
 ### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests BMC 100% (23/23), verilator BMC 100% (17/17)
+**Status**: ✅ sv-tests BMC 100% (23/23), verilator 85.1% (120/141)
 **Next Tasks**:
 - Run yosys/tests suite for additional coverage
 - Fix remaining verilator issues: pre/post_randomize, coverpoint iff
+- Fix 8 slang issues (non-standard `1'z` syntax)
 - Target: 99%+ on all suites
 - Create unit tests for any fixes
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 15+ IPs compile successfully
+**Status**: ✅ 15+ IPs compile, some simulate successfully
 **Blocking Issues**:
 - $readmemh task scope access - tasks accessing parent module scope fail
 - Missing include paths for some IPs
 **Next Tasks**:
 - Fix $readmemh scope verification error
-- Test simulation on simple OpenTitan modules (prim_count, timer_core)
+- Test simulation on prim_count, timer_core, gpio testbenches
+- Run full OpenTitan IP compilation sweep
 - Create unit test for $readmemh fix
 
 ### Track 4: AVIP Full Simulation
-**Status**: 🔄 Factory fix verified, need full simulation testing
+**Status**: 🔄 Factory fix verified, phase execution blocks full testing
 **Verified**: `uvm_component_registry` specializations generated correctly
 **Next Tasks**:
-- Test APB AVIP with factory fix - verify correct test class instantiation
-- Test AHB, I2S, I3C AVIPs compilation and simulation
-- Investigate UVM phase execution in AVIP context
+- Test APB/AHB/I2S/I3C AVIP compilation with latest fixes
+- Investigate phase execution in AVIP context
+- Test with simplified UVM test that doesn't need phase hopper
+- Document any source bugs in AVIPs (UART: virtual method default arg)
 
 ---
 
@@ -134,6 +150,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 ## Remaining Limitations & Next Steps
 
 **Verification/LEC/BMC**
+- Fixed `moore.conversion` 2-state -> 4-state lowering to preserve value/unknown ordering (restores yosys SVA `$changed` wide pass case).
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges require `--resolve-read-write`; 2-state cases now
   model conflicts with explicit unknown inputs, and 2-state LLHD multi-drive
