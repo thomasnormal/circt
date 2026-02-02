@@ -7,12 +7,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 311)
+## Current Status - February 2, 2026 (Iteration 313)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
+| **DAG False Cycle Detection Fix** | ✅ FIXED | `pushCount` map replaces `inProgress` set (commit `a488f68f9`) |
+| **Instance Output Eval Priority** | ✅ FIXED | `instanceOutputMap` checked before `getSignalId` (commit `a488f68f9`) |
+| **Fork Automatic Variable Capture** | ✅ FIXED | `memoryBlocks` copy in `interpretSimFork` (commit `95589849b`) |
+| **Mailbox Unit Tests** | ✅ ADDED | 9 new tests for getOrCreateMailbox, all 26 pass |
 | **UVM Factory Registration** | ✅ FIXED | Registry specializations generated correctly |
 | **Fork loop variable capture** | ✅ FIXED | commit `c63b5b88` - automatic vars evaluated at fork time |
 | **EventRefType for triggers** | ✅ FIXED | commit `51030af6` - EventTriggerOp uses EventRefType |
@@ -30,13 +34,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
-| **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%), expect ~41/42 after X-init fix |
-| **AVIP Simulation** | ✅ **4/5** | AHB, UART, I2S, I3C complete successfully |
-| **TL Handshake Root Cause** | ✅ FOUND+FIXED | 4-state X init caused a_ready stuck at X→0 |
+| **OpenTitan Coverage** | ✅ **95.2%** | 40/42 testbenches pass (up from 69%), 1 segfault, 1 timeout |
+| **AVIP Simulation** | ✅ **6/6** | APB, UART, AHB, I2S, I3C, AXI4 all pass (JTAG/SPI compile issues) |
+| **TL Handshake a_ready** | ✅ FIXED | DAG false cycle + instance output priority fixes |
 | **Slang Trailing Comma Patch** | ✅ FIXED | `patches/slang-trailing-sysarg-comma.patch` - SPI AVIP unblocked |
-| **Mailbox SV→MLIR E2E** | ✅ COMPILES | LLVM dialect loaded; `new()→put()→get()` generates DPI calls |
-| **Mailbox Auto-Create** | ✅ FIXED | `getOrCreateMailbox()` in SyncPrimitivesManager |
-| **Mailbox Get Value Fix** | ✅ FIXED | Write to uninitialized alloca blocks in get handler |
 | **Mailbox Full E2E** | ✅ WORKING | All 5 methods work from SV; fork producer/consumer correct |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
@@ -49,7 +50,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
 3. ~~**UVM phase hopper interleaving**~~ ✅ VALIDATED - Mailbox E2E works from SV; fork producer/consumer with blocking get/put correct
-4. **OpenTitan X-init regression** - i2c_reg_top, csrng_reg_top regressed PASS→TIMEOUT after X-init fix recompile
+4. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
+5. **TL adapter d_valid=0** - a_ready fixed, but register response path doesn't assert d_valid
 
 **Major (blocking specific testbenches):**
 4. **SPI AVIP compile**: ~~Empty arg in `$sformatf`~~ ✅ FIXED (slang patch), nested class non-static property access, timescale mismatch
@@ -64,13 +66,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 
-### Next Priority: End-to-End UVM Phase Hopper Validation
+### Next Priority: TL Adapter d_valid Fix + OpenTitan Coverage Improvement
 
-**What works**: Both mailbox codegen (ImportVerilog) and runtime DPI hooks (LLHDProcessInterpreter) are implemented.
+**What works**: a_ready=1 after DAG fix, 30/42 OpenTitan testbenches pass, mailbox E2E validated.
 
-**What's needed**: End-to-end test showing UVM phase hopper pattern works: `fork { mailbox.get(phase); phase.execute(); }` interleaving across components.
+**What's needed**:
+1. Fix d_valid=0 in TL adapter - likely FirReg clock-edge update path for `outstanding_q`
+2. Improve OpenTitan coverage above 80% - fix remaining FAIL/TIMEOUT tests
+3. Debug alert_handler_tb timeout (336 processes, needs optimization)
 
-**Impact**: Validates the full UVM simulation pipeline. If this works, critical blockers drop to 0.
+**Impact**: Fixing d_valid completes the TL-UL handshake, enabling full register read/write in OpenTitan testbenches.
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
