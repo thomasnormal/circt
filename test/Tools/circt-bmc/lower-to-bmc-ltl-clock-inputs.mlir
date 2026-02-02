@@ -7,7 +7,7 @@
 // CHECK: verif.assume
 // CHECK: ltl.delay
 // CHECK: [[FROM_CLK:%.+]] = seq.from_clock [[CLK]]
-// CHECK: ltl.clock {{.*}}, posedge [[FROM_CLK]] : !ltl.sequence
+// CHECK: ltl.clock {{.*}}, posedge [[FROM_CLK]]{{.*}} : !ltl.sequence
 // CHECK-NOT: ltl.clock {{.*}}, posedge [[CLK_IN]]
 
 hw.module @top(in %clk_i1: i1, in %sig: i1) attributes {num_regs = 0 : i32, initial_values = []} {

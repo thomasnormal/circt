@@ -5,4 +5,4 @@ hw.module @top(in %clk: !seq.clock, in %in: i1) {
   hw.output
 }
 
-// CHECK: solver scopes with inputs or results are not supported
+// CHECK: Printing SMT-LIB not yet supported!

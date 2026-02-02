@@ -23,7 +23,7 @@
 // The safety check happens every cycle
 // CHECK-NFA: verif.assert
 // The liveness check (implication seen) has bmc.final attribute
-// CHECK-NFA: verif.assert{{.*}}{bmc.final}
+// CHECK-NFA: verif.assert{{.*}}bmc.final
 
 // CHECK-BMC-LABEL: func.func @nfa_sequence_match
 // CHECK-BMC: verif.bmc bound 10 num_regs

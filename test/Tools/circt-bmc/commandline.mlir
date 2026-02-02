@@ -6,5 +6,5 @@
 // CHECK-DAG: --print-counterexample
 // CHECK-DAG: --assume-known-inputs
 // CHECK-DAG: --fail-on-violation
-// CHECK-DAG: --z3-path
-// CHECK-DAG: run-smtlib
+// CHECK-DAG: --print-solver-output
+// CHECK-DAG: --emit-smtlib
