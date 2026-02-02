@@ -1413,6 +1413,8 @@ public:
 
   /// Get a mailbox by ID.
   Mailbox *getMailbox(MailboxId id);
+  /// Get or create a mailbox by ID (auto-creates unbounded mailbox for unknown IDs).
+  Mailbox *getOrCreateMailbox(MailboxId id);
 
 private:
   ProcessScheduler &scheduler;

@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 310)
+## Current Status - February 2, 2026 (Iteration 311)
 
 ### Session Summary - Key Milestones
 
@@ -33,6 +33,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **TL Handshake Root Cause** | ✅ FOUND+FIXED | 4-state X init caused a_ready stuck at X→0 |
 | **Slang Trailing Comma Patch** | ✅ FIXED | `patches/slang-trailing-sysarg-comma.patch` - SPI AVIP unblocked |
 | **Mailbox SV→MLIR E2E** | ✅ COMPILES | LLVM dialect loaded; `new()→put()→get()` generates DPI calls |
+| **Mailbox Auto-Create** | ✅ FIXED | `getOrCreateMailbox()` in SyncPrimitivesManager |
+| **Mailbox Get Value Fix** | ✅ FIXED | Write to uninitialized alloca blocks in get handler |
+| **Mailbox Full E2E** | ✅ WORKING | All 5 methods work from SV; fork producer/consumer correct |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
@@ -43,7 +46,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Critical (blocking UVM testbench execution):**
 1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
-3. **UVM phase hopper interleaving** - Mailbox codegen exists; needs end-to-end validation
+3. ~~**UVM phase hopper interleaving**~~ ✅ VALIDATED - Mailbox E2E works from SV; fork producer/consumer with blocking get/put correct
+4. **OpenTitan X-init regression** - i2c_reg_top, csrng_reg_top regressed PASS→TIMEOUT after X-init fix recompile
 
 **Major (blocking specific testbenches):**
 4. **SPI AVIP compile**: ~~Empty arg in `$sformatf`~~ ✅ FIXED (slang patch), nested class non-static property access, timescale mismatch
@@ -83,21 +87,23 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 **Location**: `lib/Conversion/ImportVerilog/Structure.cpp` - line ~4395
 
-### Test Suite Status (Iteration 310 - Updated)
+### Test Suite Status (Iteration 311 - Updated)
 
 | Suite | Pass | Total | Rate | Status |
 |-------|------|-------|------|--------|
+| **sv-tests Parse** | 851 | 1036 | **82.1%** | ✅ NO REGRESSION (full suite) |
 | **sv-tests BMC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
 | **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
-| **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
+| **verilator-verification Parse** | 122 | 154 | **79.2%** | ✅ NO REGRESSION |
 | **verilator-verification BMC** | 16 | 16 | **100%** | ✅ All pass |
-| **Yosys SVA BMC** | 13 | 13 | **100%** | ✅ FULL PASS (3 VHDL/sim skipped) |
+| **Yosys SVA BMC** | 14 | 16 | **87.5%** | ✅ NO REGRESSION (2 bind-dep skipped) |
 | **LTLToCore** | 16 | 16 | **100%** | ✅ ALL FIXED |
 | **ImportVerilog** | 221 | 221 | **100%** | ✅ |
 | **AVIP Compile** | 5 | 9 | **56%** | APB, AHB, UART, I2S, I3C pass |
 | **AVIP Simulation** | 4 | 5 | **80%** | ✅ AHB, UART, I2S, I3C complete |
 | **OpenTitan testbenches** | 31 | 42 | **73.8%** | ✅ MAJOR EXPANSION |
 | **Mailbox DPI Test** | 3 | 3 | **100%** | ✅ Non-blocking + 2 blocking tests |
+| **Mailbox SV E2E** | 4 | 4 | **100%** | ✅ put/get/try/num + fork producer/consumer |
 
 ### Local Checks (February 2, 2026)
 

@@ -1253,7 +1253,7 @@ MailboxId SyncPrimitivesManager::createMailbox(int32_t bound) {
 
 void SyncPrimitivesManager::mailboxPut(MailboxId id, ProcessId caller,
                                        uint64_t message) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return;
 
@@ -1281,14 +1281,14 @@ void SyncPrimitivesManager::mailboxPut(MailboxId id, ProcessId caller,
 }
 
 bool SyncPrimitivesManager::mailboxTryPut(MailboxId id, uint64_t message) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return false;
   return mbox->tryPut(message);
 }
 
 void SyncPrimitivesManager::mailboxGet(MailboxId id, ProcessId caller) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return;
 
@@ -1315,21 +1315,21 @@ void SyncPrimitivesManager::mailboxGet(MailboxId id, ProcessId caller) {
 }
 
 bool SyncPrimitivesManager::mailboxTryGet(MailboxId id, uint64_t &message) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return false;
   return mbox->tryGet(message);
 }
 
 bool SyncPrimitivesManager::mailboxPeek(MailboxId id, uint64_t &message) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return false;
   return mbox->tryPeek(message);
 }
 
 size_t SyncPrimitivesManager::mailboxNum(MailboxId id) {
-  Mailbox *mbox = getMailbox(id);
+  Mailbox *mbox = getOrCreateMailbox(id);
   if (!mbox)
     return 0;
   return mbox->getMessageCount();
@@ -1338,4 +1338,14 @@ size_t SyncPrimitivesManager::mailboxNum(MailboxId id) {
 Mailbox *SyncPrimitivesManager::getMailbox(MailboxId id) {
   auto it = mailboxes.find(id);
   return it != mailboxes.end() ? it->second.get() : nullptr;
+}
+
+Mailbox *SyncPrimitivesManager::getOrCreateMailbox(MailboxId id) {
+  auto it = mailboxes.find(id);
+  if (it != mailboxes.end())
+    return it->second.get();
+  // Auto-create an unbounded mailbox for this ID (supports SV mailbox new())
+  mailboxes[id] = std::make_unique<Mailbox>(id, 0);
+  LLVM_DEBUG(llvm::dbgs() << "Auto-created unbounded mailbox " << id << "\n");
+  return mailboxes[id].get();
 }

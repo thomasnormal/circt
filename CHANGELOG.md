@@ -1,44 +1,46 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 310 - February 2, 2026 (Current Status)
+## Iteration 311 - February 2, 2026 (Current Status)
 
 ### Summary
 
-Iteration 310: Validated X-init fix on OpenTitan (X→0 confirmed), created slang trailing-comma
-patch for SPI AVIP, found mailbox constructor missing `__moore_mailbox_create` call, confirmed
-all unit tests pass after X-init change.
+Iteration 311: **Mailbox E2E pipeline fully working from SystemVerilog.** All 5 mailbox methods
+(put, get, try_put, try_get, num) work correctly. Blocking producer/consumer with fork/join
+works with proper timing. Full regression: no new failures in sv-tests, verilator, yosys.
+OpenTitan X-init retest shows regression: 2 previously-passing tests now timeout.
 
 ### Accomplishments
 
-1. **✅ Slang Trailing Comma Patch** - Created `patches/slang-trailing-sysarg-comma.patch` to
-   allow trailing empty args in system function calls like `$sformatf("fmt", arg,)`. Eliminates
-   EmptyArgNotAllowed errors in SPI AVIP. Updated `patches/apply-slang-patches.sh`.
-2. **✅ Unit Tests Pass** - All 11 Moore unit tests pass (4 MooreToCoreConversion + 7 Types).
-   Both FileCheck lit tests (`basic.mlir`, `conditional-xprop.mlir`) pass cleanly.
-3. **✅ X-Init Confirmed on OpenTitan** - Recompiled uart_reg_top with new circt-verilog.
-   `a_ready` changed from `x` to `0` (X-init fix working). Tests still timeout because
-   `a_ready=0` is a separate functional issue (TL adapter logic needs investigation).
-4. **✅ Mailbox SV→MLIR Compilation Fixed** - Rebuilt circt-verilog picks up LLVM dialect
-   loading. Mailbox `new()` → `put()` → `get()` compiles to MLIR with DPI hooks.
-5. **🔍 Mailbox Constructor Gap Found** - `new()` for built-in classes skips constructor body
-   (TODO at Expressions.cpp:6248-6252), so `__moore_mailbox_create` is never called. Runtime
-   needs auto-create on first use, or constructor codegen needs fixing.
+1. **✅ Mailbox Auto-Create in Runtime** - Added `getOrCreateMailbox()` to SyncPrimitivesManager.
+   When `mailbox.new()` doesn't call `__moore_mailbox_create`, the runtime auto-creates an
+   unbounded mailbox on first use. Updated all mailbox handlers (put/get/tryPut/tryGet/num).
+2. **✅ Mailbox Get Value Fix** - Fixed `__moore_mailbox_get` handler skipping write to alloca
+   because `MemoryBlock::initialized` was false. Now writes regardless and marks initialized.
+3. **✅ Mailbox E2E from SystemVerilog** - Full pipeline works: SV `mailbox.put(42)` → MLIR DPI
+   call → runtime → `mailbox.get(result)` returns 42 correctly. Fork producer/consumer with
+   blocking semantics and timed delays (`#10`) works perfectly.
+4. **✅ No Regression in Test Suites** - sv-tests 851/1036 (82.1%), verilator-verification
+   122/154 (79.2%), yosys-SVA 14/16 (87.5%). All failures are pre-existing/known.
+5. **🔍 OpenTitan X-Init Regression** - Retest of 10 timeout tests: all still timeout (a_ready=0).
+   Additionally, i2c_reg_top and csrng_reg_top (previously passing) now timeout. The old tests
+   "passed" because BFM timeout on `a_ready=x` was quick and test continued past it. The
+   `maskFourStateValue` changes in commit `cccb3395c` changed MLIR structure significantly.
 
 ### Remaining Limitations
 
-- **OpenTitan a_ready=0**: X-init fix eliminates X propagation but TL adapter still doesn't
-  assert `a_ready=1`. Root cause: combinational logic in tlul_adapter_reg may need additional
-  initialization or process-level simulation support.
-- **Mailbox constructor**: Built-in class constructors don't emit body (TODO). Runtime
-  auto-create workaround being investigated.
-- **SPI AVIP timescale**: Files lack `timescale directives but UVM has them. Need `--timescale` flag.
+- **OpenTitan a_ready=0 + regression**: X-init fix causes i2c_reg_top and csrng_reg_top to
+  regress from PASS→TIMEOUT. Root cause under investigation (a4da550 agent analyzing
+  evaluateContinuousValue / FirRegOp interaction for TL adapter).
+- **Automatic var capture in fork/join_none**: Phase values show `x` in class-based hopper
+  pattern. `automatic int phase = ph;` inside fork scope doesn't capture correctly.
+- **SPI AVIP**: Trailing comma fixed, but still needs timescale and nested class access fixes.
 
 ### Active Work Items
 
-1. **Fix mailbox auto-create in runtime** (Track 1) - So `put/get` work without explicit `create`
-2. **Investigate TL a_ready=0** (Track 3) - Why adapter doesn't assert ready after X-init fix
-3. **Test remaining OpenTitan targets** (Track 2) - All 10 timeout tests after recompile
-4. **Full AVIP compilation with timescale** (Track 4) - SPI with `--timescale=1ns/1ps`
+1. **Fix OpenTitan a_ready regression** (Track 3) - TL adapter combinational logic evaluation
+2. **Investigate automatic var capture in fork** (Track 1) - Phase values showing x
+3. **SPI AVIP timescale + nested class** (Track 4) - Remaining compile blockers
+4. **Run OpenTitan full suite with old MLIR** (Track 2) - Verify 31 passing tests aren't affected
 
 ---
 

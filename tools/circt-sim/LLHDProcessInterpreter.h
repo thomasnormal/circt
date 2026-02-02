@@ -306,6 +306,15 @@ struct ProcessExecutionState {
   /// the function rather than skipping to the next process-level operation.
   llvm::SmallVector<CallStackFrame, 4> callStack;
 
+  /// Address to write the result of a pending mailbox get operation.
+  /// When a blocking mailbox get is waiting for a message, this stores where
+  /// to write the message value when it becomes available.
+  uint64_t pendingMailboxGetResultAddr = 0;
+
+  /// The mailbox ID for a pending blocking get operation.
+  /// Non-zero when this process is waiting for a mailbox message.
+  uint64_t pendingMailboxGetId = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
