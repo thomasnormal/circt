@@ -4388,9 +4388,30 @@ struct ClassDeclVisitor {
     return success();
   }
 
-  // Type aliases in specialized classes hold no further information; slang
-  // already elaborates them in all relevant places.
-  LogicalResult visit(const slang::ast::TypeAliasType &) { return success(); }
+  // Type aliases in specialized classes may reference parameterized class
+  // specializations. When a typedef like:
+  //   typedef uvm_component_registry #(my_test, "my_test") type_id;
+  // is inside a class, we need to ensure the specialized class is converted.
+  // Otherwise, static members like m__initialized won't be generated.
+  LogicalResult visit(const slang::ast::TypeAliasType &typeAlias) {
+    LLVM_DEBUG(llvm::dbgs() << "      TypeAliasType: " << typeAlias.name
+                            << "\n");
+    // Get the canonical type to resolve the typedef chain
+    auto &canonicalType = typeAlias.getCanonicalType();
+
+    // Check if it's a class specialization
+    if (auto *classType = canonicalType.as_if<slang::ast::ClassType>()) {
+      // If this is a specialization of a generic class, ensure it's converted
+      if (classType->genericClass) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "        -> specialized class from "
+                   << classType->genericClass->name << "\n");
+        if (failed(context.convertClassDeclaration(*classType)))
+          return failure();
+      }
+    }
+    return success();
+  }
 
   // Fully-fledged functions - SubroutineSymbol
   LogicalResult visit(const slang::ast::SubroutineSymbol &fn) {
@@ -4692,6 +4713,8 @@ ClassLowering *Context::declareClass(const slang::ast::ClassType &cls) {
   // may modify the map (like recursive calls to convertClassDeclaration),
   // because DenseMap can rehash and invalidate references.
   bool isNewDecl = !classes.contains(&cls);
+  LLVM_DEBUG(llvm::dbgs() << "declareClass: " << cls.name << " (ptr: " << &cls
+                          << ", isNewDecl: " << isNewDecl << ")\n");
   if (isNewDecl) {
     // Create the ClassLowering entry first.
     classes[&cls] = std::make_unique<ClassLowering>();
