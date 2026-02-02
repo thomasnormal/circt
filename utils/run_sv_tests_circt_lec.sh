@@ -19,7 +19,7 @@ if [[ "$INCLUDE_UVM_TAGS" == "1" ]]; then
   TAG_REGEX_EFFECTIVE="($TAG_REGEX_EFFECTIVE)|$UVM_TAG_REGEX"
 fi
 LEC_SMOKE_ONLY="${LEC_SMOKE_ONLY:-0}"
-LEC_FAIL_ON_INEQ="${LEC_FAIL_ON_INEQ:-1}"
+# LEC_FAIL_ON_INEQ removed - circt-lec no longer has --fail-on-inequivalent flag
 FORCE_LEC="${FORCE_LEC:-0}"
 SKIP_SHOULD_FAIL="${SKIP_SHOULD_FAIL:-1}"
 Z3_BIN="${Z3_BIN:-}"
@@ -244,9 +244,8 @@ while IFS= read -r -d '' sv; do
     lec_args+=("--emit-mlir")
   else
     lec_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
-    if [[ "$LEC_FAIL_ON_INEQ" == "1" ]]; then
-      lec_args+=("--fail-on-inequivalent")
-    fi
+    # Note: --fail-on-inequivalent was removed from circt-lec
+    # Result checking is done via output parsing below
   fi
   if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
     lec_args+=("--assume-known-inputs")
