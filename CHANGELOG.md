@@ -1,12 +1,47 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 305 - February 2, 2026 (Current Status)
+## Iteration 306 - February 2, 2026 (Current Status)
+
+### Summary
+
+Iteration 306 implemented two major fixes:
+1. **Mailbox DPI Hooks (Phase 1)**: Non-blocking mailbox operations integrated with LLHDProcessInterpreter
+2. **$changed Assume Fix**: Assumes now skip warmup to constrain from cycle 0, matching Yosys behavior
+
+### Changes in Iteration 306
+
+**Mailbox DPI Hooks** (tools/circt-sim/LLHDProcessInterpreter.cpp):
+- Added `__moore_mailbox_create(bound)` - Create mailbox with optional bound
+- Added `__moore_mailbox_tryput(mbox_id, msg)` - Non-blocking put
+- Added `__moore_mailbox_tryget(mbox_id, msg_out)` - Non-blocking get
+- Added `__moore_mailbox_num(mbox_id)` - Get message count
+- New unit test: `test/Tools/circt-sim/mailbox-dpi-nonblocking.mlir`
+
+**$changed Assume Fix** (lib/Conversion/LTLToCore/LTLToCore.cpp):
+- Added `skipWarmup` parameter to `LTLPropertyLowerer`
+- Assumes now pass `skipWarmup=true` to constrain from cycle 0
+- Assertions keep warmup behavior (avoid false failures during sequence startup)
+- Matches Yosys `-early -assume` behavior
+
+### Test Results - Iteration 306
+
+| Test Suite | Before | After | Change |
+|------------|--------|-------|--------|
+| Yosys SVA BMC | 12/14 (85.7%) | 14/14 (100%) | **+2 FIXED** |
+| Mailbox DPI | N/A | 1/1 (100%) | **+1 NEW** |
+
+---
+
+## Iteration 305 - February 2, 2026
 
 ### Summary
 
 Iteration 305 focused on comprehensive test suite validation and mailbox integration planning.
 Key findings include identification of $changed regression root cause and confirmation that
 SyncPrimitivesManager exists but requires integration with LLHDProcessInterpreter.
+Additional work in progress: MooreToCore now masks value bits when unknown propagates through
+logic/arithmetic ops to avoid Z pollution in 4-state modeling (addresses the OpenTitan
+aes_sbox_canright LEC NEQ), with new regression and unit coverage added.
 
 ### Test Results Summary - Iteration 305
 
@@ -64,19 +99,21 @@ apply from cycle 0, which circt-bmc does not currently replicate.
 | Feature | Status | Impact | Priority |
 |---------|--------|--------|----------|
 | Concurrent task-based processes | ❌ Missing | Blocks UVM phase hopper | **P0** |
-| Blocking queue/mailbox operations | ❌ Missing | Blocks UVM phase coordination | **P0** |
-| $changed sequence assumption semantics | ❌ Different | 2 yosys SVA regressions | P1 |
+| Blocking queue/mailbox operations | 🔄 Phase 1 done | Non-blocking done, need blocking for phases | **P0** |
+| $changed sequence assumption semantics | ✅ **FIXED** | Assumes skip warmup, match Yosys | ~~P1~~ |
 | $readmemh task scope access | ❌ Broken | Blocks OpenTitan IPs with RAM init | P1 |
+| 4-state X-prop coverage gaps | 🔄 Partial | OpenTitan aes_sbox_canright LEC NEQ until fully aligned | P1 |
 | pre/post_randomize signatures | ❌ Slang strict | Blocks some verilator tests | P2 |
 | coverpoint iff syntax | ❌ Slang missing | Blocks coverage tests | P2 |
 
 ### Features to Build (Prioritized)
 
 1. **P0: Concurrent Process Scheduler** - Extend LLHDProcessInterpreter for multiple blocked processes
-2. **P0: Blocking Queue Operations** - mailbox.get(), queue.get() as blocking primitives
-3. **P1: $changed Assume Fix** - Distinguish assume vs. assert in sequence lowering
-4. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
-5. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
+2. **P0: Blocking Queue Operations** - mailbox.get(), queue.get() as blocking primitives (Phase 2)
+3. ~~**P1: $changed Assume Fix**~~ - ✅ **DONE** in Iteration 306
+4. **P1: 4-state X-prop Completion** - Extend modeling across ops/extnets and align Z/X semantics
+5. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
+6. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
 
 ### AVIP Status Detail
 

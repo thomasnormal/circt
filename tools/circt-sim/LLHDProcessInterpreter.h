@@ -836,6 +836,9 @@ private:
   /// Fork/join manager for concurrent process spawning.
   ForkJoinManager forkJoinManager;
 
+  /// Synchronization primitives manager for semaphores and mailboxes.
+  SyncPrimitivesManager syncPrimitivesManager;
+
   /// Maximum number of ops a process may execute before forcing a stop.
   size_t maxProcessSteps = 50000;
 

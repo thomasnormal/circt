@@ -134,7 +134,8 @@ static bool getMaskedUInt64(const InterpretedValue &value,
 //===----------------------------------------------------------------------===//
 
 LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
-    : scheduler(scheduler), forkJoinManager(scheduler) {}
+    : scheduler(scheduler), forkJoinManager(scheduler),
+      syncPrimitivesManager(scheduler) {}
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
@@ -12002,6 +12003,102 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size(0x"
                                 << llvm::format_hex(arrayAddr, 16) << ") = "
                                 << result << "\n");
+      }
+      return success();
+    }
+
+    //===------------------------------------------------------------------===//
+    // Mailbox DPI Hooks (Phase 1 - Non-blocking operations)
+    //===------------------------------------------------------------------===//
+
+    // Handle __moore_mailbox_create - create a new mailbox
+    // Signature: (bound: i32) -> i64
+    if (calleeName == "__moore_mailbox_create") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        int32_t bound = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+
+        MailboxId mboxId = syncPrimitivesManager.createMailbox(bound);
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(mboxId), 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_create("
+                                << bound << ") = " << mboxId << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_tryput - non-blocking put
+    // Signature: (mbox_id: i64, msg: i64) -> i1
+    if (calleeName == "__moore_mailbox_tryput") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msg = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        bool success = syncPrimitivesManager.mailboxTryPut(mboxId, msg);
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(success ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_tryput("
+                                << mboxId << ", " << msg << ") = "
+                                << (success ? "true" : "false") << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_tryget - non-blocking get
+    // Signature: (mbox_id: i64, msg_out: ptr) -> i1
+    if (calleeName == "__moore_mailbox_tryget") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msgOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        uint64_t msg = 0;
+        bool success = syncPrimitivesManager.mailboxTryGet(mboxId, msg);
+
+        // Write the message to the output pointer if successful
+        if (success && msgOutAddr != 0) {
+          uint64_t outOffset = 0;
+          auto *outBlock = findMemoryBlockByAddress(msgOutAddr, procId, &outOffset);
+          if (outBlock && outBlock->initialized) {
+            // Write 64-bit message value
+            for (int i = 0; i < 8; ++i)
+              outBlock->data[outOffset + i] =
+                  static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(success ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_tryget("
+                                << mboxId << ", 0x"
+                                << llvm::format_hex(msgOutAddr, 16) << ") = "
+                                << (success ? "true" : "false");
+                   if (success) llvm::dbgs() << ", msg=" << msg;
+                   llvm::dbgs() << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_num - get message count
+    // Signature: (mbox_id: i64) -> i64
+    if (calleeName == "__moore_mailbox_num") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+
+        size_t count = syncPrimitivesManager.mailboxNum(mboxId);
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(count), 64));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_num("
+                                << mboxId << ") = " << count << "\n");
       }
       return success();
     }
