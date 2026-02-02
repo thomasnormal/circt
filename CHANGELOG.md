@@ -15,7 +15,27 @@ The parameterized class specialization fix has been thoroughly verified:
    - `uvm_registry_common_3356` generated with separate `m__initialized`
    - Global constructor: `__moore_global_init_uvm_pkg::uvm_pkg::uvm_registry_common_3356::m__initialized`
 
-3. **Remaining Work**: UVM phase execution - simulation completes at time 0 instead of running phases
+3. **Remaining Work**: UVM phase execution - requires concurrent task-based process coordination
+
+### UVM Phase Execution - ROOT CAUSE IDENTIFIED
+
+Investigation found that UVM phase execution fails because circt-sim's current LLHD process
+interpreter doesn't support the concurrent process coordination pattern used by UVM:
+
+1. **Phase Hopper Architecture**: Uses a forever loop in a forked process that blocks on
+   queue operations (`.get(ph)`) while the parent blocks on objection wait
+
+2. **The Problem**: circt-sim cannot properly handle:
+   - Multiple concurrent task-based processes with different waiting mechanisms
+   - Blocking queue operations happening concurrently with other waits
+   - The interleaving required for phase scheduling
+
+3. **Required Fix**: Enhance circt-sim's process scheduler to support concurrent waiting
+   on different synchronization primitives across forked processes
+
+**Files involved**:
+- `/home/thomas-ahle/uvm-core/src/base/uvm_phase_hopper.svh` - forever loop at line 381
+- `/home/thomas-ahle/circt/tools/circt-sim/LLHDProcessInterpreter.cpp` - fork handling
 
 ### Test Suite Status - NO REGRESSIONS
 
