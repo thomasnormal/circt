@@ -627,12 +627,12 @@ def EventTriggerOp : MooreOp<"event_trigger"> {
 
     Example:
     ```mlir
-    moore.event_trigger %event : !moore.event
+    moore.event_trigger %event : !moore.ref<!moore.event>
     ```
 
     See IEEE 1800-2017 Section 15.5 "Event trigger".
   }];
-  let arguments = (ins EventType:$event);
+  let arguments = (ins EventRefType:$event);
   let assemblyFormat = [{ $event attr-dict `:` type($event) }];
 }
 

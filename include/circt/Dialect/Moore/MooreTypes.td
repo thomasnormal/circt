@@ -658,6 +658,9 @@ def AnyUnionRefType : SpecificRefType<AnyUnionType>;
 /// Class references.
 def ClassHandleRefType : SpecificRefType<ClassHandleType>;
 
+/// Event references.
+def EventRefType : SpecificRefType<EventType>;
+
 //===----------------------------------------------------------------------===//
 // Virtual Interface Type
 //===----------------------------------------------------------------------===//
