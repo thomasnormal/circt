@@ -17,6 +17,7 @@
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Transforms/Passes.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
@@ -332,7 +333,7 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
   mlirContext
       ->loadDialect<moore::MooreDialect, hw::HWDialect, cf::ControlFlowDialect,
                     func::FuncDialect, verif::VerifDialect, ltl::LTLDialect,
-                    debug::DebugDialect>();
+                    debug::DebugDialect, mlir::LLVM::LLVMDialect>();
   auto conversionTimer = ts.nest("Verilog to dialect mapping");
   Context context(options, *compilation, module, driver.sourceManager);
   if (failed(context.convertCompilation()))

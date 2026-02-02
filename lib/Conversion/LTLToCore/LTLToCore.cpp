@@ -519,18 +519,23 @@ struct LTLPropertyLowerer {
     if (isa<ltl::SequenceType>(prop.getType())) {
       auto trueVal =
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      // Extract clock from ltl.clock op if present, for warmup computation
+      Value warmupClock = clock;
+      if (auto clockOp = prop.getDefiningOp<ltl::ClockOp>()) {
+        warmupClock = normalizeClock(clockOp.getClock(), clockOp.getEdge());
+      }
       auto match = lowerSequence(prop, clock, edge);
       if (!match)
         return {Value(), {}};
       // Skip warmup for assumes - constraints should apply from cycle 0.
       // Only assertions need warmup to avoid false failures during sequence
       // startup.
-      if (!skipWarmup) {
+      if (!skipWarmup && warmupClock) {
         if (auto bounds = getSequenceLengthBounds(prop)) {
           if (bounds->first == bounds->second && bounds->first > 0) {
             uint64_t shift = bounds->first - 1;
             if (shift > 0) {
-              auto warmup = shiftValue(trueVal, shift, clock);
+              auto warmup = shiftValue(trueVal, shift, warmupClock);
               auto notWarmup = comb::XorOp::create(
                   builder, loc, warmup,
                   hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));

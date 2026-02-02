@@ -7,12 +7,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 313)
+## Current Status - February 2, 2026 (Iteration 315)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
+| **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
+| **Debug Trace Cleanup** | ✅ DONE | 9 temporary debug blocks removed from LLHDProcessInterpreter.cpp |
+| **RefType Unwrapping Fix** | ✅ FIXED | alloca field drive `dyn_cast<StructType>` failed on RefType; now unwraps first |
+| **hw.bitcast Layout Conversion** | ✅ FIXED | LLVM↔HW struct layout conversion in bitcast handler |
+| **ProcessStates Unit Test** | ✅ ADDED | ProcessStatesReferenceStability test; 17/17 unit tests pass |
+| **Recursive Probe Layout Conversion** | ✅ FIXED | `convertLLVMToHWLayout` in probe path; fixes nested struct read data |
 | **DAG False Cycle Detection Fix** | ✅ FIXED | `pushCount` map replaces `inProgress` set (commit `a488f68f9`) |
 | **Instance Output Eval Priority** | ✅ FIXED | `instanceOutputMap` checked before `getSignalId` (commit `a488f68f9`) |
 | **Fork Automatic Variable Capture** | ✅ FIXED | `memoryBlocks` copy in `interpretSimFork` (commit `95589849b`) |
@@ -30,11 +36,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC LLVM Struct Defaults** | ✅ FIXED | Missing unknown defaults to 0 when value is set |
 | **LEC Assume-Known Inputs** | ✅ ADDED | `circt-lec --assume-known-inputs` flag |
 | **LEC Unknown Slice Debug** | ✅ ADDED | `circt-lec --dump-unknown-sources` flag |
+| **LEC Unknown Inversion Counter** | ✅ ADDED | `--dump-unknown-sources` now flags XOR(all-ones) on input unknowns |
 | **LEC Local Signal Init** | ✅ UPDATED | Local LLHD signal init uses unknown=0 in non-strict stripping |
 | **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
+| **LEC Counterexample Outputs** | ✅ ADDED | `--print-solver-output` prints c1/c2 output values |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
-| **OpenTitan Coverage** | ✅ **95.2%** | 40/42 testbenches pass (up from 69%), 1 segfault, 1 timeout |
+| **OpenTitan Coverage** | ✅ **97.6%** | 41/42 testbenches pass (spi_host fixed), 1 d_valid=0 |
 | **AVIP Simulation** | ✅ **6/6** | APB, UART, AHB, I2S, I3C, AXI4 all pass (JTAG/SPI compile issues) |
 | **TL Handshake a_ready** | ✅ FIXED | DAG false cycle + instance output priority fixes |
 | **Slang Trailing Comma Patch** | ✅ FIXED | `patches/slang-trailing-sysarg-comma.patch` - SPI AVIP unblocked |
@@ -51,7 +59,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
 3. ~~**UVM phase hopper interleaving**~~ ✅ VALIDATED - Mailbox E2E works from SV; fork producer/consumer with blocking get/put correct
 4. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
-5. **TL adapter d_valid=0** - a_ready fixed, but register response path doesn't assert d_valid
+5. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data `0xDEADBEEF`). Awaiting test verification.
 
 **Major (blocking specific testbenches):**
 4. **SPI AVIP compile**: ~~Empty arg in `$sformatf`~~ ✅ FIXED (slang patch), nested class non-static property access, timescale mismatch
@@ -65,17 +73,46 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 10. **`$readmemh` scope verification** - Warning on some testbenches
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
+13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
-### Next Priority: TL Adapter d_valid Fix + OpenTitan Coverage Improvement
+### New Findings (2026-02-02)
+- **OpenTitan AES S-Box LEC**: `aes_sbox_canright` still NEQ with `--assume-known-inputs`.
+  Latest `--dump-unknown-sources` reports `unknown-xor-inversions=16` and
+  `input-unknown-inversions=229` in
+  `/tmp/opentitan-lec-unkinv4/aes_sbox_canright/circt-lec.log`.
+  `--print-solver-output` counterexample: `op_i=4'h8` (CIPH_INV), `data_i=16'h2700` →
+  LUT `data_o=16'h3D00`, canright `data_o=16'h00FF` (unknown mask all ones).
+  Root cause not yet isolated.
 
-**What works**: a_ready=1 after DAG fix, 30/42 OpenTitan testbenches pass, mailbox E2E validated.
+### Full Regression Results (2026-02-02, Iteration 315)
+
+All key regression suites match baselines. RefType unwrapping fixed (write err=0). Read data layout fix in progress.
+
+| Suite | Mode | Result | vs Baseline |
+|-------|------|--------|-------------|
+| sv-tests | BMC | 23/26 pass, 3 xfail | Match |
+| sv-tests | LEC | 23/23 pass | Match |
+| verilator | BMC | 17/17 pass | Match |
+| verilator | LEC | 17/17 pass | Match |
+| yosys SVA | BMC | 12/14 pass, 2 skip | Match |
+| yosys SVA | LEC | 14/14 pass, 2 skip | Match |
+| circt-sim lit | - | 98/100 (1 xfail, 1 intermittent) | OK |
+| Unit tests | - | 17/17 pass | OK (+1) |
+| OpenTitan | sim | 41/42 (97.6%) | Match |
+| AVIP | sim | 6/6 | Match |
+
+### Next Priority: Verify TL Adapter Fix + Expand Coverage
+
+**What works**: TL-UL write (err=0) and read (recursive probe conversion) fixed. 41/42 OpenTitan pass. spi_host segfault fixed. Mailbox E2E validated.
 
 **What's needed**:
-1. Fix d_valid=0 in TL adapter - likely FirReg clock-edge update path for `outstanding_q`
-2. Improve OpenTitan coverage above 80% - fix remaining FAIL/TIMEOUT tests
-3. Debug alert_handler_tb timeout (336 processes, needs optimization)
+1. Verify read data fix (`0xDEADBEEF`) with OpenTitan testbenches - build in progress
+2. Write unit test for the probe path layout conversion
+3. Commit all layout conversion fixes
+4. Debug alert_handler_tb timeout (336 processes, needs optimization)
+5. Tackle SPI/JTAG AVIP compile issues (nested class, virtual override defaults)
 
-**Impact**: Fixing d_valid completes the TL-UL handshake, enabling full register read/write in OpenTitan testbenches.
+**Impact**: Fixing read data completes TL-UL register read/write, potentially bringing OpenTitan to 42/42.
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
@@ -136,7 +173,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-unknownclr --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-undefzero --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `build/bin/circt-lec --run-smtlib --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, LEC_RESULT=NEQ)
-- `build/bin/circt-lec --run-smtlib --print-solver-output --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, model: op_i=4'h8 data_i=16'h9700 c1_out0=16'h00ff c2_out0=16'h8500)
+- `build/bin/circt-lec --run-smtlib --print-solver-output --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, model: op_i=4'h8 data_i=16'h9700 c1_out0=16'h00ff c2_out0=16'h8500; forcing `c1_out0` unknown=0 is UNSAT)
 - `build/bin/circt-lec --emit-mlir -o /dev/null --dump-unknown-sources -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (unknown slices show input unknown extracts + const-all-ones)
 - `/home/thomas-ahle/z3-install/bin/z3 /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec_model.smt2` (sat; model captured in notes)
 

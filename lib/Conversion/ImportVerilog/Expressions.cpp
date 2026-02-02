@@ -15,11 +15,26 @@
 #include "slang/ast/expressions/MiscExpressions.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace circt;
 using namespace ImportVerilog;
 using moore::Domain;
+
+static mlir::LLVM::LLVMFuncOp
+getOrCreateRuntimeFunc(Context &context, StringRef name,
+                       mlir::LLVM::LLVMFunctionType funcType) {
+  auto module = context.intoModuleOp;
+  if (auto existing = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(name))
+    return existing;
+  mlir::OpBuilder::InsertionGuard guard(context.builder);
+  context.builder.setInsertionPointToStart(module.getBody());
+  auto func = mlir::LLVM::LLVMFuncOp::create(context.builder, module.getLoc(),
+                                             name, funcType);
+  func.setLinkage(mlir::LLVM::Linkage::External);
+  return func;
+}
 
 /// Convert a Slang `SVInt` to a CIRCT `FVInt`.
 static FVInt convertSVIntToFVInt(const slang::SVInt &svint) {
@@ -3413,6 +3428,196 @@ struct RvalueExprVisitor : public ExprVisitor {
       mlir::emitWarning(loc) << "covergroup method '" << subroutine->name
                              << "' is not yet implemented; lowering as "
                                 "regular function call";
+    }
+
+    // Handle mailbox built-in method calls (put, get, try_put, try_get, num).
+    // IEEE 1800-2017 Section 15.4 "Mailboxes"
+    // Mailbox is a built-in parameterized class. Its methods have the BuiltIn
+    // flag and the parent scope is a ClassType named "mailbox".
+    if ((subroutine->flags & slang::ast::MethodFlags::BuiltIn) &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name == "mailbox") {
+        // Get the mailbox instance (the 'this' object)
+        Value mailboxInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          mailboxInstance = context.convertRvalueExpression(*recvExpr);
+          if (!mailboxInstance)
+            return {};
+        }
+
+        if (!mailboxInstance) {
+          mlir::emitError(loc) << "mailbox method call requires mailbox instance";
+          return {};
+        }
+
+        // The mailbox instance is a class handle. We need to get the mailbox ID
+        // which is stored as a 64-bit integer inside the mailbox object.
+        // For now, we'll use the class handle value directly as the mailbox ID
+        // since our runtime represents mailboxes by their handle addresses.
+        auto i64Ty = builder.getIntegerType(64);
+        auto i1Ty = builder.getIntegerType(1);
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+
+        // Convert the mailbox handle to an i64 mailbox ID
+        Value mboxId = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, i64Ty, mailboxInstance)
+                           .getResult(0);
+
+        // Handle blocking put: mbox.put(msg)
+        if (subroutine->name == "put") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.put() requires a message argument";
+            return {};
+          }
+          // Convert the message argument to i64
+          Value msgArg = context.convertRvalueExpression(*expr.arguments()[0]);
+          if (!msgArg)
+            return {};
+          Value msg = mlir::UnrealizedConversionCastOp::create(
+                          builder, loc, i64Ty, msgArg)
+                          .getResult(0);
+
+          // Declare and call __moore_mailbox_put
+          auto putFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(mlir::LLVM::LLVMVoidType::get(context.getContext()),
+                                                {i64Ty, i64Ty});
+          auto putFunc =
+              getOrCreateRuntimeFunc(context, "__moore_mailbox_put", putFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, putFunc, ValueRange{mboxId, msg});
+
+          // put() returns void - return a dummy value
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Handle blocking get: mbox.get(msg)
+        if (subroutine->name == "get") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.get() requires an output argument";
+            return {};
+          }
+          // Get the lvalue for the output argument
+          Value msgOutLvalue = context.convertLvalueExpression(*expr.arguments()[0]);
+          if (!msgOutLvalue)
+            return {};
+
+          // Allocate temporary storage for the message
+          auto c1 = builder.create<mlir::LLVM::ConstantOp>(
+              loc, i64Ty, builder.getI64IntegerAttr(1));
+          Value msgOut = mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, i64Ty, c1, 0);
+
+          // Declare and call __moore_mailbox_get
+          auto getFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(mlir::LLVM::LLVMVoidType::get(context.getContext()),
+                                                {i64Ty, ptrTy});
+          auto getFunc =
+              getOrCreateRuntimeFunc(context, "__moore_mailbox_get", getFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, getFunc, ValueRange{mboxId, msgOut});
+
+          // Load the result and store it to the output argument
+          Value msgResult = mlir::LLVM::LoadOp::create(builder, loc, i64Ty, msgOut);
+          auto outType = cast<moore::RefType>(msgOutLvalue.getType()).getNestedType();
+          Value convertedMsg = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, outType, msgResult)
+                                   .getResult(0);
+          moore::BlockingAssignOp::create(builder, loc, msgOutLvalue, convertedMsg);
+
+          // get() returns void - return a dummy value
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Handle non-blocking try_put: mbox.try_put(msg)
+        if (subroutine->name == "try_put") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.try_put() requires a message argument";
+            return {};
+          }
+          // Convert the message argument to i64
+          Value msgArg = context.convertRvalueExpression(*expr.arguments()[0]);
+          if (!msgArg)
+            return {};
+          Value msg = mlir::UnrealizedConversionCastOp::create(
+                          builder, loc, i64Ty, msgArg)
+                          .getResult(0);
+
+          // Declare and call __moore_mailbox_tryput
+          auto tryputFuncTy = mlir::LLVM::LLVMFunctionType::get(i1Ty, {i64Ty, i64Ty});
+          auto tryputFunc = getOrCreateRuntimeFunc(
+              context, "__moore_mailbox_tryput", tryputFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, tryputFunc,
+                                                   ValueRange{mboxId, msg});
+
+          // Convert result to moore int type
+          auto resultType = context.convertType(*expr.type);
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        // Handle non-blocking try_get: mbox.try_get(msg)
+        if (subroutine->name == "try_get") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.try_get() requires an output argument";
+            return {};
+          }
+          // Get the lvalue for the output argument
+          Value msgOutLvalue = context.convertLvalueExpression(*expr.arguments()[0]);
+          if (!msgOutLvalue)
+            return {};
+
+          // Allocate temporary storage for the message
+          auto c1 = builder.create<mlir::LLVM::ConstantOp>(
+              loc, i64Ty, builder.getI64IntegerAttr(1));
+          Value msgOut = mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, i64Ty, c1, 0);
+
+          // Declare and call __moore_mailbox_tryget
+          auto trygetFuncTy = mlir::LLVM::LLVMFunctionType::get(i1Ty, {i64Ty, ptrTy});
+          auto trygetFunc = getOrCreateRuntimeFunc(
+              context, "__moore_mailbox_tryget", trygetFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, trygetFunc,
+                                                   ValueRange{mboxId, msgOut});
+
+          // Load the result and store it to the output argument
+          Value msgResult = mlir::LLVM::LoadOp::create(builder, loc, i64Ty, msgOut);
+          auto outType = cast<moore::RefType>(msgOutLvalue.getType()).getNestedType();
+          Value convertedMsg = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, outType, msgResult)
+                                   .getResult(0);
+          moore::BlockingAssignOp::create(builder, loc, msgOutLvalue, convertedMsg);
+
+          // Convert result to moore int type
+          auto resultType = context.convertType(*expr.type);
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        // Handle num: mbox.num()
+        if (subroutine->name == "num") {
+          // Declare and call __moore_mailbox_num
+          auto numFuncTy = mlir::LLVM::LLVMFunctionType::get(i64Ty, {i64Ty});
+          auto numFunc =
+              getOrCreateRuntimeFunc(context, "__moore_mailbox_num", numFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, numFunc,
+                                                   ValueRange{mboxId});
+
+          // Convert result to moore int type
+          auto resultType = context.convertType(*expr.type);
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        // Fall through for unhandled mailbox methods
+        mlir::emitWarning(loc) << "mailbox method '" << subroutine->name
+                               << "' is not yet implemented";
+      }
     }
 
     // Check if this is an interface method call (task/function defined inside

@@ -2007,6 +2007,7 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
   ScopedInputValueMap inputScope(*this, state.inputMap);
 
   InterpretedValue clkVal = evaluateContinuousValue(regOp.getClk());
+
   bool clockPosedge = false;
   if (!clkVal.isX()) {
     if (!state.hasPrevClock) {
@@ -3974,8 +3975,9 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto driveOp = dyn_cast<llhd::DriveOp>(op))
     return interpretDrive(procId, driveOp);
 
-  if (auto waitOp = dyn_cast<llhd::WaitOp>(op))
+  if (auto waitOp = dyn_cast<llhd::WaitOp>(op)) {
     return interpretWait(procId, waitOp);
+  }
 
   if (auto haltOp = dyn_cast<llhd::HaltOp>(op))
     return interpretHalt(procId, haltOp);
@@ -6312,6 +6314,24 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
         }
 
         InterpretedValue val = getValue(procId, input);
+
+        // Handle layout conversion between LLVM struct and HW struct types
+        Type inputType2 = input.getType();
+        Type outputType2 = output.getType();
+        if (!val.isX()) {
+          if ((isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(inputType2)) &&
+              (isa<hw::StructType, hw::ArrayType>(outputType2))) {
+            // LLVM -> HW layout conversion
+            APInt converted = convertLLVMToHWLayout(val.getAPInt(), inputType2, outputType2);
+            val = InterpretedValue(converted);
+          } else if ((isa<hw::StructType, hw::ArrayType>(inputType2)) &&
+                     (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(outputType2))) {
+            // HW -> LLVM layout conversion
+            APInt converted = convertHWToLLVMLayout(val.getAPInt(), inputType2, outputType2);
+            val = InterpretedValue(converted);
+          }
+        }
+
         // Adjust width if needed
         unsigned outputWidth = getTypeWidth(output.getType());
         if (!val.isX() && val.getWidth() != outputWidth) {
@@ -6595,47 +6615,27 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             memValue.insertBits(byteVal, i * 8);
           }
 
-          // Check if we need to convert from LLVM struct layout to HW struct
-          // layout. LLVM struct fields are at low-to-high bits, while HW struct
+          // Check if we need to convert from LLVM layout to HW layout.
+          // LLVM struct fields are at low-to-high bits, while HW struct
           // fields are at high-to-low bits.
           Type resultType = probeOp.getResult().getType();
-          if (auto hwStructType = dyn_cast<hw::StructType>(resultType)) {
-            Type allocaElemType = allocaOp.getElemType();
-            if (auto llvmStructType =
-                    dyn_cast<LLVM::LLVMStructType>(allocaElemType)) {
-              // Convert from LLVM layout to HW layout
-              auto hwElements = hwStructType.getElements();
-              auto llvmBody = llvmStructType.getBody();
-
-              // Build the HW struct value by extracting fields from LLVM
-              // positions and inserting at HW positions
-              APInt hwValue = APInt::getZero(width);
-              unsigned llvmBitOffset = 0;
-              unsigned hwBitOffset = width;
-
-              for (size_t i = 0; i < hwElements.size() && i < llvmBody.size();
-                   ++i) {
-                unsigned fieldWidth = getTypeWidth(hwElements[i].type);
-                hwBitOffset -= fieldWidth;
-
-                // Extract from LLVM position (low-to-high)
-                APInt fieldVal = memValue.extractBits(fieldWidth, llvmBitOffset);
-                // Insert at HW position (high-to-low)
-                hwValue.insertBits(fieldVal, hwBitOffset);
-
-                llvmBitOffset += fieldWidth;
-              }
-
-              setValue(procId, probeOp.getResult(), InterpretedValue(hwValue));
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  Probe of alloca (LLVM->HW struct conversion) = 0x"
-                         << llvm::format_hex(hwValue.getZExtValue(), 0)
-                         << " (width=" << width << ")\n");
-              return success();
-            }
+          Type allocaElemType = allocaOp.getElemType();
+          if (isa<hw::StructType, hw::ArrayType>(resultType) &&
+              isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(
+                  allocaElemType)) {
+            // Recursively convert from LLVM layout to HW layout so that
+            // nested structs and arrays are also properly reordered.
+            APInt hwValue =
+                convertLLVMToHWLayout(memValue, allocaElemType, resultType);
+            setValue(procId, probeOp.getResult(), InterpretedValue(hwValue));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe of alloca (LLVM->HW layout conversion) = 0x"
+                       << llvm::format_hex(hwValue.getZExtValue(), 0)
+                       << " (width=" << width << ")\n");
+            return success();
           }
 
-          // No struct conversion needed - use value as-is
+          // No layout conversion needed - use value as-is
           setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
           LLVM_DEBUG(llvm::dbgs()
                      << "  Probe of alloca = 0x"
@@ -7033,9 +7033,58 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 }
               }
 
-              // Insert the new field value at the computed bit offset
+              // Insert the new field value at the computed bit offset.
+              // The drive value is in HW layout, but the alloca stores
+              // in LLVM layout. Convert if the field is a struct/array.
               APInt fieldValue = driveVal.isX() ? APInt::getZero(fieldWidth)
                                                 : driveVal.getAPInt();
+              if (!driveVal.isX() &&
+                  isa<hw::StructType, hw::ArrayType>(currentType)) {
+                // Find the corresponding LLVM type for conversion
+                Type hwFieldType = currentType;
+                Type llvmFieldType;
+                // Try to get the LLVM type from the alloca's original type
+                if (auto allocaPtrType =
+                        dyn_cast<LLVM::LLVMPointerType>(allocaOp.getType())) {
+                  // The alloca elem type corresponds to the parent signal type
+                  // We need to find the LLVM field type at the same position
+                  Type allocElemType = allocaOp.getElemType();
+                  if (allocElemType) {
+                    Type curLLVM = allocElemType;
+                    for (auto it2 = extractChain.rbegin();
+                         it2 != extractChain.rend(); ++it2) {
+                      auto extractOp2 = *it2;
+                      Type rawType =
+                          it2 == extractChain.rbegin()
+                              ? parentSignal.getType()
+                              : (*(it2 - 1))->getResult(0).getType();
+                      // Unwrap RefType if present
+                      Type refInner = rawType;
+                      if (auto refT = dyn_cast<llhd::RefType>(rawType))
+                        refInner = refT.getNestedType();
+                      auto hwST = dyn_cast<hw::StructType>(refInner);
+                      if (!hwST) break;
+                      auto fidx = hwST.getFieldIndex(extractOp2.getField());
+                      if (!fidx) break;
+                      if (auto llvmST = dyn_cast<LLVM::LLVMStructType>(curLLVM)) {
+                        auto body = llvmST.getBody();
+                        if (*fidx < body.size())
+                          curLLVM = body[*fidx];
+                        else
+                          break;
+                      } else {
+                        break;
+                      }
+                    }
+                    llvmFieldType = curLLVM;
+                  }
+                }
+                if (llvmFieldType &&
+                    isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(llvmFieldType)) {
+                  fieldValue = convertHWToLLVMLayout(fieldValue, hwFieldType,
+                                                     llvmFieldType);
+                }
+              }
               if (fieldValue.getBitWidth() < fieldWidth)
                 fieldValue = fieldValue.zext(fieldWidth);
               else if (fieldValue.getBitWidth() > fieldWidth)
@@ -10206,6 +10255,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     return success();
   }
 
+  // Signal not resolved - going to memory
   // Get the pointer value first
   InterpretedValue ptrVal = getValue(procId, storeOp.getAddr());
 

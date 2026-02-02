@@ -1,5 +1,9 @@
 // RUN: circt-opt %s --lower-ltl-to-core | FileCheck %s
 
+// Test that clocked assertions with implication properties are properly lowered.
+// The implication tracking requires state registers to track when the antecedent
+// has been seen.
+
 module {
   hw.module @test(in %clock : !seq.clock, in %a : i1) {
     %clk = seq.from_clock %clock
@@ -11,5 +15,6 @@ module {
 }
 
 // CHECK: hw.module @test
+// CHECK: seq.compreg sym @ltl_state
 // CHECK: seq.compreg sym @ltl_implication_seen
-// CHECK: seq.compreg sym @ltl_past
+// CHECK: verif.assert {{.*}} {bmc.clock = "clock"

@@ -19,6 +19,21 @@ hw.module @lower_lec_llvm_structs(in %in : !hw.struct<value: i1, unknown: i1>,
 // CHECK: hw.struct_create
 // CHECK-NOT: llvm.
 
+hw.module @lower_lec_llvm_structs_undef_unknown_zero(
+    in %in : i1,
+    out out : !hw.struct<value: i1, unknown: i1>) {
+  %undef = llvm.mlir.undef : !llvm.struct<(i1, i1)>
+  %tmp0 = llvm.insertvalue %in, %undef[0] : !llvm.struct<(i1, i1)>
+  %cast = builtin.unrealized_conversion_cast %tmp0 : !llvm.struct<(i1, i1)> to !hw.struct<value: i1, unknown: i1>
+  hw.output %cast : !hw.struct<value: i1, unknown: i1>
+}
+
+// CHECK-LABEL: hw.module @lower_lec_llvm_structs_undef_unknown_zero
+// CHECK: %[[ZERO:.*]] = hw.constant false
+// CHECK: %[[OUT:.*]] = hw.struct_create (%in, %[[ZERO]]) : !hw.struct<value: i1, unknown: i1>
+// CHECK: hw.output %[[OUT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK-NOT: llvm.
+
 hw.module @lower_lec_llvm_structs_multi_store(
     in %in : !hw.struct<value: i1, unknown: i1>,
     out out : !hw.struct<value: i1, unknown: i1>) {

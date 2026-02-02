@@ -268,6 +268,7 @@ Deliverables:
   - ✅ Added E2E X‑prop regression for non‑consecutive repetition.
   - ✅ Added E2E X‑prop regression for goto repetition.
   - ✅ Added E2E X‑prop regressions for $rose/$fell.
+  - ✅ Added E2E X‑prop regressions for $stable/$changed.
   - ✅ Added ImportVerilog regression for $stable/$changed logical equality.
   - ✅ Added E2E X‑prop regression for unbounded repetition.
   - ✅ Added E2E X‑prop regression for unbounded delay ranges.
@@ -314,6 +315,14 @@ Key work:
   error signal for automated runs.
 - ✅ Ensure JIT path uses Z3 model evaluation to emit per-input counterexamples
   when `--print-counterexample` is set.
+- ✅ Strict LEC now lowers `hw.inout` ports and resolves 4-state read/write
+  against internal drives (2-state read/write still unsupported).
+- ✅ Strict LEC now supports struct-field inout accesses by lifting them to
+  explicit read/write ports.
+- ✅ Strict LEC now supports constant and dynamic array-index inout accesses by
+  lifting them to explicit read/write ports, including nested dynamic indices
+  and struct/constant-array suffixes. Dynamic indices still reject other
+  writers to the same array unless 4-state resolution is enabled.
 
 Deliverables:
 - New tests in test/Conversion/VerifToSMT and LEC-specific test folder.

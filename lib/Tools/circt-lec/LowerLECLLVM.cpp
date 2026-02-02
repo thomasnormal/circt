@@ -20,6 +20,7 @@
 #include "circt/Support/LLVM.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
@@ -1116,10 +1117,10 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
                         /*zeroUnknown=*/true);
   if (!init)
     return false;
-  auto sig =
-      llhd::SignalOp::create(sigBuilder, castOp.getLoc(), refType,
-                             StringAttr{}, init)
-          .getResult();
+  auto sigOp = llhd::SignalOp::create(sigBuilder, castOp.getLoc(), refType,
+                                      StringAttr{}, init);
+  sigOp->setAttr("lec.local", UnitAttr::get(sigBuilder.getContext()));
+  auto sig = sigOp.getResult();
   allocaSignals[alloca.getResult()] = sig;
 
   for (auto refCast : refCasts) {

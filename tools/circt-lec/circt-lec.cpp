@@ -473,6 +473,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
 
   SmallVector<std::string> lecInputNames;
+  SmallVector<std::string> lecOutputNames;
   if (outputFormat == OutputRunSMTLIB && wantSolverOutput) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
@@ -480,6 +481,10 @@ static LogicalResult executeLEC(MLIRContext &context) {
         if (auto strAttr = dyn_cast<StringAttr>(name))
           if (!strAttr.getValue().empty())
             lecInputNames.push_back(strAttr.getValue().str());
+      for (auto name : moduleA.getOutputNames())
+        if (auto strAttr = dyn_cast<StringAttr>(name))
+          if (!strAttr.getValue().empty())
+            lecOutputNames.push_back(strAttr.getValue().str());
     }
   }
 
@@ -804,6 +809,27 @@ static LogicalResult executeLEC(MLIRContext &context) {
           printed = true;
         }
         llvm::errs() << "  " << name << " = " << *value << "\n";
+      }
+      if (!lecOutputNames.empty()) {
+        bool printedOutputs = false;
+        for (size_t i = 0; i < lecOutputNames.size(); ++i) {
+          std::string c1Name = ("c1_out" + Twine(i)).str();
+          std::string c2Name = ("c2_out" + Twine(i)).str();
+          auto c1Value = findValue(c1Name);
+          auto c2Value = findValue(c2Name);
+          if (!c1Value && !c2Value)
+            continue;
+          if (!printedOutputs) {
+            llvm::errs() << "counterexample outputs:\n";
+            printedOutputs = true;
+          }
+          StringRef label = lecOutputNames[i].empty()
+                                ? StringRef("out") : StringRef(lecOutputNames[i]);
+          if (c1Value)
+            llvm::errs() << "  " << label << " (c1) = " << *c1Value << "\n";
+          if (c2Value)
+            llvm::errs() << "  " << label << " (c2) = " << *c2Value << "\n";
+        }
       }
     };
     if (token && *token == "unsat") {

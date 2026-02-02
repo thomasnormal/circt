@@ -430,8 +430,14 @@ TEST(LowerLECLLVMTest, LowersAllocaBackedLLHDRef) {
   EXPECT_FALSE(hasLLVM);
 
   bool sawSignal = false;
-  module->walk([&](circt::llhd::SignalOp) { sawSignal = true; });
+  bool sawLocalSignal = false;
+  module->walk([&](circt::llhd::SignalOp op) {
+    sawSignal = true;
+    if (op->hasAttr("lec.local"))
+      sawLocalSignal = true;
+  });
   EXPECT_TRUE(sawSignal);
+  EXPECT_TRUE(sawLocalSignal);
 }
 
 TEST(LowerLECLLVMTest, LowersAllocaBackedLLHDRefWithCast) {

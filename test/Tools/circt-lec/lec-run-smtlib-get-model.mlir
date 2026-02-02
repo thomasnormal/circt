@@ -14,4 +14,7 @@ hw.module @modB(in %in: i1, in %in2: i8, in %in3: i72, out out: i1) {
 // CHECK-DAG: in = true
 // CHECK-DAG: in2 = 8'h05
 // CHECK-DAG: in3 = 72'h010000000000000001
+// CHECK: counterexample outputs:
+// CHECK-DAG: out (c1) = 8'hA5
+// CHECK-DAG: out (c2) = 8'h05
 // CHECK: c1 != c2
