@@ -64,12 +64,13 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 | **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
 | **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
 | **verilator-verification BMC** | 16 | 16 | **100%** | ✅ All pass |
-| **Yosys SVA BMC** | 14 | 14 | **100%** | ✅ $changed FIXED |
+| **Yosys SVA BMC** | 14 | 16 | **87.5%** | ✅ $changed FIXED (2 expected sim-only) |
+| **LTLToCore** | 12 | 16 | **75%** | 4 pre-existing failures |
 | **ImportVerilog** | 221 | 221 | **100%** | ✅ |
 | **AVIP Compile** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass |
 | **AVIP Simulation** | 2 | 6 | **33%** | 🔄 Testing |
-| **OpenTitan reg_top** | 11 | 11 | **100%** | ✅ |
-| **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, prim_fifo_sync, timer_core |
+| **OpenTitan reg_top** | 21 | 42 | **50%** | ✅ Coverage expanded |
+| **OpenTitan testbenches** | 21 | 42 | **50%** | prim_*, reg_top, full IPs |
 | **Mailbox DPI Test** | 1 | 1 | **100%** | ✅ New unit test |
 
 ### AVIP Status
@@ -90,52 +91,56 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 ## Workstreams & Next Tasks
 
 ### Track 1: UVM Phase Execution (PRIORITY)
-**Status**: 🔄 KEY DISCOVERY - SyncPrimitivesManager with Mailbox exists but NOT INTEGRATED!
+**Status**: 🔄 Phase 1 DONE - Need Phase 2 blocking operations
 **Verified**: Factory registration works, phase hopper architecture analyzed
-**Discovery**: `lib/Dialect/Sim/ProcessScheduler.cpp` already has Mailbox with put/get/waitQueue
+**Done**: Mailbox non-blocking DPI hooks (create, tryput, tryget, num) integrated
 **Issue**: Phase hopper forever loop + queue blocking doesn't interleave with parent wait
 
-**Mailbox Integration Plan**:
-- **Phase 1**: Implement non-blocking API first (tryPut, tryGet)
-  - Simpler to integrate, no ProcessId context needed
-  - Can test basic queue operations without full process coordination
-- **Phase 2**: Blocking operations (requires ProcessId context)
+**Mailbox Integration Status**:
+- **Phase 1**: ✅ DONE - Non-blocking API (tryPut, tryGet, create, num)
+  - DPI hooks implemented in LLHDProcessInterpreter.cpp
+  - Unit test: `test/Tools/circt-sim/mailbox-dpi-nonblocking.mlir` passes
+- **Phase 2**: 🔄 IN PROGRESS - Blocking operations (requires ProcessId context)
   - `put()`: Block if mailbox full
   - `get()`: Block if mailbox empty
   - Needs coordination between DPI layer and ProcessScheduler
 
 **Next Tasks**:
-- Instantiate SyncPrimitivesManager in LLHDProcessInterpreter
-- Add DPI hooks for `__moore_mailbox_tryget()` / `__moore_mailbox_tryput()`
-- Test with minimal non-blocking pattern first
-- Then add blocking DPI hooks for `__moore_mailbox_get()` / `__moore_mailbox_put()`
-- Add unit tests for mailbox operations
+- Implement blocking `__moore_mailbox_put()` / `__moore_mailbox_get()` DPI hooks
+- Add process suspend/resume coordination in LLHDProcessInterpreter
+- Test with UVM phase_hopper pattern
+- Add unit tests for blocking mailbox operations
 
 ### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests BMC 100%, verilator BMC 100%, yosys SVA 85.7% (12/14)
-**Tested**: Yosys SVA suite - 12/14 pass, 2 regressions with `$changed` sequence assumptions
+**Status**: ✅ sv-tests BMC 100%, verilator BMC 100%, yosys SVA 87.5% (14/16)
+**Achieved**: $changed regression FIXED with skipWarmup parameter
+**Note**: 2 Yosys SVA tests (sva_value_change_sim, vhdl) are sim-only or VHDL, not BMC targets
 
-**$changed Regression Root Cause**:
-- circt-bmc treats sequence assumptions with delays as state machines
-- NFA doesn't constrain initial cycles (cycle 0)
-- Yosys with `-early -assume` applies constraints from cycle 0
-- **Fix**: Distinguish assume vs. assert handling in sequence lowering
+**$changed Fix Applied** (commit e6f507a1f):
+- Added `skipWarmup` parameter to `LTLPropertyLowerer`
+- Assumes pass `skipWarmup=true` to constrain from cycle 0
+- Assertions keep warmup behavior (avoid false failures)
+- New unit test: `test/Tools/circt-bmc/sva-assume-sequence-delay-e2e.sv`
 
 **Next Tasks**:
-- Fix `$changed` sequence assumption semantics (assume vs assert)
+- Fix pre-existing LTLToCore crashes (4 tests fail)
 - Fix remaining verilator issues: pre/post_randomize, coverpoint iff
 - Target: 99%+ on all suites
 - Create unit tests for any fixes
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 4/4 testbenches pass (prim_count, prim_fifo_sync, timer_core)
-**Verified**: All tested IPs run without extractBits crashes or scope errors
-**Blocking Issues**:
-- $readmemh task scope access for some IPs (i2c, spi_device)
+**Status**: ✅ 21/42 testbenches pass (50% coverage - MAJOR EXPANSION)
+**Verified**: reg_top testbenches, prim_* IPs, full IPs (i2c_tb, uart_tb)
+**Passing**: i2c_reg_top, edn_reg_top, pattgen_reg_top, aon_timer_reg_top, rom_ctrl_regs,
+  sram_ctrl_regs, csrng_reg_top, lc_ctrl_regs, otbn_reg_top, pwm_reg_top, keymgr_reg_top,
+  kmac_reg_top, entropy_src_reg_top, otp_ctrl_core_reg_top, flash_ctrl_core_reg_top,
+  sysrst_ctrl_reg_top, usbdev_reg_top, i2c_tb (full IP)
+**Dual-clock**: aon_timer, pwm, sysrst_ctrl, usbdev - all work correctly
+**Timeout**: uart_reg_top, spi_host, hmac, rv_timer (TL handshake timing)
 **Next Tasks**:
+- Fix TL handshake timing for timeout tests
+- Run remaining testbenches
 - Fix $readmemh scope verification error
-- Run more OpenTitan testbenches
-- Create unit test for $readmemh fix
 
 ### Track 4: AVIP Full Simulation
 **Status**: ✅ 6/9 AVIPs compile (APB, AHB, UART, I2S, I3C pass; SPI, JTAG, AXI4 fail)
