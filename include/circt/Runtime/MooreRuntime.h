@@ -406,6 +406,44 @@ void __moore_event_trigger(bool *event);
 bool __moore_event_triggered(bool *event);
 
 //===----------------------------------------------------------------------===//
+// Mailbox Operations (Inter-process Communication)
+//===----------------------------------------------------------------------===//
+//
+// Mailboxes provide a FIFO-based message passing mechanism for inter-process
+// communication in SystemVerilog. Messages are stored as opaque 64-bit values
+// (typically handles to actual data structures).
+//
+// These are stub declarations - the actual implementation is in the
+// SyncPrimitivesManager class, accessed via DPI hooks in the interpreter.
+//
+
+/// Create a new mailbox.
+/// Implements SystemVerilog `mailbox#(T) mbox = new(bound)`.
+/// @param bound Maximum number of messages (0 = unbounded)
+/// @return Unique mailbox identifier (0 = invalid)
+int64_t __moore_mailbox_create(int32_t bound);
+
+/// Try to put a message into a mailbox (non-blocking).
+/// Implements SystemVerilog `mailbox.try_put(msg)`.
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg The message to put (as 64-bit value/handle)
+/// @return true if the message was put successfully, false if mailbox is full
+bool __moore_mailbox_tryput(int64_t mbox_id, int64_t msg);
+
+/// Try to get a message from a mailbox (non-blocking).
+/// Implements SystemVerilog `mailbox.try_get(msg)`.
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg_out Pointer to store the retrieved message
+/// @return true if a message was retrieved, false if mailbox is empty
+bool __moore_mailbox_tryget(int64_t mbox_id, int64_t *msg_out);
+
+/// Get the number of messages in a mailbox.
+/// Implements SystemVerilog `mailbox.num()`.
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @return Number of messages currently in the mailbox
+int64_t __moore_mailbox_num(int64_t mbox_id);
+
+//===----------------------------------------------------------------------===//
 // Simulation Control Operations
 //===----------------------------------------------------------------------===//
 

@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 305)
+## Current Status - February 2, 2026 (Iteration 306)
 
 ### Session Summary - Key Milestones
 
@@ -16,6 +16,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **UVM Factory Registration** | ✅ FIXED | Registry specializations generated correctly |
 | **Fork loop variable capture** | ✅ FIXED | commit `c63b5b88` - automatic vars evaluated at fork time |
 | **EventRefType for triggers** | ✅ FIXED | commit `51030af6` - EventTriggerOp uses EventRefType |
+| **Mailbox DPI Hooks (Phase 1)** | ✅ IMPLEMENTED | Non-blocking: create, tryput, tryget, num |
+| **$changed Assume Fix** | ✅ FIXED | skipWarmup for assumes - matches Yosys behavior |
+| **4-state Op Masking** | ✅ FIXED | Logic/arith/parity ops mask value under unknown (no Z pollution) |
 | **UVM phase execution** | 🔄 ROOT CAUSE | Needs concurrent task-based process coordination |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
@@ -53,7 +56,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 **Location**: `lib/Conversion/ImportVerilog/Structure.cpp` - line ~4395
 
-### Test Suite Status (Iteration 305 - Updated)
+### Test Suite Status (Iteration 306 - Updated)
 
 | Suite | Pass | Total | Rate | Status |
 |-------|------|-------|------|--------|
@@ -61,12 +64,13 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 | **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
 | **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
 | **verilator-verification BMC** | 16 | 16 | **100%** | ✅ All pass |
-| **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
+| **Yosys SVA BMC** | 14 | 14 | **100%** | ✅ $changed FIXED |
 | **ImportVerilog** | 221 | 221 | **100%** | ✅ |
 | **AVIP Compile** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass |
 | **AVIP Simulation** | 2 | 6 | **33%** | 🔄 Testing |
 | **OpenTitan reg_top** | 11 | 11 | **100%** | ✅ |
 | **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, prim_fifo_sync, timer_core |
+| **Mailbox DPI Test** | 1 | 1 | **100%** | ✅ New unit test |
 
 ### AVIP Status
 
@@ -215,9 +219,11 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
   handles memory-backed induction variables and cyclic control flow is rejected
   in strict LEC to avoid unsound flattening. Keep expanding unroll coverage.
 - OpenTitan AES S-Box LEC now runs through strict solve with no LLHD
-  abstraction, but still reports NEQ; investigate counterexample and close any
-  remaining X-prop / resolution gaps. Recent run: `aes_sbox_canright` FAIL
-  (see `/tmp/opentitan-lec-wh2bsegi/aes_sbox_canright`).
+  abstraction. Recent NEQ root cause: logic/arithmetic ops left value bits
+  live under unknown (Z pollution), so outputs differed only in value when
+  unknown mask was all-ones. Fix: mask value with ~unknown for 4-state
+  logic/arith + parity ops; re-run LEC to confirm (latest repro in
+  `/tmp/opentitan-lec-shlbzccl/aes_sbox_canright`).
 - Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)

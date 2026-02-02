@@ -114,9 +114,13 @@ struct LTLPropertyLowerer {
   DenseMap<Value, Value> posedgeTicks;
   DenseMap<Value, Value> negedgeTicks;
   DenseMap<Value, Value> bothedgeTicks;
+  // For assumes, we skip the warmup period since constraints should apply from
+  // cycle 0. Assertions need warmup to avoid false failures during sequence
+  // startup. This matches Yosys behavior with `-early -assume`.
+  bool skipWarmup;
 
-  LTLPropertyLowerer(OpBuilder &builder, Location loc)
-      : builder(builder), loc(loc), disable() {}
+  LTLPropertyLowerer(OpBuilder &builder, Location loc, bool skipWarmup = false)
+      : builder(builder), loc(loc), disable(), skipWarmup(skipWarmup) {}
 
   Value getClockTick(Value clockSignal, ltl::ClockEdge edge, Value outerClock) {
     if (!outerClock)
@@ -518,16 +522,21 @@ struct LTLPropertyLowerer {
       auto match = lowerSequence(prop, clock, edge);
       if (!match)
         return {Value(), {}};
-      if (auto bounds = getSequenceLengthBounds(prop)) {
-        if (bounds->first == bounds->second && bounds->first > 0) {
-          uint64_t shift = bounds->first - 1;
-          if (shift > 0) {
-            auto warmup = shiftValue(trueVal, shift, clock);
-            auto notWarmup = comb::XorOp::create(
-                builder, loc, warmup,
-                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-            match = comb::OrOp::create(
-                builder, loc, SmallVector<Value, 2>{notWarmup, match}, true);
+      // Skip warmup for assumes - constraints should apply from cycle 0.
+      // Only assertions need warmup to avoid false failures during sequence
+      // startup.
+      if (!skipWarmup) {
+        if (auto bounds = getSequenceLengthBounds(prop)) {
+          if (bounds->first == bounds->second && bounds->first > 0) {
+            uint64_t shift = bounds->first - 1;
+            if (shift > 0) {
+              auto warmup = shiftValue(trueVal, shift, clock);
+              auto notWarmup = comb::XorOp::create(
+                  builder, loc, warmup,
+                  hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+              match = comb::OrOp::create(
+                  builder, loc, SmallVector<Value, 2>{notWarmup, match}, true);
+            }
           }
         }
       }
@@ -568,18 +577,21 @@ struct LTLPropertyLowerer {
       Value neg = comb::XorOp::create(
           builder, loc, inner.safety,
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-      if (auto bounds = getSequenceLengthBounds(notOp.getInput())) {
-        if (bounds->first == bounds->second && bounds->first > 0 && clock) {
-          uint64_t shift = bounds->first - 1;
-          if (shift > 0) {
-            auto trueVal =
-                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-            auto warmup = shiftValue(trueVal, shift, clock);
-            auto notWarmup = comb::XorOp::create(
-                builder, loc, warmup,
-                hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-            neg = comb::OrOp::create(
-                builder, loc, SmallVector<Value, 2>{notWarmup, neg}, true);
+      // Skip warmup for assumes - constraints should apply from cycle 0.
+      if (!skipWarmup) {
+        if (auto bounds = getSequenceLengthBounds(notOp.getInput())) {
+          if (bounds->first == bounds->second && bounds->first > 0 && clock) {
+            uint64_t shift = bounds->first - 1;
+            if (shift > 0) {
+              auto trueVal =
+                  hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+              auto warmup = shiftValue(trueVal, shift, clock);
+              auto notWarmup = comb::XorOp::create(
+                  builder, loc, warmup,
+                  hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
+              neg = comb::OrOp::create(
+                  builder, loc, SmallVector<Value, 2>{notWarmup, neg}, true);
+            }
           }
         }
       }
@@ -1221,7 +1233,9 @@ void LowerLTLToCorePass::runOnOperation() {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
-    LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    // skipWarmup=true: Assumes should constrain from cycle 0, not wait for
+    // sequence warmup. This matches Yosys behavior with `-early -assume`.
+    LTLPropertyLowerer lowerer{builder, op.getLoc(), /*skipWarmup=*/true};
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
@@ -1308,7 +1322,9 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     auto clockName = resolveClockInputName(op.getClock());
-    LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    // skipWarmup=true: Assumes should constrain from cycle 0, not wait for
+    // sequence warmup. This matches Yosys behavior with `-early -assume`.
+    LTLPropertyLowerer lowerer{builder, op.getLoc(), /*skipWarmup=*/true};
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
     auto normalizedClock = lowerer.normalizeClock(op.getClock(), ltlEdge);

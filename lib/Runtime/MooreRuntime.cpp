@@ -1753,6 +1753,44 @@ extern "C" bool __moore_event_triggered(bool *event) {
 }
 
 //===----------------------------------------------------------------------===//
+// Mailbox Operations (Stubs)
+//===----------------------------------------------------------------------===//
+//
+// These are stub implementations for the mailbox runtime functions.
+// The actual implementation is in SyncPrimitivesManager, accessed via
+// DPI hooks in the interpreter. These stubs exist for:
+// 1. Link compatibility when compiling SystemVerilog to native code
+// 2. Documentation of the expected function signatures
+//
+
+extern "C" int64_t __moore_mailbox_create(int32_t bound) {
+  // Stub: In compiled simulation, this would allocate a real mailbox.
+  // The interpreter handles this via SyncPrimitivesManager.
+  (void)bound;
+  return 0; // Invalid mailbox ID
+}
+
+extern "C" bool __moore_mailbox_tryput(int64_t mbox_id, int64_t msg) {
+  // Stub: Non-blocking put - returns false (mailbox full/invalid)
+  (void)mbox_id;
+  (void)msg;
+  return false;
+}
+
+extern "C" bool __moore_mailbox_tryget(int64_t mbox_id, int64_t *msg_out) {
+  // Stub: Non-blocking get - returns false (mailbox empty/invalid)
+  (void)mbox_id;
+  (void)msg_out;
+  return false;
+}
+
+extern "C" int64_t __moore_mailbox_num(int64_t mbox_id) {
+  // Stub: Returns 0 (empty or invalid mailbox)
+  (void)mbox_id;
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
 // Simulation Control Operations
 //===----------------------------------------------------------------------===//
 
