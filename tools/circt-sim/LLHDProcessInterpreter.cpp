@@ -11406,6 +11406,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                     << " newDataAddr=0x" << llvm::format_hex(newDataAddr, 16)
                                     << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
+
+            // Queue content changed - check if any process is waiting on memory events
+            checkMemoryEventWaiters();
           }
         }
       }
@@ -11499,6 +11502,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_pop_back("
                                 << "queue=0x" << llvm::format_hex(queueAddr, 16)
                                 << ") = " << result << "\n");
+
+        // Queue content changed - check if any process is waiting on memory events
+        checkMemoryEventWaiters();
       }
       return success();
     }
@@ -11549,6 +11555,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_pop_front("
                                 << "queue=0x" << llvm::format_hex(queueAddr, 16)
                                 << ") = " << result << "\n");
+
+        // Queue content changed - check if any process is waiting on memory events
+        checkMemoryEventWaiters();
       }
       return success();
     }
@@ -12037,14 +12046,47 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t msg = getValue(procId, callOp.getOperand(1)).getUInt64();
 
-        bool success = syncPrimitivesManager.mailboxTryPut(mboxId, msg);
+        bool putSuccess = syncPrimitivesManager.mailboxTryPut(mboxId, msg);
 
         setValue(procId, callOp.getResult(),
-                 InterpretedValue(success ? 1ULL : 0ULL, 1));
+                 InterpretedValue(putSuccess ? 1ULL : 0ULL, 1));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_tryput("
                                 << mboxId << ", " << msg << ") = "
-                                << (success ? "true" : "false") << "\n");
+                                << (putSuccess ? "true" : "false") << "\n");
+
+        // If put succeeded, try to wake a waiting get process
+        if (putSuccess) {
+          Mailbox *mbox = syncPrimitivesManager.getMailbox(mboxId);
+          if (mbox) {
+            uint64_t waiterMsg = 0;
+            ProcessId waiterId = mbox->trySatisfyGetWaiter(waiterMsg);
+            if (waiterId != InvalidProcessId) {
+              // Found a waiter - write the message to their output address
+              auto waiterIt = processStates.find(waiterId);
+              if (waiterIt != processStates.end()) {
+                auto &waiterState = waiterIt->second;
+                if (waiterState.pendingMailboxGetResultAddr != 0) {
+                  uint64_t outOffset = 0;
+                  auto *outBlock = findMemoryBlockByAddress(
+                      waiterState.pendingMailboxGetResultAddr, waiterId, &outOffset);
+                  if (outBlock) { outBlock->initialized = true;
+                    for (int i = 0; i < 8; ++i)
+                      outBlock->data[outOffset + i] =
+                          static_cast<uint8_t>((waiterMsg >> (i * 8)) & 0xFF);
+                  }
+                }
+                waiterState.pendingMailboxGetResultAddr = 0;
+                waiterState.pendingMailboxGetId = 0;
+                waiterState.waiting = false;
+                scheduler.scheduleProcess(waiterId, SchedulingRegion::Active);
+                LLVM_DEBUG(llvm::dbgs() << "    Woke get waiter process "
+                                        << waiterId << " with message "
+                                        << waiterMsg << "\n");
+              }
+            }
+          }
+        }
       }
       return success();
     }
@@ -12058,13 +12100,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t msgOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
         uint64_t msg = 0;
-        bool success = syncPrimitivesManager.mailboxTryGet(mboxId, msg);
+        bool getSuccess = syncPrimitivesManager.mailboxTryGet(mboxId, msg);
 
         // Write the message to the output pointer if successful
-        if (success && msgOutAddr != 0) {
+        if (getSuccess && msgOutAddr != 0) {
           uint64_t outOffset = 0;
           auto *outBlock = findMemoryBlockByAddress(msgOutAddr, procId, &outOffset);
-          if (outBlock && outBlock->initialized) {
+          if (outBlock) { outBlock->initialized = true;
             // Write 64-bit message value
             for (int i = 0; i < 8; ++i)
               outBlock->data[outOffset + i] =
@@ -12073,14 +12115,32 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         setValue(procId, callOp.getResult(),
-                 InterpretedValue(success ? 1ULL : 0ULL, 1));
+                 InterpretedValue(getSuccess ? 1ULL : 0ULL, 1));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_tryget("
                                 << mboxId << ", 0x"
                                 << llvm::format_hex(msgOutAddr, 16) << ") = "
-                                << (success ? "true" : "false");
-                   if (success) llvm::dbgs() << ", msg=" << msg;
+                                << (getSuccess ? "true" : "false");
+                   if (getSuccess) llvm::dbgs() << ", msg=" << msg;
                    llvm::dbgs() << "\n");
+
+        // If get succeeded, try to wake a waiting put process (for bounded mailboxes)
+        if (getSuccess) {
+          Mailbox *mbox = syncPrimitivesManager.getMailbox(mboxId);
+          if (mbox) {
+            ProcessId waiterId = mbox->trySatisfyPutWaiter();
+            if (waiterId != InvalidProcessId) {
+              // Found a put waiter - their message was already added by trySatisfyPutWaiter
+              auto waiterIt = processStates.find(waiterId);
+              if (waiterIt != processStates.end()) {
+                waiterIt->second.waiting = false;
+                scheduler.scheduleProcess(waiterId, SchedulingRegion::Active);
+                LLVM_DEBUG(llvm::dbgs() << "    Woke put waiter process "
+                                        << waiterId << "\n");
+              }
+            }
+          }
+        }
       }
       return success();
     }
@@ -12099,6 +12159,150 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_num("
                                 << mboxId << ") = " << count << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_put - blocking put
+    // Signature: (mbox_id: i64, msg: i64) -> void
+    // Blocks if the mailbox is full (bounded mailbox)
+    if (calleeName == "__moore_mailbox_put") {
+      if (callOp.getNumOperands() >= 2) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msg = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        // Try non-blocking put first
+        if (syncPrimitivesManager.mailboxTryPut(mboxId, msg)) {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_put("
+                                  << mboxId << ", " << msg
+                                  << ") - message sent immediately\n");
+
+          // Try to wake a waiting get process
+          Mailbox *mbox = syncPrimitivesManager.getMailbox(mboxId);
+          if (mbox) {
+            uint64_t waiterMsg = 0;
+            ProcessId waiterId = mbox->trySatisfyGetWaiter(waiterMsg);
+            if (waiterId != InvalidProcessId) {
+              // Found a waiter - write the message to their output address
+              auto waiterIt = processStates.find(waiterId);
+              if (waiterIt != processStates.end()) {
+                auto &waiterState = waiterIt->second;
+                if (waiterState.pendingMailboxGetResultAddr != 0) {
+                  uint64_t outOffset = 0;
+                  auto *outBlock = findMemoryBlockByAddress(
+                      waiterState.pendingMailboxGetResultAddr, waiterId, &outOffset);
+                  if (outBlock) { outBlock->initialized = true;
+                    for (int i = 0; i < 8; ++i)
+                      outBlock->data[outOffset + i] =
+                          static_cast<uint8_t>((waiterMsg >> (i * 8)) & 0xFF);
+                  }
+                }
+                waiterState.pendingMailboxGetResultAddr = 0;
+                waiterState.pendingMailboxGetId = 0;
+                waiterState.waiting = false;
+                scheduler.scheduleProcess(waiterId, SchedulingRegion::Active);
+                LLVM_DEBUG(llvm::dbgs() << "    Woke get waiter process "
+                                        << waiterId << " with message "
+                                        << waiterMsg << "\n");
+              }
+            }
+          }
+        } else {
+          // Mailbox is full - block until space is available
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_put("
+                                  << mboxId << ", " << msg
+                                  << ") - blocking (mailbox full)\n");
+
+          // Add this process to the put wait queue
+          syncPrimitivesManager.mailboxPut(mboxId, procId, msg);
+
+          // Suspend the process
+          auto &state = processStates[procId];
+          state.waiting = true;
+
+          // Set up to resume at the next operation after the call
+          state.destBlock = callOp->getBlock();
+          state.currentOp = std::next(Block::iterator(callOp));
+          state.resumeAtCurrentOp = true;
+
+          Process *proc = scheduler.getProcess(procId);
+          if (proc)
+            proc->setState(ProcessState::Waiting);
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_get - blocking get
+    // Signature: (mbox_id: i64, msg_out: ptr) -> void
+    // Blocks if the mailbox is empty
+    if (calleeName == "__moore_mailbox_get") {
+      if (callOp.getNumOperands() >= 2) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msgOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        // Try non-blocking get first
+        uint64_t msg = 0;
+        if (syncPrimitivesManager.mailboxTryGet(mboxId, msg)) {
+          // Got a message - write it to the output pointer
+          if (msgOutAddr != 0) {
+            uint64_t outOffset = 0;
+            auto *outBlock = findMemoryBlockByAddress(msgOutAddr, procId, &outOffset);
+            if (outBlock) { outBlock->initialized = true;
+              // Write 64-bit message value
+              for (int i = 0; i < 8; ++i)
+                outBlock->data[outOffset + i] =
+                    static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
+            }
+          }
+
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_get("
+                                  << mboxId << ", 0x"
+                                  << llvm::format_hex(msgOutAddr, 16)
+                                  << ") - got message " << msg << "\n");
+
+          // Try to wake a waiting put process (for bounded mailboxes)
+          Mailbox *mbox = syncPrimitivesManager.getMailbox(mboxId);
+          if (mbox) {
+            ProcessId waiterId = mbox->trySatisfyPutWaiter();
+            if (waiterId != InvalidProcessId) {
+              // Found a put waiter - their message was already added
+              auto waiterIt = processStates.find(waiterId);
+              if (waiterIt != processStates.end()) {
+                waiterIt->second.waiting = false;
+                scheduler.scheduleProcess(waiterId, SchedulingRegion::Active);
+                LLVM_DEBUG(llvm::dbgs() << "    Woke put waiter process "
+                                        << waiterId << "\n");
+              }
+            }
+          }
+        } else {
+          // Mailbox is empty - block until a message is available
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_get("
+                                  << mboxId << ", 0x"
+                                  << llvm::format_hex(msgOutAddr, 16)
+                                  << ") - blocking (mailbox empty)\n");
+
+          // Add this process to the get wait queue
+          syncPrimitivesManager.mailboxGet(mboxId, procId);
+
+          // Save the output address so we can write the result when resumed
+          auto &state = processStates[procId];
+          state.pendingMailboxGetResultAddr = msgOutAddr;
+          state.pendingMailboxGetId = mboxId;
+          state.waiting = true;
+
+          // Set up to resume at the next operation after the call
+          state.destBlock = callOp->getBlock();
+          state.currentOp = std::next(Block::iterator(callOp));
+          state.resumeAtCurrentOp = true;
+
+          Process *proc = scheduler.getProcess(procId);
+          if (proc)
+            proc->setState(ProcessState::Waiting);
+        }
       }
       return success();
     }
