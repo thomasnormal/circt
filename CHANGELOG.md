@@ -1,6 +1,83 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 301 - February 2, 2026 (Current Status)
+## Iteration 303 - February 2, 2026 (Current Status)
+
+### Full Regression Testing Completed - NO REGRESSIONS
+
+All test suites verified stable after parameterized class specialization fix:
+
+| Suite | Pass | Total | Rate | Status |
+|-------|------|-------|------|--------|
+| **sv-tests BMC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
+| **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
+| **verilator-verification** | 120 | 141 | **85.1%** | ✅ NO REGRESSION |
+| **OpenTitan reg_top** | 11 | 11 | **100%** | ✅ All compile |
+| **OpenTitan primitives** | 4 | 4 | **100%** | ✅ All compile |
+
+### OpenTitan IP Compilation Analysis
+
+**Working IPs:**
+- All 11 register-top blocks compile (uart_reg_top, i2c_reg_top, spi_host_reg_top, etc.)
+- All 4 primitives compile (prim_count, prim_flop, prim_fifo_sync, prim_fifo_sync_cnt)
+- Full IPs: gpio, gpio_no_alerts, uart, timer_core, rv_timer_full
+
+**Blocking Issues:**
+1. **$readmemh task scope access (High)**: Tasks accessing parent module scope variables fail
+   - Blocks: i2c, spi_device
+   - Error: `'moore.builtin.readmemh' op using value defined outside the region`
+
+2. **Missing include paths (Low)**: Script configuration issues
+   - Blocks: spi_host (needs `-I $SPI_HOST_RTL`)
+   - Blocks: usbdev (needs prim_sec_anchor_buf.sv in file list)
+
+### APB AVIP Simulation - Under Investigation
+
+APB AVIP simulation shows UVM initialization but appears stuck at "Starting simulation".
+Investigation ongoing.
+
+### BMC 2-State Strength Resolution for LLHD Signals
+
+LowerToBMC now resolves multi-drive 2-state LLHD signals with strength attributes
+using strength-aware resolution and explicit unknown inputs when conflicts occur.
+
+- Added regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-multi-drive-strength-2state.mlir`.
+
+---
+
+## Iteration 302 - February 2, 2026
+
+### Regression Test Results - NO REGRESSIONS
+
+| Suite | Pass | Total | Rate | Status |
+|-------|------|-------|------|--------|
+| **sv-tests BMC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
+| **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
+| **verilator-verification** | 120 | 141 | **85.1%** | ✅ NO REGRESSION |
+| **verilator (adjusted)** | 120 | 128 | **93.8%** | ✅ (excl. test bugs) |
+
+The parameterized class nested typedef fix has been verified to cause no regressions across all test suites.
+
+### sv-tests LEC Script Fix
+
+Fixed the LEC test runner script `utils/run_sv_tests_circt_lec.sh` which was failing due to removed `--fail-on-inequivalent` flag from circt-lec. Result checking now uses output parsing.
+
+### verilator-verification Failures Analysis
+
+21 failures analyzed:
+- **8 test suite bugs**: Use non-standard `1'z` instead of `1'bz` (upstream fix needed)
+- **4 expected failures**: Tests intentionally invalid SV (correct behavior)
+- **3 parameter initializer**: Slang restricts `parameter W;` without default
+- **2 pre/post_randomize**: Slang signature checking stricter than needed
+- **1 coverpoint iff**: Slang parser needs `coverpoint x iff enable` support
+- **1 enum constraint**: Slang rejects `inside {enum_type}` clause
+- **1 $unit reference**: Slang restriction on `$unit` from package
+- **1 UVM dependency**: Test requires UVM package (not CIRCT issue)
+
+Real CIRCT/slang issues to fix: 8 (slang patches needed)
+
+---
+
+## Iteration 301 - February 2, 2026
 
 ### Parameterized Class Specializations via Nested Typedefs - FIXED
 
