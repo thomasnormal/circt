@@ -34,8 +34,8 @@ Unit test added for ProcessStatesReferenceStability (17/17 pass).
 
 ### In Progress
 
-- **TL adapter read data layout** - Fix applied and verified. OpenTitan 20/23 pass.
-  3 failures: gpio_no_alerts (pre-existing), flash_ctrl_reg_top, otp_ctrl_reg_top (under investigation).
+- **TL adapter read data layout** - Fix applied and verified. OpenTitan **23/23 pass** (100%).
+  All 3 previous failures (gpio_no_alerts, flash_ctrl_reg_top, otp_ctrl_reg_top) fixed by struct layout commit.
 - **OpenTitan AES S-Box LEC NEQ** - `aes_sbox_canright` still fails with `--assume-known-inputs`.
   Latest `--dump-unknown-sources` run reports `unknown-xor-inversions=16` and
   `input-unknown-inversions=229` in the canright LEC MLIR. `--print-solver-output` yields
@@ -54,7 +54,7 @@ Unit test added for ProcessStatesReferenceStability (17/17 pass).
 | yosys/tests/sva | LEC | 14/14 pass, 2 skip (VHDL) | Yes |
 | circt-sim lit | - | 98/100 pass, 1 xfail, 1 intermittent | N/A |
 | Unit tests | - | 17/17 pass | OK (+1) |
-| OpenTitan sim | - | 20/23 pass (87%) | Regressed -1 |
+| OpenTitan sim | - | **23/23 pass (100%)** | +3 improvement |
 | AVIP sim | - | 4/4 pass | Match |
 
 ### Active Work Items
