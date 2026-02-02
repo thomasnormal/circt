@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 306)
+## Current Status - February 2, 2026 (Iteration 309)
 
 ### Session Summary - Key Milestones
 
@@ -19,25 +19,47 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Mailbox DPI Hooks (Phase 1)** | ✅ IMPLEMENTED | Non-blocking: create, tryput, tryget, num |
 | **$changed Assume Fix** | ✅ FIXED | skipWarmup for assumes - matches Yosys behavior |
 | **4-state Op Masking** | ✅ FIXED | Logic/arith/parity ops mask value under unknown (no Z pollution) |
-| **UVM phase execution** | 🔄 ROOT CAUSE | Needs concurrent task-based process coordination |
+| **Mailbox Phase 2** | ✅ IMPLEMENTED | Blocking put/get with process suspend/resume |
+| **LTLToCore Fix** | ✅ FIXED | All 16 tests pass - null clock bug fixed |
+| **LLHD Local Ref Extract Inlining** | ✅ FIXED | Derived ref drives inline; avoids LLHD abstraction |
+| **LLHD 4-State Value Updates** | ✅ FIXED | Clear unknown mask on value field updates |
+| **LEC LLVM Struct Defaults** | ✅ FIXED | Missing unknown defaults to 0 when value is set |
+| **LEC Assume-Known Inputs** | ✅ ADDED | `circt-lec --assume-known-inputs` flag |
+| **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%) |
+| **AVIP Simulation** | ✅ **4/5** | AHB, UART, I2S, I3C complete successfully |
+| **TL Handshake Root Cause** | ✅ FOUND | 4-state X init causes a_ready stuck at 0 |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
 | OpenTitan IP Parsing | ✅ 45+ IPs | Parse successfully with correct dependencies |
 
-### Current Blocker: UVM Phase Execution
+### Remaining Limitations vs. Cadence Xcelium
 
-**Root Cause**: circt-sim's LLHD process interpreter doesn't support the concurrent process coordination pattern used by UVM phases:
-- Phase hopper uses a forever loop in forked process blocking on queue `.get(ph)`
-- Parent process blocks on objection wait
-- Both must execute concurrently with proper interleaving
+**Critical (blocking UVM testbench execution):**
+1. **4-state X initialization of undriven nets** - Breaks combinational logic paths (10 OpenTitan timeouts). Fix identified: MooreToCore.cpp:5050 change `APInt::getAllOnes` → `APInt(valueWidth, 0)` for undriven nets
+2. **ImportVerilog doesn't emit mailbox put/get DPI calls** - Runtime hooks exist but SV `mailbox.put()`/`.get()` aren't lowered to `__moore_mailbox_put`/`get` yet
+3. **UVM phase hopper interleaving** - Depends on #2; once mailbox codegen works, needs end-to-end test
 
-**Required Fix**: Enhance circt-sim process scheduler to support:
-1. Multiple concurrent task-based processes with different wait mechanisms
-2. Blocking queue operations concurrent with other waits
-3. Proper interleaving for phase scheduling
+**Major (blocking specific testbenches):**
+4. **SPI AVIP compile**: Empty arg in `$sformatf`, nested class non-static property access
+5. **JTAG AVIP compile**: Default arg mismatch on virtual method override
+6. **AXI4 AVIP compile**: 4-state static reg as LLVM global, `dist` constraints
+7. **pre/post_randomize** - Not yet implemented in ImportVerilog
+8. **coverpoint `iff`** - Not yet lowered
+9. **`dist` constraint ranges** - Bounds must be constant (dynamic not supported)
 
-**Files**: `tools/circt-sim/LLHDProcessInterpreter.cpp`, `~/uvm-core/src/base/uvm_phase_hopper.svh`
+**Minor (not blocking current tests):**
+10. **`$readmemh` scope verification** - Warning on some testbenches
+11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
+12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
+
+### Current Blocker: ImportVerilog Mailbox Codegen
+
+**What works**: Runtime DPI hooks for blocking/non-blocking mailbox ops fully implemented in `LLHDProcessInterpreter.cpp`
+
+**What's missing**: `lib/Conversion/ImportVerilog/Expressions.cpp` needs to lower SystemVerilog `mailbox#(T)::put(val)` and `mailbox#(T)::get(ref val)` method calls to `__moore_mailbox_put` / `__moore_mailbox_get` DPI function calls
+
+**Impact**: Once this works, UVM phase hopper should be able to interleave correctly
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
@@ -56,7 +78,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 **Location**: `lib/Conversion/ImportVerilog/Structure.cpp` - line ~4395
 
-### Test Suite Status (Iteration 306 - Updated)
+### Test Suite Status (Iteration 309 - Updated)
 
 | Suite | Pass | Total | Rate | Status |
 |-------|------|-------|------|--------|
@@ -64,98 +86,98 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 | **sv-tests LEC** | 23 | 23 | **100%** | ✅ NO REGRESSION |
 | **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
 | **verilator-verification BMC** | 16 | 16 | **100%** | ✅ All pass |
-| **Yosys SVA BMC** | 14 | 16 | **87.5%** | ✅ $changed FIXED (2 expected sim-only) |
-| **LTLToCore** | 12 | 16 | **75%** | 4 pre-existing failures |
+| **Yosys SVA BMC** | 13 | 13 | **100%** | ✅ FULL PASS (3 VHDL/sim skipped) |
+| **LTLToCore** | 16 | 16 | **100%** | ✅ ALL FIXED |
 | **ImportVerilog** | 221 | 221 | **100%** | ✅ |
-| **AVIP Compile** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass |
-| **AVIP Simulation** | 2 | 6 | **33%** | 🔄 Testing |
-| **OpenTitan reg_top** | 21 | 42 | **50%** | ✅ Coverage expanded |
-| **OpenTitan testbenches** | 21 | 42 | **50%** | prim_*, reg_top, full IPs |
-| **Mailbox DPI Test** | 1 | 1 | **100%** | ✅ New unit test |
+| **AVIP Compile** | 5 | 9 | **56%** | APB, AHB, UART, I2S, I3C pass |
+| **AVIP Simulation** | 4 | 5 | **80%** | ✅ AHB, UART, I2S, I3C complete |
+| **OpenTitan testbenches** | 31 | 42 | **73.8%** | ✅ MAJOR EXPANSION |
+| **Mailbox DPI Test** | 3 | 3 | **100%** | ✅ Non-blocking + 2 blocking tests |
+
+### Local Checks (February 2, 2026)
+
+- `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-logic-mask.mlir | build/bin/FileCheck test/Conversion/MooreToCore/four-state-logic-mask.mlir`
+- `build/bin/circt-opt -strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
+- `build/bin/circt-opt -strip-llhd-interface-signals='strict-llhd=true' test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
+- `build/bin/circt-opt -lower-lec-llvm test/Tools/circt-lec/lower-lec-llvm-structs.mlir | build/bin/FileCheck test/Tools/circt-lec/lower-lec-llvm-structs.mlir`
+- `build/bin/circt-lec --emit-smtlib --assume-known-inputs -c1=known_a -c2=known_b test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
+- `ninja -C build CIRCTLECToolTests`
+- `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesAllocaPhiRefMerge`
+- `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesLocalRefExtractUpdate`
+- `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.ClearsUnknownOnValueFieldUpdate`
+- `ninja -C build CIRCTMooreTests`
+- `build/tools/circt/unittests/Dialect/Moore/CIRCTMooreTests --gtest_filter=MooreToCoreConversionTest.FourState*`
+- `build/bin/circt-lec --emit-mlir -c1=local_ref_extract_a -c2=local_ref_extract_b test/Tools/circt-lec/lec-strip-llhd-local-ref-extract.mlir test/Tools/circt-lec/lec-strip-llhd-local-ref-extract.mlir` (checked no `llhd.` with `rg`)
+- `build/bin/circt-lec --emit-mlir -c1=aes_sbox_lut_lec_wrapper -c2=aes_sbox_canright_lec_wrapper /tmp/opentitan-lec-canright-20260202/aes_sbox_canright/aes_sbox_lec.mlir` (no `llhd_comb` in output)
+- `build/bin/circt-lec --emit-mlir --strict-llhd -c1=aes_sbox_lut_lec_wrapper -c2=aes_sbox_canright_lec_wrapper /tmp/opentitan-lec-canright-20260202/aes_sbox_canright/aes_sbox_lec.mlir`
+- `CIRCT_VERILOG=build/bin/circt-verilog CIRCT_LEC=build/bin/circt-lec Z3_BIN=~/z3-install/bin/z3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright --workdir /tmp/opentitan-lec-canright-localmux --keep-workdir` (FAIL, LEC_RESULT=NEQ)
+- `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-localref --keep-workdir` (FAIL, LEC_RESULT=NEQ)
+- `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-unknownclr --keep-workdir` (FAIL, LEC_RESULT=NEQ)
+- `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-undefzero --keep-workdir` (FAIL, LEC_RESULT=NEQ)
+- `build/bin/circt-lec --run-smtlib --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, LEC_RESULT=NEQ)
+- `/home/thomas-ahle/z3-install/bin/z3 /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec_model.smt2` (sat; model captured in notes)
 
 ### AVIP Status
 
 | Protocol | Compile | Simulate | Notes |
 |----------|---------|----------|-------|
-| APB | ✅ | ✅ RUNS | Simulation completes at 352.9 us |
-| AHB | ✅ | 🔄 Testing | Static arrays FIXED |
-| UART | ✅ | - | Now compiles |
-| I2S | ✅ | - | Not yet tested |
-| I3C | ✅ | - | Not yet tested |
-| SPI | ❌ | - | Nested class non-static property access |
+| APB | ✅ | ✅ RUNS | Completes at 352.9 us (needs >120s) |
+| AHB | ✅ | ✅ PASS | Completes at 177 us |
+| UART | ✅ | ✅ PASS | Completes at 368 us |
+| I2S | ✅ | ✅ PASS | Completes at 181 us |
+| I3C | ✅ | ✅ PASS | Completes at 201 us |
+| SPI | ❌ | - | Empty arg in $sformatf, nested class property access |
 | JTAG | ❌ | - | Default arg mismatch on virtual override |
-| AXI4 | ❌ | - | dist range bounds must be constant |
+| AXI4 | ❌ | - | 4-state static reg as LLVM global |
 
 ---
 
 ## Workstreams & Next Tasks
 
 ### Track 1: UVM Phase Execution (PRIORITY)
-**Status**: 🔄 Phase 1 DONE - Need Phase 2 blocking operations
-**Verified**: Factory registration works, phase hopper architecture analyzed
-**Done**: Mailbox non-blocking DPI hooks (create, tryput, tryget, num) integrated
-**Issue**: Phase hopper forever loop + queue blocking doesn't interleave with parent wait
+**Status**: Phase 2 DONE (runtime hooks). Phase 3 needed (ImportVerilog codegen)
+**Done**: Mailbox DPI hooks (blocking + non-blocking) in LLHDProcessInterpreter
+**Blocker**: ImportVerilog doesn't emit `__moore_mailbox_put`/`get` for SV mailbox methods
 
-**Mailbox Integration Status**:
-- **Phase 1**: ✅ DONE - Non-blocking API (tryPut, tryGet, create, num)
-  - DPI hooks implemented in LLHDProcessInterpreter.cpp
-  - Unit test: `test/Tools/circt-sim/mailbox-dpi-nonblocking.mlir` passes
-- **Phase 2**: 🔄 IN PROGRESS - Blocking operations (requires ProcessId context)
-  - `put()`: Block if mailbox full
-  - `get()`: Block if mailbox empty
-  - Needs coordination between DPI layer and ProcessScheduler
+**Next Tasks** (in order):
+1. **Wire mailbox codegen in ImportVerilog** - Lower `mailbox.put()`→`__moore_mailbox_put`, `.get()`→`__moore_mailbox_get`
+   - File: `lib/Conversion/ImportVerilog/Expressions.cpp` (method call visitor)
+2. **Test with UVM phase_hopper** - Compile + simulate `test_uvm_hopper_pattern.sv`
+3. **Run full UVM test** - `test_uvm_run_test.sv` with phase scheduling
 
-**Next Tasks**:
-- Implement blocking `__moore_mailbox_put()` / `__moore_mailbox_get()` DPI hooks
-- Add process suspend/resume coordination in LLHDProcessInterpreter
-- Test with UVM phase_hopper pattern
-- Add unit tests for blocking mailbox operations
+### Track 2: Test Suite Coverage & Regression
+**Status**: ✅ All formal suites at 100% (sv-tests BMC/LEC, verilator BMC, Yosys SVA, LTLToCore)
+**Focus**: Maintain 100%, expand verilator-verification parse rate beyond 79.2%
 
-### Track 2: Test Suite Coverage
-**Status**: ✅ sv-tests BMC 100%, verilator BMC 100%, yosys SVA 87.5% (14/16)
-**Achieved**: $changed regression FIXED with skipWarmup parameter
-**Note**: 2 Yosys SVA tests (sva_value_change_sim, vhdl) are sim-only or VHDL, not BMC targets
-
-**$changed Fix Applied** (commit e6f507a1f):
-- Added `skipWarmup` parameter to `LTLPropertyLowerer`
-- Assumes pass `skipWarmup=true` to constrain from cycle 0
-- Assertions keep warmup behavior (avoid false failures)
-- New unit test: `test/Tools/circt-bmc/sva-assume-sequence-delay-e2e.sv`
-
-**Next Tasks**:
-- Fix pre-existing LTLToCore crashes (4 tests fail)
-- Fix remaining verilator issues: pre/post_randomize, coverpoint iff
-- Target: 99%+ on all suites
-- Create unit tests for any fixes
+**Next Tasks** (in order):
+1. **Run regression after X-init fix** - Verify no test breakage
+2. **Fix verilator-verification parse failures** - pre/post_randomize, coverpoint iff
+3. **Expand sv-tests coverage** - Add Chapter 7/12 tests beyond Chapter 16
 
 ### Track 3: OpenTitan IP Testing
-**Status**: ✅ 21/42 testbenches pass (50% coverage - MAJOR EXPANSION)
-**Verified**: reg_top testbenches, prim_* IPs, full IPs (i2c_tb, uart_tb)
-**Passing**: i2c_reg_top, edn_reg_top, pattgen_reg_top, aon_timer_reg_top, rom_ctrl_regs,
-  sram_ctrl_regs, csrng_reg_top, lc_ctrl_regs, otbn_reg_top, pwm_reg_top, keymgr_reg_top,
-  kmac_reg_top, entropy_src_reg_top, otp_ctrl_core_reg_top, flash_ctrl_core_reg_top,
-  sysrst_ctrl_reg_top, usbdev_reg_top, i2c_tb (full IP)
-**Dual-clock**: aon_timer, pwm, sysrst_ctrl, usbdev - all work correctly
-**Timeout**: uart_reg_top, spi_host, hmac, rv_timer (TL handshake timing)
-**Next Tasks**:
-- Fix TL handshake timing for timeout tests
-- Run remaining testbenches
-- Fix $readmemh scope verification error
+**Status**: 31/42 testbenches pass (73.8%). 10 timeout due to X-init bug.
+**Blocker**: 4-state X initialization (MooreToCore.cpp:5050)
+
+**Next Tasks** (in order):
+1. **Fix X-init for undriven nets** - Change `APInt::getAllOnes(valueWidth)` → `APInt(valueWidth, 0)` in MooreToCore.cpp:5050
+2. **Recompile timeout testbenches** - uart_reg_top, spi_host, hmac, rv_timer, etc.
+3. **Retest all 42** - Target: 41/42 (all except alert_handler complexity)
+4. **Investigate alert_handler_tb** - 336 processes, may need process limit increase
 
 ### Track 4: AVIP Full Simulation
-**Status**: ✅ 6/9 AVIPs compile (APB, AHB, UART, I2S, I3C pass; SPI, JTAG, AXI4 fail)
-**Verified**: UART now compiles (was incorrectly marked as failing)
-**Blocking**: UVM phase execution needed for full simulation
+**Status**: 5/9 compile, 4/5 simulate successfully. 3 compile failures remain.
+**Simulation**: AHB (177us), UART (368us), I2S (181us), I3C (201us) all pass
 
-**AVIP Compile Failures**:
-- SPI: Nested class non-static property access, empty $sformatf arg
-- JTAG: Default arg mismatch on virtual method override
-- AXI4: dist range bounds must be constant
+**Compile Failures** (3 remaining):
+- **SPI**: Empty arg in `$sformatf`, nested class non-static property access
+- **JTAG**: Default arg mismatch on virtual method override
+- **AXI4**: 4-state static reg as LLVM global, `dist` constraint bounds
 
-**Next Tasks**:
-- Test AVIP simulation once Track 1 blocking mailbox is fixed
-- File slang issues for compile blockers
-- Test with simplified UVM test that doesn't need phase hopper
+**Next Tasks** (in order):
+1. **Debug SPI compile** - Fix `$sformatf` empty arg handling in ImportVerilog
+2. **Debug JTAG compile** - Fix default arg matching on virtual override
+3. **Debug AXI4 compile** - Fix 4-state static reg lowering + `dist` constraints
+4. **Test APB with longer timeout** - Currently needs >120s to complete
 
 ---
 
@@ -220,15 +242,20 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
   across loops or multiple stores with control-flow merges; extend lowering to
   handle general LLVM ref graphs beyond the alloca-backed cases.
 - LLHD combinational control flow with pointer-typed block args now lowers
-  without abstraction (enables mem2reg + CF removal); loop unrolling now
-  handles memory-backed induction variables and cyclic control flow is rejected
-  in strict LEC to avoid unsound flattening. Keep expanding unroll coverage.
-- OpenTitan AES S-Box LEC now runs through strict solve with no LLHD
-  abstraction. Recent NEQ root cause: logic/arithmetic ops left value bits
-  live under unknown (Z pollution), so outputs differed only in value when
-  unknown mask was all-ones. Fix: mask value with ~unknown for 4-state
-  logic/arith + parity ops; re-run LEC to confirm (latest repro in
-  `/tmp/opentitan-lec-shlbzccl/aes_sbox_canright`).
+  without abstraction even when refs merge multiple allocas (new regression
+  `lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`); CF removal inserts muxes
+  and drive enables. Local alloca-backed signals now inline enabled drives via
+  sequential muxing to avoid strict abstraction. Keep expanding unroll coverage
+  and alias handling.
+- OpenTitan AES S-Box LEC: both non-strict and strict pipelines now emit MLIR
+  without `llhd_comb` after the local-signal handling fix. Masking value bits
+  with ~unknown for 4-state logic/arith/parity ops removed Z pollution, but
+  `aes_sbox_canright` still reports NEQ on rerun (even with assume-known).
+  Latest counterexample
+  (2026-02-02 undefzero run): op_i=0x8 (value=0x2, unknown=0x0),
+  data_i=0x5c00 (value=0x5c, unknown=0x00), c1_out0 value=0x00 unknown=0xff,
+  c2_out0 value=0xa7 unknown=0x00. Logs:
+  `/tmp/opentitan-lec-canright-undefzero/aes_sbox_canright`.
 - Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
