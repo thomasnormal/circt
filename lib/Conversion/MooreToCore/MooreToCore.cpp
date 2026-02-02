@@ -5134,10 +5134,14 @@ struct GlobalVariableOpConversion
       return rewriter.notifyMatchFailure(loc,
                                          "failed to convert global var type");
 
-    // Create an LLVM global with zero initialization.
-    Attribute initAttr = createLLVMZeroAttr(convertedType, op.getContext());
+    // Convert to pure LLVM type for the global (hw::StructType is not valid
+    // for LLVM::GlobalOp, e.g. 4-state types produce hw.struct<value,unknown>).
+    Type llvmGlobalType = convertToLLVMType(convertedType);
 
-    auto globalOp = LLVM::GlobalOp::create(rewriter, loc, convertedType,
+    // Create an LLVM global with zero initialization.
+    Attribute initAttr = createLLVMZeroAttr(llvmGlobalType, op.getContext());
+
+    auto globalOp = LLVM::GlobalOp::create(rewriter, loc, llvmGlobalType,
                                            /*isConstant=*/false,
                                            LLVM::Linkage::Internal,
                                            op.getSymName(), initAttr);
@@ -5328,7 +5332,8 @@ struct GlobalVariableOpConversion
         // Get the yielded value (mapped through the cloning).
         Value initValue = mapping.lookupOrDefault(yieldOp.getResult());
 
-        // Convert the init value type if needed.
+        // Convert the init value type if needed (first to convertedType,
+        // then to pure LLVM type for the store).
         Type valueType = initValue.getType();
         if (valueType != convertedType) {
           // Try unrealized conversion cast for type mismatch.
@@ -5336,6 +5341,10 @@ struct GlobalVariableOpConversion
                                  loc, convertedType, initValue)
                           .getResult(0);
         }
+
+        // Convert from hw types to LLVM types if needed (e.g. hw.struct ->
+        // llvm.struct for 4-state globals).
+        initValue = convertValueToLLVMType(initValue, loc, rewriter);
 
         // Store the value to the global variable.
         auto ptrTy = LLVM::LLVMPointerType::get(op.getContext());
