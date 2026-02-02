@@ -1,6 +1,45 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 304 - February 2, 2026 (Current Status)
+## Iteration 305 - February 2, 2026 (Current Status)
+
+### Summary
+
+Iteration 305 focuses on understanding and addressing the UVM phase execution blocker while
+maintaining test coverage across all suites. Launched parallel testing agents for real-world feedback.
+
+### Remaining Limitations for Xcelium Parity
+
+| Feature | Status | Impact | Priority |
+|---------|--------|--------|----------|
+| Concurrent task-based processes | ❌ Missing | Blocks UVM phase hopper | **P0** |
+| Blocking queue/mailbox operations | ❌ Missing | Blocks UVM phase coordination | **P0** |
+| $readmemh task scope access | ❌ Broken | Blocks OpenTitan IPs with RAM init | P1 |
+| pre/post_randomize signatures | ❌ Slang strict | Blocks some verilator tests | P2 |
+| coverpoint iff syntax | ❌ Slang missing | Blocks coverage tests | P2 |
+
+### Features to Build (Prioritized)
+
+1. **P0: Concurrent Process Scheduler** - Extend LLHDProcessInterpreter for multiple blocked processes
+2. **P0: Blocking Queue Operations** - mailbox.get(), queue.get() as blocking primitives
+3. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
+4. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
+
+---
+
+## Iteration 304 - February 2, 2026
+
+### BMC 4-State Conversion Fixes
+
+- Fixed `moore.conversion` lowering for 2-state to 4-state ints to preserve value/unknown ordering (avoid packed bitcast swap), which restores the yosys SVA `$changed` wide regression to PASS.
+- Added regression test `test/Conversion/MooreToCore/conversion-int-domain.mlir` and unit test `unittests/Dialect/Moore/ConversionTest.cpp`.
+
+### Verification Runs
+
+- yosys SVA BMC: 14 tests, failures=0, skipped=2 (vhdl and fail-no-macro).
+- sv-tests BMC: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010.
+- sv-tests LEC: total=23 pass=23 fail=0 error=0 skip=1013.
+- verilator-verification BMC: total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0.
+- verilator-verification LEC: total=17 pass=17 fail=0 error=0 skip=0.
 
 ### UVM Factory Registration - VERIFIED WORKING
 
