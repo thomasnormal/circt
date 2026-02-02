@@ -16,12 +16,17 @@ bug where `outstanding_q` was used both directly and indirectly in `tl_o_pre`.
    DenseSet with `pushCount` DenseMap. Previously, when a value appeared in both direct and
    indirect dependency paths (a DAG, not a cycle), the second push was silently dropped,
    causing `getCached()` to return X. Now shared nodes are correctly re-evaluated. The TL
-   adapter `a_ready` changes from 0 to 1 after reset, unblocking all OpenTitan TL-UL handshakes.
-2. **✅ Fork Automatic Variable Capture Fix** (from Iter 312) - `interpretSimFork` copies
+   adapter `a_ready` changes from 0 to 1 after reset.
+2. **✅ Instance Output Evaluation Priority Fix** - `instanceOutputMap` lookup now checked BEFORE
+   `getSignalId` in `evaluateContinuousValueImpl`. Instance results are registered as signals
+   for caching, but the cached signal value may be stale when multiple combinational processes
+   fire in response to the same source signal change. By evaluating through the instance we
+   always compute the correct value from current inputs.
+3. **✅ Fork Automatic Variable Capture Fix** (from Iter 312) - `interpretSimFork` copies
    `memoryBlocks` from parent to child. Verified: `captured = 0, 10, 20`.
-3. **✅ Mailbox Unit Tests** (from Iter 312) - 9 new tests for getOrCreateMailbox. All 26 pass.
-4. **✅ No Regressions** - All existing tests pass: sv-tests BMC 23/23, verilator 17/17,
-   fork capture correct, mailbox correct, 1463/1471 unit tests pass (8 pre-existing failures).
+4. **✅ Mailbox Unit Tests** (from Iter 312) - 9 new tests for getOrCreateMailbox. All 26 pass.
+5. **✅ No Regressions** - All existing tests pass: sv-tests BMC 23/23, LEC 23/23, verilator
+   BMC 17/17, LEC 17/17, fork capture correct, mailbox correct.
 
 ### Remaining Limitations
 
