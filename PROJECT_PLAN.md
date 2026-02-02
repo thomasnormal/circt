@@ -2621,6 +2621,8 @@ baselines, correct temporal semantics, and actionable diagnostics.
 | 2026-02-01 | avip/jtag_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | bind/vif + enum cast in VIP |
 | 2026-02-01 | avip/spi_avip | compile | total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0 | nested comment + empty arg + non-static property |
 | 2026-02-01 | avip/uart_avip | compile | total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
+| 2026-02-02 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green (smoke) |
+| 2026-02-02 | sv-tests | LEC | total=23 pass=23 fail=0 xfail=0 xpass=0 error=0 skip=1013 | green (smoke) |
 | 2026-01-30 | sv-tests | BMC | total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010 | green |
 | 2026-01-30 | verilator-verification | BMC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |
 | 2026-01-30 | verilator-verification | LEC | total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0 | green |

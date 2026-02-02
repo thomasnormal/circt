@@ -42,6 +42,11 @@ using strength-aware resolution and explicit unknown inputs when conflicts occur
 
 - Added regression: `test/Tools/circt-bmc/lower-to-bmc-llhd-multi-drive-strength-2state.mlir`.
 
+### sv-tests BMC/LEC Smoke (2026-02-02)
+
+- **sv-tests BMC**: total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010
+- **sv-tests LEC**: total=23 pass=23 fail=0 error=0 skip=1013
+
 ---
 
 ## Iteration 302 - February 2, 2026
