@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 2, 2026 (Iteration 309)
+## Current Status - February 2, 2026 (Iteration 310)
 
 ### Session Summary - Key Milestones
 
@@ -25,11 +25,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LLHD 4-State Value Updates** | ✅ FIXED | Clear unknown mask on value field updates |
 | **LEC LLVM Struct Defaults** | ✅ FIXED | Missing unknown defaults to 0 when value is set |
 | **LEC Assume-Known Inputs** | ✅ ADDED | `circt-lec --assume-known-inputs` flag |
+| **LEC Unknown Slice Debug** | ✅ ADDED | `circt-lec --dump-unknown-sources` flag |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
 | **OpenTitan Coverage** | ✅ **73.8%** | 31/42 testbenches pass (up from 50%), expect ~41/42 after X-init fix |
 | **AVIP Simulation** | ✅ **4/5** | AHB, UART, I2S, I3C complete successfully |
-| **TL Handshake Root Cause** | ✅ FOUND+FIXED | 4-state X init caused a_ready stuck at 0 |
+| **TL Handshake Root Cause** | ✅ FOUND+FIXED | 4-state X init caused a_ready stuck at X→0 |
+| **Slang Trailing Comma Patch** | ✅ FIXED | `patches/slang-trailing-sysarg-comma.patch` - SPI AVIP unblocked |
+| **Mailbox SV→MLIR E2E** | ✅ COMPILES | LLVM dialect loaded; `new()→put()→get()` generates DPI calls |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
@@ -43,7 +46,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 3. **UVM phase hopper interleaving** - Mailbox codegen exists; needs end-to-end validation
 
 **Major (blocking specific testbenches):**
-4. **SPI AVIP compile**: Empty arg in `$sformatf`, nested class non-static property access
+4. **SPI AVIP compile**: ~~Empty arg in `$sformatf`~~ ✅ FIXED (slang patch), nested class non-static property access, timescale mismatch
 5. **JTAG AVIP compile**: Default arg mismatch on virtual method override
 6. **AXI4 AVIP compile**: 4-state static reg as LLVM global, `dist` constraints
 7. **pre/post_randomize** - Not yet implemented in ImportVerilog
@@ -80,7 +83,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 **Location**: `lib/Conversion/ImportVerilog/Structure.cpp` - line ~4395
 
-### Test Suite Status (Iteration 309 - Updated)
+### Test Suite Status (Iteration 310 - Updated)
 
 | Suite | Pass | Total | Rate | Status |
 |-------|------|-------|------|--------|
@@ -103,6 +106,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - `build/bin/circt-opt -strip-llhd-interface-signals='strict-llhd=true' test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-alloca-phi-ref-multi.mlir`
 - `build/bin/circt-opt -lower-lec-llvm test/Tools/circt-lec/lower-lec-llvm-structs.mlir | build/bin/FileCheck test/Tools/circt-lec/lower-lec-llvm-structs.mlir`
 - `build/bin/circt-lec --emit-smtlib --assume-known-inputs -c1=known_a -c2=known_b test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
+- `build/bin/circt-lec --emit-mlir -o /dev/null --dump-unknown-sources -c1=unknown_a -c2=unknown_b test/Tools/circt-lec/lec-dump-unknown-sources.mlir test/Tools/circt-lec/lec-dump-unknown-sources.mlir | build/bin/FileCheck test/Tools/circt-lec/lec-dump-unknown-sources.mlir`
 - `ninja -C build CIRCTLECToolTests`
 - `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesAllocaPhiRefMerge`
 - `build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests --gtest_filter=StripLLHDSignalPtrCastTest.HandlesLocalRefExtractUpdate`
@@ -117,6 +121,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-unknownclr --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-undefzero --keep-workdir` (FAIL, LEC_RESULT=NEQ)
 - `build/bin/circt-lec --run-smtlib --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (FAIL, LEC_RESULT=NEQ)
+- `build/bin/circt-lec --emit-mlir -o /dev/null --dump-unknown-sources -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir` (unknown slices show input unknown extracts + const-all-ones)
 - `/home/thomas-ahle/z3-install/bin/z3 /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec_model.smt2` (sat; model captured in notes)
 
 ### AVIP Status
@@ -128,7 +133,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 | UART | ✅ | ✅ PASS | Completes at 368 us |
 | I2S | ✅ | ✅ PASS | Completes at 181 us |
 | I3C | ✅ | ✅ PASS | Completes at 201 us |
-| SPI | ❌ | - | Empty arg in $sformatf, nested class property access |
+| SPI | ⚠️ | - | ~~Empty arg in $sformatf~~ ✅ FIXED, nested class property, timescale |
 | JTAG | ❌ | - | Default arg mismatch on virtual override |
 | AXI4 | ❌ | - | 4-state static reg as LLVM global |
 
@@ -258,6 +263,9 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
   data_i=0x5c00 (value=0x5c, unknown=0x00), c1_out0 value=0x00 unknown=0xff,
   c2_out0 value=0xa7 unknown=0x00. Logs:
   `/tmp/opentitan-lec-canright-undefzero/aes_sbox_canright`.
+  New debug flag `--dump-unknown-sources` shows unknown slice still includes
+  input unknown extracts plus const-all-ones ops, so need to isolate which
+  branch drives all-ones with known inputs.
 - Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)
