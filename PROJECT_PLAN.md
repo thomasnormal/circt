@@ -58,7 +58,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 | APB | ✅ | ✅ RUNS | Simulation completes at 352.9 us |
 | AHB | ✅ | 🔄 Testing | Static arrays FIXED |
 | I2S | ✅ | - | Not yet tested |
-| UART | ❌ | - | Covergroup syntax issue |
+| UART | ❌ | - | Source bug: virtual method default arg mismatch |
 | I3C | ✅ | - | Not yet tested |
 
 ---
@@ -89,7 +89,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 **Next Tasks**:
 - Test APB AVIP with factory fix - verify correct test class instantiation
 - Test AHB, I2S, I3C AVIPs with full simulation
-- Fix UART covergroup syntax issue
+- Fix source bugs in AVIPs (UART: virtual method default arg mismatch)
 
 ---
 
@@ -123,8 +123,9 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 **Verification/LEC/BMC**
 - Extend 4-state modeling to remaining ops/extnets and add matching regressions.
 - Dynamic inout writer merges require `--resolve-read-write`; 2-state cases now
-  model conflicts with explicit unknown inputs, but strength-aware resolution
-  remains missing.
+  model conflicts with explicit unknown inputs, and 2-state LLHD multi-drive
+  resolution now honors drive strengths. Remaining: strength-aware inout/extnet
+  resolution across the full pipeline.
 - LEC now lowers trivial LLVM struct pack/unpack (`lower-lec-llvm`) and
   single-block multi-store alloca patterns; now also handles LLVM struct muxes
   (including comb.mux fed by HW-to-LLVM casts),
@@ -138,7 +139,7 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 - Strict LEC now resolves overlapping conditional interface stores for 4-state
   inout fields using enable-based resolution, and handles 2-state cases by
   injecting explicit unknown inputs when conflicts are possible. Remaining:
-  2-state inout read/write resolution and full strength-aware resolution.
+  full strength-aware resolution for inout/extnet cases across tools.
 - Pointer SSA/memory SSA is still incomplete for non-alloca refs and aliasing
   across loops or multiple stores with control-flow merges; extend lowering to
   handle general LLVM ref graphs beyond the alloca-backed cases.
