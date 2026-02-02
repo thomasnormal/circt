@@ -1,6 +1,48 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 309 - February 2, 2026 (Current Status)
+## Iteration 310 - February 2, 2026 (Current Status)
+
+### Summary
+
+Iteration 310: Validated X-init fix on OpenTitan (X→0 confirmed), created slang trailing-comma
+patch for SPI AVIP, found mailbox constructor missing `__moore_mailbox_create` call, confirmed
+all unit tests pass after X-init change.
+
+### Accomplishments
+
+1. **✅ Slang Trailing Comma Patch** - Created `patches/slang-trailing-sysarg-comma.patch` to
+   allow trailing empty args in system function calls like `$sformatf("fmt", arg,)`. Eliminates
+   EmptyArgNotAllowed errors in SPI AVIP. Updated `patches/apply-slang-patches.sh`.
+2. **✅ Unit Tests Pass** - All 11 Moore unit tests pass (4 MooreToCoreConversion + 7 Types).
+   Both FileCheck lit tests (`basic.mlir`, `conditional-xprop.mlir`) pass cleanly.
+3. **✅ X-Init Confirmed on OpenTitan** - Recompiled uart_reg_top with new circt-verilog.
+   `a_ready` changed from `x` to `0` (X-init fix working). Tests still timeout because
+   `a_ready=0` is a separate functional issue (TL adapter logic needs investigation).
+4. **✅ Mailbox SV→MLIR Compilation Fixed** - Rebuilt circt-verilog picks up LLVM dialect
+   loading. Mailbox `new()` → `put()` → `get()` compiles to MLIR with DPI hooks.
+5. **🔍 Mailbox Constructor Gap Found** - `new()` for built-in classes skips constructor body
+   (TODO at Expressions.cpp:6248-6252), so `__moore_mailbox_create` is never called. Runtime
+   needs auto-create on first use, or constructor codegen needs fixing.
+
+### Remaining Limitations
+
+- **OpenTitan a_ready=0**: X-init fix eliminates X propagation but TL adapter still doesn't
+  assert `a_ready=1`. Root cause: combinational logic in tlul_adapter_reg may need additional
+  initialization or process-level simulation support.
+- **Mailbox constructor**: Built-in class constructors don't emit body (TODO). Runtime
+  auto-create workaround being investigated.
+- **SPI AVIP timescale**: Files lack `timescale directives but UVM has them. Need `--timescale` flag.
+
+### Active Work Items
+
+1. **Fix mailbox auto-create in runtime** (Track 1) - So `put/get` work without explicit `create`
+2. **Investigate TL a_ready=0** (Track 3) - Why adapter doesn't assert ready after X-init fix
+3. **Test remaining OpenTitan targets** (Track 2) - All 10 timeout tests after recompile
+4. **Full AVIP compilation with timescale** (Track 4) - SPI with `--timescale=1ns/1ps`
+
+---
+
+## Iteration 309 - February 2, 2026
 
 ### Summary
 
@@ -45,6 +87,7 @@ Iteration 308 achieved major milestones with multiple 100% test suite results:
 6. **LLHD 4-State Value Updates**: ✅ FIXED - Unknown mask cleared on value field writes
 7. **LEC LLVM Struct Defaults**: ✅ FIXED - Missing unknown defaults to 0 when value is set
 8. **LEC Assume-Known Inputs**: ✅ ADDED - CLI flag to constrain 4-state inputs
+9. **LEC Unknown Slice Debug**: ✅ ADDED - CLI flag to dump 4-state unknown slices
 
 ### Phase 2 Blocking Mailbox Implementation
 
@@ -98,6 +141,8 @@ if (!skipWarmup && warmupClock) {  // Added null check
 - When building 4-state structs from `llvm.undef`, default missing unknown to 0
   if the value field is present (treats 2-state insertions as known).
 - Added `circt-lec --assume-known-inputs` to constrain 4-state inputs in SMT.
+- Added `circt-lec --dump-unknown-sources` to print backward slices for 4-state
+  output unknown masks (debug only).
 
 **New Tests:**
 - `test/Tools/circt-lec/lec-strip-llhd-local-ref-extract.mlir`
@@ -106,6 +151,7 @@ if (!skipWarmup && warmupClock) {  // Added null check
 - Added `lower_lec_llvm_structs_undef_unknown_zero` in
   `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`
 - Added `test/Tools/circt-lec/lec-emit-smtlib-assume-known-inputs.mlir`
+- Added `test/Tools/circt-lec/lec-dump-unknown-sources.mlir`
 
 **LEC Status:**
 - OpenTitan `aes_sbox_canright` still NEQ even with `--assume-known-inputs`

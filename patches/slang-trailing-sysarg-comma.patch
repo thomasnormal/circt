@@ -1,0 +1,26 @@
+diff --git a/source/ast/expressions/CallExpression.cpp b/source/ast/expressions/CallExpression.cpp
+--- a/source/ast/expressions/CallExpression.cpp
++++ b/source/ast/expressions/CallExpression.cpp
+@@ -610,12 +610,18 @@ Expression& CallExpression::createSystemCall(
+                     case SyntaxKind::EmptyArgument:
+                         if (subroutine.allowEmptyArgument(index)) {
+                             buffer.push_back(compilation.emplace<EmptyArgumentExpression>(
+                                 compilation.getVoidType(), actualArgs[i]->sourceRange()));
+                         }
+-                        else {
+-                            argContext.addDiag(diag::EmptyArgNotAllowed,
+-                                               actualArgs[i]->sourceRange());
+-                            return badExpr(compilation, nullptr);
++                        else if (i == actualArgs.size() - 1) {
++                            // Trailing comma in system function call arguments
++                            // (e.g. $sformatf("fmt", arg,)) -- commercial simulators
++                            // like Xcelium and VCS accept this, so just skip the
++                            // empty trailing argument instead of erroring.
++                        }
++                        else {
++                            argContext.addDiag(diag::EmptyArgNotAllowed,
++                                               actualArgs[i]->sourceRange());
++                            return badExpr(compilation, nullptr);
+                         }
+                         break;
+                     default:

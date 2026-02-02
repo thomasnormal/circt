@@ -19,3 +19,5 @@ git apply --ignore-whitespace "$script_dir/slang-relax-string-concat-byte.patch"
 git apply --ignore-whitespace "$script_dir/slang-allow-class-handle-format.patch" || true
 # Allow clocking argument in $past at position 2 (3rd argument) in addition to position 3
 git apply --ignore-whitespace "$script_dir/slang-past-clocking-arg.patch" || true
+# Trailing comma in system function call args (e.g. $sformatf("fmt",arg,)) -- Xcelium/VCS compat
+git apply --ignore-whitespace "$script_dir/slang-trailing-sysarg-comma.patch" || true
