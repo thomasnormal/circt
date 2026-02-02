@@ -4,8 +4,60 @@
 
 ### Summary
 
-Iteration 305 focuses on understanding and addressing the UVM phase execution blocker while
-maintaining test coverage across all suites. Launched parallel testing agents for real-world feedback.
+Iteration 305 focused on comprehensive test suite validation and mailbox integration planning.
+Key findings include identification of $changed regression root cause and confirmation that
+SyncPrimitivesManager exists but requires integration with LLHDProcessInterpreter.
+
+### Test Results Summary - Iteration 305
+
+| Test Suite | Pass | Total | Rate | Notes |
+|------------|------|-------|------|-------|
+| **sv-tests BMC** | 23 | 23 | **100%** | NO REGRESSION |
+| **verilator-verification Parse** | - | - | **79.2%** | Parse rate |
+| **verilator-verification BMC** | 16 | 16 | **100%** | All BMC tests pass |
+| **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
+| **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, prim_fifo_sync, timer_core pass |
+| **AVIP Compilation** | 6 | 9 | **67%** | APB, AHB, UART, I2S, I3C pass; SPI, JTAG, AXI4 fail |
+
+### $changed Regression Root Cause Analysis
+
+Two yosys SVA tests regressed with `$changed` sequence assumptions:
+
+**Root Cause**: circt-bmc treats sequence assumptions with delays as state machines that don't
+constrain initial cycles. The sequence `a ##1 b` is lowered to an NFA where `a` only becomes
+active after cycle 0.
+
+**Yosys Behavior**: With `-early -assume`, Yosys exposes the delay structure so constraints
+apply from cycle 0, which circt-bmc does not currently replicate.
+
+**Recommended Fix**: Distinguish assume vs. assert handling in sequence lowering:
+- Assertions: Current NFA semantics are correct (violations only checked after match)
+- Assumptions: Should constrain inputs from cycle 0 by unrolling delay prefix
+
+### Mailbox Integration Plan
+
+**Discovery**: `SyncPrimitivesManager` with `Mailbox` class exists in
+`lib/Dialect/Sim/ProcessScheduler.cpp` but is **NOT INTEGRATED** with LLHDProcessInterpreter.
+
+**Existing Infrastructure** (ProcessScheduler.h:1273-1423):
+- `Mailbox` class with `put()/get()` operations
+- `putWaitQueue` and `getWaitQueue` for blocked processes
+- `trySatisfyGetWaiter()` to wake processes
+
+**Phase 1 Plan**: Implement non-blocking API first:
+- `tryPut()`: Add item if space available, return success/failure
+- `tryGet()`: Remove item if available, return success/failure
+- Simpler to integrate, no process context needed
+
+**Phase 2 Plan**: Blocking operations (deferred):
+- `put()`: Block if mailbox full, requires ProcessId context
+- `get()`: Block if mailbox empty, requires ProcessId context
+- Needs coordination between DPI layer and ProcessScheduler
+
+**Required Work**:
+1. Instantiate SyncPrimitivesManager in LLHDProcessInterpreter
+2. Add DPI hooks for `__moore_mailbox_get()` using existing Mailbox class
+3. Add DPI hooks for `__moore_mailbox_put()` to wake blocked getters
 
 ### Remaining Limitations for Xcelium Parity
 
@@ -13,6 +65,7 @@ maintaining test coverage across all suites. Launched parallel testing agents fo
 |---------|--------|--------|----------|
 | Concurrent task-based processes | ❌ Missing | Blocks UVM phase hopper | **P0** |
 | Blocking queue/mailbox operations | ❌ Missing | Blocks UVM phase coordination | **P0** |
+| $changed sequence assumption semantics | ❌ Different | 2 yosys SVA regressions | P1 |
 | $readmemh task scope access | ❌ Broken | Blocks OpenTitan IPs with RAM init | P1 |
 | pre/post_randomize signatures | ❌ Slang strict | Blocks some verilator tests | P2 |
 | coverpoint iff syntax | ❌ Slang missing | Blocks coverage tests | P2 |
@@ -21,29 +74,22 @@ maintaining test coverage across all suites. Launched parallel testing agents fo
 
 1. **P0: Concurrent Process Scheduler** - Extend LLHDProcessInterpreter for multiple blocked processes
 2. **P0: Blocking Queue Operations** - mailbox.get(), queue.get() as blocking primitives
-3. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
-4. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
+3. **P1: $changed Assume Fix** - Distinguish assume vs. assert in sequence lowering
+4. **P1: $readmemh Scope Fix** - Task scope access to parent module variables
+5. **P2: Slang Patches** - pre/post_randomize, coverpoint iff, non-standard literals
 
-### Key Discovery: SyncPrimitivesManager Already Exists!
+### AVIP Status Detail
 
-Research found that `SyncPrimitivesManager` with `Mailbox` class is already implemented in
-`lib/Dialect/Sim/ProcessScheduler.cpp` but **NOT INTEGRATED** with LLHDProcessInterpreter.
-
-**Existing infrastructure** (ProcessScheduler.h:1273-1423):
-- `Mailbox` class with `put()/get()` operations
-- `putWaitQueue` and `getWaitQueue` for blocked processes
-- `trySatisfyGetWaiter()` to wake processes
-
-**Required work**: Instantiate SyncPrimitivesManager in LLHDProcessInterpreter and add DPI hooks
-for queue operations that use it.
-
-### Test Results - Iteration 305
-
-| Test Suite | Pass | Total | Rate | Notes |
-|------------|------|-------|------|-------|
-| **Yosys SVA BMC** | 12 | 14 | **85.7%** | 2 $changed regressions |
-| **OpenTitan testbenches** | 4 | 4 | **100%** | prim_count, timer_core, gpio, prim_fifo_sync |
-| **AVIP Compilation** | 7+ | 9 | **78%+** | APB, AHB, AXI4, I2S, I3C compile |
+| Protocol | Compile | Notes |
+|----------|---------|-------|
+| APB | PASS | |
+| AHB | PASS | |
+| UART | PASS | |
+| I2S | PASS | |
+| I3C | PASS | |
+| SPI | FAIL | Nested class non-static property access, empty $sformatf arg |
+| JTAG | FAIL | Default arg mismatch on virtual method override |
+| AXI4 | FAIL | dist range bounds must be constant |
 
 ---
 
