@@ -1,46 +1,48 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 311 - February 2, 2026 (Current Status)
+## Iteration 312 - February 2, 2026 (Current Status)
 
 ### Summary
 
-Iteration 311: **Mailbox E2E pipeline fully working from SystemVerilog.** All 5 mailbox methods
-(put, get, try_put, try_get, num) work correctly. Blocking producer/consumer with fork/join
-works with proper timing. Full regression: no new failures in sv-tests, verilator, yosys.
-OpenTitan X-init retest shows regression: 2 previously-passing tests now timeout.
+Iteration 312: **Fork automatic variable capture fixed.** Fixed `interpretSimFork` to copy
+`memoryBlocks` from parent to child, implementing proper SystemVerilog automatic variable
+capture semantics. Added 9 unit tests for mailbox getOrCreateMailbox. OpenTitan regression
+confirmed: 2 tests regressed due to MLIR recompilation after MooreToCore X-init change.
+TL adapter a_ready=0 root cause narrowed to `evaluateContinuousValue` not evaluating
+`hw.struct_create` for cross-instance block args.
 
 ### Accomplishments
 
-1. **✅ Mailbox Auto-Create in Runtime** - Added `getOrCreateMailbox()` to SyncPrimitivesManager.
-   When `mailbox.new()` doesn't call `__moore_mailbox_create`, the runtime auto-creates an
-   unbounded mailbox on first use. Updated all mailbox handlers (put/get/tryPut/tryGet/num).
-2. **✅ Mailbox Get Value Fix** - Fixed `__moore_mailbox_get` handler skipping write to alloca
-   because `MemoryBlock::initialized` was false. Now writes regardless and marks initialized.
-3. **✅ Mailbox E2E from SystemVerilog** - Full pipeline works: SV `mailbox.put(42)` → MLIR DPI
-   call → runtime → `mailbox.get(result)` returns 42 correctly. Fork producer/consumer with
-   blocking semantics and timed delays (`#10`) works perfectly.
-4. **✅ No Regression in Test Suites** - sv-tests 851/1036 (82.1%), verilator-verification
-   122/154 (79.2%), yosys-SVA 14/16 (87.5%). All failures are pre-existing/known.
-5. **🔍 OpenTitan X-Init Regression** - Retest of 10 timeout tests: all still timeout (a_ready=0).
-   Additionally, i2c_reg_top and csrng_reg_top (previously passing) now timeout. The old tests
-   "passed" because BFM timeout on `a_ready=x` was quick and test continued past it. The
-   `maskFourStateValue` changes in commit `cccb3395c` changed MLIR structure significantly.
+1. **✅ Fork Automatic Variable Capture Fix** - `interpretSimFork` now copies `memoryBlocks`
+   from parent to child process states. Previously, `llvm.alloca`-based automatic variables
+   were inaccessible in fork branches (child's `findMemoryBlock` returned nullptr → X value).
+   Now each fork iteration gets a deep copy snapshot of automatic variables.
+2. **✅ Mailbox Unit Tests** - Added 9 new tests to SyncPrimitivesTest covering:
+   `getOrCreateMailbox` auto-creation for unknown IDs, idempotency, FIFO ordering on
+   auto-created mailboxes, tryGet on empty, tryPut on bounded full, num/peek on auto-created.
+   All 26 SyncPrimitivesTest pass.
+3. **✅ OpenTitan Regression Confirmed** - 27/39 tests PASS, 2 regressions (csrng_reg_top,
+   i2c_reg_top). Root cause: MLIR files recompiled on Feb 2 after MooreToCore X-init change
+   (`cccb3395c`). Pre-change MLIR files (Jan 26-31) all still pass. Runtime has no regressions.
+4. **🔍 TL Adapter a_ready=0 Root Cause** - Debug instrumentation shows `tl_o_pre` struct_create
+   evaluates to all-zeros (132 bits). `evaluateContinuousValueImpl` never reaches the
+   `StructCreate` case for cross-instance block arg resolution. Instance output signals mapped
+   but combinational re-evaluation not triggered after register value changes.
 
 ### Remaining Limitations
 
-- **OpenTitan a_ready=0 + regression**: X-init fix causes i2c_reg_top and csrng_reg_top to
-  regress from PASS→TIMEOUT. Root cause under investigation (a4da550 agent analyzing
-  evaluateContinuousValue / FirRegOp interaction for TL adapter).
-- **Automatic var capture in fork/join_none**: Phase values show `x` in class-based hopper
-  pattern. `automatic int phase = ph;` inside fork scope doesn't capture correctly.
+- **OpenTitan a_ready=0 + regression**: evaluateContinuousValue doesn't re-evaluate struct_create
+  for cross-instance block args after signal changes. Agent a4da550 traced the issue to the
+  block arg mapping path where `tl_o_pre` is resolved as `hw.struct_create` but returns all-0.
 - **SPI AVIP**: Trailing comma fixed, but still needs timescale and nested class access fixes.
+- **OpenTitan AES S-Box LEC NEQ**: `aes_sbox_canright` still mismatches LUT under LEC.
 
 ### Active Work Items
 
-1. **Fix OpenTitan a_ready regression** (Track 3) - TL adapter combinational logic evaluation
-2. **Investigate automatic var capture in fork** (Track 1) - Phase values showing x
+1. **Fix evaluateContinuousValue cross-instance struct_create** (Track 3) - The root cause
+2. **Re-evaluate MooreToCore X-init change** (Track 2) - May need to revert or refine cccb3395c
 3. **SPI AVIP timescale + nested class** (Track 4) - Remaining compile blockers
-4. **Run OpenTitan full suite with old MLIR** (Track 2) - Verify 31 passing tests aren't affected
+4. **Run full regression with fixed fork capture** (Track 1) - Verify AVIP test improvements
 
 ---
 
