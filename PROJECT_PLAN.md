@@ -144,6 +144,11 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 1. **Automatic Variables in Fork Loops**: `automatic` variables in loops don't capture current iteration value
 2. **Event Trigger Not Waking Waiters**: `->event` inside fork doesn't wake `@(event)` waiters
+3. **AVIP Compile Blockers** (from `~/mbit/*avip*` smoke runs):
+   - `dist` range bounds must be constant (e.g. `[0:$]` in `dist`).
+   - Override method default argument mismatch vs superclass signature.
+   - Nested class access to non-static outer properties in `randomize() with`.
+   - Empty argument in `$sformatf` rejected.
 
 ---
 
@@ -179,7 +184,8 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
   in strict LEC to avoid unsound flattening. Keep expanding unroll coverage.
 - OpenTitan AES S-Box LEC now runs through strict solve with no LLHD
   abstraction, but still reports NEQ; investigate counterexample and close any
-  remaining X-prop / resolution gaps.
+  remaining X-prop / resolution gaps. Recent run: `aes_sbox_canright` FAIL
+  (see `/tmp/opentitan-lec-wh2bsegi/aes_sbox_canright`).
 - Full multi-driver resolution semantics are still missing.
 
 ### CRITICAL: Simulation Runtime Blockers (Updated Iteration 74)

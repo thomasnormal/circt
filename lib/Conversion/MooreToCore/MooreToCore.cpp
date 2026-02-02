@@ -8274,6 +8274,84 @@ struct ConversionOpConversion : public OpConversionPattern<ConversionOp> {
       }
     }
 
+    // Handle integer domain conversions explicitly to preserve 4-state layout.
+    if (auto inputMooreInt = dyn_cast<moore::IntType>(op.getInput().getType())) {
+      if (auto resultMooreInt =
+              dyn_cast<moore::IntType>(op.getResult().getType())) {
+        bool inputFour = inputMooreInt.getDomain() == Domain::FourValued;
+        bool resultFour = resultMooreInt.getDomain() == Domain::FourValued;
+
+        if (inputFour || resultFour) {
+          unsigned resultWidth = resultMooreInt.getWidth();
+          Location loc = op.getLoc();
+
+          if (resultFour) {
+            auto resultStructType = cast<hw::StructType>(resultType);
+            auto resultValueType =
+                cast<IntegerType>(resultStructType.getElements()[0].type);
+            unsigned valueWidth = resultValueType.getWidth();
+
+            Value value;
+            Value unknown;
+            if (inputFour && isFourStateStructType(adaptor.getInput().getType())) {
+              value = extractFourStateValue(rewriter, loc, adaptor.getInput());
+              unknown =
+                  extractFourStateUnknown(rewriter, loc, adaptor.getInput());
+            } else {
+              value = adaptor.getInput();
+              unknown = hw::ConstantOp::create(
+                  rewriter, loc, rewriter.getIntegerType(inputMooreInt.getWidth()),
+                  0);
+            }
+
+            // Ensure integer types before adjusting width.
+            if (!isa<IntegerType>(value.getType())) {
+              value = rewriter.createOrFold<hw::BitcastOp>(
+                  loc,
+                  rewriter.getIntegerType(
+                      value.getType().getIntOrFloatBitWidth()),
+                  value);
+            }
+            if (!isa<IntegerType>(unknown.getType())) {
+              unknown = rewriter.createOrFold<hw::BitcastOp>(
+                  loc,
+                  rewriter.getIntegerType(
+                      unknown.getType().getIntOrFloatBitWidth()),
+                  unknown);
+            }
+
+            value = adjustIntegerWidth(rewriter, value, valueWidth, loc);
+            unknown = adjustIntegerWidth(rewriter, unknown, valueWidth, loc);
+
+            if (value.getType() != resultValueType)
+              value = rewriter.createOrFold<hw::BitcastOp>(loc, resultValueType,
+                                                          value);
+            if (unknown.getType() != resultValueType)
+              unknown = rewriter.createOrFold<hw::BitcastOp>(
+                  loc, resultValueType, unknown);
+
+            auto result =
+                createFourStateStruct(rewriter, loc, value, unknown);
+            rewriter.replaceOp(op, result);
+            return success();
+          }
+
+          if (inputFour) {
+            Value value = adaptor.getInput();
+            if (isFourStateStructType(value.getType()))
+              value = extractFourStateValue(rewriter, loc, value);
+
+            value = adjustIntegerWidth(rewriter, value, resultWidth, loc);
+            if (value.getType() != resultType)
+              value =
+                  rewriter.createOrFold<hw::BitcastOp>(loc, resultType, value);
+            rewriter.replaceOp(op, value);
+            return success();
+          }
+        }
+      }
+    }
+
     int64_t inputBw = hw::getBitWidth(adaptor.getInput().getType());
     int64_t resultBw = hw::getBitWidth(resultType);
     if (inputBw == -1 || resultBw == -1)
