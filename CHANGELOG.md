@@ -27,20 +27,28 @@ bug where `outstanding_q` was used both directly and indirectly in `tl_o_pre`.
 4. **✅ Mailbox Unit Tests** (from Iter 312) - 9 new tests for getOrCreateMailbox. All 26 pass.
 5. **✅ No Regressions** - All existing tests pass: sv-tests BMC 23/23, LEC 23/23, verilator
    BMC 17/17, LEC 17/17, fork capture correct, mailbox correct.
+6. **✅ OpenTitan Regressions Recovered** - csrng_reg_top and i2c_reg_top now PASS again
+   after DAG fix (were TIMEOUT regressions from X-init recompile).
+7. **✅ OpenTitan 95.2% Pass Rate** (40/42): Up from 69.2% (27/39). 11 tests improved
+   (aes_reg_top, ascon_reg_top, csrng_reg_top, gpio_no_alerts, gpio, hmac_reg_top,
+   i2c_reg_top, rv_timer_reg_top, tlul_adapter_reg, uart_reg_top, uart). 1 segfault
+   (spi_host_reg_top_tb in interpretWait), 1 timeout (alert_handler_tb).
+8. **✅ LEC Counterexample UX** - Local LLHD temps init unknown=0 in non-strict stripping,
+   `(get-model)` injected for z3 runs, and `--print-solver-output` now prints c1/c2 outputs.
 
 ### Remaining Limitations
 
 - **OpenTitan d_valid still 0**: `a_ready=1` now correct, but register read response path
-  (`d_valid`) doesn't assert. May be a separate issue in the response generation logic.
+  (`d_valid`) doesn't assert. Investigating FirReg clock-edge update path.
 - **SPI AVIP**: Trailing comma fixed, but still needs timescale and nested class access fixes.
 - **OpenTitan AES S-Box LEC NEQ**: `aes_sbox_canright` still mismatches LUT under LEC.
 
 ### Active Work Items
 
-1. **Full OpenTitan regression with DAG fix** (Track 3) - Testing all 39 testbenches
-2. **Debug d_valid=0 in TL adapter** (Track 3) - Next blocker after a_ready fix
-3. **SPI AVIP timescale + nested class** (Track 4) - Remaining compile blockers
-4. **sv-tests/verilator regression check** (Track 1) - Ongoing
+1. **Debug d_valid=0 in TL adapter** (Track 3) - FirReg register update on clock edge
+2. **DAG shared-node unit test** (Track 1) - Lit test for the pushCount fix
+3. **Full OpenTitan regression** (Track 3) - 32/42 complete, waiting for final results
+4. **AVIP tests** (Track 4) - Running I2S, I3C, AXI4 verification
 
 ---
 
