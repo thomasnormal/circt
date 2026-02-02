@@ -9228,6 +9228,14 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     auto &parentState = processStates[procId];
     childState.valueMap = parentState.valueMap;
 
+    // Copy memory blocks from parent to child so that automatic variables
+    // allocated via llvm.alloca in the parent scope are accessible inside
+    // fork branches. Each child gets its own deep copy, which implements
+    // SystemVerilog automatic variable capture semantics: each fork
+    // iteration captures the current value of automatic variables at the
+    // point of the fork.
+    childState.memoryBlocks = parentState.memoryBlocks;
+
     // Copy processOrInitialOp from parent so that the child can look up functions
     // in the parent module (needed for virtual method dispatch via call_indirect)
     childState.processOrInitialOp = parentState.processOrInitialOp;

@@ -310,4 +310,160 @@ TEST_F(SyncPrimitivesTest, MailboxWaitQueues) {
   EXPECT_EQ(msg, 2u);
 }
 
+//===----------------------------------------------------------------------===//
+// getOrCreateMailbox Tests - Validates auto-creation fix for unknown IDs
+//===----------------------------------------------------------------------===//
+
+TEST_F(SyncPrimitivesTest, GetOrCreateMailboxCreatesForUnknownId) {
+  // getOrCreateMailbox should auto-create an unbounded mailbox for an ID
+  // that was never explicitly created via createMailbox().
+  MailboxId unknownId = 999;
+
+  // getMailbox should return nullptr for unknown IDs
+  EXPECT_EQ(syncManager->getMailbox(unknownId), nullptr);
+
+  // getOrCreateMailbox should create and return a valid mailbox
+  Mailbox *mbox = syncManager->getOrCreateMailbox(unknownId);
+  ASSERT_NE(mbox, nullptr);
+  EXPECT_EQ(mbox->getId(), unknownId);
+  EXPECT_FALSE(mbox->isBounded());
+  EXPECT_TRUE(mbox->isEmpty());
+}
+
+TEST_F(SyncPrimitivesTest, GetOrCreateMailboxReturnsExistingForKnownId) {
+  // Create a mailbox explicitly
+  MailboxId id = syncManager->createMailbox(5);
+
+  // getOrCreateMailbox should return the same mailbox, not create a new one
+  Mailbox *mbox = syncManager->getOrCreateMailbox(id);
+  ASSERT_NE(mbox, nullptr);
+  EXPECT_EQ(mbox->getId(), id);
+  EXPECT_TRUE(mbox->isBounded()); // Should retain the bound=5 property
+}
+
+TEST_F(SyncPrimitivesTest, GetOrCreateMailboxIdempotent) {
+  // Calling getOrCreateMailbox twice with the same unknown ID should return
+  // the same mailbox instance.
+  MailboxId id = 12345;
+
+  Mailbox *first = syncManager->getOrCreateMailbox(id);
+  ASSERT_NE(first, nullptr);
+
+  // Put a message to verify state persistence
+  first->put(42);
+
+  Mailbox *second = syncManager->getOrCreateMailbox(id);
+  ASSERT_NE(second, nullptr);
+  EXPECT_EQ(first, second);
+  EXPECT_EQ(second->getMessageCount(), 1u);
+}
+
+//===----------------------------------------------------------------------===//
+// Mailbox operations on auto-created mailboxes (via manager methods)
+// These test the fix where manager methods now use getOrCreateMailbox
+// instead of getMailbox, so they work with unknown IDs.
+//===----------------------------------------------------------------------===//
+
+TEST_F(SyncPrimitivesTest, MailboxPutGetOnAutoCreatedMailbox) {
+  // mailboxTryPut and mailboxTryGet should work on IDs that were never
+  // explicitly created, because the manager auto-creates them.
+  MailboxId unknownId = 777;
+
+  // Put should auto-create the mailbox and succeed
+  EXPECT_TRUE(syncManager->mailboxTryPut(unknownId, 100));
+  EXPECT_TRUE(syncManager->mailboxTryPut(unknownId, 200));
+  EXPECT_TRUE(syncManager->mailboxTryPut(unknownId, 300));
+
+  // Num should reflect the messages
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 3u);
+
+  // Get should return messages in FIFO order
+  uint64_t msg;
+  EXPECT_TRUE(syncManager->mailboxTryGet(unknownId, msg));
+  EXPECT_EQ(msg, 100u);
+  EXPECT_TRUE(syncManager->mailboxTryGet(unknownId, msg));
+  EXPECT_EQ(msg, 200u);
+  EXPECT_TRUE(syncManager->mailboxTryGet(unknownId, msg));
+  EXPECT_EQ(msg, 300u);
+
+  // Should be empty now
+  EXPECT_FALSE(syncManager->mailboxTryGet(unknownId, msg));
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 0u);
+}
+
+TEST_F(SyncPrimitivesTest, MailboxTryGetOnEmptyReturnsFalse) {
+  // Explicitly test that tryGet on an empty mailbox returns false
+  // and does not modify the output parameter.
+  MailboxId mbox = syncManager->createMailbox();
+  uint64_t msg = 0xDEADBEEF;
+
+  EXPECT_FALSE(syncManager->mailboxTryGet(mbox, msg));
+  // msg should be unchanged since tryGet returned false
+  EXPECT_EQ(msg, 0xDEADBEEFu);
+}
+
+TEST_F(SyncPrimitivesTest, MailboxTryGetOnAutoCreatedEmptyReturnsFalse) {
+  // tryGet on an auto-created (previously unknown) mailbox should also
+  // return false since it starts empty.
+  MailboxId unknownId = 555;
+  uint64_t msg = 0xDEADBEEF;
+
+  EXPECT_FALSE(syncManager->mailboxTryGet(unknownId, msg));
+  EXPECT_EQ(msg, 0xDEADBEEFu);
+}
+
+TEST_F(SyncPrimitivesTest, MailboxTryPutOnBoundedFull) {
+  // Verify that tryPut on a full bounded mailbox returns false.
+  MailboxId mbox = syncManager->createMailbox(1); // bound = 1
+
+  EXPECT_TRUE(syncManager->mailboxTryPut(mbox, 10));
+  // Mailbox is now full (1 of 1)
+  EXPECT_FALSE(syncManager->mailboxTryPut(mbox, 20));
+
+  // Verify the message in the mailbox is the first one
+  uint64_t msg;
+  EXPECT_TRUE(syncManager->mailboxTryGet(mbox, msg));
+  EXPECT_EQ(msg, 10u);
+
+  // Now there's space again
+  EXPECT_TRUE(syncManager->mailboxTryPut(mbox, 30));
+  EXPECT_TRUE(syncManager->mailboxTryGet(mbox, msg));
+  EXPECT_EQ(msg, 30u);
+}
+
+TEST_F(SyncPrimitivesTest, MailboxNumOnAutoCreatedMailbox) {
+  // mailboxNum should return 0 for an auto-created (previously unknown)
+  // mailbox and correctly track messages.
+  MailboxId unknownId = 888;
+
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 0u);
+
+  syncManager->mailboxTryPut(unknownId, 1);
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 1u);
+
+  syncManager->mailboxTryPut(unknownId, 2);
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 2u);
+
+  uint64_t msg;
+  syncManager->mailboxTryGet(unknownId, msg);
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 1u);
+}
+
+TEST_F(SyncPrimitivesTest, MailboxPeekOnAutoCreatedMailbox) {
+  // mailboxPeek should work on auto-created mailboxes.
+  MailboxId unknownId = 444;
+
+  uint64_t msg;
+  // Peek on empty auto-created mailbox should return false
+  EXPECT_FALSE(syncManager->mailboxPeek(unknownId, msg));
+
+  // Put a message and peek
+  syncManager->mailboxTryPut(unknownId, 42);
+  EXPECT_TRUE(syncManager->mailboxPeek(unknownId, msg));
+  EXPECT_EQ(msg, 42u);
+
+  // Peek should not remove the message
+  EXPECT_EQ(syncManager->mailboxNum(unknownId), 1u);
+}
+
 } // namespace
