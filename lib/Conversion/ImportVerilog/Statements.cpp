@@ -570,6 +570,10 @@ struct StmtVisitor {
     struct ForkBranch {
       llvm::SmallVector<const slang::ast::VariableDeclStatement *, 4> decls;
       const slang::ast::Statement *stmt = nullptr;
+      // Pre-computed initializer values for automatic variables. These are
+      // evaluated at fork creation time to capture the current values of
+      // outer scope variables (like loop counters).
+      llvm::DenseMap<const slang::ast::VariableSymbol *, Value> capturedInits;
     };
     llvm::SmallVector<ForkBranch, 4> branches;
     llvm::SmallVector<const slang::ast::VariableDeclStatement *, 4> pendingDecls;
@@ -595,6 +599,39 @@ struct StmtVisitor {
 
     Context::ValueSymbolScope forkScope(context.valueSymbols);
 
+    // Pre-compute initializer values for automatic variable declarations
+    // BEFORE creating the ForkOp. This ensures that references to outer scope
+    // variables (like loop counters) capture their current values at fork
+    // creation time, not when the fork branch executes.
+    //
+    // For example, in:
+    //   for (int i = 1; i <= 3; i++) begin
+    //     fork
+    //       automatic int local_i = i;  // Should capture i's current value
+    //       begin #(local_i * 100); end
+    //     join_none
+    //   end
+    //
+    // Each fork iteration should capture a different value of `i`.
+    for (size_t branchIdx = 0; branchIdx < branches.size(); ++branchIdx) {
+      auto &branch = branches[branchIdx];
+      for (auto *decl : branch.decls) {
+        const auto &var = decl->symbol;
+        if (const auto *init = var.getInitializer()) {
+          auto type = context.convertType(*var.getDeclaredType());
+          if (!type)
+            return failure();
+          auto initialValue = context.convertRvalueExpression(*init, type);
+          if (!initialValue)
+            return failure();
+          branch.capturedInits[&var] = initialValue;
+          LLVM_DEBUG(llvm::dbgs() << "Fork capture: stored init for var '"
+                                  << var.name << "' at " << &var
+                                  << " in branch " << branchIdx << "\n");
+        }
+      }
+    }
+
     // Create the ForkOp with the appropriate number of branches.
     auto forkOp = moore::ForkOp::create(builder, loc, joinType, nameAttr,
                                         branches.size());
@@ -612,8 +649,21 @@ struct StmtVisitor {
 
       Context::ValueSymbolScope branchScope(context.valueSymbols);
       for (auto *decl : branches[i].decls) {
-        if (failed(visit(*decl)))
-          return failure();
+        // Use pre-captured initializer values for automatic variables.
+        LLVM_DEBUG(llvm::dbgs() << "Fork lookup: checking var '"
+                                << decl->symbol.name << "' at " << &decl->symbol
+                                << " in branch " << i << ", map size="
+                                << branches[i].capturedInits.size() << "\n");
+        auto it = branches[i].capturedInits.find(&decl->symbol);
+        if (it != branches[i].capturedInits.end()) {
+          LLVM_DEBUG(llvm::dbgs() << "Fork lookup: FOUND, using captured init\n");
+          if (failed(declareVariableWithInit(decl->symbol, it->second)))
+            return failure();
+        } else {
+          LLVM_DEBUG(llvm::dbgs() << "Fork lookup: NOT FOUND, using regular decl\n");
+          if (failed(visit(*decl)))
+            return failure();
+        }
       }
 
       if (failed(context.convertStatement(*branches[i].stmt)))
@@ -881,6 +931,30 @@ struct StmtVisitor {
     auto varOp = moore::VariableOp::create(
         builder, loc, moore::RefType::get(unpackedType),
         builder.getStringAttr(var.name), initial);
+    context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                         &var, varOp);
+    return success();
+  }
+
+  /// Declare a variable with a pre-computed initial value. This is used for
+  /// automatic variables in fork blocks where the initializer must be evaluated
+  /// at fork creation time to capture outer scope variable values.
+  LogicalResult declareVariableWithInit(const slang::ast::VariableSymbol &var,
+                                        Value initialValue) {
+    auto type = context.convertType(*var.getDeclaredType());
+    if (!type)
+      return failure();
+
+    auto unpackedType = dyn_cast<moore::UnpackedType>(type);
+    if (!unpackedType) {
+      mlir::emitError(loc) << "variable '" << var.name
+                           << "' has non-unpacked type: " << type;
+      return failure();
+    }
+
+    auto varOp = moore::VariableOp::create(
+        builder, loc, moore::RefType::get(unpackedType),
+        builder.getStringAttr(var.name), initialValue);
     context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
                                          &var, varOp);
     return success();
@@ -2728,14 +2802,16 @@ struct StmtVisitor {
     if (!target)
       return failure();
 
-    // Read the current value of the target.
-    Value readValue = moore::ReadOp::create(builder, loc, target);
-
-    // Check if this is an event type - if so, use EventTriggerOp.
-    if (isa<moore::EventType>(readValue.getType())) {
-      moore::EventTriggerOp::create(builder, loc, readValue);
+    // Check if this is an event type - if so, use EventTriggerOp with the ref.
+    // EventTriggerOp takes a reference so it can toggle the underlying signal.
+    auto refType = dyn_cast<moore::RefType>(target.getType());
+    if (refType && isa<moore::EventType>(refType.getNestedType())) {
+      moore::EventTriggerOp::create(builder, loc, target);
       return success();
     }
+
+    // Read the current value of the target.
+    Value readValue = moore::ReadOp::create(builder, loc, target);
 
     // For integer types, use the toggle mechanism: invert the current value
     // and write it back to signal the event.
