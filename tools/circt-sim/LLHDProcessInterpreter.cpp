@@ -2239,7 +2239,13 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     mlir::Value aux;
   };
 
-  llvm::DenseSet<mlir::Value> inProgress;
+  // Track how many times each value has been pushed onto the evaluation stack.
+  // In a DAG (directed acyclic graph), a value may be shared by multiple
+  // consumers. We allow pushing a value up to 2 times: once for the original
+  // reference and once for a shared dependency. The duplicate will be a no-op
+  // when popped (already cached from the first evaluation). If a value is
+  // pushed more than twice, it indicates a true combinational cycle.
+  llvm::DenseMap<mlir::Value, unsigned> pushCount;
   llvm::DenseMap<mlir::Value, InterpretedValue> cache;
   llvm::SmallVector<EvalFrame, 64> stack;
 
@@ -2252,11 +2258,13 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       return;
     if (cache.find(v) != cache.end())
       return;
-    if (!inProgress.insert(v).second) {
+    auto &count = pushCount[v];
+    if (count >= 2) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Warning: Cycle detected in evaluateContinuousValue\n");
       return;
     }
+    count++;
     stack.push_back(EvalFrame{v});
   };
 
@@ -2266,14 +2274,12 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     EvalFrame &frame = stack.back();
     mlir::Value current = frame.value;
     if (cache.find(current) != cache.end()) {
-      inProgress.erase(current);
       stack.pop_back();
       continue;
     }
 
     auto finish = [&](InterpretedValue result) {
       cache[current] = result;
-      inProgress.erase(current);
       stack.pop_back();
     };
 
@@ -2285,19 +2291,11 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     };
 
     if (frame.stage == 0) {
-      if (SignalId sigId = getSignalId(current)) {
-        const SignalValue &sv = scheduler.getSignalValue(sigId);
-        if (sv.isUnknown()) {
-          if (auto encoded = getEncodedUnknownForType(current.getType()))
-            finish(InterpretedValue(*encoded));
-          else
-            finish(makeUnknown(current));
-        } else {
-          finish(InterpretedValue::fromSignalValue(sv));
-        }
-        continue;
-      }
-
+      // Check instanceOutputMap BEFORE getSignalId. Instance results are
+      // registered as signals (for caching), but the signal value may be stale
+      // when multiple combinational processes fire in response to the same
+      // source signal change. By evaluating through the instance we always
+      // compute the correct combinational value from current inputs.
       auto instMapIt = instanceOutputMap.find(activeInstanceId);
       if (instMapIt != instanceOutputMap.end()) {
         auto instIt = instMapIt->second.find(current);
@@ -2312,6 +2310,19 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           }
           continue;
         }
+      }
+
+      if (SignalId sigId = getSignalId(current)) {
+        const SignalValue &sv = scheduler.getSignalValue(sigId);
+        if (sv.isUnknown()) {
+          if (auto encoded = getEncodedUnknownForType(current.getType()))
+            finish(InterpretedValue(*encoded));
+          else
+            finish(makeUnknown(current));
+        } else {
+          finish(InterpretedValue::fromSignalValue(sv));
+        }
+        continue;
       }
 
       if (auto result = dyn_cast<OpResult>(current)) {
