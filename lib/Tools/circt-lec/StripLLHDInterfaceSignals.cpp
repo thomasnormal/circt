@@ -51,6 +51,8 @@ struct FieldAccess {
   bool hasMultipleStoreValues = false;
 };
 
+static constexpr StringLiteral kLECLocalSignalAttr = "lec.local";
+
 struct ModuleState {
   Namespace ns;
   unsigned insertIndex = 0;
@@ -205,8 +207,14 @@ void CFRemover::run() {
   for (auto *block : rpot)
     sortedBlocks.push_back(block);
 
-  if (sortedBlocks.size() != region.getBlocks().size())
-    return;
+  if (sortedBlocks.size() != region.getBlocks().size()) {
+    llvm::SmallPtrSet<Block *, 8> reachable(sortedBlocks.begin(),
+                                            sortedBlocks.end());
+    for (auto &block : llvm::make_early_inc_range(region)) {
+      if (!reachable.contains(&block))
+        block.erase();
+    }
+  }
 
   DenseMap<Block *, unsigned> blockOrder;
   blockOrder.reserve(sortedBlocks.size());
@@ -435,6 +443,40 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
   return hw::StructCreateOp::create(builder, loc, hwType, fields);
 }
 
+static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc,
+                               bool zeroUnknown) {
+  if (auto intType = dyn_cast<IntegerType>(type))
+    return hw::ConstantOp::create(
+        builder, loc,
+        builder.getIntegerAttr(intType, APInt(intType.getWidth(), 0)));
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    SmallVector<Value, 4> fields;
+    fields.reserve(structType.getElements().size());
+    for (const auto &field : structType.getElements()) {
+      if (auto nestedStruct = dyn_cast<hw::StructType>(field.type)) {
+        Value nested =
+            buildDefaultValue(nestedStruct, builder, loc, zeroUnknown);
+        if (!nested)
+          return {};
+        fields.push_back(nested);
+        continue;
+      }
+      auto fieldInt = dyn_cast<IntegerType>(field.type);
+      if (!fieldInt)
+        return {};
+      bool isUnknownField =
+          field.name && field.name.getValue() == "unknown";
+      APInt value = (isUnknownField && !zeroUnknown)
+                        ? APInt::getAllOnes(fieldInt.getWidth())
+                        : APInt(fieldInt.getWidth(), 0);
+      fields.push_back(hw::ConstantOp::create(
+          builder, loc, builder.getIntegerAttr(fieldInt, value)));
+    }
+    return hw::StructCreateOp::create(builder, loc, structType, fields);
+  }
+  return {};
+}
+
 static Value adjustIntegerWidth(OpBuilder &builder, Value value,
                                 unsigned targetWidth, Location loc) {
   auto intType = dyn_cast<IntegerType>(value.getType());
@@ -449,6 +491,543 @@ static Value adjustIntegerWidth(OpBuilder &builder, Value value,
     return comb::ConcatOp::create(builder, loc, ValueRange{zeroExt, value});
   }
   return comb::ExtractOp::create(builder, loc, value, 0, targetWidth);
+}
+
+static Value stripPointerCasts(Value ptr,
+                               SmallVectorImpl<Operation *> *casts = nullptr) {
+  Value current = ptr;
+  while (true) {
+    if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>()) {
+      if (casts)
+        casts->push_back(bitcast);
+      current = bitcast.getArg();
+      continue;
+    }
+    if (auto addr = current.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+      if (casts)
+        casts->push_back(addr);
+      current = addr.getArg();
+      continue;
+    }
+    return current;
+  }
+}
+
+static bool collectAllocaBases(Value current,
+                               llvm::SmallPtrSetImpl<Value> &visited,
+                               llvm::SmallPtrSetImpl<Operation *> &bases) {
+  current = stripPointerCasts(current);
+  if (!visited.insert(current).second)
+    return true;
+  if (auto alloca = current.getDefiningOp<LLVM::AllocaOp>()) {
+    bases.insert(alloca.getOperation());
+    return true;
+  }
+  if (auto select = current.getDefiningOp<LLVM::SelectOp>()) {
+    return collectAllocaBases(select.getTrueValue(), visited, bases) &&
+           collectAllocaBases(select.getFalseValue(), visited, bases);
+  }
+  auto arg = dyn_cast<BlockArgument>(current);
+  if (!arg)
+    return false;
+  Block *block = arg.getOwner();
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      return false;
+    bool found = false;
+    for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+         succIndex < e; ++succIndex) {
+      if (branch->getSuccessor(succIndex) != block)
+        continue;
+      auto succOperands = branch.getSuccessorOperands(succIndex);
+      if (arg.getArgNumber() >= succOperands.size())
+        return false;
+      if (!collectAllocaBases(succOperands[arg.getArgNumber()], visited,
+                              bases))
+        return false;
+      found = true;
+    }
+    if (!found)
+      return false;
+  }
+  return true;
+}
+
+static LLVM::AllocaOp resolveAllocaBase(
+    Value ptr, llvm::SmallPtrSetImpl<Value> &visited) {
+  Value current = stripPointerCasts(ptr);
+  if (auto alloca = current.getDefiningOp<LLVM::AllocaOp>())
+    return alloca;
+  if (!visited.insert(current).second)
+    return nullptr;
+  if (auto select = current.getDefiningOp<LLVM::SelectOp>()) {
+    auto trueBase = resolveAllocaBase(select.getTrueValue(), visited);
+    if (!trueBase)
+      return nullptr;
+    auto falseBase = resolveAllocaBase(select.getFalseValue(), visited);
+    if (!falseBase || falseBase != trueBase)
+      return nullptr;
+    return trueBase;
+  }
+  auto arg = dyn_cast<BlockArgument>(current);
+  if (!arg)
+    return nullptr;
+  Block *block = arg.getOwner();
+  SmallVector<Value, 4> incomingPtrs;
+  for (Block *pred : block->getPredecessors()) {
+    auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+    if (!branch)
+      return nullptr;
+    bool found = false;
+    for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+         succIndex < e; ++succIndex) {
+      if (branch->getSuccessor(succIndex) != block)
+        continue;
+      auto succOperands = branch.getSuccessorOperands(succIndex);
+      if (arg.getArgNumber() >= succOperands.size())
+        return nullptr;
+      incomingPtrs.push_back(succOperands[arg.getArgNumber()]);
+      found = true;
+    }
+    if (!found)
+      return nullptr;
+  }
+  if (incomingPtrs.empty())
+    return nullptr;
+  LLVM::AllocaOp base;
+  for (Value incoming : incomingPtrs) {
+    auto incomingBase = resolveAllocaBase(incoming, visited);
+    if (!incomingBase)
+      return nullptr;
+    if (!base)
+      base = incomingBase;
+    else if (incomingBase != base)
+      return nullptr;
+  }
+  return base;
+}
+
+static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
+                                       bool zeroUnknown) {
+  if (castOp.getInputs().size() != 1 || castOp.getResults().size() != 1)
+    return false;
+  auto refType = dyn_cast<llhd::RefType>(castOp.getResult(0).getType());
+  if (!refType)
+    return false;
+  Value ptr = castOp.getInputs().front();
+  if (!isa<LLVM::LLVMPointerType>(ptr.getType()))
+    return false;
+
+  llvm::SmallPtrSet<Value, 8> visited;
+  llvm::SmallPtrSet<Operation *, 4> baseSet;
+  if (!collectAllocaBases(ptr, visited, baseSet) || baseSet.empty())
+    return false;
+  SmallVector<LLVM::AllocaOp, 4> baseAllocas;
+  baseAllocas.reserve(baseSet.size());
+  for (Operation *op : baseSet)
+    baseAllocas.push_back(cast<LLVM::AllocaOp>(op));
+  Type allocaElemType = baseAllocas.front().getElemType();
+  for (auto base : baseAllocas)
+    if (base.getElemType() != allocaElemType)
+      return false;
+
+  auto baseSetContains = [&](Value value) -> bool {
+    llvm::SmallPtrSet<Value, 8> localVisited;
+    llvm::SmallPtrSet<Operation *, 4> valueBases;
+    if (!collectAllocaBases(value, localVisited, valueBases) ||
+        valueBases.empty())
+      return false;
+    for (Operation *op : valueBases)
+      if (!baseSet.contains(op))
+        return false;
+    return true;
+  };
+
+  llvm::SmallPtrSet<Value, 16> derivedPtrs;
+  SmallVector<Value, 16> worklist;
+  auto addDerived = [&](Value value) {
+    if (derivedPtrs.insert(value).second)
+      worklist.push_back(value);
+  };
+  for (auto base : baseAllocas)
+    addDerived(base.getResult());
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        addDerived(bitcast.getResult());
+        continue;
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        addDerived(addr.getResult());
+        continue;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        if (baseSetContains(select.getResult()))
+          addDerived(select.getResult());
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] != current)
+              continue;
+            BlockArgument arg = succ->getArgument(idx);
+            if (baseSetContains(arg))
+              addDerived(arg);
+          }
+        }
+        continue;
+      }
+    }
+  }
+
+  SmallVector<LLVM::StoreOp, 8> stores;
+  SmallVector<LLVM::LoadOp, 8> loads;
+  SmallVector<UnrealizedConversionCastOp, 4> refCasts;
+  SmallVector<Operation *, 8> ptrCasts;
+  for (Value value : derivedPtrs) {
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        if (store.getAddr() != value)
+          return false;
+        stores.push_back(store);
+        continue;
+      }
+      if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+        if (load.getAddr() != value)
+          return false;
+        loads.push_back(load);
+        continue;
+      }
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(user)) {
+        if (cast.getInputs().size() == 1 && cast.getResults().size() == 1 &&
+            cast.getInputs().front() == value &&
+            cast.getResult(0).getType() == refType) {
+          refCasts.push_back(cast);
+          continue;
+        }
+        if (cast->use_empty())
+          continue;
+        return false;
+      }
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        if (bitcast.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(bitcast.getResult()))
+          return false;
+        ptrCasts.push_back(bitcast);
+        continue;
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        if (addr.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(addr.getResult()))
+          return false;
+        ptrCasts.push_back(addr);
+        continue;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        if (!derivedPtrs.contains(select.getResult()))
+          continue;
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] != value)
+              continue;
+            if (!derivedPtrs.contains(succ->getArgument(idx)))
+              continue;
+          }
+        }
+        continue;
+      }
+      return false;
+    }
+  }
+
+  if (stores.empty() && loads.empty() && refCasts.empty())
+    return false;
+
+  Type nestedType = refType.getNestedType();
+  DenseMap<LLVM::StoreOp, Value> storeValues;
+  for (LLVM::StoreOp store : stores) {
+    Value storedValue = unwrapStoredValue(store.getValue());
+    if (storedValue.getType() != nestedType) {
+      if (auto hwType = dyn_cast<hw::StructType>(nestedType)) {
+        if (isa<LLVM::LLVMStructType>(storedValue.getType())) {
+          OpBuilder builder(store);
+          storedValue = buildHWStructFromLLVM(storedValue, hwType, builder,
+                                              store.getLoc(), {});
+        }
+      }
+    }
+    if (!storedValue || storedValue.getType() != nestedType)
+      return false;
+    storeValues[store] = storedValue;
+  }
+
+  for (LLVM::LoadOp load : loads) {
+    if (load.getType() == nestedType)
+      continue;
+    for (Operation *user : llvm::to_vector(load.getResult().getUsers())) {
+      auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!cast || cast.getInputs().size() != 1 ||
+          cast.getResults().size() != 1)
+        return false;
+      if (cast.getResult(0).getType() != nestedType)
+        return false;
+    }
+  }
+
+  OpBuilder sigBuilder(baseAllocas.front());
+  Value init =
+      buildDefaultValue(nestedType, sigBuilder, castOp.getLoc(), zeroUnknown);
+  if (!init)
+    return false;
+  auto sigOp = llhd::SignalOp::create(sigBuilder, castOp.getLoc(), refType,
+                                      StringAttr{}, init);
+  sigOp->setAttr(kLECLocalSignalAttr, sigBuilder.getUnitAttr());
+  Value sig = sigOp.getResult();
+
+  for (auto refCast : refCasts) {
+    refCast.getResult(0).replaceAllUsesWith(sig);
+    refCast.erase();
+  }
+
+  for (LLVM::LoadOp load : loads) {
+    OpBuilder loadBuilder(load);
+    Value probe = llhd::ProbeOp::create(loadBuilder, load.getLoc(), sig);
+    if (probe.getType() == load.getType()) {
+      load.getResult().replaceAllUsesWith(probe);
+      load.erase();
+      continue;
+    }
+    for (Operation *user : llvm::to_vector(load.getResult().getUsers())) {
+      auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!cast)
+        return false;
+      cast.getResult(0).replaceAllUsesWith(probe);
+      cast.erase();
+    }
+    load.erase();
+  }
+
+  for (LLVM::StoreOp store : stores) {
+    OpBuilder storeBuilder(store);
+    Value zeroTime = llhd::ConstantTimeOp::create(storeBuilder, store.getLoc(),
+                                                  0, "ns", 0, 1);
+    llhd::DriveOp::create(storeBuilder, store.getLoc(), sig,
+                          storeValues.lookup(store), zeroTime, Value{});
+    store.erase();
+  }
+
+  for (Operation *cast : llvm::reverse(ptrCasts))
+    if (cast->use_empty())
+      cast->erase();
+  for (auto base : baseAllocas)
+    if (base.use_empty())
+      base.erase();
+  return true;
+}
+
+static bool rewriteAllocaBackedStruct(LLVM::AllocaOp alloca,
+                                      bool zeroUnknown) {
+  llvm::SmallPtrSet<Value, 8> visited;
+  if (resolveAllocaBase(alloca.getResult(), visited) != alloca)
+    return false;
+
+  llvm::SmallPtrSet<Value, 16> derivedPtrs;
+  SmallVector<Value, 16> worklist;
+  auto addDerived = [&](Value value) {
+    if (derivedPtrs.insert(value).second)
+      worklist.push_back(value);
+  };
+  addDerived(alloca.getResult());
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    for (OpOperand &use : current.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        addDerived(bitcast.getResult());
+        continue;
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        addDerived(addr.getResult());
+        continue;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        llvm::SmallPtrSet<Value, 8> localVisited;
+        if (resolveAllocaBase(select.getResult(), localVisited) == alloca)
+          addDerived(select.getResult());
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] != current)
+              continue;
+            BlockArgument arg = succ->getArgument(idx);
+            llvm::SmallPtrSet<Value, 8> localVisited;
+            if (resolveAllocaBase(arg, localVisited) == alloca)
+              addDerived(arg);
+          }
+        }
+        continue;
+      }
+    }
+  }
+
+  SmallVector<LLVM::StoreOp, 8> stores;
+  SmallVector<LLVM::LoadOp, 8> loads;
+  SmallVector<Operation *, 8> ptrCasts;
+  for (Value value : derivedPtrs) {
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+        if (store.getAddr() != value)
+          return false;
+        stores.push_back(store);
+        continue;
+      }
+      if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+        if (load.getAddr() != value)
+          return false;
+        loads.push_back(load);
+        continue;
+      }
+      if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+        if (bitcast.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(bitcast.getResult()))
+          return false;
+        ptrCasts.push_back(bitcast);
+        continue;
+      }
+      if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+        if (addr.getArg() != value)
+          return false;
+        if (!derivedPtrs.contains(addr.getResult()))
+          return false;
+        ptrCasts.push_back(addr);
+        continue;
+      }
+      if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        if (!derivedPtrs.contains(select.getResult()))
+          continue;
+        continue;
+      }
+      if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          Block *succ = branch->getSuccessor(succIndex);
+          for (unsigned idx = 0, sz = succOperands.size(); idx < sz; ++idx) {
+            if (succOperands[idx] != value)
+              continue;
+            if (!derivedPtrs.contains(succ->getArgument(idx)))
+              continue;
+          }
+        }
+        continue;
+      }
+      return false;
+    }
+  }
+
+  if (stores.empty() || loads.empty())
+    return false;
+
+  hw::StructType hwType;
+  for (LLVM::LoadOp load : loads) {
+    if (load.getResult().use_empty())
+      return false;
+    for (Operation *user : llvm::to_vector(load.getResult().getUsers())) {
+      auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!cast || cast.getInputs().size() != 1 ||
+          cast.getResults().size() != 1)
+        return false;
+      auto castType = dyn_cast<hw::StructType>(cast.getResult(0).getType());
+      if (!castType)
+        return false;
+      if (!hwType)
+        hwType = castType;
+      else if (hwType != castType)
+        return false;
+    }
+  }
+  if (!hwType)
+    return false;
+
+  DenseMap<LLVM::StoreOp, Value> storeValues;
+  for (LLVM::StoreOp store : stores) {
+    Value storedValue = unwrapStoredValue(store.getValue());
+    if (storedValue.getType() != hwType) {
+      if (isa<LLVM::LLVMStructType>(storedValue.getType())) {
+        OpBuilder builder(store);
+        storedValue =
+            buildHWStructFromLLVM(storedValue, hwType, builder,
+                                  store.getLoc(), {});
+      }
+    }
+    if (!storedValue || storedValue.getType() != hwType)
+      return false;
+    storeValues[store] = storedValue;
+  }
+
+  llhd::RefType refType = llhd::RefType::get(hwType);
+  OpBuilder sigBuilder(alloca);
+  Value init =
+      buildDefaultValue(hwType, sigBuilder, alloca.getLoc(), zeroUnknown);
+  if (!init)
+    return false;
+  auto sigOp =
+      llhd::SignalOp::create(sigBuilder, alloca.getLoc(), refType,
+                             StringAttr{}, init);
+  sigOp->setAttr(kLECLocalSignalAttr, sigBuilder.getUnitAttr());
+  Value sig = sigOp.getResult();
+
+  for (LLVM::LoadOp load : loads) {
+    OpBuilder loadBuilder(load);
+    Value probe = llhd::ProbeOp::create(loadBuilder, load.getLoc(), sig);
+    for (Operation *user : llvm::to_vector(load.getResult().getUsers())) {
+      auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
+      if (!cast)
+        return false;
+      cast.getResult(0).replaceAllUsesWith(probe);
+      cast.erase();
+    }
+    load.erase();
+  }
+
+  for (LLVM::StoreOp store : stores) {
+    OpBuilder storeBuilder(store);
+    Value zeroTime = llhd::ConstantTimeOp::create(storeBuilder, store.getLoc(),
+                                                  0, "ns", 0, 1);
+    llhd::DriveOp::create(storeBuilder, store.getLoc(), sig,
+                          storeValues.lookup(store), zeroTime, Value{});
+    store.erase();
+  }
+
+  for (Operation *cast : llvm::reverse(ptrCasts))
+    if (cast->use_empty())
+      cast->erase();
+  if (alloca.use_empty())
+    alloca.erase();
+  return true;
 }
 
 static Value createZeroValue(OpBuilder &builder, Location loc, Type type) {
@@ -470,6 +1049,22 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
     return combOp.emitError("expected llhd.combinational in hw.module for LEC");
 
   Region &region = combOp.getBody();
+
+  SmallVector<UnrealizedConversionCastOp> refCasts;
+  region.walk([&](UnrealizedConversionCastOp op) {
+    if (op.getInputs().size() == 1 && op.getResults().size() == 1 &&
+        isa<LLVM::LLVMPointerType>(op.getInputs().front().getType()) &&
+        isa<llhd::RefType>(op.getResult(0).getType()))
+      refCasts.push_back(op);
+  });
+  for (auto castOp : refCasts)
+    (void)rewriteAllocaBackedLLHDRef(castOp, /*zeroUnknown=*/!strictMode);
+
+  SmallVector<LLVM::AllocaOp> allocas;
+  region.walk([&](LLVM::AllocaOp op) { allocas.push_back(op); });
+  for (LLVM::AllocaOp alloca : allocas)
+    if (alloca->getParentOp())
+      (void)rewriteAllocaBackedStruct(alloca, /*zeroUnknown=*/!strictMode);
 
   auto getLocalRefPtr = [](Value ref) -> Value {
     if (ref.getDefiningOp<llhd::SignalOp>())
@@ -596,6 +1191,45 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   });
   for (auto castOp : deadCasts)
     castOp.erase();
+
+  // Remove unused block arguments to avoid invalid pointer-typed merges.
+  if (!region.empty()) {
+    for (Block &block : region) {
+      for (int argIndex = static_cast<int>(block.getNumArguments()) - 1;
+           argIndex >= 0; --argIndex) {
+        BlockArgument arg = block.getArgument(argIndex);
+        if (!arg.use_empty())
+          continue;
+        for (Block *pred : block.getPredecessors()) {
+          Operation *terminator = pred->getTerminator();
+          if (auto br = dyn_cast<cf::BranchOp>(terminator)) {
+            auto operands = llvm::to_vector(br.getDestOperands());
+            operands.erase(operands.begin() + argIndex);
+            br.getDestOperandsMutable().assign(operands);
+            continue;
+          }
+          if (auto br = dyn_cast<cf::CondBranchOp>(terminator)) {
+            if (br.getTrueDest() == &block) {
+              auto operands = llvm::to_vector(br.getTrueDestOperands());
+              operands.erase(operands.begin() + argIndex);
+              br.getTrueDestOperandsMutable().assign(operands);
+              continue;
+            }
+            if (br.getFalseDest() == &block) {
+              auto operands = llvm::to_vector(br.getFalseDestOperands());
+              operands.erase(operands.begin() + argIndex);
+              br.getFalseDestOperandsMutable().assign(operands);
+              continue;
+            }
+            continue;
+          }
+          return combOp.emitError(
+              "unsupported predecessor for unused block argument in LEC");
+        }
+        block.eraseArgument(argIndex);
+      }
+    }
+  }
 
   if (!region.empty()) {
     Block &entryBlock = region.front();
@@ -737,6 +1371,7 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
 
 static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                                       ModuleState &state, bool strictMode) {
+  bool isLocalSignal = sigOp->hasAttr(kLECLocalSignalAttr);
   struct RefStep {
     enum Kind { StructField, Extract } kind;
     StringAttr field;
@@ -835,7 +1470,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     if (pathIt == refPaths.end())
       return sigOp.emitError("missing ref path for LLHD signal");
     const RefPath &path = pathIt->second;
-    for (auto *user : ref.getUsers()) {
+  for (auto *user : ref.getUsers()) {
       if (auto probe = dyn_cast<llhd::ProbeOp>(user)) {
         probes.push_back(probe);
         probePaths.try_emplace(probe, path);
@@ -1014,13 +1649,52 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
   }
 
+
   OpBuilder builder(sigOp);
-  auto materializePath = [&](Value baseValue, const RefPath &path,
-                             Location loc) -> Value {
+  auto getStructFieldType =
+      [&](hw::StructType structType, StringAttr field) -> Type {
+    for (const auto &element : structType.getElements()) {
+      if (element.name == field)
+        return element.type;
+    }
+    return Type();
+  };
+  auto canInlinePath = [&](Type baseType, const RefPath &path) -> bool {
+    Type currentType = baseType;
+    for (const auto &step : path) {
+      if (step.kind == RefStep::StructField) {
+        auto structType = dyn_cast<hw::StructType>(currentType);
+        if (!structType)
+          return false;
+        currentType = getStructFieldType(structType, step.field);
+        if (!currentType)
+          return false;
+        continue;
+      }
+      if (step.kind == RefStep::Extract) {
+        auto baseInt = dyn_cast<IntegerType>(currentType);
+        auto elemInt = dyn_cast<IntegerType>(step.elemType);
+        if (!baseInt || !elemInt)
+          return false;
+        auto constant = step.index.getDefiningOp<hw::ConstantOp>();
+        if (!constant)
+          return false;
+        uint64_t low = constant.getValue().getZExtValue();
+        if (low + elemInt.getWidth() > baseInt.getWidth())
+          return false;
+        currentType = elemInt;
+        continue;
+      }
+    }
+    return true;
+  };
+  auto materializePath = [&](OpBuilder &pathBuilder, Value baseValue,
+                             const RefPath &path, Location loc) -> Value {
     Value value = baseValue;
     for (const auto &step : path) {
       if (step.kind == RefStep::StructField) {
-        value = hw::StructExtractOp::create(builder, loc, value, step.field);
+        value =
+            hw::StructExtractOp::create(pathBuilder, loc, value, step.field);
         continue;
       }
       if (step.kind == RefStep::Extract) {
@@ -1030,26 +1704,129 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           return Value();
         if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
           uint64_t low = constant.getValue().getZExtValue();
-          value = comb::ExtractOp::create(builder, loc, value, low,
+          value = comb::ExtractOp::create(pathBuilder, loc, value, low,
                                           elemType.getWidth());
           continue;
         }
-        Value shift =
-            adjustIntegerWidth(builder, step.index, baseType.getWidth(), loc);
-        Value shifted = comb::ShrUOp::create(builder, loc, value, shift);
-        value = comb::ExtractOp::create(builder, loc, shifted, 0,
+        Value shift = adjustIntegerWidth(pathBuilder, step.index,
+                                         baseType.getWidth(), loc);
+        Value shifted =
+            comb::ShrUOp::create(pathBuilder, loc, value, shift);
+        value = comb::ExtractOp::create(pathBuilder, loc, shifted, 0,
                                         elemType.getWidth());
         continue;
       }
     }
     return value;
   };
+  auto updatePath = [&](auto &&self, OpBuilder &pathBuilder, Value baseValue,
+                        ArrayRef<RefStep> path, Value updateValue,
+                        Location loc) -> Value {
+    if (path.empty())
+      return updateValue;
+    const RefStep &step = path.front();
+    if (step.kind == RefStep::StructField) {
+      auto structType = dyn_cast<hw::StructType>(baseValue.getType());
+      if (!structType)
+        return Value();
+      bool isFourStateStruct = isFourStateStructType(structType);
+      StringAttr unknownFieldName;
+      if (isFourStateStruct) {
+        for (const auto &element : structType.getElements()) {
+          if (element.name && element.name.getValue() == "unknown") {
+            unknownFieldName = element.name;
+            break;
+          }
+        }
+      }
+      SmallVector<Value, 4> fields;
+      fields.reserve(structType.getElements().size());
+      for (const auto &element : structType.getElements()) {
+        Value fieldValue =
+            hw::StructExtractOp::create(pathBuilder, loc, baseValue,
+                                        element.name);
+        if (element.name == step.field) {
+          fieldValue = self(self, pathBuilder, fieldValue, path.drop_front(),
+                            updateValue, loc);
+          if (!fieldValue)
+            return Value();
+          if (isFourStateStruct && element.name.getValue() == "value" &&
+              unknownFieldName) {
+            auto updateInt = dyn_cast<IntegerType>(updateValue.getType());
+            if (updateInt) {
+              Value unknownValue = hw::StructExtractOp::create(
+                  pathBuilder, loc, baseValue, unknownFieldName);
+              Value zeroUpdate =
+                  createZeroValue(pathBuilder, loc, updateValue.getType());
+              Value updatedUnknown =
+                  self(self, pathBuilder, unknownValue, path.drop_front(),
+                       zeroUpdate, loc);
+              if (!updatedUnknown)
+                return Value();
+              Value unknownFieldValue = updatedUnknown;
+              SmallVector<Value, 4> updatedFields;
+              updatedFields.reserve(structType.getElements().size());
+              for (const auto &nested : structType.getElements()) {
+                Value nestedValue = hw::StructExtractOp::create(
+                    pathBuilder, loc, baseValue, nested.name);
+                if (nested.name == step.field)
+                  nestedValue = fieldValue;
+                else if (nested.name == unknownFieldName)
+                  nestedValue = unknownFieldValue;
+                updatedFields.push_back(nestedValue);
+              }
+              return hw::StructCreateOp::create(pathBuilder, loc, structType,
+                                                updatedFields);
+            }
+          }
+        }
+        fields.push_back(fieldValue);
+      }
+      return hw::StructCreateOp::create(pathBuilder, loc, structType, fields);
+    }
+    if (step.kind == RefStep::Extract) {
+      auto baseInt = dyn_cast<IntegerType>(baseValue.getType());
+      auto elemInt = dyn_cast<IntegerType>(step.elemType);
+      if (!baseInt || !elemInt)
+        return Value();
+      auto constant = step.index.getDefiningOp<hw::ConstantOp>();
+      if (!constant)
+        return Value();
+      uint64_t low = constant.getValue().getZExtValue();
+      unsigned elemWidth = elemInt.getWidth();
+      unsigned baseWidth = baseInt.getWidth();
+      if (low + elemWidth > baseWidth)
+        return Value();
+      Value updated =
+          adjustIntegerWidth(pathBuilder, updateValue, elemWidth, loc);
+      SmallVector<Value, 3> pieces;
+      if (low + elemWidth < baseWidth) {
+        Value upper = comb::ExtractOp::create(
+            pathBuilder, loc, baseValue, low + elemWidth,
+            baseWidth - low - elemWidth);
+        pieces.push_back(upper);
+      }
+      pieces.push_back(updated);
+      if (low > 0) {
+        Value lower =
+            comb::ExtractOp::create(pathBuilder, loc, baseValue, 0, low);
+        pieces.push_back(lower);
+      }
+      if (pieces.size() == 1)
+        return pieces.front();
+      return comb::ConcatOp::create(pathBuilder, loc, pieces);
+    }
+    return Value();
+  };
 
   bool canInline = forwardedArgs.empty();
   Block *singleBlock = nullptr;
   for (auto probe : probes) {
-    if (!probePaths.lookup(probe).empty())
-      canInline = false;
+    if (!probePaths.lookup(probe).empty()) {
+      if (!canInlinePath(sigOp.getType().getNestedType(),
+                         probePaths.lookup(probe)))
+        canInline = false;
+    }
     Block *block = probe->getBlock();
     if (!singleBlock)
       singleBlock = block;
@@ -1057,9 +1834,12 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       canInline = false;
   }
   for (auto driveOp : drives) {
-    if (!drivePaths.lookup(driveOp).empty())
-      canInline = false;
-    if (driveOp.getEnable())
+    if (!drivePaths.lookup(driveOp).empty()) {
+      if (!canInlinePath(sigOp.getType().getNestedType(),
+                         drivePaths.lookup(driveOp)))
+        canInline = false;
+    }
+    if (!isLocalSignal && driveOp.getEnable())
       canInline = false;
     if (!driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>())
       canInline = false;
@@ -1070,6 +1850,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       canInline = false;
   }
 
+
+
   if (drives.size() == 1) {
     llhd::DriveOp driveOp = drives.front();
     if (drivePaths.lookup(driveOp).empty() && !driveOp.getEnable() &&
@@ -1077,7 +1859,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         isa<BlockArgument>(driveOp.getValue())) {
       Value drivenValue = driveOp.getValue();
       for (auto probe : probes) {
-        Value replacement = materializePath(drivenValue,
+        OpBuilder probeBuilder(probe);
+        Value replacement = materializePath(probeBuilder, drivenValue,
                                             probePaths.lookup(probe),
                                             probe.getLoc());
         if (!replacement)
@@ -1106,11 +1889,12 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   if (canInline && singleBlock) {
     // In strict mode, reject multiple unconditional drives as requiring
     // abstraction since simultaneous drives have undefined priority.
-    if (strictMode && drives.size() > 1 && hasEnabledDrive(drives))
+    if (strictMode && !isLocalSignal && drives.size() > 1 &&
+        hasEnabledDrive(drives))
       return sigOp.emitError(
           "LLHD signal requires abstraction; rerun without --strict-llhd");
 
-    if (drives.size() > 1 && !allDrivesSameValue(drives)) {
+    if (!isLocalSignal && drives.size() > 1 && !allDrivesSameValue(drives)) {
       bool probesAfterDrives = true;
       Operation *firstProbe = nullptr;
       bool sawProbe = false;
@@ -1249,7 +2033,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         }
       }
 
-      if (strictMode)
+      if (strictMode && !isLocalSignal)
         return sigOp.emitError(
             "LLHD signal requires abstraction; rerun without --strict-llhd");
     }
@@ -1258,17 +2042,42 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     for (auto it = singleBlock->begin(); it != singleBlock->end();) {
       Operation *op = &*it++;
       if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
-        if (driveOp.getSignal() == sigOp.getResult()) {
-          current = driveOp.getValue();
-          driveOp.erase();
+        auto pathIt = drivePaths.find(driveOp);
+        if (pathIt == drivePaths.end())
+          continue;
+        OpBuilder driveBuilder(driveOp);
+        Value driveValue = unwrapStoredValue(driveOp.getValue());
+        if (!driveValue)
+          return driveOp.emitError("unsupported LLHD drive value in LEC");
+        Value next = driveValue;
+        const RefPath &path = pathIt->second;
+        if (!path.empty()) {
+          next = updatePath(updatePath, driveBuilder, current, path, driveValue,
+                            driveOp.getLoc());
+          if (!next)
+            return driveOp.emitError(
+                "unsupported LLHD drive path update in LEC");
         }
+        if (Value enable = driveOp.getEnable()) {
+          next = comb::MuxOp::create(driveBuilder, driveOp.getLoc(), enable,
+                                     next, current);
+        }
+        current = next;
+        driveOp.erase();
         continue;
       }
       if (auto probe = dyn_cast<llhd::ProbeOp>(op)) {
-        if (probe.getSignal() == sigOp.getResult()) {
-          probe.getResult().replaceAllUsesWith(current);
-          probe.erase();
-        }
+        auto pathIt = probePaths.find(probe);
+        if (pathIt == probePaths.end())
+          continue;
+        OpBuilder probeBuilder(probe);
+        Value replacement =
+            materializePath(probeBuilder, current, pathIt->second,
+                            probe.getLoc());
+        if (!replacement)
+          return probe.emitError("unsupported LLHD probe path in LEC");
+        probe.getResult().replaceAllUsesWith(replacement);
+        probe.erase();
         continue;
       }
     }
@@ -1300,19 +2109,20 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       return probePaths.lookup(p).empty();
     });
     bool resolveEnabledDrives =
-        strictMode && canResolveEnabledDrives(drives) &&
+        strictMode && !isLocalSignal && canResolveEnabledDrives(drives) &&
         hasEnabledDrive(drives);
     // In strict mode, reject multiple conditional drives unless they are
     // complementary enables on exactly two drives.
     bool hasMultipleUnconditionalDrives =
         drives.size() > 1 &&
         llvm::any_of(drives, [](llhd::DriveOp d) { return !d.getEnable(); });
-    if (strictMode && drives.size() > 1 && hasEnabledDrive(drives) &&
+    if (strictMode && !isLocalSignal && drives.size() > 1 &&
+        hasEnabledDrive(drives) &&
         !resolveEnabledDrives && !hasComplementaryEnables(drives) &&
         !hasExclusiveEnables(drives, builder))
       return sigOp.emitError(
           "LLHD signal requires abstraction; rerun without --strict-llhd");
-    if (strictMode && hasMultipleUnconditionalDrives &&
+    if (strictMode && !isLocalSignal && hasMultipleUnconditionalDrives &&
         !allDrivesSameValue(drives))
       return sigOp.emitError(
           "LLHD signal requires abstraction; rerun without --strict-llhd");
@@ -1483,7 +2293,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     drive = drives.front();
     if (!drivePaths.lookup(drive).empty())
       needsInput = true;
-    if (drive.getEnable())
+    if (drive.getEnable() && !isLocalSignal)
       needsInput = true;
     if (!drive.getTime().getDefiningOp<llhd::ConstantTimeOp>())
       needsInput = true;
@@ -1512,7 +2322,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     Value newInput = state.addInput(module, baseName, sigOp.getInit().getType());
     for (auto probe : probes) {
       Value replacement =
-          materializePath(newInput, probePaths.lookup(probe), probe.getLoc());
+          materializePath(builder, newInput, probePaths.lookup(probe),
+                          probe.getLoc());
       if (!replacement)
         return probe.emitError("unsupported LLHD probe path in LEC");
       if (replacement.getType() != probe.getResult().getType())
@@ -1538,7 +2349,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
 
   for (auto probe : probes) {
     Value replacement =
-        materializePath(drivenValue, probePaths.lookup(probe), probe.getLoc());
+        materializePath(builder, drivenValue, probePaths.lookup(probe),
+                        probe.getLoc());
     if (!replacement)
       return probe.emitError("unsupported LLHD probe path in LEC");
     if (replacement.getType() != probe.getResult().getType())

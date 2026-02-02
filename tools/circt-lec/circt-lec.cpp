@@ -163,6 +163,16 @@ static cl::opt<bool>
               cl::desc("Allow LEC to abstract unsupported LLHD/inout cases"),
               cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool>
+    assumeKnownInputs("assume-known-inputs",
+                      cl::desc("Assume 4-state inputs are known (unknown=0)"),
+                      cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
+    dumpUnknownSources("dump-unknown-sources",
+                       cl::desc("Dump backward slices for 4-state outputs"),
+                       cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to the z3 binary for --run-smtlib"),
@@ -541,6 +551,10 @@ static LogicalResult executeLEC(MLIRContext &context) {
     // Hoist assertions before LLHD process lowering removes them.
     pm.addPass(createStripLLHDProcesses());
 
+    StripLLHDInterfaceSignalsOptions stripLLHDOpts;
+    stripLLHDOpts.strict = strictLLHDEnabled;
+    pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
+
     auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
     llhdPostPM.addPass(llhd::createLowerProcessesPass());
     llhdPostPM.addPass(mlir::createCSEPass());
@@ -562,10 +576,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
       llhdPostPM.addPass(mlir::createCanonicalizerPass());
     }
   }
-  StripLLHDInterfaceSignalsOptions stripLLHDOpts;
-  stripLLHDOpts.strict = strictLLHDEnabled;
-  pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
   pm.addPass(createLowerLECLLVM());
+  if (dumpUnknownSources)
+    pm.addPass(createDumpLECUnknowns());
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
@@ -585,7 +598,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertDatapathToSMT());
   pm.addPass(createConvertCombToSMT());
-  pm.addPass(createConvertVerifToSMT());
+  ConvertVerifToSMTOptions convertVerifToSMTOptions;
+  convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
+  pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
   pm.addPass(createSimpleCanonicalizerPass());
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
@@ -648,6 +663,28 @@ static LogicalResult executeLEC(MLIRContext &context) {
       llvm::raw_fd_ostream smtStream(smtFd, true);
       if (failed(smt::exportSMTLIB(module.get(), smtStream)))
         return failure();
+    }
+    if (wantSolverOutput) {
+      auto buffer = llvm::MemoryBuffer::getFile(smtPath);
+      if (!buffer) {
+        llvm::errs() << "failed to read SMT file for model request\n";
+        return failure();
+      }
+      std::string contents = buffer.get()->getBuffer().str();
+      size_t resetPos = contents.rfind("(reset)");
+      std::string getModel = "(get-model)\n";
+      if (resetPos != std::string::npos) {
+        contents.insert(resetPos, getModel);
+      } else {
+        contents.append(getModel);
+      }
+      std::error_code ec;
+      llvm::raw_fd_ostream smtStream(smtPath, ec, llvm::sys::fs::OF_Text);
+      if (ec) {
+        llvm::errs() << "failed to rewrite SMT file: " << ec.message() << "\n";
+        return failure();
+      }
+      smtStream << contents;
     }
 
     SmallString<128> outPath;
