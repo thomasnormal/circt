@@ -2552,7 +2552,7 @@ def RandomBIOp : Builtin<"random"> {
   // Optional positional attribute for the seed
   let arguments = (ins Optional<TwoValuedI32>:$seed);
   let results = (outs TwoValuedI32:$result);
-  let assemblyFormat = "($seed^)? attr-dict";
+  let assemblyFormat = "(`seed` $seed^)? attr-dict";
 }
 
 def UrandomBIOp : Builtin<"urandom"> {
@@ -2568,7 +2568,7 @@ def UrandomBIOp : Builtin<"urandom"> {
   // Optional positional attribute for the seed
   let arguments = (ins Optional<TwoValuedI32>:$seed);
   let results = (outs TwoValuedI32:$result);
-  let assemblyFormat = "($seed^)? attr-dict";
+  let assemblyFormat = "(`seed` $seed^)? attr-dict";
 }
 
 def UrandomRangeBIOp : Builtin<"urandom_range"> {
