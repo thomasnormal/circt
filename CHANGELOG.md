@@ -38,6 +38,17 @@ llvm.func internal @"__moore_global_init_Container::arr"() {
 }
 ```
 
+### LEC 2-State Strength Resolution for LLHD Signals
+
+Strict LEC now resolves multiple LLHD drives with strength attributes on 2-state
+signals by using strength-aware resolution and explicit unknown inputs when
+conflicts occur.
+
+- Added 2-state strength-aware resolution helpers and unit tests.
+- Updated LLHD interface stripping to apply strength resolution for 2-state
+  signals instead of erroring.
+- Added regression: `test/Tools/circt-lec/lec-strip-llhd-signal-strength-resolve-2state.mlir`.
+
 ### UVM Phase Creation - VERIFIED WORKING
 
 UVM phases can now be created with uvm-core:

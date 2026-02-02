@@ -11,6 +11,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Support/BoolCondition.h"
 #include "circt/Support/FourStateUtils.h"
+#include "circt/Support/TwoStateUtils.h"
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-lec/Passes.h"
@@ -27,6 +28,7 @@
 #include "mlir/IR/RegionGraphTraits.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Mem2Reg.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -794,7 +796,11 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       else if (val.getType() != valueType)
         return false;
     }
-    return valueType && isFourStateStructType(valueType);
+    if (!valueType)
+      return false;
+    if (isFourStateStructType(valueType))
+      return true;
+    return getTwoStateValueWidth(valueType).has_value();
   };
 
   SmallVector<llhd::ProbeOp> probes;
@@ -1183,16 +1189,44 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
               s1Attr ? static_cast<unsigned>(s1Attr.getValue())
                      : defaultStrength);
         }
-        Value resolved = anyStrength
-                             ? resolveFourStateValuesWithStrength(
-                                   resolveBuilder, firstProbe->getLoc(),
-                                   driveValues, driveEnables, driveStrength0,
-                                   driveStrength1,
-                                   static_cast<unsigned>(
-                                       llhd::DriveStrength::HighZ))
-                             : resolveFourStateValuesWithEnable(
-                                   resolveBuilder, firstProbe->getLoc(),
-                                   driveValues, driveEnables);
+        Type valueType = driveValues.front().getType();
+        Value resolved;
+        if (isFourStateStructType(valueType)) {
+          resolved = anyStrength
+                         ? resolveFourStateValuesWithStrength(
+                               resolveBuilder, firstProbe->getLoc(),
+                               driveValues, driveEnables, driveStrength0,
+                               driveStrength1,
+                               static_cast<unsigned>(
+                                   llhd::DriveStrength::HighZ))
+                         : resolveFourStateValuesWithEnable(
+                               resolveBuilder, firstProbe->getLoc(),
+                               driveValues, driveEnables);
+        } else {
+          auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+          if (!module)
+            return sigOp.emitError("expected LLHD signal in hw.module");
+          Value unknownValue;
+          auto getUnknownValue = [&]() -> Value {
+            if (unknownValue)
+              return unknownValue;
+            std::string baseName = "llhd_sig_unknown";
+            if (auto nameAttr = sigOp.getNameAttr())
+              baseName = (nameAttr.getValue() + "_unknown").str();
+            unknownValue = state.addInput(module, baseName, valueType);
+            return unknownValue;
+          };
+          resolved =
+              anyStrength
+                  ? resolveTwoStateValuesWithStrength(
+                        resolveBuilder, firstProbe->getLoc(), driveValues,
+                        driveEnables, driveStrength0, driveStrength1,
+                        getUnknownValue(),
+                        static_cast<unsigned>(llhd::DriveStrength::HighZ))
+                  : resolveTwoStateValuesWithEnable(
+                        resolveBuilder, firstProbe->getLoc(), driveValues,
+                        driveEnables, getUnknownValue());
+        }
         if (resolved) {
           for (auto probe : probes) {
             probe.getResult().replaceAllUsesWith(resolved);
@@ -1339,16 +1373,41 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                 replacement = sigOp.getInit();
               } else {
                 builder.setInsertionPoint(probe);
-                replacement =
-                    activeAnyStrength
-                        ? resolveFourStateValuesWithStrength(
-                              builder, probe.getLoc(), activeValues,
-                              activeEnables, activeStrength0, activeStrength1,
-                              static_cast<unsigned>(
-                                  llhd::DriveStrength::HighZ))
-                        : resolveFourStateValuesWithEnable(
-                              builder, probe.getLoc(), activeValues,
-                              activeEnables);
+                Type valueType = activeValues.front().getType();
+                if (isFourStateStructType(valueType)) {
+                  replacement =
+                      activeAnyStrength
+                          ? resolveFourStateValuesWithStrength(
+                                builder, probe.getLoc(), activeValues,
+                                activeEnables, activeStrength0,
+                                activeStrength1,
+                                static_cast<unsigned>(
+                                    llhd::DriveStrength::HighZ))
+                          : resolveFourStateValuesWithEnable(
+                                builder, probe.getLoc(), activeValues,
+                                activeEnables);
+                } else {
+                  auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+                  if (!module)
+                    return probe.emitError(
+                        "expected LLHD signal in hw.module");
+                  std::string baseName = "llhd_sig_unknown";
+                  if (auto nameAttr = sigOp.getNameAttr())
+                    baseName = (nameAttr.getValue() + "_unknown").str();
+                  Value unknownValue =
+                      state.addInput(module, baseName, valueType);
+                  replacement =
+                      activeAnyStrength
+                          ? resolveTwoStateValuesWithStrength(
+                                builder, probe.getLoc(), activeValues,
+                                activeEnables, activeStrength0,
+                                activeStrength1, unknownValue,
+                                static_cast<unsigned>(
+                                    llhd::DriveStrength::HighZ))
+                          : resolveTwoStateValuesWithEnable(
+                                builder, probe.getLoc(), activeValues,
+                                activeEnables, unknownValue);
+                }
               }
               if (!replacement ||
                   replacement.getType() != probe.getResult().getType())
@@ -1996,7 +2055,8 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if (field.stores.empty() || field.reads.empty())
         return false;
       auto valueType = field.reads.front().getType();
-      if (!isFourStateStructType(valueType))
+      bool isFourState = isFourStateStructType(valueType);
+      if (!isFourState && !getTwoStateValueWidth(valueType))
         return false;
 
       auto module = sigOp->getParentOfType<hw::HWModuleOp>();
@@ -2094,9 +2154,23 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         return false;
 
       builder.setInsertionPoint(readOp);
-      Value resolved = resolveFourStateValuesWithEnable(builder,
-                                                        readOp->getLoc(),
-                                                        values, enables);
+      Value resolved;
+      if (isFourState) {
+        resolved = resolveFourStateValuesWithEnable(builder, readOp->getLoc(),
+                                                    values, enables);
+      } else {
+        auto baseName = sigOp.getNameAttr()
+                            ? sigOp.getNameAttr().getValue()
+                            : StringRef("llhd_if");
+        std::string name = baseName.str();
+        name += "_field";
+        name += std::to_string(entry.first);
+        name += "_unknown";
+        Value unknownValue = state.addInput(module, name, valueType);
+        resolved = resolveTwoStateValuesWithEnable(builder, readOp->getLoc(),
+                                                   values, enables,
+                                                   unknownValue);
+      }
       if (!resolved || resolved.getType() != valueType)
         return false;
       for (auto read : field.reads)
