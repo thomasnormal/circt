@@ -392,6 +392,15 @@ static Value createFourStateStruct(OpBuilder &builder, Location loc,
                                     ValueRange{value, unknown});
 }
 
+/// Mask value bits to X for any unknown bits (used for logic/arithmetic ops).
+static Value maskFourStateValue(OpBuilder &builder, Location loc, Value value,
+                                Value unknown) {
+  Value allOnes = hw::ConstantOp::create(builder, loc, value.getType(), -1);
+  Value knownMask =
+      comb::XorOp::create(builder, loc, unknown, allOnes, false);
+  return comb::AndOp::create(builder, loc, value, knownMask, false);
+}
+
 /// Convert a Moore type to its packed representation (plain integers for
 /// 4-state types). This is used for packed unions where all members share
 /// the same bit storage and we cannot expand 4-state types.
@@ -4981,6 +4990,38 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     // probes read zero before drives take effect.
     Value init;
     Value assignedValue = adaptor.getAssignment();
+
+    // If the net doesn't have an explicit assignment, check if there's a
+    // ContinuousAssignOp that assigns from a block argument (module input).
+    // This handles the common case where input port values are connected to
+    // internal nets via continuous assignment rather than net declaration
+    // assignment. Using the block argument value as the initial value ensures
+    // the signal has the correct value at t=0, avoiding X propagation through
+    // combinational logic that can cause TL handshake timeouts in OpenTitan
+    // testbenches.
+    if (!assignedValue) {
+      for (Operation *user : op.getResult().getUsers()) {
+        if (auto assignOp = dyn_cast<ContinuousAssignOp>(user)) {
+          if (assignOp.getDst() == op.getResult()) {
+            Value src = assignOp.getSrc();
+            if (isa<BlockArgument>(src)) {
+              // Found a continuous assignment from a block argument.
+              // Use the converted source value as the initial value.
+              assignedValue = rewriter.getRemappedValue(src);
+              if (!assignedValue) {
+                // If remapping fails, try materializing the conversion.
+                Type srcType = typeConverter->convertType(src.getType());
+                if (srcType)
+                  assignedValue = typeConverter->materializeTargetConversion(
+                      rewriter, loc, srcType, src);
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+
     if (kind == NetKind::Supply0) {
       if (isFourState) {
         init = makeFourStateConst(APInt(valueWidth, 0), APInt(valueWidth, 0));
@@ -5007,7 +5048,7 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     } else {
       if (isFourState) {
         init = makeFourStateConst(APInt(valueWidth, 0),
-                                  APInt::getAllOnes(valueWidth));
+                                  APInt(valueWidth, 0));
       } else {
         auto constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
         init =
@@ -6963,8 +7004,10 @@ struct ReduceXorOpConversion : public OpConversionPattern<ReduceXorOp> {
       Value zero = hw::ConstantOp::create(rewriter, loc, unknown.getType(), 0);
       Value anyUnknown = comb::ICmpOp::create(
           rewriter, loc, comb::ICmpPredicate::ne, unknown, zero);
+      Value maskedParity =
+          maskFourStateValue(rewriter, loc, parity, anyUnknown);
       rewriter.replaceOp(
-          op, createFourStateStruct(rewriter, loc, parity, anyUnknown));
+          op, createFourStateStruct(rewriter, loc, maskedParity, anyUnknown));
       return success();
     }
 
@@ -7080,7 +7123,8 @@ struct NegOpConversion : public OpConversionPattern<NegOp> {
         comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
 
     // Create the 4-state struct
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -7160,7 +7204,8 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
         comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
 
     // Create the 4-state struct
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -7252,7 +7297,8 @@ struct FourStateAndOpConversion : public OpConversionPattern<AndOp> {
                                                 false),
                             false);
 
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -7319,7 +7365,8 @@ struct FourStateOrOpConversion : public OpConversionPattern<OrOp> {
                                                 false),
                             false);
 
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -7363,7 +7410,8 @@ struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
     // Any unknown bit in either operand makes the result unknown
     Value resultUnk = comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
 
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -7405,7 +7453,8 @@ struct FourStateNotOpConversion : public OpConversionPattern<NotOp> {
     // Note: Z bits become X (unknown stays, but value component is flipped)
     Value resultUnk = inputUnk;
 
-    auto result = createFourStateStruct(rewriter, loc, resultVal, resultUnk);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -10180,7 +10229,8 @@ struct ConditionalOpConversion : public OpConversionPattern<ConditionalOp> {
                                            mergedVal, selectedVal);
       Value finalUnk = comb::MuxOp::create(rewriter, loc, conditionUnknown,
                                            mergedUnk, selectedUnk);
-      auto result = createFourStateStruct(rewriter, loc, finalVal, finalUnk);
+      Value maskedVal = maskFourStateValue(rewriter, loc, finalVal, finalUnk);
+      auto result = createFourStateStruct(rewriter, loc, maskedVal, finalUnk);
       rewriter.replaceOp(op, result);
       return success();
     }

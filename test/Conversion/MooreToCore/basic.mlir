@@ -398,10 +398,9 @@ moore.module @Net() {
 
 // CHECK-LABEL: hw.module @NetLogic
 // CHECK-DAG: [[SUP1_INIT:%.+]] = hw.aggregate_constant [true, false] : !hw.struct<value: i1, unknown: i1>
-// CHECK-DAG: [[SUP0_INIT:%.+]] = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
-// CHECK-DAG: [[WIRE_INIT:%.+]] = hw.aggregate_constant [false, true] : !hw.struct<value: i1, unknown: i1>
-// CHECK: llhd.sig [[WIRE_INIT]] : !hw.struct<value: i1, unknown: i1>
-// CHECK: llhd.sig [[SUP0_INIT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK-DAG: [[ZERO_INIT:%.+]] = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[ZERO_INIT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[ZERO_INIT]] : !hw.struct<value: i1, unknown: i1>
 // CHECK: llhd.sig [[SUP1_INIT]] : !hw.struct<value: i1, unknown: i1>
 moore.module @NetLogic(out a : !moore.l1, out b : !moore.l1, out c : !moore.l1) {
   %wire = moore.net wire : !moore.ref<l1>
