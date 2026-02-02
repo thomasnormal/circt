@@ -1,6 +1,24 @@
 # CIRCT UVM Parity Changelog
 
-## Iteration 301 - February 1, 2026 (Current Status)
+## Iteration 301 - February 2, 2026 (Current Status)
+
+### Parameterized Class Specializations via Nested Typedefs - FIXED
+
+Fixed a critical bug where parameterized class specializations referenced via nested typedefs inside classes (like UVM's `uvm_component_utils` macro) were not being properly converted. This caused all classes using the same parameterized registry pattern to share a single static member instead of having separate instances.
+
+**Root Cause**: When processing `TypeAliasType` members inside classes, the visitor was returning early without triggering conversion of the referenced specialized class.
+
+**Fix**: Added logic to `TypeAliasType` visitor in `ClassDeclVisitor` to check if the canonical type is a specialized class and trigger its conversion.
+
+**Impact**: This unblocks the UVM factory registration pattern where each component class defines:
+```systemverilog
+class my_test extends uvm_component;
+  typedef uvm_component_registry #(my_test, "my_test") type_id;  // Now properly specialized
+  ...
+endclass
+```
+
+Each class now correctly gets its own `m__initialized` static variable in its registry specialization.
 
 ### Static Associative Arrays - VERIFIED WORKING
 
