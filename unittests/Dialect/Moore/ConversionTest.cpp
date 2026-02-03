@@ -32,6 +32,23 @@ bool isFourStateStructType(Type type) {
          fields[1].name.getValue() == "unknown";
 }
 
+bool isLLVMFourStateStructType(Type type, unsigned &width) {
+  auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type);
+  if (!llvmStructType || llvmStructType.isOpaque())
+    return false;
+  auto body = llvmStructType.getBody();
+  if (body.size() != 2)
+    return false;
+  auto valueType = dyn_cast<IntegerType>(body[0]);
+  auto unknownType = dyn_cast<IntegerType>(body[1]);
+  if (!valueType || !unknownType)
+    return false;
+  if (valueType.getWidth() != unknownType.getWidth())
+    return false;
+  width = valueType.getWidth();
+  return true;
+}
+
 bool hasMaskedUnknownStructCreate(ModuleOp module) {
   bool found = false;
   module.walk([&](hw::StructCreateOp create) {
@@ -226,6 +243,66 @@ TEST(MooreToCoreConversionTest, FourStateGlobalVariableUsesLLVMType) {
 
   EXPECT_TRUE(foundLLVMGlobal);
   EXPECT_FALSE(hasHWStructType);
+}
+
+TEST(MooreToCoreConversionTest, FourStateLLVMStructCastPreservesFieldOrder) {
+  MLIRContext context;
+  context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,
+                      seq::SeqDialect, llhd::LLHDDialect, ltl::LTLDialect,
+                      verif::VerifDialect, LLVM::LLVMDialect,
+                      arith::ArithDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @cast_from_llvm(out out : !hw.struct<value: i8, unknown: i8>) {
+      %undef = llvm.mlir.undef : !llvm.struct<(i8, i8)>
+      %val = hw.constant 90 : i8
+      %unk = hw.constant 15 : i8
+      %s0 = llvm.insertvalue %val, %undef[0] : !llvm.struct<(i8, i8)>
+      %s1 = llvm.insertvalue %unk, %s0[1] : !llvm.struct<(i8, i8)>
+      %hw = builtin.unrealized_conversion_cast %s1 : !llvm.struct<(i8, i8)> to !hw.struct<value: i8, unknown: i8>
+      hw.output %hw : !hw.struct<value: i8, unknown: i8>
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createConvertMooreToCorePass());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool sawOrderedAggregate = false;
+  module->walk([&](hw::AggregateConstantOp agg) {
+    if (!isFourStateStructType(agg.getType()))
+      return;
+    auto fields = agg.getFieldsAttr();
+    if (fields.size() != 2)
+      return;
+    auto valueAttr = dyn_cast<IntegerAttr>(fields[0]);
+    auto unknownAttr = dyn_cast<IntegerAttr>(fields[1]);
+    if (!valueAttr || !unknownAttr)
+      return;
+    if (valueAttr.getValue().getLimitedValue() == 90 &&
+        unknownAttr.getValue().getLimitedValue() == 15)
+      sawOrderedAggregate = true;
+  });
+
+  bool sawFourStateCast = false;
+  module->walk([&](UnrealizedConversionCastOp cast) {
+    if (cast.getNumOperands() != 1 || cast.getNumResults() != 1)
+      return;
+    Type srcType = cast.getOperand(0).getType();
+    Type dstType = cast.getResult(0).getType();
+    unsigned width = 0;
+    if ((isFourStateStructType(srcType) &&
+         isLLVMFourStateStructType(dstType, width)) ||
+        (isFourStateStructType(dstType) &&
+         isLLVMFourStateStructType(srcType, width)))
+      sawFourStateCast = true;
+  });
+
+  EXPECT_TRUE(sawOrderedAggregate);
+  EXPECT_FALSE(sawFourStateCast);
 }
 
 TEST(MooreToCoreConversionTest, FourStateConditionalMasksUnknownValue) {

@@ -201,6 +201,24 @@ static hw::StructType getNestedStructType(hw::StructType hwType,
   return current;
 }
 
+static hw::StructType getFourStateStructForLLVM(LLVM::LLVMStructType llvmType) {
+  if (llvmType.isOpaque())
+    return {};
+  auto body = llvmType.getBody();
+  if (body.size() != 2)
+    return {};
+  auto valueType = dyn_cast<IntegerType>(body[0]);
+  auto unknownType = dyn_cast<IntegerType>(body[1]);
+  if (!valueType || !unknownType)
+    return {};
+  if (valueType.getWidth() != unknownType.getWidth())
+    return {};
+  auto *ctx = llvmType.getContext();
+  return hw::StructType::get(
+      ctx, {{StringAttr::get(ctx, "value"), valueType},
+            {StringAttr::get(ctx, "unknown"), unknownType}});
+}
+
 static Value extractFromHWStruct(Value hwStruct, ArrayRef<int64_t> path,
                                  OpBuilder &builder, Location loc) {
   Value current = hwStruct;
@@ -1379,6 +1397,38 @@ void LowerLECLLVMPass::runOnOperation() {
           "unsupported LLVM struct conversion in LEC; add lowering");
       signalPassFailure();
       return;
+    }
+  }
+
+  // Lower leftover llvm.extractvalue ops from 4-state LLVM structs into
+  // comb/hw operations so we can fully eliminate LLVM structs.
+  SmallVector<LLVM::ExtractValueOp, 16> extracts;
+  module.walk([&](LLVM::ExtractValueOp op) {
+    auto llvmStructType =
+        dyn_cast<LLVM::LLVMStructType>(op.getContainer().getType());
+    if (!llvmStructType)
+      return;
+    if (!getFourStateStructForLLVM(llvmStructType))
+      return;
+    extracts.push_back(op);
+  });
+  if (!extracts.empty()) {
+    DominanceInfo domInfo(module);
+    for (auto extract : extracts) {
+      auto llvmStructType =
+          cast<LLVM::LLVMStructType>(extract.getContainer().getType());
+      auto hwType = getFourStateStructForLLVM(llvmStructType);
+      if (!hwType)
+        continue;
+      OpBuilder builder(extract);
+      ArrayRef<int64_t> path = extract.getPosition();
+      Value replacement = findInsertedValue(extract.getContainer(), hwType,
+                                            path, &domInfo, builder,
+                                            extract.getLoc(), &allocaSignals);
+      if (!replacement)
+        continue;
+      extract.replaceAllUsesWith(replacement);
+      extract.erase();
     }
   }
 

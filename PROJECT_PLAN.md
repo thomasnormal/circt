@@ -52,6 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC Local Signal Init** | ✅ UPDATED | Local LLHD signal init uses unknown=0 in non-strict stripping |
 | **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
 | **LEC Counterexample Outputs** | ✅ ADDED | `--print-solver-output` prints c1/c2 output values |
+| **OpenTitan AES S-Box LEC (assume-known)** | ✅ EQ | LowerLECLLVM lowers LLVM struct mux/extract; use `--mlir-disable-threading --assume-known-inputs` |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
 | **4-state LLVM Global Type Fix** | ✅ FIXED | `GlobalVariableOpConversion` converts `hw::StructType` to `LLVM::LLVMStructType`. All 12 Moore unit tests pass. |
@@ -124,17 +125,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **Fork shared memory**: parent process chain committed as `c76d665ef`
 
 ### New Findings (2026-02-03)
-- **OpenTitan AES S-Box LEC**: unknown-mask issue persists on canright output.
-  - Workdir: `/tmp/opentitan-lec-canright-extractref/aes_sbox_canright`
-  - Model: `op_i=4'h8`, `data_i=16'h0800` → canright `data_o=16'h00FF`, LUT `data_o=16'hBF00`
-  - Forcing canright unknown mask to zero is UNSAT, so the NEQ still hinges on X-prop.
-- **OpenTitan AES S-Box LEC (fixed-input SMT check)**: with the same input model
-  (`op_i=4'h8`, `data_i=16'h0800`), forcing canright unknown to zero is UNSAT even
-  after removing the distinct constraint, indicating the canright logic itself
-  deterministically produces unknown for that input (not just an unconstrained mask).
-- **LowerLECLLVM sanity**: `circt-opt -lower-lec-llvm` on `aes_sbox_lec.mlir` removes
-  all `llvm.*`/`unrealized_conversion_cast` ops in the canright path; pointer phis
-  become value phis, so the remaining X-prop is from 4-state logic modeling.
+- **OpenTitan AES S-Box LEC**: canright now **EQ under `--assume-known-inputs`**
+  after lowering LLVM struct mux/extract to HW (value/unknown ordering preserved).
+  - Workdir: `/tmp/opentitan-lec-canright-castfix3/aes_sbox_canright`
+  - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --assume-known-inputs" utils/run_opentitan_circt_lec.py --impl-filter canright --workdir /tmp/opentitan-lec-canright-castfix3 --keep-workdir`
+  - Result: `LEC_RESULT=EQ`. (Without assume-known inputs, still NEQ due to X-prop.)
+- **LowerLECLLVM struct mux lowering**: `llvm.insertvalue` + `comb.mux` + `llvm.extractvalue`
+  patterns now lower to field-wise `comb.mux` + `hw.struct_create`, eliminating
+  leftover LLVM ops in LEC and fixing canright NEQ under 2-state.
 - **StripLLHDProcesses dynamic-drive fix**: detect zero-time dynamic drives from
   above and keep the drive value instead of injecting an unconstrained input.
   Added regression in `test/Tools/circt-bmc/strip-llhd-process-drives.mlir`.
@@ -198,7 +196,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 7. Debug alert_handler_tb wall-clock timeout (334 processes, needs optimization)
 
 **What's needed (Track 4 - OpenTitan & Formal)**:
-9. Fix AES S-Box Canright LEC (X-prop issue in bit-select semantics)
+9. Resolve AES S-Box Canright LEC under full X-prop (2-state passes with `--assume-known-inputs`)
 10. Expand OpenTitan coverage beyond 42 IPs
 
 **Impact**: AVIP deep simulation validates UVM phasing end-to-end. Slang patches unblock remaining compilation failures. Test infra fixes ensure CI-ready regression suites.
