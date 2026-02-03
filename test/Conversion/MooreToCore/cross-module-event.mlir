@@ -11,16 +11,13 @@
 // CHECK-SAME: in %top_e : !llhd.ref<i1>
 // CHECK: llhd.process
 // CHECK-NOT: seq.initial
-// The event trigger probes the ref, allocates memory, stores, then calls
-// CHECK: llhd.prb %top_e : i1
-// CHECK: llvm.alloca
-// CHECK: llvm.store
-// CHECK: llvm.call @__moore_event_trigger
+// The event trigger takes the ref directly and toggles the underlying signal
+// CHECK: llhd.prb %top_e
+// CHECK: llhd.drv %top_e
 
 moore.module @inner(in %top_e : !moore.ref<event>) {
   moore.procedure initial {
-    %0 = moore.read %top_e : <event>
-    moore.event_trigger %0 : event
+    moore.event_trigger %top_e : <event>
     moore.return
   }
   moore.output

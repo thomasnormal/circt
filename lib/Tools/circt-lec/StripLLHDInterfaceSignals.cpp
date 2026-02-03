@@ -1355,6 +1355,30 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   if (!yieldOp)
     return combOp.emitError("expected llhd.yield terminator in combinational");
 
+  // After CFRemover merges blocks, ops may reference values defined later in
+  // the block (e.g. a hw.constant created for drive enables placed after the
+  // drive that uses it). Sort the block topologically so that cloning visits
+  // definitions before their uses.
+  {
+    llvm::SmallPtrSet<Operation *, 16> scheduled;
+    SmallVector<Operation *> sorted;
+    std::function<void(Operation *)> schedule = [&](Operation *op) {
+      if (!scheduled.insert(op).second)
+        return;
+      for (Value operand : op->getOperands()) {
+        if (auto *def = operand.getDefiningOp()) {
+          if (def->getBlock() == &body)
+            schedule(def);
+        }
+      }
+      sorted.push_back(op);
+    };
+    for (auto &op : body)
+      schedule(&op);
+    for (Operation *op : sorted)
+      op->moveBefore(terminator);
+  }
+
   IRMapping mapping;
   OpBuilder builder(combOp);
   for (auto &op : body.without_terminator())
