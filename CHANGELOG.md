@@ -1,5 +1,19 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 333 - February 3, 2026
+
+### Summary
+
+Iteration 333: Added a correlation-loss regression for strict X-prop in circt-lec to document the `a & ~a` case, which should be known-zero but is treated as unknown in the current 4-state model. This complements the x-optimistic mitigation.
+
+### Accomplishments
+
+1. **Regression added** - `lec-x-correlation.mlir` captures strict NEQ vs optimistic EQ for `a & ~a`.
+
+### Verification
+
+- Not run (requires `circt-lec` + z3).
+
 ## Iteration 332 - February 3, 2026
 
 ### Summary
