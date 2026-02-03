@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 330)
+## Current Status - February 3, 2026 (Iteration 331)
 
 ### Session Summary - Key Milestones
 
@@ -31,6 +31,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **MooreToCore `-1 - x` X-prop** | ✅ **FIXED** | Bitwise NOT now preserves per-bit unknowns instead of all-ones unknown |
 | **MooreToCore add/sub X-prop** | ✅ **IMPROVED** | Per-bit unknown propagation using carry-possible tracking |
 | **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 and small-width const shift/add (<=16) avoid `comb.mul` |
+| **MooreToCore eq/ne X-prop** | ✅ **IMPROVED** | Known mismatches now return definite results even with X/Z bits |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -342,54 +343,72 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ---
 
-## Workstreams & Next Tasks
+## Workstreams & Next Tasks (Updated February 3, 2026 - Iteration 330)
 
-### Track 1: UVM Phase Execution (PRIORITY)
-**Status**: Phase 2 DONE (runtime hooks). Phase 3 needed (ImportVerilog codegen)
-**Done**: Mailbox DPI hooks (blocking + non-blocking) in LLHDProcessInterpreter
-**Blocker**: ImportVerilog doesn't emit `__moore_mailbox_put`/`get` for SV mailbox methods
+### Track 1: UVM Phase Execution (CRITICAL PRIORITY)
+**Status**: Mailbox codegen DONE. Process context detection BLOCKING.
+**Done**: Mailbox DPI hooks (blocking + non-blocking), mailbox codegen in ImportVerilog
+**Blocker**: UVM `run_test()` rejects call because `process::self()` returns null
+
+**Root Cause** (diagnosed Iter 330):
+- UVM checks `process::self()` to detect process context
+- circt-sim doesn't implement SystemVerilog process APIs
+- Error: "run_test() invoked from a non process context"
+- Phase hopper fork is never created
 
 **Next Tasks** (in order):
-1. **Wire mailbox codegen in ImportVerilog** - Lower `mailbox.put()`→`__moore_mailbox_put`, `.get()`→`__moore_mailbox_get`
-   - File: `lib/Conversion/ImportVerilog/Expressions.cpp` (method call visitor)
-2. **Test with UVM phase_hopper** - Compile + simulate `test_uvm_hopper_pattern.sv`
-3. **Run full UVM test** - `test_uvm_run_test.sv` with phase scheduling
+1. **Implement `process::self()` runtime** - Return non-null inside llhd.process/sim.fork
+   - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` (add handler for `__moore_process_self`)
+   - May need ImportVerilog changes if not already lowered
+2. **Test with UVM run_test()** - Verify phase hopper fork gets created
+3. **Run full UVM testbench** - APB AVIP with transaction activity
 
 ### Track 2: Test Suite Coverage & Regression
-**Status**: ✅ All formal suites at 100% (sv-tests BMC/LEC, verilator BMC, Yosys SVA, LTLToCore)
-**Focus**: Maintain 100%, expand verilator-verification parse rate beyond 79.2%
+**Status**: ✅ circt-sim 99/99, circt-lec 98/98, circt-bmc 74/74, LTLToCore green
+**Focus**: Maintain 100%, run continuous regression
+
+**Test Suites**:
+- `sv-tests`: BMC/LEC formal tests
+- `verilator-verification`: BMC formal tests
+- `yosys/tests/sva`: BMC/LEC formal tests (14/14 each)
+- `opentitan`: Simulation testbenches
 
 **Next Tasks** (in order):
-1. **Run regression after X-init fix** - Verify no test breakage
-2. **Fix verilator-verification parse failures** - pre/post_randomize, coverpoint iff
-3. **Expand sv-tests coverage** - Add Chapter 7/12 tests beyond Chapter 16
+1. **Run full regression** - sv-tests, verilator, yosys, lit tests
+2. **Fix any regressions** - Investigate new failures
+3. **Expand coverage** - Add more edge case tests
 
 ### Track 3: OpenTitan IP Testing
-**Status**: **31/31 testbenches pass (100%)**. Expanded from 23 to 31 tracked tests, all passing.
-**Previous Blocker**: ~~4-state X initialization~~ ✅ FIXED
+**Status**: **42/42 testbenches tracked, 41 PASS + 1 timeout (alert_handler)**
+**Previous Blocker**: ~~4-state X initialization~~ ✅ FIXED, ~~TL adapter~~ ✅ FIXED
 
 **Next Tasks** (in order):
-1. **Fix X-init for undriven nets** - Change `APInt::getAllOnes(valueWidth)` → `APInt(valueWidth, 0)` in MooreToCore.cpp:5050
-2. **Recompile timeout testbenches** - uart_reg_top, spi_host, hmac, rv_timer, etc.
-3. **Retest all 42** - Target: 41/42 (all except alert_handler complexity)
-4. **Investigate alert_handler_tb** - 336 processes, may need process limit increase
+1. **Run formal regression** - BMC and LEC on all tracked IPs
+2. **Investigate alert_handler_tb** - 336 processes, timeout issue
+3. **Expand IP coverage** - Add more OpenTitan IPs as they compile
 
 ### Track 4: AVIP Full Simulation
-**Status**: 6/8 compile, 4/4 simulate successfully. SPI and JTAG now compile cleanly.
-**Simulation**: APB, AHB (177us), UART (368us), I2S (181us) all pass. No regressions.
+**Status**: 9/9 compile, 7/8 simulate successfully
+**Simulation**: APB, UART, I2S, AHB, SPI, AXI4, I3C pass. JTAG blocked (slang).
 
-**Compile Failures** (3 remaining):
-- ~~**SPI**~~: ✅ Now compiles with 3 slang patches (nested-block-comment, randomize-with-scope, virtual-arg-default)
-- ~~**JTAG**~~: ✅ Now compiles with virtual-arg-default slang patch
-- **AXI4**: `dist` constraint bounds, needs investigation
-- **AXI4Lite**: Needs investigation
-- **I3C**: Needs investigation
+**AVIP Status**:
+| Protocol | Compile | Simulate | Notes |
+|----------|---------|----------|-------|
+| APB | ✅ | ✅ RUNS | 352.9 us, needs longer timeout |
+| AHB | ✅ | ✅ PASS | 177 us |
+| UART | ✅ | ✅ PASS | 368 us |
+| I2S | ✅ | ✅ PASS | 181 us |
+| I3C | ✅ | ✅ PASS | 201 us |
+| SPI | ✅ | ✅ RUNS | 3 slang patches applied |
+| AXI4 | ✅ | ✅ RUNS | Vendor filelist (572K lines) |
+| AXI4Lite | ✅ | ⚠️ | `--compat=all -Wno-range-oob` required |
+| JTAG | ✅ | ❌ BLOCKED | slang virtual override issue |
 
 **Next Tasks** (in order):
-1. **Test SPI AVIP simulation** - Compiles, needs simulation testing
-2. **Test JTAG AVIP simulation** - Compiles, needs simulation testing
-3. **Debug AXI4/AXI4Lite/I3C compile** - Investigate remaining compile failures
-4. **Test APB with longer timeout** - Currently needs >120s to complete
+1. **Deep AVIP simulation** - Run with 300s timeout, check transaction activity
+2. **Debug JTAG slang issue** - Create patch for virtual override
+3. **Verify UVM phase progression** - Check build/connect/run phases complete
+4. **Check transaction activity** - Verify driver/monitor output in logs
 
 ---
 
