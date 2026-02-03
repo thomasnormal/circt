@@ -22,11 +22,11 @@ moore.module @FourStateInLLVMStruct() {
     %val = moore.constant -1 : l8
     moore.blocking_assign %ref, %val : l8
 
-    // Read entire struct and extract 4-state field - converts llvm.struct back to hw.struct
+    // Read entire struct and extract 4-state field - directly extracts nested value
+    // The compiler optimizes by using a nested index [1, 0] to extract the value field
+    // directly from the LLVM struct, avoiding intermediate hw.struct conversion.
     // CHECK: %[[LOADED:.*]] = llvm.load %[[ALLOC]] : !llvm.ptr -> !llvm.struct<(struct<(ptr, i64)>, struct<(i8, i8)>)>
-    // CHECK: %[[FIELD:.*]] = llvm.extractvalue %[[LOADED]][1] : !llvm.struct<(struct<(ptr, i64)>, struct<(i8, i8)>)>
-    // CHECK: %[[HWSTRUCT:.*]] = builtin.unrealized_conversion_cast %[[FIELD]] : !llvm.struct<(i8, i8)> to !hw.struct<value: i8, unknown: i8>
-    // CHECK: hw.struct_extract %[[HWSTRUCT]]["value"]
+    // CHECK: %[[VALUE:.*]] = llvm.extractvalue %[[LOADED]][1, 0] : !llvm.struct<(struct<(ptr, i64)>, struct<(i8, i8)>)>
     %read = moore.read %data : !moore.ref<ustruct<{name: string, value: l8}>>
     %extracted = moore.struct_extract %read, "value" : ustruct<{name: string, value: l8}> -> l8
     %fmt = moore.fmt.int hex_lower %extracted, align right, pad zero : l8
