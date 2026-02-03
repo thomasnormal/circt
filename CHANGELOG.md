@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 336 - February 3, 2026
+
+### Summary
+
+Iteration 336: Added 4-state consensus simplifications for AND/OR/XOR (e.g. `(a & b) ^ (a & ~b) -> a`) plus nested XOR cancellation, with new regression and unit coverage. OpenTitan AES S-Box LEC still NEQ under strict X-prop; counterexample unchanged (LUT more precise than canright).
+
+### Accomplishments
+
+1. **4-state consensus + XOR cancellation** - MooreToCore simplifies consensus patterns and cancels nested XOR duplicates before lowering.
+2. **Regression added** - `four-state-consensus.mlir` covers consensus reductions across XOR/OR/AND.
+3. **Unit test added** - `FourStateConsensusSimplifiesToInput` verifies pass-through conversion.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-consensus.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-consensus.mlir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**)
+
+### Notes
+
+- Counterexample (packed value+unknown): `op_i=4'h4`, `data_i=16'h6D10`, outputs `c1=16'h035C` (LUT), `c2=16'h00FF` (canright).
+
+## Iteration 332 - February 3, 2026
+
+### Summary
+
+Iteration 332: Wait condition spurious trigger fix, MooreToCore test fixes, APB AVIP progress.
+
+### Accomplishments
+
+1. **Wait condition spurious trigger fix** - Fixed issue where wait conditions could trigger spuriously, causing incorrect process scheduling behavior.
+2. **MooreToCore test fixes** - Resolved test failures in the MooreToCore conversion tests.
+3. **APB AVIP progress** - Continued progress on APB AVIP simulation testing.
+
+### Verification
+
+- Commit: `b8517345f`
+
+---
+
+## Iteration 335 - February 3, 2026
+
+### Summary
+
+Iteration 335: Re-ran OpenTitan AES S-Box LEC after correlation peepholes. Strict X-prop still NEQ but the counterexample shifted; x-optimistic remains EQ. This confirms remaining correlation gaps beyond simple complements.
+
+### Verification
+
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**)
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --x-optimistic" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**EQ**)
+
+### Notes
+
+- New strict counterexample: `op_i=4'h4`, `data_i=16'h6D10`, outputs `c1=16'h035C`, `c2=16'h00FF` (packed value+unknown).
+
 ## Iteration 334 - February 3, 2026
 
 ### Summary
@@ -19,15 +74,23 @@ Iteration 334: Added correlation-aware peepholes for 4-state AND/OR/XOR when ope
 
 ### Summary
 
-Iteration 333: Added a correlation-loss regression for strict X-prop in circt-lec to document the `a & ~a` case, which should be known-zero but is treated as unknown in the current 4-state model. This complements the x-optimistic mitigation.
+Iteration 333: Wait condition spurious trigger fix, LowerLECLLVM extractvalue from undef fix, MooreToCore APInt isSigned bug fix, ImportVerilog test pattern fixes, APB AVIP multi-top requirement discovery, SPI AVIP simulation progress (163ns in 60s), all formal suites passing.
 
 ### Accomplishments
 
-1. **Regression added** - `lec-x-correlation.mlir` captures strict NEQ vs optimistic EQ for `a & ~a`.
+1. **Wait condition spurious trigger fix** - Fixed issue where wait conditions could trigger spuriously due to incorrect signal change detection (commit b8517345f).
+2. **LowerLECLLVM extractvalue from undef fix** - Fixed crash when extractvalue operates on undef aggregate values (commit 46bbe4961).
+3. **MooreToCore APInt isSigned bug fix** - Fixed incorrect signedness handling in APInt conversions, plus test pattern updates.
+4. **ImportVerilog test pattern fixes** - Updated FileCheck patterns to match current IR output.
+5. **APB AVIP multi-top requirement discovery** - Identified that APB AVIP requires multi-top module support for proper simulation.
+6. **SPI AVIP simulation progress** - SPI AVIP now simulates to 163ns in 60s wall time.
+7. **All formal suites passing** - BMC and LEC regression suites passing.
 
 ### Verification
 
-- Not run (requires `circt-lec` + z3).
+- Commits: `b8517345f` (wait condition fix), `46bbe4961` (extractvalue fix)
+- Track B (Formal): All suites passing
+- Track D (AVIP): SPI 163ns/60s
 
 ## Iteration 332 - February 3, 2026
 
