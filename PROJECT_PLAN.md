@@ -7,14 +7,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 320)
+## Current Status - February 3, 2026 (Iteration 321)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| **AVIP llhd.drv in Called Functions** | ❌ **BLOCKER** | All 5 AVIPs fail at 0fs; `llhd.drv` in called funcs not supported by interpreter |
-| **AVIP Multi-Top Requirement** | ⚠️ DIAGNOSED | Need `--top hdl_top --top hvl_top` for HVL+HDL simulation |
+| **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
+| **AVIP Simulation 5/5 Running** | ✅ **RUNNING** | APB, UART, AHB, I2S, I3C all complete successfully (198-447ns) |
+| **AVIP Multi-Top Requirement** | ✅ WORKING | `--top HdlTop --top HvlTop` works correctly |
 | **Slang Randomize Array Scoping** | ⚠️ IN PROGRESS | Patch needed for SPI, JTAG, AXI4, AXI4Lite AVIPs |
 | **Yosys BMC Regression Fix** | ✅ FIXED | BMC_ASSUME_KNOWN_INPUTS override + rg portability (commit `fc02d2ddc`) |
 | **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
@@ -102,6 +103,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
+### New Findings (2026-02-03, Iteration 321)
+- **llhd.drv/prb in called functions FIXED**: Replaced manual memory search in `interpretProbe` and `interpretDrive` with `findMemoryBlockByAddress()`, which comprehensively checks process-local allocas (commit `3d35211f3`). This was the critical AVIP simulation blocker.
+- **All 5 AVIP simulations running**: APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully`. Multi-top (`--top HdlTop --top HvlTop`) works correctly. Simulation times 198-447ns suggest UVM phases complete quickly but test needs longer stimulus for transaction activity.
+- **AVIP status upgraded**: From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully, UVM init, BFM instantiation working).
+- **Next steps**: Deeper AVIP simulation (longer run times, checking transaction activity). Complete slang randomize array scoping patch for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
 - **AVIP simulation blocker**: All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) compile to LLHD MLIR (300K-370K lines each) but fail at 0fs. Root cause: `llhd.drv` inside called functions not supported by LLHDProcessInterpreter. This is the **top priority** blocking fix.
@@ -148,9 +155,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   (likely loop/bit-select semantics), not unknown propagation. Root cause still open.
   (Superseded by 2026-02-03 findings: unknown mask still present.)
 
-### Full Regression Results (2026-02-03, Iteration 320)
+### Full Regression Results (2026-02-03, Iteration 321)
 
-All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. **Yosys 14/14 pass** (regression script verified). AVIP simulation blocked by `llhd.drv` in called functions.
+All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, formal 106/106. **All 5 AVIP simulations running** (APB, UART, AHB, I2S, I3C).
 
 | Suite | Mode | Result | vs Baseline |
 |-------|------|--------|-------------|
@@ -163,20 +170,23 @@ All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail
 | circt-sim lit | - | **100/100 (99 pass, 1 xfail)** | ✅ Clean |
 | circt-lec lit | - | **98/98 pass, 0 fail**, 17 unsupported, 3 xfail | ✅ ALL CLEAN |
 | circt-bmc lit | - | **74/74 pass, 0 fail**, 124 unsupported, 16 xfail | ✅ 9 fixed |
-| Unit tests | - | 21/21 pass | +4 layout tests |
+| Unit tests | - | **23/23 pass** | +2 from Iter 320 |
 | OpenTitan | sim | **42/42 (41 pass + 1 timeout)** | Formal regression running |
-| AVIP | sim | **blocked** | `llhd.drv` in called functions not supported |
+| AVIP | sim | **5/5 running** (apb,uart,ahb,i2s,i3c) | ✅ All complete successfully (198-447ns) |
 | AVIP | compile | **5/9 pass** (apb,uart,i2s,ahb,i3c) | 4 need slang randomize patch |
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Next Priority: Fix llhd.drv in Called Functions + Slang Patches
+### Next Priority: Deeper AVIP Simulation + Remaining AVIP Compilation
 
-**What works**: OpenTitan **42/42** (41 pass + 1 wall-clock timeout). circt-lec **98/98** pass. circt-sim **100/100** clean. **Yosys 14/14 BMC+LEC** (regression script verified). 21/21 unit tests pass. AVIP 5/9 compile.
+**What works**: All 5 AVIP simulations **running** (APB, UART, AHB, I2S, I3C). OpenTitan **42/42**. circt-sim 99p/1xf. Unit tests **23/23**. Formal **106/106**. AVIP 5/9 compile.
 
-**What's needed (Track 1 - AVIP Simulation Blocker)** [TOP PRIORITY]:
-1. **Fix `llhd.drv` in called functions** - LLHDProcessInterpreter does not support `llhd.drv` ops inside called functions (only at process top level). All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) fail at 0fs due to this. **This is the single blocker for all AVIP simulation.**
-2. **Support `--top hdl_top --top hvl_top`** - Multi-top elaboration for HVL+HDL simulation
+**What's needed (Track 1 - Deeper AVIP Simulation)** [TOP PRIORITY]:
+1. **Longer AVIP run times** - Current simulations complete in 198-447ns. Need to verify transaction activity (reads/writes/transfers) is actually occurring, not just UVM phase completion.
+2. **Check AVIP transaction logs** - Verify BFMs are driving stimulus and monitors are collecting transactions.
+
+**What's needed (Track 2 - Remaining AVIP Compilation)**:
+1. **Complete slang randomize array scoping patch** - Needed for SPI, JTAG, AXI4, AXI4Lite AVIPs that use `array[i].randomize() with {}` constraint scoping.
 
 **What's needed (Track 2 - Slang Patches)**:
 3. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
@@ -5216,6 +5226,7 @@ Test files in ~/mbit/*:
 |--------|-----------|----------|
 | Jan 2026 | M1: UVM Parses | Zero errors parsing uvm_pkg.sv | ✅ ACHIEVED |
 | Feb 2026 | M2: File I/O | $fopen, $fwrite, $fclose work |
+| Feb 2026 | M2.5: AVIP Sim Unblocked | llhd.drv/prb in called functions fixed, 5/5 AVIPs run | ✅ ACHIEVED (Iter 321, commit `3d35211f3`) |
 | Mar 2026 | M3: AVIP Parses | All ~/mbit/* AVIPs parse |
 | Q2 2026 | M4: Basic Sim | Simple UVM test runs |
 | Q3 2026 | M5: Full UVM | Factory pattern, phasing work |
