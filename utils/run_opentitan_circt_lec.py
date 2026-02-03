@@ -134,6 +134,7 @@ def main() -> int:
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
     circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
+    lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "0") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     z3_bin = os.environ.get("Z3_BIN", "")
@@ -149,6 +150,9 @@ def main() -> int:
                   file=sys.stderr)
             return 1
     clamp_invalid_op = not args.allow_invalid_op
+
+    if lec_x_optimistic and "--x-optimistic" not in circt_lec_args:
+        circt_lec_args.append("--x-optimistic")
 
     def write_valid_op_wrapper(out_path: Path, wrapper_name: str, inner_name: str) -> None:
         out_path.write_text(
