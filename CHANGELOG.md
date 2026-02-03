@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 327 - February 3, 2026
+
+### Summary
+
+Iteration 327: Implemented per-bit unknown propagation for 4-state add/sub (ripple-carry with possible-value tracking) and added a regression proving partial unknowns no longer collapse to all-unknown. OpenTitan AES S-Box LEC remains NEQ under full X-prop; assume-known stays EQ.
+
+### Accomplishments
+
+1. **4-state add/sub precision** - Per-bit unknown propagation for add/sub using possible-value carry tracking.
+2. **Regression added** - `four-state-add-partial-unknown.mlir` verifies partial unknown propagation.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-add-partial-unknown.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-add-partial-unknown.mlir`
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-sub-neg1-mask.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-sub-neg1-mask.mlir`
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/unknown-index-const-array.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/unknown-index-const-array.mlir`
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**, full X-prop)
+
+### Notes
+
+- Full X-prop still NEQ for `aes_sbox_canright` with counterexample: `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A` vs `c2=16'h00FE` (packed value+unknown).
+
 ## Iteration 326 - February 3, 2026
 
 ### Summary

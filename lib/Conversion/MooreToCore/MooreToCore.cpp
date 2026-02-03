@@ -38,6 +38,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <type_traits>
 #include "llvm/Support/MathExtras.h"
 #include "llvm/IR/DerivedTypes.h"
 #include <queue>
@@ -418,6 +419,84 @@ static Value maskFourStateValue(OpBuilder &builder, Location loc, Value value,
   Value knownMask =
       comb::XorOp::create(builder, loc, unknown, allOnes, false);
   return comb::AndOp::create(builder, loc, value, knownMask, false);
+}
+
+static Value buildFourStateAddSub(OpBuilder &builder, Location loc, Value lhsVal,
+                                  Value lhsUnk, Value rhsVal, Value rhsUnk,
+                                  bool isSub) {
+  auto intTy = cast<IntegerType>(lhsVal.getType());
+  unsigned width = intTy.getWidth();
+  auto i1Ty = builder.getI1Type();
+  Value one = hw::ConstantOp::create(builder, loc, i1Ty, 1);
+  Value zero = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+  Value allOnes = hw::ConstantOp::create(builder, loc, lhsVal.getType(), -1);
+
+  if (isSub)
+    rhsVal = comb::XorOp::create(builder, loc, rhsVal, allOnes, false);
+
+  Value carry0 = isSub ? zero : one;
+  Value carry1 = isSub ? one : zero;
+
+  auto and2 = [&](Value a, Value b) {
+    return comb::AndOp::create(builder, loc, a, b, false);
+  };
+  auto or2 = [&](Value a, Value b) {
+    return comb::OrOp::create(builder, loc, a, b, false);
+  };
+  auto xor2 = [&](Value a, Value b) {
+    return comb::XorOp::create(builder, loc, a, b, false);
+  };
+  auto and3 = [&](Value a, Value b, Value c) { return and2(and2(a, b), c); };
+  auto or3 = [&](Value a, Value b, Value c) { return or2(or2(a, b), c); };
+  auto or4 = [&](Value a, Value b, Value c, Value d) {
+    return or2(or2(a, b), or2(c, d));
+  };
+
+  SmallVector<Value, 8> valueBits;
+  SmallVector<Value, 8> unknownBits;
+  valueBits.reserve(width);
+  unknownBits.reserve(width);
+
+  for (unsigned bit = 0; bit < width; ++bit) {
+    Value aValBit = comb::ExtractOp::create(builder, loc, lhsVal, bit, 1);
+    Value aUnkBit = comb::ExtractOp::create(builder, loc, lhsUnk, bit, 1);
+    Value bValBit = comb::ExtractOp::create(builder, loc, rhsVal, bit, 1);
+    Value bUnkBit = comb::ExtractOp::create(builder, loc, rhsUnk, bit, 1);
+
+    Value aNotVal = xor2(aValBit, one);
+    Value bNotVal = xor2(bValBit, one);
+    Value a1 = or2(aUnkBit, aValBit);
+    Value a0 = or2(aUnkBit, aNotVal);
+    Value b1 = or2(bUnkBit, bValBit);
+    Value b0 = or2(bUnkBit, bNotVal);
+
+    Value sum1 = or4(and3(a0, b0, carry1), and3(a0, b1, carry0),
+                     and3(a1, b0, carry0), and3(a1, b1, carry1));
+    Value sum0 = or4(and3(a0, b0, carry0), and3(a0, b1, carry1),
+                     and3(a1, b0, carry1), and3(a1, b1, carry0));
+
+    Value resultValBit = and2(sum1, xor2(sum0, one));
+    Value resultUnkBit = and2(sum1, sum0);
+    valueBits.push_back(resultValBit);
+    unknownBits.push_back(resultUnkBit);
+
+    Value carry1Next = or3(and2(a1, b1), and2(a1, carry1), and2(b1, carry1));
+    Value carry0Next = or3(and2(a0, b0), and2(a0, carry0), and2(b0, carry0));
+    carry1 = carry1Next;
+    carry0 = carry0Next;
+  }
+
+  Value resultVal = valueBits.back();
+  Value resultUnk = unknownBits.back();
+  for (int bit = static_cast<int>(width) - 2; bit >= 0; --bit) {
+    resultVal =
+        comb::ConcatOp::create(builder, loc, ValueRange{resultVal, valueBits[bit]});
+    resultUnk =
+        comb::ConcatOp::create(builder, loc, ValueRange{resultUnk, unknownBits[bit]});
+  }
+
+  Value maskedVal = maskFourStateValue(builder, loc, resultVal, resultUnk);
+  return createFourStateStruct(builder, loc, maskedVal, resultUnk);
 }
 
 static bool parseFourStateStructAttr(Attribute attr, APInt &value,
@@ -7568,18 +7647,25 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
       return success();
     }
 
-    // 4-state arithmetic: if any bit is unknown, entire result is X
+    // 4-state arithmetic: add/sub use per-bit unknown propagation, others
+    // remain conservative (any unknown bit => all-unknown result).
     Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
     Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
     Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
     Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
 
-    // Perform the arithmetic operation on the value components
+    if constexpr (std::is_same_v<SourceOp, AddOp> ||
+                  std::is_same_v<SourceOp, SubOp>) {
+      Value result = buildFourStateAddSub(rewriter, loc, lhsVal, lhsUnk, rhsVal,
+                                          rhsUnk,
+                                          std::is_same_v<SourceOp, SubOp>);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // Conservative fallback for other ops.
     Value resultVal = TargetOp::create(rewriter, loc, lhsVal, rhsVal, false);
     auto width = resultVal.getType().getIntOrFloatBitWidth();
-
-    // Check if either operand has any unknown bits
-    // hasUnknown = (lhsUnk != 0) || (rhsUnk != 0)
     Value zero = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
     Value allOnes =
         hw::ConstantOp::create(rewriter, loc, rewriter.getIntegerType(width), -1);
@@ -7588,13 +7674,8 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
     Value rhsHasUnk = comb::ICmpOp::create(rewriter, loc,
                                            comb::ICmpPredicate::ne, rhsUnk, zero);
     Value hasUnknown = comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
-
-    // If any unknown: result unknown = all ones, else = 0
-    // Using mux: resultUnk = hasUnknown ? allOnes : 0
     Value resultUnk =
         comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
-
-    // Create the 4-state struct
     Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
     auto result = createFourStateStruct(rewriter, loc, maskedVal, resultUnk);
     rewriter.replaceOp(op, result);
