@@ -46,7 +46,7 @@ run_case() {
   local sv="$1"
   local mode="$2"
   if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
-    if ! rg -q '^[[:space:]]*`(ifn?def|if)[[:space:]]+FAIL\b' "$sv"; then
+    if ! grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
       echo "SKIP(fail-no-macro): $(basename "$sv" .sv)"
       return
     fi
