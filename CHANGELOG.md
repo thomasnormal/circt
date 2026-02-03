@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 334 - February 3, 2026
+
+### Summary
+
+Iteration 334: Added correlation-aware peepholes for 4-state AND/OR/XOR when operands are identical or complements (e.g. `a ^ a`, `a & ~a`). This reduces pessimism for common correlation patterns and adds regression coverage.
+
+### Accomplishments
+
+1. **4-state correlation peepholes** - AND/OR/XOR now fold identical/complement operands to known constants or passthroughs.
+2. **Regression added** - `four-state-correlation.mlir` covers xor/and/or with complement cases.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-correlation.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-correlation.mlir`
+
 ## Iteration 333 - February 3, 2026
 
 ### Summary

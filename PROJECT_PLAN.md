@@ -33,6 +33,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 and small-width const shift/add (<=16) avoid `comb.mul` |
 | **MooreToCore eq/ne X-prop** | ✅ **IMPROVED** | Known mismatches now return definite results even with X/Z bits |
 | **OpenTitan LEC x-optimistic** | ✅ **AVAILABLE** | `LEC_X_OPTIMISTIC=1` forwards `--x-optimistic` for AES S-Box LEC EQ |
+| **MooreToCore correlation peepholes** | ✅ **IMPROVED** | AND/OR/XOR fold identical/complement operands (e.g. `a & ~a`) to reduce pessimism |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
