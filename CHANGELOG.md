@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 330 - February 3, 2026
+
+### Summary
+
+Iteration 330: Re-verified OpenTitan AES S-Box LEC after const-mul shift/add change. Assume-known remains EQ; full X-prop still NEQ with the same counterexample. Captured unknown-source trace for future debugging.
+
+### Verification
+
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**)
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output --dump-unknown-sources" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**, unknown slice trace logged)
+
+### Notes
+
+- Counterexample unchanged: `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE` (packed value+unknown).
+
 ## Iteration 329 - February 3, 2026
 
 ### Summary
