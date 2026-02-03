@@ -16,7 +16,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
 | **AVIP Simulation 5/5 Running** | ✅ **RUNNING** | APB, UART, AHB, I2S, I3C all complete successfully (198-447ns) |
 | **AVIP Multi-Top Requirement** | ✅ WORKING | `--top HdlTop --top HvlTop` works correctly |
-| **Slang Randomize Array Scoping** | ⚠️ IN PROGRESS | Patch needed for SPI, JTAG, AXI4, AXI4Lite AVIPs |
+| **Slang Randomize Array Scoping** | ⚠️ IN PROGRESS | Patch needed for SPI, JTAG, AXI4 AVIPs |
 | **Yosys BMC Regression Fix** | ✅ FIXED | BMC_ASSUME_KNOWN_INPUTS override + rg portability (commit `fc02d2ddc`) |
 | **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
@@ -24,7 +24,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Verilator BMC Script Fix** | ⚠️ DIAGNOSED | `--run-smtlib --z3-path` flags removed; script needs update to `--emit-smtlib` |
 | **SPI AVIP randomize scoping** | ⚠️ DIAGNOSED | slang bug: `array[i].randomize() with {this.member}` scopes `this` to array type |
 | **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
-| **AVIP Compilation** | ⚠️ **5/9** | apb,uart,i2s,ahb,i3c pass; spi,jtag,axi4,axi4Lite need slang randomize patch |
+| **AVIP Compilation** | ⚠️ **6/9** | apb,uart,i2s,ahb,i3c,axi4Lite (lib) pass; spi,jtag,axi4 need slang randomize patch |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
 | **Debug Trace Cleanup** | ✅ DONE | 9 temporary debug blocks removed from LLHDProcessInterpreter.cpp |
 | **RefType Unwrapping Fix** | ✅ FIXED | alloca field drive `dyn_cast<StructType>` failed on RefType; now unwraps first |
@@ -93,10 +93,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 5. ~~**JTAG AVIP compile**~~: ✅ FIXED - virtual-arg-default slang patch applied, compiles cleanly. Simulation testing needed.
 6. ~~**AXI4 AVIP compile**~~: ✅ FIXED - Vendor filelist compiles (572K lines MLIR)
 7. ~~**I3C AVIP compile**~~: ✅ FIXED - Vendor filelist compiles (356K lines MLIR)
-8. **AXI4Lite AVIP compile**: 1 remaining bind+include error in consolidated filelist
+8. **AXI4Lite AVIP compile**: ✅ `Axi4LiteCompileLib.f` compiles with `--compat=all -Wno-range-oob`; full filelist still blocked by bind in `Axi4LiteHdlTop.sv`
 9. **pre/post_randomize** - Not yet implemented in ImportVerilog
 8. **coverpoint `iff`** - Not yet lowered
-9. **`dist` constraint ranges** - Bounds must be constant (dynamic not supported)
+9. ~~**`dist` constraint ranges**~~ ✅ Unbounded `$` bounds supported; `dist-constraints.sv` enabled
 
 **Minor (not blocking current tests):**
 10. **`$readmemh` scope verification** - Warning on some testbenches
@@ -108,7 +108,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **llhd.drv/prb in called functions FIXED**: Replaced manual memory search in `interpretProbe` and `interpretDrive` with `findMemoryBlockByAddress()`, which comprehensively checks process-local allocas (commit `3d35211f3`). This was the critical AVIP simulation blocker.
 - **All 5 AVIP simulations running**: APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully`. Multi-top (`--top HdlTop --top HvlTop`) works correctly. Simulation times 198-447ns suggest UVM phases complete quickly but test needs longer stimulus for transaction activity.
 - **AVIP status upgraded**: From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully, UVM init, BFM instantiation working).
-- **Next steps**: Deeper AVIP simulation (longer run times, checking transaction activity). Complete slang randomize array scoping patch for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+- **Next steps**: Deeper AVIP simulation (longer run times, checking transaction activity). Complete slang randomize array scoping patch for remaining 3 AVIPs (SPI, JTAG, AXI4).
+- **AXI4Lite dist `$` fix**: unbounded dist bounds now resolve via LHS membership width; AXI4Lite compile (lib filelist) passes with `--compat=all -Wno-range-oob`.
 - **circt-lec run-smtlib UNSAT fix**: `--print-solver-output` and `--print-counterexample` now avoid UNSAT failures by only inserting `(get-model)` when needed for SAT/UNKNOWN results.
 - **LEC X-optimistic outputs**: Added `--x-optimistic` to compare only known output bits (unknowns are don't-care), which avoids false NEQ when X-prop differs (e.g., LUT array indexing vs Canright logic).
 - **OpenTitan AES S-Box LEC (x-optimistic)**: canright now EQ with `--x-optimistic --mlir-disable-threading` (workdir: `/tmp/opentitan-lec-canright-xoptim`).
@@ -117,7 +118,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
 - **AVIP simulation blocker**: All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) compile to LLHD MLIR (300K-370K lines each) but fail at 0fs. Root cause: `llhd.drv` inside called functions not supported by LLHDProcessInterpreter. This is the **top priority** blocking fix.
 - **AVIP multi-top requirement**: Need `--top hdl_top --top hvl_top` for proper simulation with both HVL and HDL modules.
-- **Slang randomize array scoping patch**: Under development for `array[i].randomize() with {}` constraint. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+- **Slang randomize array scoping patch**: Under development for `array[i].randomize() with {}` constraint. Needed for remaining 3 AVIPs (SPI, JTAG, AXI4).
 - **OpenTitan formal regression**: Running full suite to verify green status.
 
 ### New Findings (2026-02-03, Iteration 319)
@@ -174,7 +175,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 | Unit tests | - | **23/23 pass** | +2 from Iter 320 |
 | OpenTitan | sim | **42/42 (41 pass + 1 timeout)** | Formal regression running |
 | AVIP | sim | **5/5 running** (apb,uart,ahb,i2s,i3c) | ✅ All complete successfully (198-447ns) |
-| AVIP | compile | **5/9 pass** (apb,uart,i2s,ahb,i3c) | 4 need slang randomize patch |
+| AVIP | compile | **6/9 pass** (apb,uart,i2s,ahb,i3c,axi4Lite-lib) | 3 need slang randomize patch |
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
@@ -187,10 +188,10 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 2. **Check AVIP transaction logs** - Verify BFMs are driving stimulus and monitors are collecting transactions.
 
 **What's needed (Track 2 - Remaining AVIP Compilation)**:
-1. **Complete slang randomize array scoping patch** - Needed for SPI, JTAG, AXI4, AXI4Lite AVIPs that use `array[i].randomize() with {}` constraint scoping.
+1. **Complete slang randomize array scoping patch** - Needed for SPI, JTAG, AXI4 AVIPs that use `array[i].randomize() with {}` constraint scoping.
 
 **What's needed (Track 2 - Slang Patches)**:
-3. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+3. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Needed for remaining 3 AVIPs (SPI, JTAG, AXI4).
 4. Implement pre/post_randomize in ImportVerilog
 5. Lower coverpoint `iff` conditions
 

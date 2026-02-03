@@ -6336,9 +6336,20 @@ struct RvalueExprVisitor : public ExprVisitor {
     SmallVector<int64_t> weights;
     SmallVector<int64_t> perRange;
 
+    auto isUnboundedDistExpr = [&](const slang::ast::Expression &expr,
+                                   const auto &self) -> bool {
+      if (expr.type && expr.type->isUnbounded())
+        return true;
+      if (expr.as_if<slang::ast::UnboundedLiteral>())
+        return true;
+      if (auto *conv = expr.as_if<slang::ast::ConversionExpression>())
+        return self(conv->operand(), self);
+      return false;
+    };
+
     auto resolveDistBound =
         [&](const slang::ast::Expression &boundExpr) -> FailureOr<int64_t> {
-      if (boundExpr.as_if<slang::ast::UnboundedLiteral>()) {
+      if (isUnboundedDistExpr(boundExpr, isUnboundedDistExpr)) {
         if (!expr.left().type->isIntegral()) {
           mlir::emitError(loc)
               << "dist $ requires an integral left-hand side type";
