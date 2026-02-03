@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 325)
+## Current Status - February 3, 2026 (Iteration 326)
 
 ### Session Summary - Key Milestones
 
@@ -28,6 +28,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **SPI AVIP compile workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites nested comments, trailing `$sformatf` comma, `$` dist ranges, and inline `randomize() with` constraints (use FILELIST_BASE for vendor filelists) |
 | **MooreToCore const-array unknown index** | ✅ **IMPROVED** | Unknown-index dyn_extract now preserves partial knowns for 4-state constant arrays |
 | **OpenTitan AES S-Box LEC (canright, assume-known)** | ✅ EQ | Re-verified after const-array X-prop fix (`--assume-known-inputs --mlir-disable-threading`) |
+| **MooreToCore `-1 - x` X-prop** | ✅ **FIXED** | Bitwise NOT now preserves per-bit unknowns instead of all-ones unknown |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -111,6 +112,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **Inline `randomize() with` outer-scope access** - ⚠️ SPI testbench uses inline constraints that slang rejects; AVIP runner drops inline constraint blocks for compile
 
 **Minor (not blocking current tests):**
+15. **Arithmetic X-prop precision** - `Add/Sub/Mul/Div` treat any unknown bit as all-unknown; refine per-bit unknown propagation to reduce LUT vs canright divergence.
 14. **4-state unknown index on non-constant arrays** - still conservative (unknown index => all bits unknown); extend constant-array improvement to general cases.
 10. **`$readmemh` scope verification** - Warning on some testbenches
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
@@ -135,6 +137,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** without assume-known.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'hBF04`, outputs `c1=16'h00FF`, `c2=16'h00FE`.
+
+### New Findings (2026-02-03, Iteration 326)
+- **OpenTitan AES S-Box LEC (canright)**: assume-known remains **EQ** after `-1 - x` X-prop fix.
+  - Command: `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ**; LUT now more precise than canright.
+  - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+  - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.

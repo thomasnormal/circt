@@ -6421,11 +6421,10 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
           return success();
         }
 
-        if (Value unknownIndexed = buildUnknownIndexedConstantArray(
-                rewriter, loc, arrType, adaptor.getInput(), idx, idxUnknown)) {
-          rewriter.replaceOp(op, unknownIndexed);
-          return success();
-        }
+        Value unknownIndexed;
+        if (hasUnknownIndex)
+          unknownIndexed = buildUnknownIndexedConstantArray(
+              rewriter, loc, arrType, adaptor.getInput(), idx, idxUnknown);
 
         Value outOfBoundsCond =
             hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
@@ -6437,7 +6436,7 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
               rewriter, loc, comb::ICmpPredicate::ugt, idx, maxIdxConst);
         }
         Value cond = outOfBoundsCond;
-        if (hasUnknownIndex)
+        if (hasUnknownIndex && !unknownIndexed)
           cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
                                     idxUnknownCond);
 
@@ -6451,9 +6450,15 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
             comb::MuxOp::create(rewriter, loc, cond, zero, elemValue);
         Value finalUnknown =
             comb::MuxOp::create(rewriter, loc, cond, allOnes, elemUnknown);
-        auto result =
+        auto fallback =
             createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
-        rewriter.replaceOp(op, result);
+        if (unknownIndexed) {
+          Value result = comb::MuxOp::create(rewriter, loc, idxUnknownCond,
+                                             unknownIndexed, fallback);
+          rewriter.replaceOp(op, result);
+        } else {
+          rewriter.replaceOp(op, fallback);
+        }
         return success();
       } else {
         rewriter.replaceOpWithNewOp<hw::ArraySliceOp>(op, resultType,
@@ -7487,6 +7492,41 @@ struct NegRealOpConversion : public OpConversionPattern<NegRealOp> {
   matchAndRewrite(NegRealOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOpWithNewOp<arith::NegFOp>(op, adaptor.getInput());
+    return success();
+  }
+};
+
+/// 4-state aware subtraction special-case:
+/// Detect `-1 - x` (bitwise NOT) and preserve per-bit unknowns.
+struct FourStateSubNegOneOpConversion : public OpConversionPattern<SubOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SubOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto resultType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+
+    if (!isFourStateStructType(resultType))
+      return failure();
+
+    APInt lhsVal;
+    APInt lhsUnk;
+    if (!getFourStateConstant(adaptor.getLhs(), lhsVal, lhsUnk))
+      return failure();
+    if (!lhsUnk.isZero() || !lhsVal.isAllOnes())
+      return failure();
+
+    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
+    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
+    Value allOnes =
+        hw::ConstantOp::create(rewriter, loc, rhsVal.getType(), -1);
+    Value resultVal =
+        comb::XorOp::create(rewriter, loc, rhsVal, allOnes, false);
+    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, rhsUnk);
+    auto result = createFourStateStruct(rewriter, loc, maskedVal, rhsUnk);
+    rewriter.replaceOp(op, result);
     return success();
   }
 };
@@ -21684,6 +21724,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
     // Patterns of binary operations (4-state aware for arithmetic).
     FourStateArithOpConversion<AddOp, comb::AddOp>,
+    FourStateSubNegOneOpConversion,
     FourStateArithOpConversion<SubOp, comb::SubOp>,
     FourStateArithOpConversion<MulOp, comb::MulOp>,
     FourStateArithOpConversion<DivUOp, comb::DivUOp>,
