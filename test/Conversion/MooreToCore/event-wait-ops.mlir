@@ -1,6 +1,5 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
-// CHECK-DAG: llvm.func @__moore_event_trigger(!llvm.ptr)
 // CHECK-DAG: llvm.func @__moore_event_triggered(!llvm.ptr) -> i1
 
 //===----------------------------------------------------------------------===//
@@ -22,11 +21,12 @@ moore.module @test_event_triggered(in %event: !moore.event, out result: !moore.i
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: hw.module @test_event_trigger_in_procedure
-moore.module @test_event_trigger_in_procedure(in %event: !moore.event) {
+moore.module @test_event_trigger_in_procedure(in %event_ref: !moore.ref<event>) {
   moore.procedure initial {
-    // Trigger the event - this should call __moore_event_trigger
-    // CHECK: llvm.call @__moore_event_trigger
-    moore.event_trigger %event : !moore.event
+    // Trigger the event - this takes a ref and toggles the underlying signal
+    // CHECK: llhd.prb %event_ref
+    // CHECK: llhd.drv %event_ref
+    moore.event_trigger %event_ref : <event>
     moore.return
   }
   moore.output
@@ -39,14 +39,10 @@ moore.module @test_event_trigger_in_procedure(in %event: !moore.event) {
 // CHECK-LABEL: hw.module @test_event_trigger_with_read
 moore.module @test_event_trigger_with_read(in %event_ref: !moore.ref<event>) {
   moore.procedure initial {
-    // Read the event and trigger it
-    // The lowering probes the ref, allocates memory, stores, then calls
-    %event = moore.read %event_ref : <event>
-    // CHECK: llhd.prb %event_ref : i1
-    // CHECK: llvm.alloca
-    // CHECK: llvm.store
-    // CHECK: llvm.call @__moore_event_trigger
-    moore.event_trigger %event : !moore.event
+    // Trigger the event ref directly - toggles the underlying LLHD signal
+    // CHECK: llhd.prb %event_ref
+    // CHECK: llhd.drv %event_ref
+    moore.event_trigger %event_ref : <event>
     moore.return
   }
   moore.output
