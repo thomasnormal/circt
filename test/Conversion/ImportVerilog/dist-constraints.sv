@@ -28,12 +28,11 @@ class DistTest;
   }
 
   // Distribution with unbounded range
-  // NOTE: Unbounded range ($) requires special handling and is currently
-  // not fully supported. This test is disabled pending further work.
-  // TODO: Enable when unbounded range support is complete.
-  // constraint c_unbounded {
-  //   value dist { [11:$] := 1 };
-  // }
+  // CHECK: moore.constraint.block @c_unbounded
+  // CHECK: moore.constraint.dist %{{.*}}, [11, 4294967295], [1], [0]
+  constraint c_unbounded {
+    value dist { [11:$] := 1 };
+  }
 
   // Mixed distribution
   // CHECK: moore.constraint.block @c_mixed

@@ -8,6 +8,7 @@ Iteration 321: **All 5 AVIP simulations now run successfully.** Fixed critical b
 Lowered remaining LLVM struct mux/extract patterns in LEC to HW, resolving the OpenTitan AES S-Box canright NEQ under `--assume-known-inputs` (requires `--mlir-disable-threading` for `--run-smtlib`).
 circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output by running a model request only when needed.
 Added `--x-optimistic` LEC output comparison to ignore unknown-bit differences when checking equivalence.
+Enabled `$` unbounded dist bounds through conversion expressions and re-enabled `dist-constraints.sv`; AXI4Lite compile-lib now passes with `--compat=all -Wno-range-oob`.
 
 ### Accomplishments
 
@@ -18,6 +19,7 @@ Added `--x-optimistic` LEC output comparison to ignore unknown-bit differences w
 5. **LEC LLVM struct mux lowering** - Lowered `llvm.insertvalue` + `comb.mux` + `llvm.extractvalue` to field-wise `comb.mux` + `hw.struct_create`, eliminating leftover LLVM ops in LEC. OpenTitan AES S-Box canright now EQ with `--assume-known-inputs`. Added MooreToCore + LEC regression tests.
 6. **circt-lec run-smtlib model request** - `--print-solver-output`/`--print-counterexample` now run z3 once without `(get-model)` and only request a model when needed, preventing z3 UNSAT failures while preserving model output for SAT/UNKNOWN cases.
 7. **X-optimistic LEC outputs** - Added `--x-optimistic` to compare outputs only on known bits (unknowns are don't-care). Includes a regression and unit test.
+8. **Unbounded dist range support** - Resolved `$` bounds in dist constraints even after conversions, enabled `dist-constraints.sv`, and verified AXI4Lite compile-lib with `--compat=all -Wno-range-oob`.
 
 ### Verification
 
@@ -25,7 +27,7 @@ Added `--x-optimistic` LEC output comparison to ignore unknown-bit differences w
 - Unit tests: **23/23 pass**
 - Formal regression: **106/106 pass**
 - AVIP simulation: **5/5 running** (APB, UART, AHB, I2S, I3C)
-- AVIP compile: 5/9 pass (remaining 4 need slang randomize patch)
+- AVIP compile: **6/9 pass** (axi4Lite lib filelist passes with `--compat=all -Wno-range-oob`)
 - OpenTitan AES S-Box LEC (canright, assume-known, `--mlir-disable-threading`): **EQ**
 - OpenTitan AES S-Box LEC (canright, `--x-optimistic --mlir-disable-threading`): **EQ**
 
