@@ -26,7 +26,8 @@ class Namespace;
 /// Get the Verif to SMT conversion patterns.
 void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
+    bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
+    bool forSMTLIBExport,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps);
 

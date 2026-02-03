@@ -797,6 +797,10 @@ def ConvertVerifToSMT : Pass<"convert-verif-to-smt", "mlir::ModuleOp"> {
     Option<"assumeKnownInputs", "assume-known-inputs", "bool",
            /*default=*/"false",
            "Assume input values are known (not X) for BMC and LEC operations.">,
+    Option<"xOptimisticOutputs", "x-optimistic", "bool",
+           /*default=*/"false",
+           "Treat unknown output bits as don't-care when checking LEC "
+           "equivalence.">,
     Option<"forSMTLIBExport", "for-smtlib-export", "bool",
            /*default=*/"false",
            "Generate output suitable for SMT-LIB export.">,

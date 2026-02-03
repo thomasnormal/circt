@@ -1,11 +1,13 @@
 add_circt_unittest(CIRCTLECToolTests
   LowerLECLLVMTest.cpp
   StripLLHDSignalPtrCastTest.cpp
+  XOptimisticLECTest.cpp
 )
 
 target_link_libraries(CIRCTLECToolTests
   PRIVATE
   CIRCTLECTransforms
+  CIRCTVerifToSMT
   CIRCTHW
   MLIRIR
   MLIRParser
@@ -13,5 +15,6 @@ target_link_libraries(CIRCTLECToolTests
   MLIRControlFlowDialect
   MLIRLLVMDialect
   MLIRSCFDialect
+  MLIRSMT
   MLIRSupport
 )
