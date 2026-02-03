@@ -6808,38 +6808,10 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
       if (!addrVal.isX() && addrVal.getUInt64() != 0) {
         uint64_t addr = addrVal.getUInt64();
+        // Use the comprehensive memory search that checks process-local
+        // allocas, module-level allocas, malloc blocks, and globals.
         uint64_t offset = 0;
-        MemoryBlock *block = nullptr;
-
-        // Check global memory blocks
-        for (auto &entry : globalAddresses) {
-          StringRef globalName = entry.first();
-          uint64_t globalBaseAddr = entry.second;
-          auto blockIt = globalMemoryBlocks.find(globalName);
-          if (blockIt != globalMemoryBlocks.end()) {
-            uint64_t globalSize = blockIt->second.size;
-            if (addr >= globalBaseAddr &&
-                addr < globalBaseAddr + globalSize) {
-              block = &blockIt->second;
-              offset = addr - globalBaseAddr;
-              break;
-            }
-          }
-        }
-
-        // Check malloc blocks (class instances)
-        if (!block) {
-          for (auto &entry : mallocBlocks) {
-            uint64_t mallocBaseAddr = entry.first;
-            uint64_t mallocSize = entry.second.size;
-            if (addr >= mallocBaseAddr &&
-                addr < mallocBaseAddr + mallocSize) {
-              block = &entry.second;
-              offset = addr - mallocBaseAddr;
-              break;
-            }
-          }
-        }
+        MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
 
         if (block && offset + loadSize <= block->size) {
           if (!block->initialized) {
@@ -7642,37 +7614,14 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         unsigned width = getTypeWidth(refType.getNestedType());
         unsigned storeSize = (width + 7) / 8;
 
-        // Find the memory block at this address
+        // Find the memory block at this address using the comprehensive
+        // search that checks process-local allocas, module-level allocas,
+        // malloc blocks, and global memory blocks.  The previous manual
+        // search only checked globals and mallocs, missing process-local
+        // allocas (e.g., automatic variables passed by ref through
+        // func.call chains like uvm_resource_debug::init_access_record).
         uint64_t offset = 0;
-        MemoryBlock *block = nullptr;
-
-        // Check global memory blocks
-        for (auto &entry : globalAddresses) {
-          StringRef globalName = entry.first();
-          uint64_t globalBaseAddr = entry.second;
-          auto blockIt = globalMemoryBlocks.find(globalName);
-          if (blockIt != globalMemoryBlocks.end()) {
-            uint64_t globalSize = blockIt->second.size;
-            if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-              block = &blockIt->second;
-              offset = addr - globalBaseAddr;
-              break;
-            }
-          }
-        }
-
-        // Check malloc blocks (class instances)
-        if (!block) {
-          for (auto &entry : mallocBlocks) {
-            uint64_t mallocBaseAddr = entry.first;
-            uint64_t mallocSize = entry.second.size;
-            if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-              block = &entry.second;
-              offset = addr - mallocBaseAddr;
-              break;
-            }
-          }
-        }
+        MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
 
         if (block && offset + storeSize <= block->size) {
           if (driveVal.isX()) {
