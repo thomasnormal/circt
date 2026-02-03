@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 320 - February 3, 2026
+
+### Summary
+
+Iteration 320: Fixed yosys BMC regression (BMC_ASSUME_KNOWN_INPUTS override + rg portability, commit `fc02d2ddc`). **14/14 yosys pass** through regression script. Diagnosed AVIP simulation blocker: all 5 compiled AVIPs fail at 0fs due to `llhd.drv` inside called functions not supported by LLHDProcessInterpreter. Identified multi-top requirement (`--top hdl_top --top hvl_top`). Slang randomize array scoping patch under development for remaining 4 AVIPs. OpenTitan formal regression running.
+
+### Accomplishments
+
+1. **Yosys BMC regression fix** - Fixed BMC_ASSUME_KNOWN_INPUTS override and `rg` portability issues in regression script (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through the regression script in both BMC and LEC modes.
+2. **AVIP simulation blocker diagnosed** - All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) produce 300K-370K lines of LLHD MLIR each but fail at 0fs simulation time. Root cause: `llhd.drv` operations inside called functions (not at process top level) are not supported by LLHDProcessInterpreter. This blocks all AVIP simulation progress.
+3. **AVIP multi-top issue diagnosed** - AVIP testbenches require `--top hdl_top --top hvl_top` to properly instantiate both the HVL (UVM) and HDL (DUT) portions of the simulation. Without this, only one side is elaborated.
+4. **Slang randomize array scoping patch** - Under development for `array[i].randomize() with {}` constraint scoping. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite) that use indexed array randomization.
+5. **OpenTitan formal regression** - Running full formal regression suite to verify all suites remain green with latest changes.
+
+### Verification
+
+- All lit test suites: 540 total, 385 pass, 21 xfail, 141 unsup, 0 fail
+- Yosys BMC: **14/14 pass** (regression script verified)
+- Yosys LEC: **14/14 pass**
+- Verilator BMC: 17/17 pass
+- sv-tests: 23/26 BMC, 23/23 LEC
+- AVIP compile: 5/9 pass (apb, uart, i2s, ahb, i3c)
+- AVIP simulation: **blocked** - `llhd.drv` in called functions not supported
+
 ## Iteration 319 - February 3, 2026
 
 ### Summary
@@ -13,6 +37,11 @@ Iteration 319: **Yosys 14/14 BMC+LEC pass** after wildcard segfault fix for basi
 3. **SPI AVIP randomize scoping bug diagnosis** - slang bug where `array[i].randomize() with { this.member }` incorrectly scopes `this` to the array type instead of the element type. Root cause in `CallExpression.cpp:533` where `randomizeScope` doesn't handle indexed element access. Workaround: assign to temp variable before randomize.
 4. **AVIP deep simulation testing** - Running simulation tests on 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) to measure how far each gets past UVM init.
 5. **OpenTitan formal regression re-run** - Verifying all suites remain green with latest changes.
+6. **OpenTitan LEC canright deep dive** - Fixed-input SMT check shows canright
+   unknown bits are **forced** for `op_i=4'h8`, `data_i=16'h0800` even without
+   the distinct constraint, so the X-prop is deterministic. `circt-opt -lower-lec-llvm`
+   confirms llvm ops are fully eliminated (value phis), so the remaining issue is
+   in 4-state logic modeling rather than pointer/alloca lowering.
 
 ### Verification
 

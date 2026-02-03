@@ -7,19 +7,23 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 319)
+## Current Status - February 3, 2026 (Iteration 320)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | basic02 wildcard fix → all pass (2 VHDL skips) |
+| **AVIP llhd.drv in Called Functions** | ❌ **BLOCKER** | All 5 AVIPs fail at 0fs; `llhd.drv` in called funcs not supported by interpreter |
+| **AVIP Multi-Top Requirement** | ⚠️ DIAGNOSED | Need `--top hdl_top --top hvl_top` for HVL+HDL simulation |
+| **Slang Randomize Array Scoping** | ⚠️ IN PROGRESS | Patch needed for SPI, JTAG, AXI4, AXI4Lite AVIPs |
+| **Yosys BMC Regression Fix** | ✅ FIXED | BMC_ASSUME_KNOWN_INPUTS override + rg portability (commit `fc02d2ddc`) |
+| **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
 | **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
 | **Verilator BMC Script Fix** | ⚠️ DIAGNOSED | `--run-smtlib --z3-path` flags removed; script needs update to `--emit-smtlib` |
 | **SPI AVIP randomize scoping** | ⚠️ DIAGNOSED | slang bug: `array[i].randomize() with {this.member}` scopes `this` to array type |
 | **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
-| **AVIP Compilation** | ⚠️ **5/9** | apb,uart,i2s,ahb,i3c pass; spi,jtag fail; axi4 timeout; axi4Lite filelist |
+| **AVIP Compilation** | ⚠️ **5/9** | apb,uart,i2s,ahb,i3c pass; spi,jtag,axi4,axi4Lite need slang randomize patch |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
 | **Debug Trace Cleanup** | ✅ DONE | 9 temporary debug blocks removed from LLHDProcessInterpreter.cpp |
 | **RefType Unwrapping Fix** | ✅ FIXED | alloca field drive `dyn_cast<StructType>` failed on RefType; now unwraps first |
@@ -98,6 +102,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
+### New Findings (2026-02-03, Iteration 320)
+- **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
+- **AVIP simulation blocker**: All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) compile to LLHD MLIR (300K-370K lines each) but fail at 0fs. Root cause: `llhd.drv` inside called functions not supported by LLHDProcessInterpreter. This is the **top priority** blocking fix.
+- **AVIP multi-top requirement**: Need `--top hdl_top --top hvl_top` for proper simulation with both HVL and HDL modules.
+- **Slang randomize array scoping patch**: Under development for `array[i].randomize() with {}` constraint. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+- **OpenTitan formal regression**: Running full suite to verify green status.
+
 ### New Findings (2026-02-03, Iteration 319)
 - **Yosys 14/14 pass**: After wildcard segfault fix, basic02.sv compiles and passes both BMC and LEC. All 14 SystemVerilog yosys/tests/sva now pass in both modes.
 - **Verilator BMC test infra bug**: `run_verilator_verification_circt_bmc.sh` passes deprecated `--run-smtlib --z3-path` flags when `BMC_RUN_SMTLIB=1`. These flags don't exist in circt-bmc. Without the flag, 17/17 pass. Fix: update script to use `--emit-smtlib` + pipe to z3.
@@ -110,6 +121,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   - Workdir: `/tmp/opentitan-lec-canright-extractref/aes_sbox_canright`
   - Model: `op_i=4'h8`, `data_i=16'h0800` → canright `data_o=16'h00FF`, LUT `data_o=16'hBF00`
   - Forcing canright unknown mask to zero is UNSAT, so the NEQ still hinges on X-prop.
+- **OpenTitan AES S-Box LEC (fixed-input SMT check)**: with the same input model
+  (`op_i=4'h8`, `data_i=16'h0800`), forcing canright unknown to zero is UNSAT even
+  after removing the distinct constraint, indicating the canright logic itself
+  deterministically produces unknown for that input (not just an unconstrained mask).
+- **LowerLECLLVM sanity**: `circt-opt -lower-lec-llvm` on `aes_sbox_lec.mlir` removes
+  all `llvm.*`/`unrealized_conversion_cast` ops in the canright path; pointer phis
+  become value phis, so the remaining X-prop is from 4-state logic modeling.
 - **MooreToCore local extract_ref assigns**: added llvm.ptr static extract update path
   to mirror dyn_extract_ref (new regression: `test/Conversion/MooreToCore/extract-ref-local-assign.mlir`).
 
@@ -125,9 +143,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   (likely loop/bit-select semantics), not unknown propagation. Root cause still open.
   (Superseded by 2026-02-03 findings: unknown mask still present.)
 
-### Full Regression Results (2026-02-03, Iteration 319)
+### Full Regression Results (2026-02-03, Iteration 320)
 
-All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. **Yosys 14/14 pass** (both BMC and LEC).
+All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. **Yosys 14/14 pass** (regression script verified). AVIP simulation blocked by `llhd.drv` in called functions.
 
 | Suite | Mode | Result | vs Baseline |
 |-------|------|--------|-------------|
@@ -135,35 +153,34 @@ All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail
 | sv-tests | LEC | 23/23 pass | Match |
 | verilator | BMC | 17/17 pass | Match |
 | verilator | LEC | 17/17 pass | Match |
-| yosys SVA | BMC | **14/14 pass**, 2 skip | ✅ +3 (was 11/14) |
-| yosys SVA | LEC | **14/14 pass**, 2 skip | ✅ +1 (was 13/14) |
+| yosys SVA | BMC | **14/14 pass**, 2 skip | ✅ Regression script verified |
+| yosys SVA | LEC | **14/14 pass**, 2 skip | ✅ Regression script verified |
 | circt-sim lit | - | **100/100 (99 pass, 1 xfail)** | ✅ Clean |
 | circt-lec lit | - | **98/98 pass, 0 fail**, 17 unsupported, 3 xfail | ✅ ALL CLEAN |
 | circt-bmc lit | - | **74/74 pass, 0 fail**, 124 unsupported, 16 xfail | ✅ 9 fixed |
 | Unit tests | - | 21/21 pass | +4 layout tests |
-| OpenTitan | sim | **42/42 (41 pass + 1 timeout)** | +11 expanded |
-| AVIP | sim | **7/8** (APB, UART, I2S, AHB, SPI, AXI4, I3C) | +2 AXI4/I3C |
-| AVIP | compile | 8/9 pass | Match |
+| OpenTitan | sim | **42/42 (41 pass + 1 timeout)** | Formal regression running |
+| AVIP | sim | **blocked** | `llhd.drv` in called functions not supported |
+| AVIP | compile | **5/9 pass** (apb,uart,i2s,ahb,i3c) | 4 need slang randomize patch |
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Next Priority: AVIP Deep Simulation + Slang Patches + Test Infra
+### Next Priority: Fix llhd.drv in Called Functions + Slang Patches
 
-**What works**: OpenTitan **42/42** (41 pass + 1 wall-clock timeout). AVIP **7/8** simulation. AVIP 8/9 compile. circt-lec **98/98** pass. circt-sim **100/100** clean. **Yosys 14/14 BMC+LEC.** 21/21 unit tests pass.
+**What works**: OpenTitan **42/42** (41 pass + 1 wall-clock timeout). circt-lec **98/98** pass. circt-sim **100/100** clean. **Yosys 14/14 BMC+LEC** (regression script verified). 21/21 unit tests pass. AVIP 5/9 compile.
 
-**What's needed (Track 1 - AVIP Deep Simulation)**:
-1. **Deepen AVIP simulation** - Push SPI/UART/APB past UVM init to test phase execution
-2. **Test JTAG AVIP simulation** - Blocked by slang enum/reg conversion
-3. **Fix AXI4Lite AVIP compile** - 1 remaining bind+include error
+**What's needed (Track 1 - AVIP Simulation Blocker)** [TOP PRIORITY]:
+1. **Fix `llhd.drv` in called functions** - LLHDProcessInterpreter does not support `llhd.drv` ops inside called functions (only at process top level). All 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) fail at 0fs due to this. **This is the single blocker for all AVIP simulation.**
+2. **Support `--top hdl_top --top hvl_top`** - Multi-top elaboration for HVL+HDL simulation
 
 **What's needed (Track 2 - Slang Patches)**:
-4. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Would unblock SPI AVIP without workaround.
-5. Implement pre/post_randomize in ImportVerilog
-6. Lower coverpoint `iff` conditions
+3. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Needed for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+4. Implement pre/post_randomize in ImportVerilog
+5. Lower coverpoint `iff` conditions
 
 **What's needed (Track 3 - Test Infrastructure)**:
-7. **Fix verilator BMC script** - Update deprecated `--run-smtlib --z3-path` to `--emit-smtlib` + z3 pipe
-8. Debug alert_handler_tb wall-clock timeout (334 processes, needs optimization)
+6. **Fix verilator BMC script** - Update deprecated `--run-smtlib --z3-path` to `--emit-smtlib` + z3 pipe
+7. Debug alert_handler_tb wall-clock timeout (334 processes, needs optimization)
 
 **What's needed (Track 4 - OpenTitan & Formal)**:
 9. Fix AES S-Box Canright LEC (X-prop issue in bit-select semantics)
