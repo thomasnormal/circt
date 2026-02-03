@@ -45,14 +45,13 @@ def main() -> int:
         error = last_msg.get("error")
         if error:
             print(f"Error detected ({error}); allowing stop.", file=debug_file)
-            # return 0
-            time.sleep(3600)  # Sleep for an hour
+            return 0  # Allow stop on error instead of sleeping
 
         # last msg: {'type': 'queue-operation', 'operation': 'enqueue', 'timestamp': '2026-01-17T12:34:54.040Z', 'sessionId': '6785cec7-3fb3-48b9-8758-87cb4f0a07c1', 'content': '<task-notification>\n<task-id>a4b5a02</task-id>\n<status>completed</status>\n<summary>Agent "Track A: APB AVIP full compilation" completed</summary>\n<result>You\'ve hit your limit · resets 2pm (UTC)</result>\n</task-notification>\nFull transcript available at: /tmp/claude/-home-thomas-ahle-circt/tasks/a4b5a02.output'}
         content = last_msg.get("content")
         if content and "hit your limit" in content:
-            print(f"Limit detected ({content}); sleeping for an hour.", file=debug_file)
-            time.sleep(3600)  # Sleep for an hour
+            print(f"Limit detected ({content}); allowing stop.", file=debug_file)
+            return 0  # Allow stop on rate limit instead of sleeping
 
         # for i in range(-10,0):
         #     CONTINUE_MESSAGE += "\n" + lines[i]
