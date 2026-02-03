@@ -183,7 +183,12 @@ for suite in "${suites[@]}"; do
       "--module" "$top_for_file")
     if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
       if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
-        bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+        # Derive the z3 shared library path from Z3_BIN's installation.
+        z3_lib_from_bin="$(dirname "$(dirname "$Z3_BIN")")/lib64/libz3.so"
+        if [[ ! -f "$z3_lib_from_bin" ]]; then
+          z3_lib_from_bin="$(dirname "$(dirname "$Z3_BIN")")/lib/libz3.so"
+        fi
+        bmc_args+=("--shared-libs=$z3_lib_from_bin")
       else
         bmc_args+=("--shared-libs=$Z3_LIB")
       fi
