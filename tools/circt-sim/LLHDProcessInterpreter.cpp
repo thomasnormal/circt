@@ -11840,10 +11840,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               }
 
               // Add operands to worklist - trace through comparison, arithmetic,
-              // and load/probe ops but stop at getelementptr (doesn't read memory)
+              // extraction, and load/probe ops but stop at getelementptr
+              // (doesn't read memory)
               bool shouldTrace = isa<comb::ICmpOp, LLVM::ZExtOp, LLVM::SExtOp>(defOp) ||
                                  isa<comb::AddOp, comb::SubOp, comb::AndOp>(defOp) ||
                                  isa<comb::OrOp, comb::XorOp>(defOp) ||
+                                 isa<comb::ExtractOp, LLVM::ExtractValueOp>(defOp) ||
                                  isa<LLVM::LoadOp>(defOp) ||
                                  isa<llhd::ProbeOp>(defOp);
               if (shouldTrace) {

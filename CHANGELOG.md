@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 338 - February 3, 2026
+
+### Summary
+
+Iteration 338: Fixed critical UVM phase hopper infinite loop bug. Root cause was `wait(queue.size() != 0)` not waking up when queue was modified - the `__moore_wait_condition` function wasn't tracing through `comb::ExtractOp` and `LLVM::ExtractValueOp` when building the invalidation list, so the `llvm.load` was never found and re-evaluated.
+
+### Accomplishments
+
+1. **Wait condition extract tracing fix** - Added `comb::ExtractOp` and `LLVM::ExtractValueOp` to `shouldTrace` check in wait condition invalidation logic. This fixes the condition chain:
+   ```
+   __moore_wait_condition(%result)
+     ← zext %cmp
+     ← icmp ne %size, 0
+     ← comb.extract %struct_size       ← NOW TRACED
+     ← llvm.extractvalue %queue_struct ← NOW TRACED
+     ← llvm.load %queue_ptr            ← NOW FOUND & INVALIDATED
+   ```
+2. **New test added** - `test/Tools/circt-sim/wait-queue-size.sv` verifies `wait(q.size() != 0)` properly wakes up when queue is modified.
+3. **UVM phase hopper unblocked** - APB AVIP simulation no longer immediately hangs on fork+wait patterns.
+
+### Verification
+
+- `wait (q.size() != 0)` works correctly - wait wakes up when queue is pushed
+- `wait (count != 0)` on simple variables still works
+- `wait (obj.member == 0)` on class members still works
+- All existing circt-sim tests pass
+
+### Files Changed
+
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Added extract ops to shouldTrace
+- `test/Tools/circt-sim/wait-queue-size.sv` - New regression test
+
+---
+
 ## Iteration 337 - February 3, 2026
 
 ### Summary
