@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 328)
+## Current Status - February 3, 2026 (Iteration 329)
 
 ### Session Summary - Key Milestones
 
@@ -30,7 +30,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **OpenTitan AES S-Box LEC (canright, assume-known)** | ✅ EQ | Re-verified after const-array X-prop fix (`--assume-known-inputs --mlir-disable-threading`) |
 | **MooreToCore `-1 - x` X-prop** | ✅ **FIXED** | Bitwise NOT now preserves per-bit unknowns instead of all-ones unknown |
 | **MooreToCore add/sub X-prop** | ✅ **IMPROVED** | Per-bit unknown propagation using carry-possible tracking |
-| **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 now zeroes or passthroughs even pre-conversion |
+| **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 and small-width const shift/add (<=16) avoid `comb.mul` |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -114,7 +114,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **Inline `randomize() with` outer-scope access** - ⚠️ SPI testbench uses inline constraints that slang rejects; AVIP runner drops inline constraint blocks for compile
 
 **Minor (not blocking current tests):**
-15. **Arithmetic X-prop precision** - `Div/Mod` still treat any unknown bit as all-unknown; `Mul` only handles const 0/1 fast-path. Consider per-bit/interval propagation to reduce LUT vs canright divergence.
+15. **Arithmetic X-prop precision** - `Div/Mod` still treat any unknown bit as all-unknown; `Mul` only handles const 0/1 and small-width const shift/add (<=16). Consider per-bit/interval propagation to reduce LUT vs canright divergence.
 14. **4-state unknown index on non-constant arrays** - still conservative (unknown index => all bits unknown); extend constant-array improvement to general cases.
 10. **`$readmemh` scope verification** - Warning on some testbenches
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase

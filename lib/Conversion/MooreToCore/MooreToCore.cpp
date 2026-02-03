@@ -7671,43 +7671,92 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
     }
 
     if constexpr (std::is_same_v<SourceOp, MulOp>) {
-      APInt lhsConst;
-      APInt lhsConstUnk;
-      if (getFourStateConstant(adaptor.getLhs(), lhsConst, lhsConstUnk) &&
-          lhsConstUnk.isZero()) {
-        if (lhsConst.isZero()) {
-          Value zeroVal =
-              hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
-          Value zeroUnk =
-              hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
-          rewriter.replaceOp(op,
-                             createFourStateStruct(rewriter, loc, zeroVal,
-                                                   zeroUnk));
-          return success();
-        }
-        if (lhsConst.isOne()) {
-          rewriter.replaceOp(op, adaptor.getRhs());
-          return success();
-        }
+      APInt constVal;
+      APInt constUnk;
+      Value otherVal;
+      Value otherUnk;
+      Value passthrough;
+      bool hasConst = false;
+      if (getFourStateConstant(adaptor.getLhs(), constVal, constUnk) &&
+          constUnk.isZero()) {
+        otherVal = rhsVal;
+        otherUnk = rhsUnk;
+        passthrough = adaptor.getRhs();
+        hasConst = true;
+      } else if (getFourStateConstant(adaptor.getRhs(), constVal, constUnk) &&
+                 constUnk.isZero()) {
+        otherVal = lhsVal;
+        otherUnk = lhsUnk;
+        passthrough = adaptor.getLhs();
+        hasConst = true;
       }
 
-      APInt rhsConst;
-      APInt rhsConstUnk;
-      if (getFourStateConstant(adaptor.getRhs(), rhsConst, rhsConstUnk) &&
-          rhsConstUnk.isZero()) {
-        if (rhsConst.isZero()) {
+      if (hasConst) {
+        if (constVal.isZero()) {
           Value zeroVal =
-              hw::ConstantOp::create(rewriter, loc, rhsVal.getType(), 0);
+              hw::ConstantOp::create(rewriter, loc, otherVal.getType(), 0);
           Value zeroUnk =
-              hw::ConstantOp::create(rewriter, loc, rhsUnk.getType(), 0);
+              hw::ConstantOp::create(rewriter, loc, otherUnk.getType(), 0);
           rewriter.replaceOp(op,
                              createFourStateStruct(rewriter, loc, zeroVal,
                                                    zeroUnk));
           return success();
         }
-        if (rhsConst.isOne()) {
-          rewriter.replaceOp(op, adaptor.getLhs());
+        if (constVal.isOne()) {
+          rewriter.replaceOp(op, passthrough);
           return success();
+        }
+
+        unsigned width = constVal.getBitWidth();
+        if (width <= 16) {
+          auto shiftConst = [&](unsigned shift) {
+            Value shiftVal = hw::ConstantOp::create(
+                rewriter, loc, otherVal.getType(), static_cast<int64_t>(shift));
+            Value shiftedVal =
+                comb::ShlOp::create(rewriter, loc, otherVal, shiftVal);
+            Value shiftedUnk =
+                comb::ShlOp::create(rewriter, loc, otherUnk, shiftVal);
+            Value masked =
+                maskFourStateValue(rewriter, loc, shiftedVal, shiftedUnk);
+            return createFourStateStruct(rewriter, loc, masked, shiftedUnk);
+          };
+
+          if (constVal.isPowerOf2()) {
+            unsigned shift = constVal.logBase2();
+            rewriter.replaceOp(op, shiftConst(shift));
+            return success();
+          }
+
+          bool initialized = false;
+          Value sumVal;
+          Value sumUnk;
+          for (unsigned bit = 0; bit < width; ++bit) {
+            if (!constVal[bit])
+              continue;
+            if (!initialized) {
+              Value partial = shiftConst(bit);
+              sumVal = extractFourStateValue(rewriter, loc, partial);
+              sumUnk = extractFourStateUnknown(rewriter, loc, partial);
+              initialized = true;
+            } else {
+              Value partial = shiftConst(bit);
+              Value partialVal =
+                  extractFourStateValue(rewriter, loc, partial);
+              Value partialUnk =
+                  extractFourStateUnknown(rewriter, loc, partial);
+              Value sum = buildFourStateAddSub(rewriter, loc, sumVal, sumUnk,
+                                               partialVal, partialUnk,
+                                               /*isSub=*/false);
+              sumVal = extractFourStateValue(rewriter, loc, sum);
+              sumUnk = extractFourStateUnknown(rewriter, loc, sum);
+            }
+          }
+          if (initialized) {
+            Value masked = maskFourStateValue(rewriter, loc, sumVal, sumUnk);
+            rewriter.replaceOp(
+                op, createFourStateStruct(rewriter, loc, masked, sumUnk));
+            return success();
+          }
         }
       }
     }
