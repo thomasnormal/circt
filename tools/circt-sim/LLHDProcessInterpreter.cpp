@@ -12757,6 +12757,138 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_int_to_string - convert i64 to string struct {ptr, i64}
+    if (calleeName == "__moore_int_to_string" ||
+        calleeName == "__moore_string_itoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue intArg = getValue(procId, callOp.getOperand(0));
+        std::string str;
+        if (intArg.isX()) {
+          str = "x";
+        } else {
+          str = std::to_string(intArg.getAPInt().getSExtValue());
+        }
+
+        // Store the string in persistent storage
+        interpreterStrings.push_back(std::move(str));
+        const std::string &stored = interpreterStrings.back();
+        int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+        int64_t lenVal = static_cast<int64_t>(stored.size());
+
+        // Register in dynamic strings registry
+        dynamicStrings[ptrVal] = {stored.data(), lenVal};
+
+        // Pack into 128-bit struct result {ptr(lower 64), len(upper 64)}
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_int_to_string("
+                                << (intArg.isX() ? "X" : std::to_string(intArg.getAPInt().getSExtValue()))
+                                << ") = \"" << stored << "\"\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_string_concat - concatenate two string structs
+    // Signature: (lhs_ptr: ptr, rhs_ptr: ptr) -> struct{ptr, i64}
+    // lhs_ptr and rhs_ptr point to stack-allocated {ptr, i64} structs
+    if (calleeName == "__moore_string_concat") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        // Helper to read a string struct from a pointer address
+        auto readStringFromStructPtr = [&](Value operand) -> std::string {
+          InterpretedValue ptrArg = getValue(procId, operand);
+          if (ptrArg.isX())
+            return "";
+
+          uint64_t structAddr = ptrArg.getUInt64();
+          uint64_t structOffset = 0;
+          auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
+          if (!block || !block->initialized || structOffset + 16 > block->data.size())
+            return "";
+
+          // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
+          uint64_t strPtr = 0;
+          int64_t strLen = 0;
+          for (int i = 0; i < 8; ++i) {
+            strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
+            strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+          }
+
+          if (strPtr == 0 || strLen <= 0)
+            return "";
+
+          // Look up in dynamicStrings registry first
+          auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+          if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+              dynIt->second.second > 0) {
+            return std::string(dynIt->second.first,
+                               std::min(static_cast<size_t>(strLen),
+                                        static_cast<size_t>(dynIt->second.second)));
+          }
+
+          // Try global memory lookup (for string literals)
+          for (auto &[globalName, globalAddr] : globalAddresses) {
+            auto blockIt = globalMemoryBlocks.find(globalName);
+            if (blockIt != globalMemoryBlocks.end()) {
+              MemoryBlock &gBlock = blockIt->second;
+              if (strPtr >= globalAddr && strPtr < globalAddr + gBlock.size) {
+                uint64_t off = strPtr - globalAddr;
+                size_t avail = std::min(static_cast<size_t>(strLen),
+                                        gBlock.data.size() - static_cast<size_t>(off));
+                if (avail > 0 && gBlock.initialized)
+                  return std::string(reinterpret_cast<const char *>(
+                                         gBlock.data.data() + off),
+                                     avail);
+              }
+            }
+          }
+
+          // Try addressToGlobal reverse lookup
+          auto globalIt = addressToGlobal.find(strPtr);
+          if (globalIt != addressToGlobal.end()) {
+            auto blockIt = globalMemoryBlocks.find(globalIt->second);
+            if (blockIt != globalMemoryBlocks.end()) {
+              const MemoryBlock &gBlock = blockIt->second;
+              size_t avail = std::min(static_cast<size_t>(strLen),
+                                      gBlock.data.size());
+              if (avail > 0 && gBlock.initialized)
+                return std::string(reinterpret_cast<const char *>(
+                                       gBlock.data.data()),
+                                   avail);
+            }
+          }
+
+          return "";
+        };
+
+        std::string lhs = readStringFromStructPtr(callOp.getOperand(0));
+        std::string rhs = readStringFromStructPtr(callOp.getOperand(1));
+        std::string result = lhs + rhs;
+
+        // Store the concatenated string in persistent storage
+        interpreterStrings.push_back(std::move(result));
+        const std::string &stored = interpreterStrings.back();
+        int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+        int64_t lenVal = static_cast<int64_t>(stored.size());
+
+        // Register in dynamic strings registry
+        dynamicStrings[ptrVal] = {stored.data(), lenVal};
+
+        // Pack into 128-bit struct result
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_concat(\"" << lhs
+                                << "\", \"" << rhs << "\") = \"" << stored
+                                << "\"\n");
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {
