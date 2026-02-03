@@ -1327,6 +1327,9 @@ public:
   /// Add a process waiting to get.
   void addGetWaiter(ProcessId id) { getWaitQueue.push_back(id); }
 
+  /// Add a process waiting to peek.
+  void addPeekWaiter(ProcessId id) { peekWaitQueue.push_back(id); }
+
   /// Try to satisfy a get waiter.
   ProcessId trySatisfyGetWaiter(uint64_t &message) {
     if (getWaitQueue.empty() || isEmpty())
@@ -1337,6 +1340,14 @@ public:
     messages.erase(messages.begin());
     getWaitQueue.erase(getWaitQueue.begin());
     return id;
+  }
+
+  /// Drain peek waiters (no message consumption).
+  void takePeekWaiters(llvm::SmallVectorImpl<ProcessId> &out) {
+    if (peekWaitQueue.empty())
+      return;
+    out.append(peekWaitQueue.begin(), peekWaitQueue.end());
+    peekWaitQueue.clear();
   }
 
   /// Try to satisfy a put waiter.
@@ -1356,6 +1367,7 @@ private:
   std::vector<uint64_t> messages;
   std::vector<std::pair<ProcessId, uint64_t>> putWaitQueue;
   std::vector<ProcessId> getWaitQueue;
+  std::vector<ProcessId> peekWaitQueue;
 };
 
 //===----------------------------------------------------------------------===//

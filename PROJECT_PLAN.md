@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 332 - Wait Condition Fix)
+## Current Status - February 3, 2026 (Iteration 336 - Process Control + Fork Disable Fix)
 
 ### Session Summary - Key Milestones
 
@@ -47,6 +47,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **DAG False Cycle Detection Fix** | ✅ FIXED | `pushCount` map replaces `inProgress` set (commit `a488f68f9`) |
 | **Instance Output Eval Priority** | ✅ FIXED | `instanceOutputMap` checked before `getSignalId` (commit `a488f68f9`) |
 | **Fork Automatic Variable Capture** | ✅ FIXED | `memoryBlocks` copy in `interpretSimFork` (commit `95589849b`) |
+| **Process kill/status/await** | ✅ FIXED | `process::kill/status/await` wired through ImportVerilog + circt-sim |
+| **Process randstate/srandom** | ✅ FIXED | `process::get_randstate/set_randstate/srandom` wired through ImportVerilog + circt-sim |
+| **Array locator runtime calls** | ✅ FIXED | `moore.array.locator` predicates now tolerate `llvm.call`/casts (process status in UVM) |
 | **Mailbox Unit Tests** | ✅ ADDED | 9 new tests for getOrCreateMailbox, all 26 pass |
 | **UVM Factory Registration** | ✅ FIXED | Registry specializations generated correctly |
 | **Fork loop variable capture** | ✅ FIXED | commit `c63b5b88` - automatic vars evaluated at fork time |
@@ -55,6 +58,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **$changed Assume Fix** | ✅ FIXED | skipWarmup for assumes - matches Yosys behavior |
 | **4-state Op Masking** | ✅ FIXED | Logic/arith/parity ops mask value under unknown (no Z pollution) |
 | **Mailbox Phase 2** | ✅ IMPLEMENTED | Blocking put/get with process suspend/resume |
+| **Mailbox peek/try_peek** | ✅ IMPLEMENTED | Non-blocking peek + blocking peek resume (circt-sim regression) |
 | **LTLToCore Fix** | ✅ FIXED | All 16 tests pass - null clock bug fixed |
 | **LLHD Local Ref Extract Inlining** | ✅ FIXED | Derived ref drives inline; avoids LLHD abstraction |
 | **LLHD 4-State Value Updates** | ✅ FIXED | Clear unknown mask on value field updates |
@@ -103,9 +107,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
 3. ~~**UVM process context detection**~~ ✅ FIXED Iter 331 - `process::self()` implemented in LLHDProcessInterpreter.cpp
-4. **UVM phase hopper infinite loop** - After `process::self()` fix, UVM creates `uvm_test_top` but phase timeout watchdog enters infinite fork scheduling loop. Phase hopper fork is created but never completes.
-5. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
-6. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
+4. **AVIP MLIR artifacts need regeneration** - Older AVIP MLIR (pre-Iter 331) lacks `process::self()` calls; `run_test()` reports non-process context unless recompiled.
+5. **UVM phase hopper infinite loop** - Likely resolved by fork disable completion + `process::kill/status/await` support; re-run uvm-core/AVIP to confirm.
+6. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
+7. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
 
 **Major (blocking specific testbenches):**
 4. ~~**SPI AVIP compile**~~: ✅ FIXED - All 3 slang patches applied, compiles cleanly. Simulation testing needed.
@@ -117,6 +122,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 10. **coverpoint `iff`** - Not yet lowered
 11. **`dist` constraint open ranges** - ⚠️ `$` upper bounds still rejected by slang; SPI compile clamps `[11:$]` to `[11:1023]` in the AVIP runner
 12. **Inline `randomize() with` outer-scope access** - ⚠️ SPI testbench uses inline constraints that slang rejects; AVIP runner drops inline constraint blocks for compile
+13. ~~**process randstate/srandom**~~ ✅ IMPLEMENTED - `process::get_randstate/set_randstate/srandom` wired with circt-sim regression.
+14. ~~**mailbox peek/try_peek**~~ ✅ IMPLEMENTED - `mailbox.peek/try_peek` wired with circt-sim regression.
 
 **Minor (not blocking current tests):**
 15. **Arithmetic X-prop precision** - `Div/Mod` still treat any unknown bit as all-unknown; `Mul` only handles const 0/1 and small-width const shift/add (<=16). Consider per-bit/interval propagation to reduce LUT vs canright divergence.

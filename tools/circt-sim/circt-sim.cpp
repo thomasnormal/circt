@@ -271,6 +271,11 @@ static llvm::cl::opt<bool>
                  llvm::cl::desc("Run verifier after each pass"),
                  llvm::cl::init(true), llvm::cl::cat(debugCategory));
 
+static llvm::cl::opt<bool>
+    skipPasses("skip-passes",
+               llvm::cl::desc("Skip preprocessing passes (input already lowered)"),
+               llvm::cl::init(false), llvm::cl::cat(mainCategory));
+
 // DPI options
 static llvm::cl::list<std::string>
     sharedLibs("shared-libs",
@@ -1473,16 +1478,18 @@ static LogicalResult processInput(MLIRContext &context,
   }
 
   reportStage("passes");
-  // Run preprocessing passes if needed
-  PassManager pm(&context);
-  pm.enableVerifier(verifyPasses);
+  if (!skipPasses) {
+    // Run preprocessing passes if needed
+    PassManager pm(&context);
+    pm.enableVerifier(verifyPasses);
 
-  // Add passes to lower to simulation-friendly form
-  pm.addPass(createCanonicalizerPass());
+    // Add passes to lower to simulation-friendly form
+    pm.addPass(createCanonicalizerPass());
 
-  if (failed(pm.run(*module))) {
-    llvm::errs() << "Error: Pass pipeline failed\n";
-    return failure();
+    if (failed(pm.run(*module))) {
+      llvm::errs() << "Error: Pass pipeline failed\n";
+      return failure();
+    }
   }
 
   // Create and initialize simulation context

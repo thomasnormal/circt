@@ -1,6 +1,4 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
-// XFAIL: *
-// Known conversion bug: ltl.clock with explicit clock signal causes SSA dominance violation
 
 // Mixed clock-name (bmc.clock) and clock-value (ltl.clock) contexts for the
 // same delay op should not be treated as a conflict.

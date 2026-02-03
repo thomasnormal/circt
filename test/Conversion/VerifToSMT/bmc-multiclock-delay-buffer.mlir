@@ -2,6 +2,7 @@
 
 // CHECK-LABEL: func.func @delay_multiclock_any_posedge
 // CHECK: scf.for
+// CHECK: func.call @bmc_loop
 // CHECK: func.call @bmc_circuit
 // The bmc_circuit function checks delay buffer values with smt.eq and smt.or
 // CHECK-LABEL: func.func @bmc_circuit

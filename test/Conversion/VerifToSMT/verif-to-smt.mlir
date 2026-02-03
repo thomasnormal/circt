@@ -137,15 +137,15 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK-DAG:  smt.declare_fun : !smt.bv<32>
 // CHECK-DAG:  smt.declare_fun : !smt.array<[!smt.bv<1> -> !smt.bv<32>]>
 // CHECK:      scf.for
-// The circuit now returns 5 values (4 outputs + 1 property)
-// CHECK:        func.call @bmc_circuit
-// CHECK-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
-// Loop is called after circuit
+// Loop is called first
 // CHECK:        func.call @bmc_loop
 // Edge detection for register updates
 // CHECK:        smt.bv.not
 // CHECK:        smt.bv.and
 // CHECK:        smt.eq {{%.+}}, [[CNEG1]] : !smt.bv<1>
+// The circuit now returns 5 values (4 outputs + 1 property)
+// CHECK:        func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
 // Property checking
 // CHECK:        smt.eq {{%.+}}, [[CNEG1]] : !smt.bv<1>
 // CHECK:        smt.not
@@ -169,10 +169,10 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 
 // RUN: circt-opt %s --convert-verif-to-smt="rising-clocks-only=true" --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s --check-prefix=CHECK1
 // CHECK1-LABEL:  func.func @test_bmc() -> i1 {
+// In rising-clocks-only mode, bmc_loop is called first then circuit
+// CHECK1:        func.call @bmc_loop
 // CHECK1:        func.call @bmc_circuit
 // CHECK1-SAME: -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
-// In rising-clocks-only mode, bmc_loop is called then the check is done
-// CHECK1:        func.call @bmc_loop
 // CHECK1:        smt.eq
 // CHECK1:        smt.not
 // CHECK1:        smt.push 1

@@ -2040,3 +2040,37 @@ hw.module @issue9403(in %sel: i1, out out1: ui1) {
   %mux1 = comb.mux %sel, %true, %false : ui1
   hw.output %mux1 : ui1
 }
+
+// CHECK-LABEL: @andAbsorb
+hw.module @andAbsorb(in %a: i1, in %b: i1, out o: i1) {
+// CHECK-NEXT: hw.output %a : i1
+  %0 = comb.or %a, %b : i1
+  %1 = comb.and %a, %0 : i1
+  hw.output %1 : i1
+}
+
+// CHECK-LABEL: @orAbsorb
+hw.module @orAbsorb(in %a: i1, in %b: i1, out o: i1) {
+// CHECK-NEXT: hw.output %a : i1
+  %0 = comb.and %a, %b : i1
+  %1 = comb.or %a, %0 : i1
+  hw.output %1 : i1
+}
+
+// CHECK-LABEL: @xorCancelParity
+hw.module @xorCancelParity(in %a: i4, in %b: i4, in %c: i4, out o: i4) {
+// CHECK-NEXT: hw.output %c : i4
+  %0 = comb.xor %a, %b, %a, %b, %c : i4
+  hw.output %0 : i4
+}
+
+// CHECK-LABEL: @andConstCombine
+hw.module @andConstCombine(in %a: i4, out o: i4) {
+// CHECK-NEXT: %[[CST:%.+]] = hw.constant 1 : i4
+// CHECK-NEXT: %[[AND:%.+]] = comb.and %a, %[[CST]] : i4
+// CHECK-NEXT: hw.output %[[AND]] : i4
+  %c3 = hw.constant 3 : i4
+  %c5 = hw.constant 5 : i4
+  %0 = comb.and %a, %c3, %c5 : i4
+  hw.output %0 : i4
+}

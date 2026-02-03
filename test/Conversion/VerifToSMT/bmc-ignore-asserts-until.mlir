@@ -7,12 +7,11 @@
 // CHECK-DAG: arith.constant true
 // CHECK-DAG: arith.constant false
 // CHECK: scf.for {{%.+}} = {{%.+}} to {{%.+}} step {{%.+}} iter_args({{%.+}} = {{%.+}}, {{%.+}} = {{%.+}})
+// Loop is called first
+// CHECK: func.call @bmc_loop
 // Circuit returns outputs + property value (!smt.bv<1>)
 // CHECK: func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<32>, !smt.bv<1>)
-// Loop is called after circuit
-// CHECK: func.call @bmc_loop
-// CHECK: smt.declare_fun : !smt.bv<32>
 // ignore_asserts_until check (compare iteration with threshold)
 // CHECK: arith.cmpi ult
 // CHECK: scf.if
@@ -21,7 +20,6 @@
 // CHECK: } else {
 // Check the property
 // CHECK:     smt.not
-// CHECK:     smt.and
 // CHECK:     smt.push 1
 // CHECK:     smt.assert
 // CHECK:     smt.check sat

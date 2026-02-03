@@ -126,6 +126,22 @@ TEST_F(ForkJoinTest, DisableForkTerminatesChildren) {
   EXPECT_EQ(proc2->getState(), ProcessState::Terminated);
 }
 
+TEST_F(ForkJoinTest, DisableForkCompletesForWaitFork) {
+  ProcessId parent = scheduler->registerProcess("parent", []() {});
+  ProcessId child = scheduler->registerProcess("child", []() {});
+
+  ForkId forkId = forkManager->createFork(parent, ForkJoinType::JoinNone);
+  forkManager->addChildToFork(forkId, child);
+
+  EXPECT_FALSE(forkManager->waitFork(parent));
+  EXPECT_TRUE(forkManager->hasActiveChildren(parent));
+
+  forkManager->disableFork(forkId);
+
+  EXPECT_TRUE(forkManager->waitFork(parent));
+  EXPECT_FALSE(forkManager->hasActiveChildren(parent));
+}
+
 TEST_F(ForkJoinTest, WaitForkChecksAllJoinNone) {
   ProcessId parent = scheduler->registerProcess("parent", []() {});
   ProcessId child1 = scheduler->registerProcess("child1", []() {});

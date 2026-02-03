@@ -1,6 +1,4 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
-// XFAIL: *
-// Known conversion bug: ltl.past sequence lowering is unsupported in this case.
 
 // Shared ltl.past with different clock edges is cloned per property.
 // CHECK-LABEL: func.func @past_edge_conflict

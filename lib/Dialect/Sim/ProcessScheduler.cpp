@@ -1143,7 +1143,14 @@ void ForkJoinManager::disableFork(ForkId forkId) {
     scheduler.terminateProcess(childId);
   }
 
+  // Treat disabled children as completed so wait_fork/hasActiveChildren clears.
+  group->completedCount = group->childProcesses.size();
   group->joined = true;
+
+  // Resume the parent if it's waiting on fork completion or halt.
+  Process *parent = scheduler.getProcess(group->parentProcess);
+  if (parent && parent->getState() == ProcessState::Waiting)
+    scheduler.resumeProcess(group->parentProcess);
 }
 
 void ForkJoinManager::disableAllForks(ProcessId parentProcess) {
