@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 329 - February 3, 2026
+
+### Summary
+
+Iteration 329: Expanded 4-state multiply constant handling to decompose small constants into shift/add (<=16-bit), keeping per-bit unknown propagation without falling back to conservative `comb.mul`. Added regressions for mul-by-2/3.
+
+### Accomplishments
+
+1. **4-state mul const shift/add** - Mul by small constant now lowers to shift or shift+add with per-bit unknown propagation.
+2. **Regressions added** - `four-state-mul-const.mlir` now checks mul-by-2 and mul-by-3 avoid `comb.mul`.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-mul-const.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-mul-const.mlir`
+
+### Notes
+
+- OpenTitan AES S-Box LEC has not been re-run since this change; last full X-prop run remained NEQ (see Iteration 328).
+
 ## Iteration 328 - February 3, 2026
 
 ### Summary
