@@ -290,6 +290,93 @@ struct ExprVisitor {
       : context(context), loc(loc), builder(context.builder),
         isLvalue(isLvalue) {}
 
+  /// Resolve a hierarchical interface member access like `p.child.awvalid` and
+  /// return either a reference (lvalue) or value (rvalue) for the signal.
+  /// This supports nested interface instances inside interfaces by walking
+  /// the hierarchical reference path and chaining VirtualInterfaceSignalRefOp.
+  Value resolveHierarchicalInterfaceSignalRef(
+      const slang::ast::HierarchicalValueExpression &expr,
+      StringRef signalName) {
+    Value instRef;
+    size_t baseIndex = 0;
+
+    for (size_t i = 0; i < expr.ref.path.size(); ++i) {
+      const auto &elem = expr.ref.path[i];
+      if (auto *instSym = elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+        if (instSym->getDefinition().definitionKind ==
+            slang::ast::DefinitionKind::Interface) {
+          instRef = context.resolveInterfaceInstance(instSym, loc);
+          if (instRef) {
+            baseIndex = i;
+            break;
+          }
+        }
+      } else if (auto *ifacePort =
+                     elem.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+        if (auto it = context.interfacePortValues.find(ifacePort);
+            it != context.interfacePortValues.end()) {
+          instRef = it->second;
+          baseIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (!instRef)
+      return {};
+
+    auto instRefTy = dyn_cast<moore::RefType>(instRef.getType());
+    if (!instRefTy)
+      return {};
+    auto vifTy =
+        dyn_cast<moore::VirtualInterfaceType>(instRefTy.getNestedType());
+    if (!vifTy)
+      return {};
+
+    // Read the base interface instance.
+    Value vifValue = moore::ReadOp::create(builder, loc, instRef);
+
+    // Walk nested interface instances in the hierarchical path, if any.
+    for (size_t i = baseIndex + 1; i < expr.ref.path.size(); ++i) {
+      auto *childInst =
+          expr.ref.path[i].symbol->as_if<slang::ast::InstanceSymbol>();
+      if (!childInst ||
+          childInst->getDefinition().definitionKind !=
+              slang::ast::DefinitionKind::Interface)
+        continue;
+
+      auto *ifaceLowering = context.convertInterfaceHeader(&childInst->body);
+      if (!ifaceLowering)
+        return {};
+
+      auto childIfaceRef = mlir::FlatSymbolRefAttr::get(
+          builder.getContext(), ifaceLowering->op.getSymName());
+      auto childVifTy =
+          moore::VirtualInterfaceType::get(builder.getContext(), childIfaceRef);
+      auto childRefTy = moore::RefType::get(childVifTy);
+      auto signalSym = mlir::FlatSymbolRefAttr::get(builder.getContext(),
+                                                    childInst->name);
+
+      Value childRef = moore::VirtualInterfaceSignalRefOp::create(
+          builder, loc, childRefTy, vifValue, signalSym);
+      vifValue = moore::ReadOp::create(builder, loc, childRef);
+      vifTy = childVifTy;
+    }
+
+    auto type = context.convertType(*expr.type);
+    if (!type)
+      return {};
+    auto signalSym =
+        mlir::FlatSymbolRefAttr::get(builder.getContext(), signalName);
+    auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
+    Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
+        builder, loc, refTy, vifValue, signalSym);
+
+    if (isLvalue)
+      return signalRef;
+    return moore::ReadOp::create(builder, loc, signalRef);
+  }
+
   /// Convert an expression either as an lvalue or rvalue, depending on whether
   /// this is an lvalue or rvalue visitor. This is useful for projections such
   /// as `a[i]`, where you want `a` as an lvalue if you want `a[i]` as an
@@ -1334,6 +1421,20 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle inline constraint receivers and compiler-generated 'this' symbols.
+    if (auto inlineRef = context.getInlineConstraintThisRef()) {
+      if (auto inlineSym = context.getInlineConstraintThisSymbol();
+          inlineSym && inlineSym == &expr.symbol) {
+        return inlineRef;
+      }
+      if (expr.symbol.name == "this")
+        return inlineRef;
+    }
+    if (expr.symbol.name == "this") {
+      if (auto thisRef = context.getImplicitThisRef())
+        return thisRef;
+    }
+
     // Handle local variables.
     if (auto value = context.valueSymbols.lookup(&expr.symbol)) {
       if (isa<moore::RefType>(value.getType())) {
@@ -1528,44 +1629,16 @@ struct RvalueExprVisitor : public ExprVisitor {
               parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
         if (instBody->getDefinition().definitionKind ==
             slang::ast::DefinitionKind::Interface) {
-          // This is a variable/net inside an interface. Find the interface
-          // instance from the hierarchical path.
-          for (const auto &elem : expr.ref.path) {
-            Value instRef;
-            if (auto *instSym =
-                    elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-              if (auto it = context.interfaceInstances.find(instSym);
-                  it != context.interfaceInstances.end())
-                instRef = it->second;
-            } else if (auto *ifacePort =
-                           elem.symbol
-                               ->as_if<slang::ast::InterfacePortSymbol>()) {
-              if (auto it = context.interfacePortValues.find(ifacePort);
-                  it != context.interfacePortValues.end())
-                instRef = it->second;
+          // This is a variable/net inside an interface. Resolve the interface
+          // instance from the hierarchical path and build the signal access,
+          // including nested interface instances.
+          if (auto value = resolveHierarchicalInterfaceSignalRef(
+                  expr, expr.symbol.name)) {
+            if (context.rvalueReadCallback) {
+              if (auto readOp = value.getDefiningOp<moore::ReadOp>())
+                context.rvalueReadCallback(readOp);
             }
-
-            if (!instRef)
-              continue;
-
-            // Found the interface instance. The instance is stored as a
-            // RefType<VirtualInterfaceType>, so we need to read it first.
-            Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-            // Create a signal reference.
-            auto type = context.convertType(*expr.type);
-            if (!type)
-              return {};
-            auto signalSym = mlir::FlatSymbolRefAttr::get(
-                builder.getContext(), expr.symbol.name);
-            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
-            Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
-                builder, loc, refTy, vifValue, signalSym);
-            // For rvalue, read from the reference
-            auto readOp = moore::ReadOp::create(builder, loc, signalRef);
-            if (context.rvalueReadCallback)
-              context.rvalueReadCallback(readOp);
-            return readOp.getResult();
+            return value;
           }
         }
       }
@@ -1587,43 +1660,13 @@ struct RvalueExprVisitor : public ExprVisitor {
                                    .as_if<slang::ast::InstanceBodySymbol>()) {
             if (instBody->getDefinition().definitionKind ==
                 slang::ast::DefinitionKind::Interface) {
-              // Find the interface port from the hierarchical path
-              for (const auto &elem : expr.ref.path) {
-                Value instRef;
-                if (auto *instSym =
-                        elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                  if (auto it = context.interfaceInstances.find(instSym);
-                      it != context.interfaceInstances.end())
-                    instRef = it->second;
-                } else if (auto *ifacePort =
-                               elem.symbol
-                                   ->as_if<slang::ast::InterfacePortSymbol>()) {
-                  if (auto it = context.interfacePortValues.find(ifacePort);
-                      it != context.interfacePortValues.end())
-                    instRef = it->second;
+              if (auto value = resolveHierarchicalInterfaceSignalRef(
+                      expr, internalSym->name)) {
+                if (context.rvalueReadCallback) {
+                  if (auto readOp = value.getDefiningOp<moore::ReadOp>())
+                    context.rvalueReadCallback(readOp);
                 }
-
-                if (!instRef)
-                  continue;
-
-                // Found the interface instance. Read from the RefType.
-                Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-                // Create a signal reference using the internal symbol's name.
-                auto type = context.convertType(*expr.type);
-                if (!type)
-                  return {};
-                auto signalSym = mlir::FlatSymbolRefAttr::get(
-                    builder.getContext(), internalSym->name);
-                auto refTy =
-                    moore::RefType::get(cast<moore::UnpackedType>(type));
-                Value signalRef = moore::VirtualInterfaceSignalRefOp::create(
-                    builder, loc, refTy, vifValue, signalSym);
-                // For rvalue, read from the reference
-                auto readOp = moore::ReadOp::create(builder, loc, signalRef);
-                if (context.rvalueReadCallback)
-                  context.rvalueReadCallback(readOp);
-                return readOp.getResult();
+                return value;
               }
             }
           }
@@ -3430,6 +3473,36 @@ struct RvalueExprVisitor : public ExprVisitor {
                                 "regular function call";
     }
 
+    // Handle process::self() built-in static method.
+    // IEEE 1800-2017 Section 9.7 "Process control"
+    // The process class is a built-in class with a static self() method that
+    // returns a handle to the currently executing process, or null if called
+    // from outside a process context (e.g., from a module's initial context).
+    if ((subroutine->flags & slang::ast::MethodFlags::BuiltIn) &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name == "process" && subroutine->name == "self") {
+        // process::self() is a static method - no 'this' object needed.
+        // Generate a call to __moore_process_self() runtime function which
+        // returns a non-null handle when called from inside a process context
+        // (llhd.process or sim.fork child), or null otherwise.
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+        auto selfFuncTy = mlir::LLVM::LLVMFunctionType::get(ptrTy, {});
+        auto selfFunc = getOrCreateRuntimeFunc(context, "__moore_process_self",
+                                               selfFuncTy);
+        auto callOp = mlir::LLVM::CallOp::create(builder, loc, selfFunc,
+                                                 ValueRange{});
+        // Convert the result to the expected class handle type
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+        return mlir::UnrealizedConversionCastOp::create(builder, loc,
+                                                        resultType,
+                                                        callOp.getResult())
+            .getResult(0);
+      }
+    }
+
     // Handle mailbox built-in method calls (put, get, try_put, try_get, num).
     // IEEE 1800-2017 Section 15.4 "Mailboxes"
     // Mailbox is a built-in parameterized class. Its methods have the BuiltIn
@@ -4616,9 +4689,14 @@ struct RvalueExprVisitor : public ExprVisitor {
             &randomizeOp.getInlineConstraints().front());
 
         auto savedThisRef = context.getInlineConstraintThisRef();
+        auto savedThisSym = context.getInlineConstraintThisSymbol();
         context.setInlineConstraintThisRef(classObj);
+        context.setInlineConstraintThisSymbol(args[0]->getSymbolReference());
         auto restoreThisRef = llvm::make_scope_exit(
-            [&] { context.setInlineConstraintThisRef(savedThisRef); });
+            [&] {
+              context.setInlineConstraintThisRef(savedThisRef);
+              context.setInlineConstraintThisSymbol(savedThisSym);
+            });
 
         // Convert the inline constraints
         if (failed(context.convertConstraint(*inlineConstraints, loc)))
@@ -6655,6 +6733,20 @@ struct LvalueExprVisitor : public ExprVisitor {
 
   // Handle named values, such as references to declared variables.
   Value visit(const slang::ast::NamedValueExpression &expr) {
+    // Handle inline constraint receivers and compiler-generated 'this' symbols.
+    if (auto inlineRef = context.getInlineConstraintThisRef()) {
+      if (auto inlineSym = context.getInlineConstraintThisSymbol();
+          inlineSym && inlineSym == &expr.symbol) {
+        return inlineRef;
+      }
+      if (expr.symbol.name == "this")
+        return inlineRef;
+    }
+    if (expr.symbol.name == "this") {
+      if (auto thisRef = context.getImplicitThisRef())
+        return thisRef;
+    }
+
     // Handle local variables.
     if (auto value = context.valueSymbols.lookup(&expr.symbol))
       return value;
@@ -6823,41 +6915,9 @@ struct LvalueExprVisitor : public ExprVisitor {
               parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
         if (instBody->getDefinition().definitionKind ==
             slang::ast::DefinitionKind::Interface) {
-          // This is a variable/net inside an interface. Find the interface
-          // instance from the hierarchical path.
-          for (const auto &elem : expr.ref.path) {
-            Value instRef;
-            if (auto *instSym =
-                    elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-              if (auto it = context.interfaceInstances.find(instSym);
-                  it != context.interfaceInstances.end())
-                instRef = it->second;
-            } else if (auto *ifacePort =
-                           elem.symbol
-                               ->as_if<slang::ast::InterfacePortSymbol>()) {
-              if (auto it = context.interfacePortValues.find(ifacePort);
-                  it != context.interfacePortValues.end())
-                instRef = it->second;
-            }
-
-            if (!instRef)
-              continue;
-
-            // Found the interface instance. The instance is stored as a
-            // RefType<VirtualInterfaceType>, so we need to read it first.
-            Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-            // Create a signal reference.
-            auto type = context.convertType(*expr.type);
-            if (!type)
-              return {};
-            auto signalSym = mlir::FlatSymbolRefAttr::get(
-                builder.getContext(), expr.symbol.name);
-            auto refTy = moore::RefType::get(cast<moore::UnpackedType>(type));
-            // For lvalue, return the reference directly
-            return moore::VirtualInterfaceSignalRefOp::create(
-                builder, loc, refTy, vifValue, signalSym);
-          }
+          if (auto value = resolveHierarchicalInterfaceSignalRef(
+                  expr, expr.symbol.name))
+            return value;
         }
       }
     }
@@ -6878,40 +6938,9 @@ struct LvalueExprVisitor : public ExprVisitor {
                                    .as_if<slang::ast::InstanceBodySymbol>()) {
             if (instBody->getDefinition().definitionKind ==
                 slang::ast::DefinitionKind::Interface) {
-              // Find the interface port from the hierarchical path
-              for (const auto &elem : expr.ref.path) {
-                Value instRef;
-                if (auto *instSym =
-                        elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-                  if (auto it = context.interfaceInstances.find(instSym);
-                      it != context.interfaceInstances.end())
-                    instRef = it->second;
-                } else if (auto *ifacePort =
-                               elem.symbol
-                                   ->as_if<slang::ast::InterfacePortSymbol>()) {
-                  if (auto it = context.interfacePortValues.find(ifacePort);
-                      it != context.interfacePortValues.end())
-                    instRef = it->second;
-                }
-
-                if (!instRef)
-                  continue;
-
-                // Found the interface instance. Read from the RefType.
-                Value vifValue = moore::ReadOp::create(builder, loc, instRef);
-
-                // Create a signal reference using the internal symbol's name.
-                auto type = context.convertType(*expr.type);
-                if (!type)
-                  return {};
-                auto signalSym = mlir::FlatSymbolRefAttr::get(
-                    builder.getContext(), internalSym->name);
-                auto refTy =
-                    moore::RefType::get(cast<moore::UnpackedType>(type));
-                // For lvalue, return the reference directly
-                return moore::VirtualInterfaceSignalRefOp::create(
-                    builder, loc, refTy, vifValue, signalSym);
-              }
+              if (auto value = resolveHierarchicalInterfaceSignalRef(
+                      expr, internalSym->name))
+                return value;
             }
           }
         }

@@ -1753,6 +1753,23 @@ extern "C" bool __moore_event_triggered(bool *event) {
 }
 
 //===----------------------------------------------------------------------===//
+// Process Control Operations
+//===----------------------------------------------------------------------===//
+
+extern "C" void *__moore_process_self(void) {
+  // Stub implementation for process::self().
+  // IEEE 1800-2017 Section 9.7 "Process control"
+  //
+  // In the interpreter (LLHDProcessInterpreter), this is handled specially
+  // to return a non-null handle when called from within a process context.
+  //
+  // In compiled simulation without full process support, this returns null
+  // to indicate "not in a process context" - the caller should handle this
+  // gracefully (e.g., UVM's run_test() checks for this).
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
 // Mailbox Operations (Stubs)
 //===----------------------------------------------------------------------===//
 //

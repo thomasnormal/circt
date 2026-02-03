@@ -9652,7 +9652,6 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     LLVM_DEBUG(llvm::dbgs() << "    Created child process " << childId
                             << " for branch " << idx << "\n");
   }
-
   // Handle different join types
   switch (joinType) {
   case ForkJoinType::JoinNone:
@@ -10425,7 +10424,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   bool useNative = false;
   uint64_t nativeOffset = 0;
   size_t nativeSize = 0;
-
   if (block) {
     // Local alloca memory
     // Calculate the offset within the memory block
@@ -11488,6 +11486,32 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
         }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_self - get current process handle.
+    // Implements the SystemVerilog `process::self()` static method.
+    // IEEE 1800-2017 Section 9.7 "Process control"
+    // Returns a non-null handle when called from within a process context
+    // (llhd.process, initial block, always block, fork branch), or null
+    // when called from outside a process context.
+    if (calleeName == "__moore_process_self") {
+      // We're being called from within the interpreter's process execution,
+      // which means we're definitely inside a process context.
+      // Return a non-null pointer - we use the process state address as
+      // a unique identifier for the process handle.
+      auto &state = processStates[procId];
+      void *processHandle = &state;
+
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_process_self() = 0x"
+                              << llvm::format_hex(reinterpret_cast<uint64_t>(processHandle), 16)
+                              << " (inside process context)\n");
+
+      // Set the result to the process handle pointer value
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, reinterpret_cast<uint64_t>(processHandle))));
       }
       return success();
     }
