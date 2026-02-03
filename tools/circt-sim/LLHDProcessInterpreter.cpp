@@ -10308,6 +10308,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
 
   // Create a memory block
   MemoryBlock block(totalSize, getTypeWidth(elemType));
+  block.initialized = true;  // Alloca memory is zero-initialized and readable
 
   // Check if this alloca is at module level (not inside an llhd.process,
   // func.func, or llvm.func). Allocas inside functions should be process-local
@@ -11787,11 +11788,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
 
             // Copy new element to the end
-            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId);
+            uint64_t elemOffset = 0;
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
             if (elemBlock && elemBlock->initialized) {
-              size_t copySize = std::min(static_cast<size_t>(elemSize), elemBlock->data.size());
-              std::memcpy(newBlock.data.data() + queueLen * elemSize,
-                          elemBlock->data.data(), copySize);
+              size_t availableBytes = (elemOffset < elemBlock->data.size())
+                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t copySize = std::min(static_cast<size_t>(elemSize), availableBytes);
+              if (copySize > 0)
+                std::memcpy(newBlock.data.data() + queueLen * elemSize,
+                            elemBlock->data.data() + elemOffset, copySize);
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
@@ -11992,10 +11997,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             newBlock.initialized = true;
 
             // Copy new element to the front
-            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId);
+            uint64_t elemOffset = 0;
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
             if (elemBlock && elemBlock->initialized) {
-              size_t copySize = std::min(static_cast<size_t>(elemSize), elemBlock->data.size());
-              std::memcpy(newBlock.data.data(), elemBlock->data.data(), copySize);
+              size_t availableBytes = (elemOffset < elemBlock->data.size())
+                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t copySize = std::min(static_cast<size_t>(elemSize), availableBytes);
+              if (copySize > 0)
+                std::memcpy(newBlock.data.data(),
+                            elemBlock->data.data() + elemOffset, copySize);
             }
 
             // Copy existing elements after the new one
@@ -13048,16 +13058,13 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
   llvm::sort(ctorEntries,
              [](const auto &a, const auto &b) { return a.first < b.first; });
 
-  // Create a temporary process state for executing constructors
-  // We use process ID 0 as a special "global init" process
+  // Create a temporary process state for executing constructors.
+  // Must use a non-zero ID because InvalidProcessId == 0 and
+  // findMemoryBlockByAddress's walk loop skips process ID 0.
   ProcessExecutionState tempState;
-  ProcessId tempProcId = 0;
-
-  // Check if we already have a process with ID 0; if so, use a different ID
-  if (processStates.count(tempProcId)) {
-    // Find an unused process ID
-    tempProcId = processStates.size() + 1000;
-  }
+  ProcessId tempProcId = nextTempProcId++;
+  while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
+    tempProcId = nextTempProcId++;
   processStates[tempProcId] = std::move(tempState);
 
   // Execute each constructor in priority order
@@ -13097,14 +13104,13 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
   LLVM_DEBUG(llvm::dbgs()
              << "LLHDProcessInterpreter: Executing module-level LLVM ops\n");
 
-  // Create a temporary process state for executing module-level ops
+  // Create a temporary process state for executing module-level ops.
+  // Must use a non-zero ID because InvalidProcessId == 0 and
+  // findMemoryBlockByAddress's walk loop skips process ID 0.
   ProcessExecutionState tempState;
-  ProcessId tempProcId = 0;
-
-  // Check if we already have a process with ID 0; if so, use a different ID
-  if (processStates.count(tempProcId)) {
-    tempProcId = processStates.size() + 2000;
-  }
+  ProcessId tempProcId = nextTempProcId++;
+  while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
+    tempProcId = nextTempProcId++;
   processStates[tempProcId] = std::move(tempState);
 
   unsigned opsExecuted = 0;
