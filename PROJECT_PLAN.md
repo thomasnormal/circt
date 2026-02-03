@@ -7,13 +7,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 337 - Stop Hook Fix + Process Control Commit)
+## Current Status - February 3, 2026 (Iteration 338 - Wait Condition Extract Fix)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | **Wait Condition Spurious Trigger Fix** | ✅ **FIXED** | Fixed wait conditions triggering spuriously (commit `b8517345f`) |
+| **Wait Condition Extract Tracing Fix** | ✅ **FIXED** | Fixed `wait(q.size()!=0)` not waking up - added `comb::ExtractOp` and `LLVM::ExtractValueOp` to tracing |
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
 | **AVIP Simulation 5/5 Running** | ✅ **RUNNING** | APB, UART, AHB, I2S, I3C all complete successfully (198-447ns) |
 | **AVIP Multi-Top Requirement** | ✅ WORKING | `--top HdlTop --top HvlTop` works correctly |
@@ -108,7 +109,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
 3. ~~**UVM process context detection**~~ ✅ FIXED Iter 331 - `process::self()` implemented in LLHDProcessInterpreter.cpp
 4. **AVIP MLIR artifacts need regeneration** - Older AVIP MLIR (pre-Iter 331) lacks `process::self()` calls; `run_test()` reports non-process context unless recompiled.
-5. **UVM phase hopper infinite loop** - Likely resolved by fork disable completion + `process::kill/status/await` support; re-run uvm-core/AVIP to confirm.
+5. ~~**UVM phase hopper infinite loop**~~ ✅ FIXED - Root cause was `wait(q.size()!=0)` not waking up; `comb::ExtractOp` and `LLVM::ExtractValueOp` now traced in wait condition invalidation.
 6. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
 7. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
 
