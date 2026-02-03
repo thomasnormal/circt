@@ -42,6 +42,11 @@ Iteration 319: **Yosys 14/14 BMC+LEC pass** after wildcard segfault fix for basi
    the distinct constraint, so the X-prop is deterministic. `circt-opt -lower-lec-llvm`
    confirms llvm ops are fully eliminated (value phis), so the remaining issue is
    in 4-state logic modeling rather than pointer/alloca lowering.
+7. **StripLLHDProcesses dynamic-drive refinement** - If a process only drives a
+   signal at zero-time from values defined above the process, keep that drive
+   instead of replacing it with an unconstrained input. Added regression coverage
+   in `test/Tools/circt-bmc/strip-llhd-process-drives.mlir`. OpenTitan canright LEC
+   still NEQ; further investigation continues.
 
 ### Verification
 
