@@ -406,6 +406,22 @@ void __moore_event_trigger(bool *event);
 bool __moore_event_triggered(bool *event);
 
 //===----------------------------------------------------------------------===//
+// Process Control Operations
+//===----------------------------------------------------------------------===//
+//
+// The SystemVerilog `process` class provides process control capabilities.
+// IEEE 1800-2017 Section 9.7 "Process control"
+//
+
+/// Get a handle to the currently executing process.
+/// Implements SystemVerilog `process::self()` static method.
+/// Returns a non-null handle when called from within a process context
+/// (llhd.process, initial block, always block, fork branch), or null
+/// when called from outside a process context.
+/// @return A process handle (non-null if inside a process, null otherwise)
+void *__moore_process_self(void);
+
+//===----------------------------------------------------------------------===//
 // Mailbox Operations (Inter-process Communication)
 //===----------------------------------------------------------------------===//
 //
