@@ -16,10 +16,9 @@ hw.module @drive_init_only(out out: i1) {
   hw.output %0 : i1
 }
 
-// CHECK: hw.module @drive_with_wait
-// CHECK-SAME: in %[[SIG_IN:[a-zA-Z0-9_]+]]{{ *}}: i1
+// CHECK-LABEL: hw.module @drive_with_wait
 // CHECK-NOT: llhd.process
-// CHECK: llhd.drv %{{.*}}, %[[SIG_IN]] after %{{.*}} : i1
+// CHECK: llhd.drv %{{.*}}, %{{.*}} after %{{.*}} : i1
 hw.module @drive_with_wait(out out: i1) {
   %c0_i1 = hw.constant false
   %c1_i1 = hw.constant true

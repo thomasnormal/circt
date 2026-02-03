@@ -1413,6 +1413,11 @@ void LowerLECLLVMPass::runOnOperation() {
     extracts.push_back(op);
   });
   if (!extracts.empty()) {
+    auto isUndefContainer = [](Value value) -> bool {
+      while (auto insert = value.getDefiningOp<LLVM::InsertValueOp>())
+        value = insert.getContainer();
+      return value.getDefiningOp<LLVM::UndefOp>() != nullptr;
+    };
     DominanceInfo domInfo(module);
     for (auto extract : extracts) {
       auto llvmStructType =
@@ -1425,6 +1430,19 @@ void LowerLECLLVMPass::runOnOperation() {
       Value replacement = findInsertedValue(extract.getContainer(), hwType,
                                             path, &domInfo, builder,
                                             extract.getLoc(), &allocaSignals);
+      if (!replacement && isUndefContainer(extract.getContainer())) {
+        // When extracting from an undef container, provide a default value.
+        // For 4-state structs: value=0, unknown=1 (all bits unknown).
+        auto resultType = dyn_cast<IntegerType>(extract.getType());
+        if (resultType) {
+          bool isUnknownField = path.size() == 1 && path[0] == 1;
+          APInt value = isUnknownField ? APInt::getAllOnes(resultType.getWidth())
+                                       : APInt(resultType.getWidth(), 0);
+          replacement = hw::ConstantOp::create(
+              builder, extract.getLoc(),
+              builder.getIntegerAttr(resultType, value));
+        }
+      }
       if (!replacement)
         continue;
       extract.replaceAllUsesWith(replacement);
