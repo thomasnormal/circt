@@ -3655,6 +3655,20 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     // This can happen when a process is triggered by a signal change while
     // it was waiting for that signal.
     //
+    // IMPORTANT: If waitConditionRestartBlock is set, the process is waiting
+    // on a wait(condition) that evaluated to false. In this case, we should
+    // NOT resume the process - it should only resume when its poll callback
+    // fires (which sets waiting=false before scheduling). This prevents an
+    // infinite loop where the process is continuously re-scheduled, evaluates
+    // the still-false condition, and sets waiting=true again, all at the same
+    // simulation time.
+    if (state.waitConditionRestartBlock) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process triggered while waiting on wait(condition) - "
+                    "ignoring spurious trigger, will resume via poll callback\n");
+      return;
+    }
+    //
     // We need to clear the waiting flag so the execution loop will run.
     // The process will resume at its current position (which should be right
     // after the llhd.wait that set the waiting flag originally, or at the
