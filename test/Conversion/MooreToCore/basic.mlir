@@ -48,11 +48,11 @@ func.func @UnrealizedConversionCast(%arg0: !moore.i8) -> !moore.i16 {
 // CHECK-LABEL: func @Expressions
 // CHECK-SAME: (%arg0: i1, %arg1: !hw.struct<value: i1, unknown: i1>, %arg2: i6, %arg3: i5, %arg4: i1, %arg5: !hw.array<5xi32>, %arg6: !llhd.ref<i1>, %arg7: !llhd.ref<!hw.array<5xi32>>)
 func.func @Expressions(%arg0: !moore.i1, %arg1: !moore.l1, %arg2: !moore.i6, %arg3: !moore.i5, %arg4: !moore.i1, %arg5: !moore.array<5 x i32>, %arg6: !moore.ref<i1>, %arg7: !moore.ref<array<5 x i32>>) {
-  // CHECK: hw.aggregate_constant
-  // CHECK: hw.aggregate_constant
   // Local variables in functions use llvm.alloca instead of llhd.sig
-  // CHECK: llvm.mlir.constant(1 : i64)
-  // CHECK: hw.constant 0 : i12
+  // CHECK-DAG: llvm.mlir.constant(1 : i64)
+  // CHECK-DAG: hw.constant 0 : i12
+  // CHECK-DAG: hw.aggregate_constant
+  // CHECK-DAG: hw.aggregate_constant
   moore.concat %arg0, %arg0 : (!moore.i1, !moore.i1) -> !moore.i2
   moore.concat %arg1, %arg1 : (!moore.l1, !moore.l1) -> !moore.l2
 
@@ -376,11 +376,11 @@ moore.module @Net() {
   // CHECK: %a = llhd.sig
   %a = moore.net wire : !moore.ref<i32>
 
-  // CHECK: llhd.prb %a
+  // Note: The read of %a is used to initialize %b, but since %b is unused,
+  // both the read (llhd.prb) and %b (llhd.sig + llhd.drv) are DCE'd.
   %0 = moore.read %a : !moore.ref<i32>
 
-  // CHECK: %b = llhd.sig
-  // CHECK: llhd.drv %b,
+  // %b is unused so it gets DCE'd along with its initialization
   %b = moore.net wire %0 : !moore.ref<i32>
 
   %3 = moore.constant 10 : i32

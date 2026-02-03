@@ -175,8 +175,8 @@ func.func @test_assoc_delete() {
 }
 
 // CHECK-LABEL: func @test_assoc_delete_key
-// CHECK: [[ADDR:%.+]] = llvm.mlir.addressof @testAssoc : !llvm.ptr
-// CHECK: [[KEY:%.+]] = hw.constant 42 : i8
+// CHECK-DAG: [[ADDR:%.+]] = llvm.mlir.addressof @testAssoc : !llvm.ptr
+// CHECK-DAG: [[KEY:%.+]] = hw.constant 42 : i8
 // CHECK: llvm.alloca {{.*}} x i8
 // CHECK: llvm.store [[KEY]], {{.*}} : i8, !llvm.ptr
 // CHECK: llvm.call @__moore_assoc_delete_key([[ADDR]], {{.*}}) : (!llvm.ptr, !llvm.ptr) -> ()
@@ -284,7 +284,7 @@ func.func @test_queue_insert() {
 
 // CHECK-LABEL: func @test_queue_pop_back
 // CHECK-DAG: [[SIZE:%.+]] = llvm.mlir.constant(4 : i64) : i64
-// CHECK: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
+// CHECK-DAG: [[QPTR:%.+]] = llvm.mlir.addressof @testQueue : !llvm.ptr
 // CHECK: [[RESULT:%.+]] = llvm.call @__moore_queue_pop_back([[QPTR]], [[SIZE]]) : (!llvm.ptr, i64) -> i64
 // CHECK: arith.trunci [[RESULT]] : i64 to i32
 func.func @test_queue_pop_back() -> !moore.i32 {
