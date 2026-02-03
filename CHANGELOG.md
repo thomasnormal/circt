@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 319 - February 3, 2026
+
+### Summary
+
+Iteration 319: **Yosys 14/14 BMC+LEC pass** after wildcard segfault fix for basic02.sv (bind port `.*` connections). Diagnosed verilator BMC test infrastructure bug (deprecated `--run-smtlib` flags). Diagnosed SPI AVIP slang `randomize() with` scoping bug on indexed array elements. All lit tests still green (540 total, 0 fail).
+
+### Accomplishments
+
+1. **Yosys SVA 100% pass** - All 14 SystemVerilog tests pass in both BMC and LEC modes (2 VHDL skips). basic02.sv now compiles after the wildcard `.*` port connection fix in slang-bind-scope.patch. Previous: 11/14 BMC, 13/14 LEC.
+2. **Verilator BMC test infrastructure diagnosis** - `run_verilator_verification_circt_bmc.sh` passes deprecated `--run-smtlib --z3-path=...` flags when `BMC_RUN_SMTLIB=1`, but these no longer exist in circt-bmc. Without the flag: 17/17 PASS. Fix in progress: update script to use `--emit-smtlib` piped to z3.
+3. **SPI AVIP randomize scoping bug diagnosis** - slang bug where `array[i].randomize() with { this.member }` incorrectly scopes `this` to the array type instead of the element type. Root cause in `CallExpression.cpp:533` where `randomizeScope` doesn't handle indexed element access. Workaround: assign to temp variable before randomize.
+4. **AVIP deep simulation testing** - Running simulation tests on 5 compiled AVIPs (APB, UART, I2S, AHB, I3C) to measure how far each gets past UVM init.
+5. **OpenTitan formal regression re-run** - Verifying all suites remain green with latest changes.
+
+### Verification
+
+- All lit test suites: 540 total, 385 pass, 21 xfail, 141 unsup, 0 fail
+- Yosys BMC: **14/14 pass** (up from 11/14)
+- Yosys LEC: **14/14 pass** (up from 13/14)
+- Verilator BMC: 17/17 pass (without BMC_RUN_SMTLIB)
+- sv-tests: 23/26 BMC, 23/23 LEC
+- AVIP compile: 5/9 pass
+
 ## Iteration 318 - February 3, 2026
 
 ### Summary
@@ -8,7 +31,7 @@ Iteration 318: Fixed slang-bind-scope.patch wildcard segfault (inactive union me
 
 ### Accomplishments
 
-1. **Slang bind-scope wildcard segfault fix** - `PortConnection::getExpression` accessed inactive union member when `connectedSymbol` was null and `exprSyntax` contained a wildcard token. Added `Lookup::unqualified` guard before the fallback scope switch to avoid dereferencing invalid memory.
+1. **Slang bind-scope wildcard segfault fix** - `PortConnection::getExpression` accessed inactive union member when `connectedSymbol` was null and `exprSyntax` contained a wildcard token. Added `!connectedSymbol &&` guard before checking `exprSyntax` to avoid dereferencing the inactive union member.
    - **Files**: `patches/slang-bind-scope.patch` (source/ast/symbols/PortSymbols.cpp)
 2. **All lit tests green** - 540 total tests across all suites: 99 circt-sim + 107 MooreToCore + 98 circt-lec + 74 circt-bmc + 7 LTLToCore = 385 pass, 21 xfail, 141 unsup, **0 fail**.
 3. **AVIP compilation** - 5/9 pass (apb, uart, i2s, ahb, i3c), 2 fail (spi, jtag), 1 timeout (axi4), 1 filelist issue (axi4Lite).

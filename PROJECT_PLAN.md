@@ -7,15 +7,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 318)
+## Current Status - February 3, 2026 (Iteration 319)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with Lookup::unqualified |
+| **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | basic02 wildcard fix → all pass (2 VHDL skips) |
+| **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
 | **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
-| **Yosys BMC Improvement** | ✅ **11/14** | Up from 6/14; basic02 was segfault, now clean error |
+| **Verilator BMC Script Fix** | ⚠️ DIAGNOSED | `--run-smtlib --z3-path` flags removed; script needs update to `--emit-smtlib` |
+| **SPI AVIP randomize scoping** | ⚠️ DIAGNOSED | slang bug: `array[i].randomize() with {this.member}` scopes `this` to array type |
 | **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
 | **AVIP Compilation** | ⚠️ **5/9** | apb,uart,i2s,ahb,i3c pass; spi,jtag fail; axi4 timeout; axi4Lite filelist |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -96,11 +98,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
-### New Findings (2026-02-03, Iteration 318)
-- **slang-bind-scope.patch wildcard segfault**: `PortConnection::getExpression` accessed inactive union member when `connectedSymbol` was null and `exprSyntax` had a wildcard token. Fixed with `Lookup::unqualified` guard before fallback scope switch.
-- **Lit tests all green**: 540 total (99 circt-sim + 107 MooreToCore + 98 circt-lec + 74 circt-bmc + 7 LTLToCore = 385 pass, 21 xfail, 141 unsup, 0 fail)
-- **AVIP compilation regression**: 5/9 pass (apb, uart, i2s, ahb, i3c), 2 fail (spi, jtag), 1 timeout (axi4), 1 filelist issue (axi4Lite)
-- **Yosys BMC**: improved from 6/14 to 11/14 pass. basic02 was segfault, now produces clean error.
+### New Findings (2026-02-03, Iteration 319)
+- **Yosys 14/14 pass**: After wildcard segfault fix, basic02.sv compiles and passes both BMC and LEC. All 14 SystemVerilog yosys/tests/sva now pass in both modes.
+- **Verilator BMC test infra bug**: `run_verilator_verification_circt_bmc.sh` passes deprecated `--run-smtlib --z3-path` flags when `BMC_RUN_SMTLIB=1`. These flags don't exist in circt-bmc. Without the flag, 17/17 pass. Fix: update script to use `--emit-smtlib` + pipe to z3.
+- **SPI AVIP randomize scoping bug**: `array[i].randomize() with { this.member }` in slang incorrectly scopes `this` to the array type instead of the element type. Bug is in `CallExpression.cpp:533` where `firstArg->type` yields the array element type but the `randomizeScope` path doesn't handle indexed expressions. Workaround: use temp variable.
+- **slang-bind-scope.patch wildcard segfault**: Fixed with `!connectedSymbol &&` guard (commit `8747eeb70`)
 - **Fork shared memory**: parent process chain committed as `c76d665ef`
 
 ### New Findings (2026-02-03)
@@ -123,9 +125,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   (likely loop/bit-select semantics), not unknown propagation. Root cause still open.
   (Superseded by 2026-02-03 findings: unknown mask still present.)
 
-### Full Regression Results (2026-02-03, Iteration 318)
+### Full Regression Results (2026-02-03, Iteration 319)
 
-All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. Yosys BMC 11/14 pass (up from 6/14).
+All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. **Yosys 14/14 pass** (both BMC and LEC).
 
 | Suite | Mode | Result | vs Baseline |
 |-------|------|--------|-------------|
@@ -133,8 +135,8 @@ All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail
 | sv-tests | LEC | 23/23 pass | Match |
 | verilator | BMC | 17/17 pass | Match |
 | verilator | LEC | 17/17 pass | Match |
-| yosys SVA | BMC | 12/14 pass, 2 skip | Match |
-| yosys SVA | LEC | 14/14 pass, 2 skip | Match |
+| yosys SVA | BMC | **14/14 pass**, 2 skip | ✅ +3 (was 11/14) |
+| yosys SVA | LEC | **14/14 pass**, 2 skip | ✅ +1 (was 13/14) |
 | circt-sim lit | - | **100/100 (99 pass, 1 xfail)** | ✅ Clean |
 | circt-lec lit | - | **98/98 pass, 0 fail**, 17 unsupported, 3 xfail | ✅ ALL CLEAN |
 | circt-bmc lit | - | **74/74 pass, 0 fail**, 124 unsupported, 16 xfail | ✅ 9 fixed |
@@ -145,23 +147,29 @@ All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Next Priority: AVIP Simulation Depth + Fork Memory Model + OpenTitan Coverage
+### Next Priority: AVIP Deep Simulation + Slang Patches + Test Infra
 
-**What works**: OpenTitan **42/42** (41 pass + 1 wall-clock timeout). AVIP **7/8** simulation (APB, UART, I2S, AHB, SPI, AXI4, I3C). AVIP 8/9 compile. circt-lec **98/98** pass (ALL CLEAN). circt-sim **100/100** clean. 21/21 unit tests pass.
+**What works**: OpenTitan **42/42** (41 pass + 1 wall-clock timeout). AVIP **7/8** simulation. AVIP 8/9 compile. circt-lec **98/98** pass. circt-sim **100/100** clean. **Yosys 14/14 BMC+LEC.** 21/21 unit tests pass.
 
-**What's needed**:
-1. ~~Test SPI AVIP simulation~~ ✅ Runs to 100us, UVM init OK, BFMs initialize
-2. ~~Fix remaining circt-lec failures~~ ✅ **98/98 pass, 0 fail.** Topological sort in lowerCombinationalOp fixed last crash.
-3. ~~Fix circt-bmc 9 failures~~ ✅ All 9 fixed (CHECK pattern updates). 74/74 pass.
-4. **Deepen AVIP simulation** - Push SPI/UART/APB past UVM init to test phase execution
-5. **Fix fork memory model** - Child writes to parent allocas not visible after join (TODO in mailbox-hopper-pattern)
-6. **Test JTAG AVIP simulation** - Blocked by slang enum/reg conversion
-7. **Fix AXI4Lite AVIP compile** - 1 remaining bind+include error
+**What's needed (Track 1 - AVIP Deep Simulation)**:
+1. **Deepen AVIP simulation** - Push SPI/UART/APB past UVM init to test phase execution
+2. **Test JTAG AVIP simulation** - Blocked by slang enum/reg conversion
+3. **Fix AXI4Lite AVIP compile** - 1 remaining bind+include error
+
+**What's needed (Track 2 - Slang Patches)**:
+4. **Fix slang randomize array scoping** - `array[i].randomize() with {this.member}` scopes `this` incorrectly. Would unblock SPI AVIP without workaround.
+5. Implement pre/post_randomize in ImportVerilog
+6. Lower coverpoint `iff` conditions
+
+**What's needed (Track 3 - Test Infrastructure)**:
+7. **Fix verilator BMC script** - Update deprecated `--run-smtlib --z3-path` to `--emit-smtlib` + z3 pipe
 8. Debug alert_handler_tb wall-clock timeout (334 processes, needs optimization)
-9. Implement pre/post_randomize in ImportVerilog
-10. Lower coverpoint `iff` conditions
 
-**Impact**: circt-bmc fixes for test hygiene. AVIP simulation depth validates UVM phasing. Fork memory model needed for correct cross-thread variable sharing.
+**What's needed (Track 4 - OpenTitan & Formal)**:
+9. Fix AES S-Box Canright LEC (X-prop issue in bit-select semantics)
+10. Expand OpenTitan coverage beyond 42 IPs
+
+**Impact**: AVIP deep simulation validates UVM phasing end-to-end. Slang patches unblock remaining compilation failures. Test infra fixes ensure CI-ready regression suites.
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
