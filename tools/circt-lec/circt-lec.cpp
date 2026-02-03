@@ -673,7 +673,83 @@ static LogicalResult executeLEC(MLIRContext &context) {
       if (failed(smt::exportSMTLIB(module.get(), smtStream)))
         return failure();
     }
-    if (wantSolverOutput) {
+
+    auto findResultToken = [](StringRef text) -> std::optional<std::string> {
+      StringRef remaining = text;
+      std::optional<std::string> result;
+      while (!remaining.empty()) {
+        remaining = remaining.ltrim(" \t\r\n");
+        if (remaining.empty())
+          break;
+        StringRef token =
+            remaining.take_until([](char c) { return c == ' ' || c == '\t' ||
+                                                     c == '\r' || c == '\n'; });
+        if (token == "sat" || token == "unsat" || token == "unknown")
+          result = token.str();
+        remaining = remaining.drop_front(token.size());
+      }
+      return result;
+    };
+
+    struct Z3Run {
+      int exitCode = 0;
+      std::string errMsg;
+      std::string combinedOutput;
+      std::optional<std::string> token;
+    };
+
+    auto runZ3 = [&](StringRef smtFile, bool requestModel,
+                     Z3Run &run) -> LogicalResult {
+      SmallString<128> outPath;
+      int outFd = -1;
+      if (auto ec =
+              llvm::sys::fs::createTemporaryFile("circt-lec", "out", outFd,
+                                                 outPath)) {
+        llvm::errs() << "failed to create temporary output file: "
+                     << ec.message() << "\n";
+        return failure();
+      }
+      llvm::FileRemover outRemover(outPath);
+      llvm::sys::Process::SafelyCloseFileDescriptor(outFd);
+
+      SmallString<128> errPath;
+      int errFd = -1;
+      if (auto ec =
+              llvm::sys::fs::createTemporaryFile("circt-lec", "err", errFd,
+                                                 errPath)) {
+        llvm::errs() << "failed to create temporary error file: "
+                     << ec.message() << "\n";
+        return failure();
+      }
+      llvm::FileRemover errRemover(errPath);
+      llvm::sys::Process::SafelyCloseFileDescriptor(errFd);
+
+      SmallVector<StringRef, 4> args;
+      args.push_back(*z3Program);
+      if (requestModel)
+        args.push_back("-model");
+      args.push_back(smtFile);
+      std::array<std::optional<StringRef>, 3> redirects = {
+          std::nullopt, outPath.str(), errPath.str()};
+      run.exitCode = llvm::sys::ExecuteAndWait(
+          *z3Program, args, std::nullopt, redirects, 0, 0, &run.errMsg);
+
+      auto outBuffer = llvm::MemoryBuffer::getFile(outPath);
+      if (!outBuffer) {
+        llvm::errs() << "failed to read z3 output\n";
+        return failure();
+      }
+      auto errBuffer = llvm::MemoryBuffer::getFile(errPath);
+      run.combinedOutput = outBuffer.get()->getBuffer().str();
+      if (errBuffer && !errBuffer.get()->getBuffer().empty()) {
+        run.combinedOutput.append("\n");
+        run.combinedOutput.append(errBuffer.get()->getBuffer().str());
+      }
+      run.token = findResultToken(run.combinedOutput);
+      return success();
+    };
+
+    auto makeModelSMTFile = [&]() -> FailureOr<SmallString<128>> {
       auto buffer = llvm::MemoryBuffer::getFile(smtPath);
       if (!buffer) {
         llvm::errs() << "failed to read SMT file for model request\n";
@@ -687,90 +763,60 @@ static LogicalResult executeLEC(MLIRContext &context) {
       } else {
         contents.append(getModel);
       }
-      std::error_code ec;
-      llvm::raw_fd_ostream smtStream(smtPath, ec, llvm::sys::fs::OF_Text);
-      if (ec) {
-        llvm::errs() << "failed to rewrite SMT file: " << ec.message() << "\n";
+
+      SmallString<128> smtModelPath;
+      int smtModelFd = -1;
+      if (auto ec = llvm::sys::fs::createTemporaryFile(
+              "circt-lec", "smt2", smtModelFd, smtModelPath)) {
+        llvm::errs() << "failed to create temporary SMT file: "
+                     << ec.message() << "\n";
         return failure();
       }
+      llvm::raw_fd_ostream smtStream(smtModelFd, true);
       smtStream << contents;
-    }
-
-    SmallString<128> outPath;
-    int outFd = -1;
-    if (auto ec =
-            llvm::sys::fs::createTemporaryFile("circt-lec", "out", outFd,
-                                               outPath)) {
-      llvm::errs() << "failed to create temporary output file: "
-                   << ec.message() << "\n";
-      return failure();
-    }
-    llvm::FileRemover outRemover(outPath);
-    llvm::sys::Process::SafelyCloseFileDescriptor(outFd);
-
-    SmallString<128> errPath;
-    int errFd = -1;
-    if (auto ec =
-            llvm::sys::fs::createTemporaryFile("circt-lec", "err", errFd,
-                                               errPath)) {
-      llvm::errs() << "failed to create temporary error file: "
-                   << ec.message() << "\n";
-      return failure();
-    }
-    llvm::FileRemover errRemover(errPath);
-    llvm::sys::Process::SafelyCloseFileDescriptor(errFd);
-
-    SmallVector<StringRef, 4> args;
-    args.push_back(*z3Program);
-    if (wantSolverOutput)
-      args.push_back("-model");
-    args.push_back(smtPath);
-    std::string errMsg;
-    std::array<std::optional<StringRef>, 3> redirects = {
-        std::nullopt, outPath.str(), errPath.str()};
-    int result = llvm::sys::ExecuteAndWait(*z3Program, args, std::nullopt,
-                                           redirects, 0, 0, &errMsg);
-    if (result != 0 || !errMsg.empty()) {
-      llvm::errs() << "z3 invocation failed";
-      if (!errMsg.empty())
-        llvm::errs() << ": " << errMsg;
-      llvm::errs() << "\n";
-      return failure();
-    }
-
-    auto outBuffer = llvm::MemoryBuffer::getFile(outPath);
-    if (!outBuffer) {
-      llvm::errs() << "failed to read z3 output\n";
-      return failure();
-    }
-    auto errBuffer = llvm::MemoryBuffer::getFile(errPath);
-    std::string combinedOutput = outBuffer.get()->getBuffer().str();
-    if (errBuffer && !errBuffer.get()->getBuffer().empty()) {
-      combinedOutput.append("\n");
-      combinedOutput.append(errBuffer.get()->getBuffer().str());
-    }
-    if (wantSolverOutput) {
-      llvm::errs() << "z3 output:\n" << combinedOutput << "\n";
-    }
-
-    auto findResultToken = [](StringRef text) -> std::optional<StringRef> {
-      StringRef remaining = text;
-      std::optional<StringRef> result;
-      while (!remaining.empty()) {
-        remaining = remaining.ltrim(" \t\r\n");
-        if (remaining.empty())
-          break;
-        StringRef token =
-            remaining.take_until([](char c) { return c == ' ' || c == '\t' ||
-                                                     c == '\r' || c == '\n'; });
-        if (token == "sat" || token == "unsat" || token == "unknown")
-          result = token;
-        remaining = remaining.drop_front(token.size());
-      }
-      return result;
+      return smtModelPath;
     };
 
-    auto token = findResultToken(combinedOutput);
+    Z3Run initialRun;
+    if (failed(runZ3(smtPath, wantSolverOutput, initialRun)))
+      return failure();
+    if (!initialRun.errMsg.empty()) {
+      llvm::errs() << "z3 invocation failed: " << initialRun.errMsg << "\n";
+      return failure();
+    }
+
+    Z3Run modelRun;
+    const Z3Run *selectedRun = &initialRun;
+    std::optional<SmallString<128>> smtModelPath;
+    std::optional<llvm::FileRemover> smtModelRemover;
+    if (wantSolverOutput &&
+        (!initialRun.token || *initialRun.token == "sat" ||
+         *initialRun.token == "unknown")) {
+      auto modelPath = makeModelSMTFile();
+      if (failed(modelPath))
+        return failure();
+      smtModelPath = std::move(*modelPath);
+      smtModelRemover.emplace(*smtModelPath);
+      if (failed(runZ3(*smtModelPath, wantSolverOutput, modelRun)))
+        return failure();
+      if (!modelRun.errMsg.empty()) {
+        llvm::errs() << "z3 invocation failed: " << modelRun.errMsg << "\n";
+        return failure();
+      }
+      if (modelRun.token)
+        selectedRun = &modelRun;
+      else {
+        llvm::errs() << "unexpected z3 output: "
+                     << modelRun.combinedOutput << "\n";
+        return failure();
+      }
+    }
+
+    if (wantSolverOutput) {
+      llvm::errs() << "z3 output:\n" << selectedRun->combinedOutput << "\n";
+    }
+
+    auto token = selectedRun->token;
     auto maybePrintCounterexample = [&](StringRef result) {
       if (!wantSolverOutput)
         return;
@@ -779,7 +825,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
       if (lecInputNames.empty())
         return;
 
-      auto modelValues = parseZ3Model(combinedOutput);
+      auto modelValues = parseZ3Model(selectedRun->combinedOutput);
       if (modelValues.empty())
         return;
 
@@ -845,7 +891,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
           << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
       maybePrintCounterexample(*token);
     } else {
-      llvm::errs() << "unexpected z3 output: " << combinedOutput << "\n";
+      llvm::errs() << "unexpected z3 output: "
+                   << selectedRun->combinedOutput << "\n";
       return failure();
     }
     outputFile.value()->keep();

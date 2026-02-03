@@ -6,6 +6,7 @@
 
 Iteration 321: **All 5 AVIP simulations now run successfully.** Fixed critical blocker: `llhd.drv`/`llhd.prb` in called functions now use `findMemoryBlockByAddress()` instead of manual memory search (commit `3d35211f3`). APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully` using multi-top (`--top HdlTop --top HvlTop`). AVIP status upgraded from "blocked" to "5/5 running". Regression clean: circt-sim lit 99p/1xf, unit tests 23/23, formal 106/106.
 Lowered remaining LLVM struct mux/extract patterns in LEC to HW, resolving the OpenTitan AES S-Box canright NEQ under `--assume-known-inputs` (requires `--mlir-disable-threading` for `--run-smtlib`).
+circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output by running a model request only when needed.
 
 ### Accomplishments
 
@@ -14,6 +15,7 @@ Lowered remaining LLVM struct mux/extract patterns in LEC to HW, resolving the O
 3. **AVIP status upgraded** - From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully). All 5 initialize UVM, instantiate BFMs, and complete simulation.
 4. **Regression verification** - circt-sim lit 99 pass / 1 xfail, unit tests 23/23, formal regression 106/106 pass. No regressions introduced.
 5. **LEC LLVM struct mux lowering** - Lowered `llvm.insertvalue` + `comb.mux` + `llvm.extractvalue` to field-wise `comb.mux` + `hw.struct_create`, eliminating leftover LLVM ops in LEC. OpenTitan AES S-Box canright now EQ with `--assume-known-inputs`. Added MooreToCore + LEC regression tests.
+6. **circt-lec run-smtlib model request** - `--print-solver-output`/`--print-counterexample` now run z3 once without `(get-model)` and only request a model when needed, preventing z3 UNSAT failures while preserving model output for SAT/UNKNOWN cases.
 
 ### Verification
 

@@ -109,6 +109,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **All 5 AVIP simulations running**: APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully`. Multi-top (`--top HdlTop --top HvlTop`) works correctly. Simulation times 198-447ns suggest UVM phases complete quickly but test needs longer stimulus for transaction activity.
 - **AVIP status upgraded**: From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully, UVM init, BFM instantiation working).
 - **Next steps**: Deeper AVIP simulation (longer run times, checking transaction activity). Complete slang randomize array scoping patch for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
+- **circt-lec run-smtlib UNSAT fix**: `--print-solver-output` and `--print-counterexample` now avoid UNSAT failures by only inserting `(get-model)` when needed for SAT/UNKNOWN results.
 
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
