@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 328 - February 3, 2026
+
+### Summary
+
+Iteration 328: Added 4-state multiply special-cases for constant 0/1 (including Moore constant detection) and corresponding regressions. OpenTitan AES S-Box LEC remains NEQ under full X-prop; assume-known stays EQ.
+
+### Accomplishments
+
+1. **Mul by 0/1 special-cases** - 4-state multiply now collapses to zero or passes through the other operand when a constant 0/1 is detected (even before conversion).
+2. **Regressions added** - `four-state-mul-const.mlir` verifies mul-by-1 passthrough and mul-by-0 zeroing.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-mul-const.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-mul-const.mlir`
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**, full X-prop)
+
+### Notes
+
+- Full X-prop still NEQ for `aes_sbox_canright` with counterexample: `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A` vs `c2=16'h00FE` (packed value+unknown).
+
 ## Iteration 327 - February 3, 2026
 
 ### Summary

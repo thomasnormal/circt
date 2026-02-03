@@ -19,6 +19,7 @@
 #include "circt/Dialect/Sim/SimOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/ConversionPatternSet.h"
+#include "circt/Support/FVInt.h"
 #include "circt/Transforms/Passes.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -524,6 +525,12 @@ static Value stripUnrealizedCast(Value value) {
 
 static bool getFourStateConstant(Value value, APInt &val, APInt &unknown) {
   value = stripUnrealizedCast(value);
+  if (auto mooreConst = value.getDefiningOp<moore::ConstantOp>()) {
+    FVInt fv = mooreConst.getValue();
+    val = fv.getRawValue();
+    unknown = fv.getRawUnknown();
+    return true;
+  }
   auto agg = value.getDefiningOp<hw::AggregateConstantOp>();
   if (!agg)
     agg = nullptr;
@@ -7661,6 +7668,48 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
                                           std::is_same_v<SourceOp, SubOp>);
       rewriter.replaceOp(op, result);
       return success();
+    }
+
+    if constexpr (std::is_same_v<SourceOp, MulOp>) {
+      APInt lhsConst;
+      APInt lhsConstUnk;
+      if (getFourStateConstant(adaptor.getLhs(), lhsConst, lhsConstUnk) &&
+          lhsConstUnk.isZero()) {
+        if (lhsConst.isZero()) {
+          Value zeroVal =
+              hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
+          Value zeroUnk =
+              hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+          rewriter.replaceOp(op,
+                             createFourStateStruct(rewriter, loc, zeroVal,
+                                                   zeroUnk));
+          return success();
+        }
+        if (lhsConst.isOne()) {
+          rewriter.replaceOp(op, adaptor.getRhs());
+          return success();
+        }
+      }
+
+      APInt rhsConst;
+      APInt rhsConstUnk;
+      if (getFourStateConstant(adaptor.getRhs(), rhsConst, rhsConstUnk) &&
+          rhsConstUnk.isZero()) {
+        if (rhsConst.isZero()) {
+          Value zeroVal =
+              hw::ConstantOp::create(rewriter, loc, rhsVal.getType(), 0);
+          Value zeroUnk =
+              hw::ConstantOp::create(rewriter, loc, rhsUnk.getType(), 0);
+          rewriter.replaceOp(op,
+                             createFourStateStruct(rewriter, loc, zeroVal,
+                                                   zeroUnk));
+          return success();
+        }
+        if (rhsConst.isOne()) {
+          rewriter.replaceOp(op, adaptor.getLhs());
+          return success();
+        }
+      }
     }
 
     // Conservative fallback for other ops.
