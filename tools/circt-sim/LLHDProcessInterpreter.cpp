@@ -9644,13 +9644,28 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     auto &parentState = processStates[procId];
     childState.valueMap = parentState.valueMap;
 
-    // Copy memory blocks from parent to child so that automatic variables
-    // allocated via llvm.alloca in the parent scope are accessible inside
-    // fork branches. Each child gets its own deep copy, which implements
-    // SystemVerilog automatic variable capture semantics: each fork
-    // iteration captures the current value of automatic variables at the
-    // point of the fork.
-    childState.memoryBlocks = parentState.memoryBlocks;
+    // Share parent-scope allocas via the parent pointer chain instead of
+    // deep-copying.  Only allocas defined WITHIN the fork body region are
+    // local to the child (automatic variable capture).  Parent-scope allocas
+    // (e.g. loop counters, shared variables) are accessed through the parent
+    // chain so that child writes are visible to the parent after join.
+    //
+    // Collect the set of alloca Values that are defined inside this branch.
+    llvm::DenseSet<mlir::Value> forkBodyAllocas;
+    branch.walk([&](LLVM::AllocaOp allocaOp) {
+      forkBodyAllocas.insert(allocaOp.getResult());
+    });
+
+    // Deep-copy only fork-body-local allocas from the parent (they may have
+    // been pre-populated during value map copy).  Everything else is shared.
+    for (auto &[val, block] : parentState.memoryBlocks) {
+      if (forkBodyAllocas.contains(val))
+        childState.memoryBlocks[val] = block; // deep copy for fork-local
+    }
+
+    // Set parent pointer so that lookups fall through to the parent chain
+    // for allocas not found locally.
+    childState.parentProcessId = procId;
 
     // Copy processOrInitialOp from parent so that the child can look up functions
     // in the parent module (needed for virtual method dispatch via call_indirect)
@@ -10174,27 +10189,29 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
 
 MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
                                                       Value ptr) {
-  auto &state = processStates[procId];
+  // Unwrap GEP / bitcast first so the base pointer is used for lookup.
+  if (auto gepOp = ptr.getDefiningOp<LLVM::GEPOp>())
+    return findMemoryBlock(procId, gepOp.getBase());
+  if (auto bitcastOp = ptr.getDefiningOp<LLVM::BitcastOp>())
+    return findMemoryBlock(procId, bitcastOp.getArg());
 
-  // First check if this is a direct alloca result in process-local memory
-  auto it = state.memoryBlocks.find(ptr);
-  if (it != state.memoryBlocks.end())
-    return &it->second;
+  // Walk the process -> parent chain looking for the memory block.
+  ProcessId cur = procId;
+  while (cur != InvalidProcessId) {
+    auto stateIt = processStates.find(cur);
+    if (stateIt == processStates.end())
+      break;
+    auto &st = stateIt->second;
+    auto it = st.memoryBlocks.find(ptr);
+    if (it != st.memoryBlocks.end())
+      return &it->second;
+    cur = st.parentProcessId;
+  }
 
   // Check module-level allocas (accessible by all processes)
   auto moduleIt = moduleLevelAllocas.find(ptr);
   if (moduleIt != moduleLevelAllocas.end())
     return &moduleIt->second;
-
-  // Check if this is a GEP result - trace back to find the base pointer
-  if (auto gepOp = ptr.getDefiningOp<LLVM::GEPOp>()) {
-    return findMemoryBlock(procId, gepOp.getBase());
-  }
-
-  // Check if this is a bitcast - trace through
-  if (auto bitcastOp = ptr.getDefiningOp<LLVM::BitcastOp>()) {
-    return findMemoryBlock(procId, bitcastOp.getArg());
-  }
 
   return nullptr;
 }
@@ -10202,19 +10219,30 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlock(ProcessId procId,
 MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
                                                               ProcessId procId,
                                                               uint64_t *outOffset) {
-  // Check process-local allocas by looking up their assigned addresses
+  // Walk the process -> parent chain looking for the memory block by address.
   if (procId != static_cast<ProcessId>(-1)) {
-    auto &state = processStates[procId];
-    for (auto &[val, block] : state.memoryBlocks) {
-      // Get the address assigned to this Value
-      auto it = state.valueMap.find(val);
-      if (it != state.valueMap.end()) {
-        uint64_t blockAddr = it->second.getUInt64();
-        if (addr >= blockAddr && addr < blockAddr + block.size) {
-          if (outOffset) *outOffset = addr - blockAddr;
-          return &block;
+    ProcessId cur = procId;
+    while (cur != InvalidProcessId) {
+      auto stateIt = processStates.find(cur);
+      if (stateIt == processStates.end())
+        break;
+      auto &state = stateIt->second;
+      for (auto &[val, block] : state.memoryBlocks) {
+        // Get the address assigned to this Value.
+        // Check the original process's valueMap first (child copies parent
+        // valueMap), then fall back to the block-owning process's valueMap.
+        auto it = processStates[procId].valueMap.find(val);
+        if (it == processStates[procId].valueMap.end())
+          it = state.valueMap.find(val);
+        if (it != state.valueMap.end() && !it->second.isX()) {
+          uint64_t blockAddr = it->second.getUInt64();
+          if (addr >= blockAddr && addr < blockAddr + block.size) {
+            if (outOffset) *outOffset = addr - blockAddr;
+            return &block;
+          }
         }
       }
+      cur = state.parentProcessId;
     }
   }
   // Check module-level allocas

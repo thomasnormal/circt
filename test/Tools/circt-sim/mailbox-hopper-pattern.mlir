@@ -22,9 +22,8 @@
 // CHECK-DAG: Producer: adding sentinel -1
 // CHECK-DAG: Consumer: got sentinel, exiting
 // CHECK: Hopper test complete
-// TODO: Should be 4, but fork deep-copies parent memoryBlocks so child
-// writes to items_consumed_ptr are not visible to parent after join.
-// CHECK: Items consumed: 0
+// Fork child shares parent-scope allocas, so writes are visible after join.
+// CHECK: Items consumed: 4
 // CHECK-NOT: ERROR(PROCESS_STEP_OVERFLOW)
 // CHECK: Simulation finished successfully
 

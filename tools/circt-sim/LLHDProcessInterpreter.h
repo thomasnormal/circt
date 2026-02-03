@@ -316,6 +316,12 @@ struct ProcessExecutionState {
   /// Non-zero when this process is waiting for a mailbox message.
   uint64_t pendingMailboxGetId = 0;
 
+  /// Parent process ID for shared memory in fork/join.
+  /// When a child process is created by sim.fork, parent-scope allocas are
+  /// accessed through this chain rather than deep-copied.  Only allocas
+  /// defined within the fork body are local to the child.
+  ProcessId parentProcessId = 0;
+
   ProcessExecutionState() = default;
   explicit ProcessExecutionState(llhd::ProcessOp op)
       : processOrInitialOp(op.getOperation()), currentBlock(nullptr),
