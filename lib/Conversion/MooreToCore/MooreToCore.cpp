@@ -38,6 +38,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/IR/DerivedTypes.h"
 #include <queue>
 
@@ -417,6 +418,200 @@ static Value maskFourStateValue(OpBuilder &builder, Location loc, Value value,
   Value knownMask =
       comb::XorOp::create(builder, loc, unknown, allOnes, false);
   return comb::AndOp::create(builder, loc, value, knownMask, false);
+}
+
+static bool parseFourStateStructAttr(Attribute attr, APInt &value,
+                                     APInt &unknown) {
+  auto fields = dyn_cast<ArrayAttr>(attr);
+  if (!fields || fields.size() != 2)
+    return false;
+  auto valueAttr = dyn_cast<IntegerAttr>(fields[0]);
+  auto unknownAttr = dyn_cast<IntegerAttr>(fields[1]);
+  if (!valueAttr || !unknownAttr)
+    return false;
+  value = valueAttr.getValue();
+  unknown = unknownAttr.getValue();
+  return true;
+}
+
+static Value stripUnrealizedCast(Value value) {
+  while (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+    if (cast.getInputs().size() != 1)
+      break;
+    value = cast.getInputs().front();
+  }
+  return value;
+}
+
+static bool getFourStateConstant(Value value, APInt &val, APInt &unknown) {
+  value = stripUnrealizedCast(value);
+  auto agg = value.getDefiningOp<hw::AggregateConstantOp>();
+  if (!agg)
+    agg = nullptr;
+  if (agg)
+    return parseFourStateStructAttr(agg.getFields(), val, unknown);
+
+  if (auto create = value.getDefiningOp<hw::StructCreateOp>()) {
+    auto operands = create.getOperands();
+    if (operands.size() != 2)
+      return false;
+    auto valueConst = operands[0].getDefiningOp<hw::ConstantOp>();
+    auto unknownConst = operands[1].getDefiningOp<hw::ConstantOp>();
+    if (!valueConst || !unknownConst)
+      return false;
+    auto valueAttr = dyn_cast<IntegerAttr>(valueConst.getValueAttr());
+    auto unknownAttr = dyn_cast<IntegerAttr>(unknownConst.getValueAttr());
+    if (!valueAttr || !unknownAttr)
+      return false;
+    val = valueAttr.getValue();
+    unknown = unknownAttr.getValue();
+    return true;
+  }
+
+  return false;
+}
+
+static bool getFourStateArrayConstants(Value array, hw::ArrayType arrType,
+                                       SmallVectorImpl<APInt> &values,
+                                       SmallVectorImpl<APInt> &unknowns) {
+  array = stripUnrealizedCast(array);
+  const size_t numElems = arrType.getNumElements();
+  if (auto create = array.getDefiningOp<hw::ArrayCreateOp>()) {
+    if (create.getInputs().size() != numElems)
+      return false;
+    for (Value elem : create.getInputs()) {
+      APInt val;
+      APInt unk;
+      if (!getFourStateConstant(elem, val, unk))
+        return false;
+      values.push_back(val);
+      unknowns.push_back(unk);
+    }
+    return true;
+  }
+  if (auto agg = array.getDefiningOp<hw::AggregateConstantOp>()) {
+    auto fields = agg.getFields();
+    if (fields.size() != numElems)
+      return false;
+    for (Attribute elemAttr : fields) {
+      APInt val;
+      APInt unk;
+      if (!parseFourStateStructAttr(elemAttr, val, unk))
+        return false;
+      values.push_back(val);
+      unknowns.push_back(unk);
+    }
+    return true;
+  }
+  return false;
+}
+
+static Value buildUnknownIndexedConstantArray(OpBuilder &builder, Location loc,
+                                              hw::ArrayType arrType,
+                                              Value array, Value idxValue,
+                                              Value idxUnknown) {
+  if (!llvm::isPowerOf2_64(arrType.getNumElements()))
+    return Value();
+  constexpr uint64_t kMaxUnknownIndexElements = 256;
+  if (arrType.getNumElements() > kMaxUnknownIndexElements)
+    return Value();
+
+  auto elemStructTy = dyn_cast<hw::StructType>(arrType.getElementType());
+  if (!elemStructTy || !isFourStateStructType(elemStructTy))
+    return Value();
+
+  SmallVector<APInt, 32> values;
+  SmallVector<APInt, 32> unknowns;
+  if (!getFourStateArrayConstants(array, arrType, values, unknowns))
+    return Value();
+
+  const unsigned numElems = arrType.getNumElements();
+  const unsigned idxWidth = llvm::Log2_64_Ceil(numElems);
+  const unsigned elemWidth =
+      cast<IntegerType>(elemStructTy.getElements()[0].type).getWidth();
+
+  auto i1Ty = builder.getI1Type();
+  Value one = hw::ConstantOp::create(builder, loc, i1Ty, 1);
+  Value zeroMask =
+      hw::ConstantOp::create(builder, loc, APInt(numElems, 0));
+  Value mask = hw::ConstantOp::create(builder, loc,
+                                      APInt::getAllOnes(numElems));
+
+  for (unsigned bit = 0; bit < idxWidth; ++bit) {
+    APInt maskOne = APInt::getZero(numElems);
+    for (unsigned idx = 0; idx < numElems; ++idx) {
+      if ((idx >> bit) & 1)
+        maskOne.setBit(idx);
+    }
+    APInt maskZero = ~maskOne;
+    maskZero = maskZero & APInt::getAllOnes(numElems);
+
+    Value idxValBit =
+        comb::ExtractOp::create(builder, loc, idxValue, bit, 1);
+    Value idxUnkBit =
+        comb::ExtractOp::create(builder, loc, idxUnknown, bit, 1);
+    Value knownBit = comb::XorOp::create(builder, loc, idxUnkBit, one, false);
+
+    Value maskOneConst =
+        hw::ConstantOp::create(builder, loc, maskOne);
+    Value maskZeroConst =
+        hw::ConstantOp::create(builder, loc, maskZero);
+    Value selectedMask =
+        comb::MuxOp::create(builder, loc, idxValBit, maskOneConst, maskZeroConst,
+                            false);
+    Value filtered =
+        comb::AndOp::create(builder, loc, mask, selectedMask, false);
+    mask =
+        comb::MuxOp::create(builder, loc, knownBit, filtered, mask, false);
+  }
+
+  SmallVector<Value, 8> valueBits;
+  SmallVector<Value, 8> unknownBits;
+  valueBits.reserve(elemWidth);
+  unknownBits.reserve(elemWidth);
+  for (unsigned bit = 0; bit < elemWidth; ++bit) {
+    APInt bitMaskOne = APInt::getZero(numElems);
+    APInt bitMaskZero = APInt::getZero(numElems);
+    for (unsigned idx = 0; idx < numElems; ++idx) {
+      bool bitVal = values[idx][bit];
+      bool bitUnk = unknowns[idx][bit];
+      if (bitVal || bitUnk)
+        bitMaskOne.setBit(idx);
+      if (!bitVal || bitUnk)
+        bitMaskZero.setBit(idx);
+    }
+    Value bitMaskOneConst =
+        hw::ConstantOp::create(builder, loc, bitMaskOne);
+    Value bitMaskZeroConst =
+        hw::ConstantOp::create(builder, loc, bitMaskZero);
+
+    Value maybeOneMask =
+        comb::AndOp::create(builder, loc, mask, bitMaskOneConst, false);
+    Value maybeZeroMask =
+        comb::AndOp::create(builder, loc, mask, bitMaskZeroConst, false);
+    Value maybeOne = comb::ICmpOp::create(
+        builder, loc, comb::ICmpPredicate::ne, maybeOneMask, zeroMask);
+    Value maybeZero = comb::ICmpOp::create(
+        builder, loc, comb::ICmpPredicate::ne, maybeZeroMask, zeroMask);
+    Value notMaybeZero =
+        comb::XorOp::create(builder, loc, maybeZero, one, false);
+    Value valueBit =
+        comb::AndOp::create(builder, loc, maybeOne, notMaybeZero, false);
+    Value unknownBit =
+        comb::AndOp::create(builder, loc, maybeOne, maybeZero, false);
+    valueBits.push_back(valueBit);
+    unknownBits.push_back(unknownBit);
+  }
+
+  Value value = valueBits.back();
+  Value unknown = unknownBits.back();
+  for (int bit = static_cast<int>(elemWidth) - 2; bit >= 0; --bit) {
+    value =
+        comb::ConcatOp::create(builder, loc, ValueRange{value, valueBits[bit]});
+    unknown = comb::ConcatOp::create(builder, loc,
+                                     ValueRange{unknown, unknownBits[bit]});
+  }
+  return createFourStateStruct(builder, loc, value, unknown);
 }
 
 /// Convert a Moore type to its packed representation (plain integers for
@@ -6199,20 +6394,22 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
       // Handle 4-state index - extract just the value part
       Value idx = adaptor.getLowBit();
-      Value idxUnknownCond;
-      if (isFourStateStructType(idx.getType())) {
-        Value idxUnknown = extractFourStateUnknown(rewriter, loc, idx);
-        Value zero =
-            hw::ConstantOp::create(rewriter, loc, idxUnknown.getType(), 0);
-        idxUnknownCond = comb::ICmpOp::create(
-            rewriter, loc, comb::ICmpPredicate::ne, idxUnknown, zero);
+      bool hasUnknownIndex = isFourStateStructType(idx.getType());
+      Value idxUnknown;
+      if (hasUnknownIndex) {
+        idxUnknown = extractFourStateUnknown(rewriter, loc, idx);
         idx = extractFourStateValue(rewriter, loc, idx);
       }
-      if (!idxUnknownCond) {
-        idxUnknownCond =
-            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
-      }
       idx = adjustIntegerWidth(rewriter, idx, idxWidth, loc);
+      if (idxUnknown)
+        idxUnknown = adjustIntegerWidth(rewriter, idxUnknown, idxWidth, loc);
+      else
+        idxUnknown =
+            hw::ConstantOp::create(rewriter, loc, idx.getType(), 0);
+      Value zero =
+          hw::ConstantOp::create(rewriter, loc, idx.getType(), 0);
+      Value idxUnknownCond = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, idxUnknown, zero);
 
       bool isSingleElementExtract = arrType.getElementType() == resultType;
 
@@ -6221,6 +6418,12 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
             hw::ArrayGetOp::create(rewriter, loc, adaptor.getInput(), idx);
         if (!isFourStateStructType(resultType)) {
           rewriter.replaceOp(op, elem);
+          return success();
+        }
+
+        if (Value unknownIndexed = buildUnknownIndexedConstantArray(
+                rewriter, loc, arrType, adaptor.getInput(), idx, idxUnknown)) {
+          rewriter.replaceOp(op, unknownIndexed);
           return success();
         }
 
@@ -6234,7 +6437,7 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
               rewriter, loc, comb::ICmpPredicate::ugt, idx, maxIdxConst);
         }
         Value cond = outOfBoundsCond;
-        if (idxUnknownCond)
+        if (hasUnknownIndex)
           cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
                                     idxUnknownCond);
 
