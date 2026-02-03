@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 325 - February 3, 2026
+
+### Summary
+
+Iteration 325: Improved 4-state unknown-index handling for constant arrays in MooreToCore so partial-known results are preserved (no all-ones unknown blanket on any unknown index). Added regression coverage for constant-array dynamic extract.
+
+### Accomplishments
+
+1. **Constant-array unknown index X-prop** - MooreToCore now builds unknown-aware masks when the array is a 4-state constant and the index is partially unknown.
+2. **Regression added** - `unknown-index-const-array.mlir` covers the improved behavior.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/unknown-index-const-array.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/unknown-index-const-array.mlir`
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+
+## Iteration 324 - February 3, 2026
+
+### Summary
+
+Iteration 324: Unblocked SPI AVIP compilation by adding SPI-specific rewrites in `run_avip_circt_verilog.sh` (nested block comments, trailing `$sformatf` comma, open `$` dist range, and inline `randomize() with` constraints). SPI AVIP now compiles cleanly with `--compat=all -Wno-range-oob` using the vendor filelist base override.
+
+### Accomplishments
+
+1. **SPI AVIP compile workaround** - Added SPI-specific file rewrites in `run_avip_circt_verilog.sh` to normalize nested comments, trailing `$sformatf` commas, open `dist` ranges, and inline randomize constraints.
+
+### Verification
+
+- `FILELIST_BASE=/home/thomas-ahle/mbit/spi_avip/sim/cadenceSim CIRCT_VERILOG_ARGS="--compat=all -Wno-range-oob" utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/spi_avip`
+
+## Iteration 323 - February 3, 2026
+
+### Summary
+
+Iteration 323: Verified pre/post_randomize lowering with a new ImportVerilog regression; documented the feature as implemented (calls emitted around randomize).
+
+### Accomplishments
+
+1. **pre/post_randomize regression** - Added `randomize-pre-post.sv` to ensure `moore.call_pre_randomize`/`moore.call_post_randomize` surround `moore.randomize`.
+
+### Verification
+
+- `./build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/randomize-pre-post.sv | ./build/bin/FileCheck test/Conversion/ImportVerilog/randomize-pre-post.sv`
+
+## Iteration 322 - February 3, 2026
+
+### Summary
+
+Iteration 322: Fixed nested interface member access in ImportVerilog (hierarchical `p.child.awvalid` now resolves through interface-instance chains for both rvalue and lvalue paths). Added regression `nested-interface-assign.sv`. Axi4Lite AVIP full filelist now compiles with `--compat=all -Wno-range-oob` after updating `run_avip_circt_verilog.sh` to detect axi4lite by name and rewrite `Axi4LiteHdlTop.sv` to drop the local cover-property include (workaround for slang bind limitation).
+
+### Accomplishments
+
+1. **Nested interface access fix** - Hierarchical interface member references now walk interface-instance chains in `HierarchicalValueExpression` (rvalue + lvalue + modport paths). This prevents `moore.virtual_interface.signal_ref` from targeting the wrong interface.
+2. **Regression added** - New `test/Conversion/ImportVerilog/nested-interface-assign.sv` covers nested interface signal assignment.
+3. **Axi4Lite compile unblocked** - `run_avip_circt_verilog.sh` now detects axi4lite by name and rewrites `Axi4LiteHdlTop.sv` to drop the local `Axi4LiteCoverProperty.sv` include so slang resolves the bind against the global interface definition.
+
+### Verification
+
+- `ninja -C build circt-verilog`
+- `./build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/nested-interface-assign.sv | ./build/bin/FileCheck test/Conversion/ImportVerilog/nested-interface-assign.sv`
+- `CIRCT_VERILOG_ARGS="--compat=all -Wno-range-oob" utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4Lite_avip`
+
 ## Iteration 321 - February 3, 2026
 
 ### Summary
@@ -9,6 +71,8 @@ Lowered remaining LLVM struct mux/extract patterns in LEC to HW, resolving the O
 circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output by running a model request only when needed.
 Added `--x-optimistic` LEC output comparison to ignore unknown-bit differences when checking equivalence.
 Enabled `$` unbounded dist bounds through conversion expressions and re-enabled `dist-constraints.sv`; AXI4Lite compile-lib now passes with `--compat=all -Wno-range-oob`.
+Fixed inline constraint scoping for randomize receivers: map compiler-generated `this` and receiver symbols to the randomize target (covers array elements and nested member receivers). Added regressions.
+AVIP compile smoke: SPI passes, AXI4 passes, JTAG passes with `--compat=all -Wno-range-oob`.
 
 ### Accomplishments
 
