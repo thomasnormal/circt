@@ -371,6 +371,24 @@ static bool isFourStateStructType(Type type) {
          fields[1].name.getValue() == "unknown";
 }
 
+/// Check if a type is an LLVM struct representing a 4-state pair (iN, iN).
+static bool isLLVMFourStateStructType(Type type, unsigned &width) {
+  auto llvmStructType = dyn_cast<LLVM::LLVMStructType>(type);
+  if (!llvmStructType || llvmStructType.isOpaque())
+    return false;
+  auto body = llvmStructType.getBody();
+  if (body.size() != 2)
+    return false;
+  auto valueType = dyn_cast<IntegerType>(body[0]);
+  auto unknownType = dyn_cast<IntegerType>(body[1]);
+  if (!valueType || !unknownType)
+    return false;
+  if (valueType.getWidth() != unknownType.getWidth())
+    return false;
+  width = valueType.getWidth();
+  return true;
+}
+
 /// Extract the value component from a 4-state struct.
 static Value extractFourStateValue(OpBuilder &builder, Location loc,
                                    Value fourState) {
@@ -8740,6 +8758,46 @@ struct UnrealizedCastFourStateConversion
       if (value.getType() != dstType)
         value = rewriter.createOrFold<hw::BitcastOp>(loc, dstType, value);
       rewriter.replaceOp(op, value);
+      return success();
+    }
+
+    // llvm.struct<(iN, iN)> -> 4-state struct: extract fields in order.
+    unsigned llvmWidth = 0;
+    if (isFourStateStructType(dstType) &&
+        isLLVMFourStateStructType(srcType, llvmWidth)) {
+      auto structType = cast<hw::StructType>(dstType);
+      auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+      auto unknownType = cast<IntegerType>(structType.getElements()[1].type);
+      if (valueType.getWidth() != llvmWidth ||
+          unknownType.getWidth() != llvmWidth)
+        return failure();
+      Value value = LLVM::ExtractValueOp::create(
+          rewriter, loc, valueType, input, ArrayRef<int64_t>{0});
+      Value unknown = LLVM::ExtractValueOp::create(
+          rewriter, loc, unknownType, input, ArrayRef<int64_t>{1});
+      Value result = createFourStateStruct(rewriter, loc, value, unknown);
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
+    // 4-state struct -> llvm.struct<(iN, iN)>: insert fields in order.
+    if (isFourStateStructType(srcType) &&
+        isLLVMFourStateStructType(dstType, llvmWidth)) {
+      auto llvmStructType = cast<LLVM::LLVMStructType>(dstType);
+      auto structType = cast<hw::StructType>(srcType);
+      auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+      auto unknownType = cast<IntegerType>(structType.getElements()[1].type);
+      if (valueType.getWidth() != llvmWidth ||
+          unknownType.getWidth() != llvmWidth)
+        return failure();
+      Value value = extractFourStateValue(rewriter, loc, input);
+      Value unknown = extractFourStateUnknown(rewriter, loc, input);
+      Value result = LLVM::UndefOp::create(rewriter, loc, llvmStructType);
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, value,
+                                           ArrayRef<int64_t>{0});
+      result = LLVM::InsertValueOp::create(rewriter, loc, result, unknown,
+                                           ArrayRef<int64_t>{1});
+      rewriter.replaceOp(op, result);
       return success();
     }
 
@@ -20845,12 +20903,18 @@ static void populateLegality(ConversionTarget &target,
             op.getResult(0).getType().isInteger(1) &&
             isFourStateStructType(op.getOperand(0).getType()))
           return false;
-        // Allow casts between hw.array and llvm.array types.
-        // These are used when lowering fixed-size arrays that need to be
-        // passed to runtime functions.
         if (op.getNumOperands() == 1 && op.getNumResults() == 1) {
           Type inputType = op.getOperand(0).getType();
           Type outputType = op.getResult(0).getType();
+          unsigned width = 0;
+          if ((isFourStateStructType(inputType) &&
+               isLLVMFourStateStructType(outputType, width)) ||
+              (isFourStateStructType(outputType) &&
+               isLLVMFourStateStructType(inputType, width)))
+            return false;
+          // Allow casts between hw.array and llvm.array types.
+          // These are used when lowering fixed-size arrays that need to be
+          // passed to runtime functions.
           if ((isa<hw::ArrayType>(inputType) &&
                isa<LLVM::LLVMArrayType>(outputType)) ||
               (isa<LLVM::LLVMArrayType>(inputType) &&
