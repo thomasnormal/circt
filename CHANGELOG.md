@@ -4,23 +4,22 @@
 
 ### Summary
 
-Iteration 318: MooreToCore local ref assignment for static extract now updates llvm.ptr-backed locals with load/modify/store and 4-state unknown tracking. Added a regression. OpenTitan `aes_sbox_canright` LEC still reports NEQ with unknown mask at the output.
+Iteration 318: Fixed slang-bind-scope.patch wildcard segfault (inactive union member access in `PortConnection::getExpression`). All lit tests green (540 total: 385 pass, 21 xfail, 141 unsup, 0 fail). Yosys BMC improved from 6/14 to 11/14 pass. Fork shared memory via parent process chain (commit `c76d665ef`).
 
 ### Accomplishments
 
-1. **MooreToCore extract_ref local assign** - Added llvm.ptr-backed `extract_ref` assignment handling with 4-state unknown updates, matching the dynamic case.
-   - **Files**: `lib/Conversion/MooreToCore/MooreToCore.cpp`
-   - **Test**: `test/Conversion/MooreToCore/extract-ref-local-assign.mlir`
-2. **OpenTitan LEC re-run** - `aes_sbox_canright` still fails under `--assume-known-inputs` with unknown mask on canright output.
-   - Workdir: `/tmp/opentitan-lec-canright-extractref/aes_sbox_canright`
-   - Model: `op_i=4'h8`, `data_i=16'h0800`, `c1_out0=16'h00FF`, `c2_out0=16'hBF00`
+1. **Slang bind-scope wildcard segfault fix** - `PortConnection::getExpression` accessed inactive union member when `connectedSymbol` was null and `exprSyntax` contained a wildcard token. Added `Lookup::unqualified` guard before the fallback scope switch to avoid dereferencing invalid memory.
+   - **Files**: `patches/slang-bind-scope.patch` (source/ast/symbols/PortSymbols.cpp)
+2. **All lit tests green** - 540 total tests across all suites: 99 circt-sim + 107 MooreToCore + 98 circt-lec + 74 circt-bmc + 7 LTLToCore = 385 pass, 21 xfail, 141 unsup, **0 fail**.
+3. **AVIP compilation** - 5/9 pass (apb, uart, i2s, ahb, i3c), 2 fail (spi, jtag), 1 timeout (axi4), 1 filelist issue (axi4Lite).
+4. **Yosys BMC improvement** - Improved from 6/14 to 11/14 pass. basic02 was segfault, now produces clean error.
+5. **Fork shared memory via parent process chain** - Committed as `c76d665ef`. Fork children now share memory with parent through process chain rather than deep copy.
 
 ### Verification
 
-- `ninja -C build circt-lec circt-opt`
-- `build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/extract-ref-local-assign.mlir`
-- `utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright --workdir /tmp/opentitan-lec-canright-extractref --keep-workdir`
-- `build/bin/circt-lec --run-smtlib --print-solver-output --assume-known-inputs --z3-path=/home/thomas-ahle/z3-install/bin/z3 -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-extractref/aes_sbox_canright/aes_sbox_lec.mlir`
+- All lit test suites: 540 total, 385 pass, 21 xfail, 141 unsup, 0 fail
+- Yosys BMC: 11/14 pass (up from 6/14)
+- AVIP compile: 5/9 pass
 
 ## Iteration 317 - February 3, 2026 (Current Status)
 
