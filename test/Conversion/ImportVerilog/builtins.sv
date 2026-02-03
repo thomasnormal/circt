@@ -312,13 +312,13 @@ function RandomBuiltins(int x, int y);
   // CHECK: [[URAND0:%.+]] = moore.builtin.urandom
   // CHECK-NEXT: call @dummyA([[URAND0]]) : (!moore.i32) -> ()
   dummyA($urandom());
-  // CHECK: [[URAND1:%.+]] = moore.builtin.urandom [[X]]
+  // CHECK: [[URAND1:%.+]] = moore.builtin.urandom seed [[X]]
   // CHECK-NEXT: call @dummyA([[URAND1]]) : (!moore.i32) -> ()
   dummyA($urandom(x));
   // CHECK: [[RAND0:%.+]] = moore.builtin.random
   // CHECK-NEXT: call @dummyA([[RAND0]]) : (!moore.i32) -> ()
   dummyA($random());
-  // CHECK: [[RAND1:%.+]] = moore.builtin.random [[X]]
+  // CHECK: [[RAND1:%.+]] = moore.builtin.random seed [[X]]
   // CHECK-NEXT: call @dummyA([[RAND1]]) : (!moore.i32) -> ()
   dummyA($random(x));
   // CHECK: [[URAND_RANGE0:%.+]] = moore.builtin.urandom_range [[X]]

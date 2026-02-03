@@ -523,6 +523,304 @@ static Value stripUnrealizedCast(Value value) {
   return value;
 }
 
+static bool getKnownMooreConstant(Value value, APInt &knownValue) {
+  value = stripUnrealizedCast(value);
+  auto constOp = value.getDefiningOp<moore::ConstantOp>();
+  if (!constOp)
+    return false;
+  FVInt fv = constOp.getValue();
+  if (fv.hasUnknown())
+    return false;
+  knownValue = fv.getRawValue();
+  return true;
+}
+
+struct SimplifyXorOpPattern : public OpRewritePattern<XorOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(XorOp op,
+                                PatternRewriter &rewriter) const override {
+    SmallVector<Value, 8> terms;
+    auto collectTerms = [&](Value value, auto &self) -> void {
+      value = stripUnrealizedCast(value);
+      if (auto xorOp = value.getDefiningOp<XorOp>()) {
+        self(xorOp.getLhs(), self);
+        self(xorOp.getRhs(), self);
+        return;
+      }
+      terms.push_back(value);
+    };
+
+    collectTerms(op.getLhs(), collectTerms);
+    collectTerms(op.getRhs(), collectTerms);
+
+    llvm::SmallDenseMap<Value, unsigned, 8> parity;
+    for (Value term : terms) {
+      Value key = stripUnrealizedCast(term);
+      parity[key] ^= 1u;
+    }
+
+    SmallVector<Value, 8> remaining;
+    remaining.reserve(parity.size());
+    llvm::SmallDenseSet<Value, 8> seen;
+    for (Value term : terms) {
+      Value key = stripUnrealizedCast(term);
+      if (parity[key] == 0 || !seen.insert(key).second)
+        continue;
+      remaining.push_back(term);
+    }
+
+    if (remaining.size() == terms.size())
+      return failure();
+
+    if (remaining.empty()) {
+      rewriter.replaceOpWithNewOp<moore::ConstantOp>(op, op.getType(), 0);
+      return success();
+    }
+    if (remaining.size() == 1) {
+      rewriter.replaceOp(op, remaining.front());
+      return success();
+    }
+
+    Value result = remaining.front();
+    for (Value term : llvm::drop_begin(remaining)) {
+      result = moore::XorOp::create(rewriter, op.getLoc(), result, term);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct SimplifyAndOpPattern : public OpRewritePattern<AndOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AndOp op,
+                                PatternRewriter &rewriter) const override {
+    auto intType = dyn_cast<IntType>(op.getType());
+    if (!intType)
+      return failure();
+
+    SmallVector<Value, 8> terms;
+    auto collectTerms = [&](Value value, auto &self) -> void {
+      value = stripUnrealizedCast(value);
+      if (auto andOp = value.getDefiningOp<AndOp>()) {
+        self(andOp.getLhs(), self);
+        self(andOp.getRhs(), self);
+        return;
+      }
+      terms.push_back(value);
+    };
+
+    collectTerms(op.getLhs(), collectTerms);
+    collectTerms(op.getRhs(), collectTerms);
+
+    auto getNotOperand = [&](Value value) -> Value {
+      value = stripUnrealizedCast(value);
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return stripUnrealizedCast(notOp.getInput());
+      return Value();
+    };
+
+    APInt constVal;
+    bool changed = false;
+    SmallVector<Value, 8> filtered;
+    filtered.reserve(terms.size());
+    for (Value term : terms) {
+      if (getKnownMooreConstant(term, constVal)) {
+        if (constVal.isZero()) {
+          auto zero =
+              moore::ConstantOp::create(rewriter, op.getLoc(), intType, 0);
+          rewriter.replaceOp(op, zero);
+          return success();
+        }
+        if (constVal.isAllOnes()) {
+          changed = true;
+          continue;
+        }
+      }
+      filtered.push_back(term);
+    }
+
+    if (filtered.empty()) {
+      auto allOnes = moore::ConstantOp::create(rewriter, op.getLoc(), intType,
+                                               -1, /*isSigned=*/true);
+      rewriter.replaceOp(op, allOnes);
+      return success();
+    }
+
+    llvm::SmallDenseSet<Value, 16> termSet;
+    termSet.reserve(filtered.size());
+    for (Value term : filtered)
+      termSet.insert(stripUnrealizedCast(term));
+
+    for (Value term : filtered) {
+      if (Value notOperand = getNotOperand(term)) {
+        if (termSet.contains(notOperand)) {
+          auto zero =
+              moore::ConstantOp::create(rewriter, op.getLoc(), intType, 0);
+          rewriter.replaceOp(op, zero);
+          return success();
+        }
+      }
+    }
+
+    SmallVector<Value, 8> newTerms;
+    newTerms.reserve(filtered.size());
+    llvm::SmallDenseSet<Value, 16> seen;
+    for (Value term : filtered) {
+      Value normalized = stripUnrealizedCast(term);
+      if (auto orOp = normalized.getDefiningOp<OrOp>()) {
+        Value orLhs = stripUnrealizedCast(orOp.getLhs());
+        Value orRhs = stripUnrealizedCast(orOp.getRhs());
+        if (termSet.contains(orLhs) || termSet.contains(orRhs)) {
+          changed = true;
+          continue;
+        }
+      }
+      if (!seen.insert(normalized).second) {
+        changed = true;
+        continue;
+      }
+      newTerms.push_back(term);
+    }
+
+    if (!changed)
+      return failure();
+
+    if (newTerms.empty()) {
+      auto allOnes = moore::ConstantOp::create(rewriter, op.getLoc(), intType,
+                                               -1, /*isSigned=*/true);
+      rewriter.replaceOp(op, allOnes);
+      return success();
+    }
+    if (newTerms.size() == 1) {
+      rewriter.replaceOp(op, newTerms.front());
+      return success();
+    }
+
+    Value result = newTerms.front();
+    for (Value term : llvm::drop_begin(newTerms)) {
+      result = moore::AndOp::create(rewriter, op.getLoc(), result, term);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+struct SimplifyOrOpPattern : public OpRewritePattern<OrOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OrOp op,
+                                PatternRewriter &rewriter) const override {
+    auto intType = dyn_cast<IntType>(op.getType());
+    if (!intType)
+      return failure();
+
+    SmallVector<Value, 8> terms;
+    auto collectTerms = [&](Value value, auto &self) -> void {
+      value = stripUnrealizedCast(value);
+      if (auto orOp = value.getDefiningOp<OrOp>()) {
+        self(orOp.getLhs(), self);
+        self(orOp.getRhs(), self);
+        return;
+      }
+      terms.push_back(value);
+    };
+
+    collectTerms(op.getLhs(), collectTerms);
+    collectTerms(op.getRhs(), collectTerms);
+
+    auto getNotOperand = [&](Value value) -> Value {
+      value = stripUnrealizedCast(value);
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return stripUnrealizedCast(notOp.getInput());
+      return Value();
+    };
+
+    APInt constVal;
+    bool changed = false;
+    SmallVector<Value, 8> filtered;
+    filtered.reserve(terms.size());
+    for (Value term : terms) {
+      if (getKnownMooreConstant(term, constVal)) {
+        if (constVal.isAllOnes()) {
+          auto allOnes = moore::ConstantOp::create(rewriter, op.getLoc(),
+                                                   intType, -1, /*isSigned=*/true);
+          rewriter.replaceOp(op, allOnes);
+          return success();
+        }
+        if (constVal.isZero()) {
+          changed = true;
+          continue;
+        }
+      }
+      filtered.push_back(term);
+    }
+
+    if (filtered.empty()) {
+      auto zero = moore::ConstantOp::create(rewriter, op.getLoc(), intType, 0);
+      rewriter.replaceOp(op, zero);
+      return success();
+    }
+
+    llvm::SmallDenseSet<Value, 16> termSet;
+    termSet.reserve(filtered.size());
+    for (Value term : filtered)
+      termSet.insert(stripUnrealizedCast(term));
+
+    for (Value term : filtered) {
+      if (Value notOperand = getNotOperand(term)) {
+        if (termSet.contains(notOperand)) {
+          auto allOnes = moore::ConstantOp::create(rewriter, op.getLoc(),
+                                                   intType, -1, /*isSigned=*/true);
+          rewriter.replaceOp(op, allOnes);
+          return success();
+        }
+      }
+    }
+
+    SmallVector<Value, 8> newTerms;
+    newTerms.reserve(filtered.size());
+    llvm::SmallDenseSet<Value, 16> seen;
+    for (Value term : filtered) {
+      Value normalized = stripUnrealizedCast(term);
+      if (auto andOp = normalized.getDefiningOp<AndOp>()) {
+        Value andLhs = stripUnrealizedCast(andOp.getLhs());
+        Value andRhs = stripUnrealizedCast(andOp.getRhs());
+        if (termSet.contains(andLhs) || termSet.contains(andRhs)) {
+          changed = true;
+          continue;
+        }
+      }
+      if (!seen.insert(normalized).second) {
+        changed = true;
+        continue;
+      }
+      newTerms.push_back(term);
+    }
+
+    if (!changed)
+      return failure();
+
+    if (newTerms.empty()) {
+      auto zero = moore::ConstantOp::create(rewriter, op.getLoc(), intType, 0);
+      rewriter.replaceOp(op, zero);
+      return success();
+    }
+    if (newTerms.size() == 1) {
+      rewriter.replaceOp(op, newTerms.front());
+      return success();
+    }
+
+    Value result = newTerms.front();
+    for (Value term : llvm::drop_begin(newTerms)) {
+      result = moore::OrOp::create(rewriter, op.getLoc(), result, term);
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 static bool getFourStateConstant(Value value, APInt &val, APInt &unknown) {
   value = stripUnrealizedCast(value);
   if (auto mooreConst = value.getDefiningOp<moore::ConstantOp>()) {
@@ -7810,18 +8108,49 @@ struct FourStateAndOpConversion : public OpConversionPattern<AndOp> {
       return success();
     }
 
+    auto strip = [](Value value) { return stripUnrealizedCast(value); };
+    auto getNotOperand = [&](Value value) -> Value {
+      value = strip(value);
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return strip(notOp.getInput());
+      return Value();
+    };
+    auto isComplement = [&](Value value, Value other) {
+      other = strip(other);
+      if (Value notOperand = getNotOperand(value))
+        return notOperand == other;
+      if (Value notOperand = getNotOperand(other))
+        return notOperand == strip(value);
+      return false;
+    };
+    auto findOrConsensus = [&](Value lhs, Value rhs) -> Value {
+      auto lhsOr = strip(lhs).getDefiningOp<OrOp>();
+      auto rhsOr = strip(rhs).getDefiningOp<OrOp>();
+      if (!lhsOr || !rhsOr)
+        return Value();
+      Value lhsA = strip(lhsOr.getLhs());
+      Value lhsB = strip(lhsOr.getRhs());
+      Value rhsA = strip(rhsOr.getLhs());
+      Value rhsB = strip(rhsOr.getRhs());
+      auto same = [&](Value a, Value b) { return strip(a) == strip(b); };
+      if (same(lhsA, rhsA) && isComplement(lhsB, rhsB))
+        return lhsA;
+      if (same(lhsA, rhsB) && isComplement(lhsB, rhsA))
+        return lhsA;
+      if (same(lhsB, rhsA) && isComplement(lhsA, rhsB))
+        return lhsB;
+      if (same(lhsB, rhsB) && isComplement(lhsA, rhsA))
+        return lhsB;
+      return Value();
+    };
+
     Value lhsRaw = op.getLhs();
     Value rhsRaw = op.getRhs();
     if (lhsRaw == rhsRaw) {
       rewriter.replaceOp(op, adaptor.getLhs());
       return success();
     }
-    auto isComplement = [&](Value value, Value other) {
-      if (auto notOp = value.getDefiningOp<NotOp>())
-        return notOp.getInput() == other;
-      return false;
-    };
-    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+    if (isComplement(lhsRaw, rhsRaw)) {
       Value zeroVal =
           hw::ConstantOp::create(rewriter, loc,
                                  extractFourStateValue(rewriter, loc,
@@ -7837,6 +8166,16 @@ struct FourStateAndOpConversion : public OpConversionPattern<AndOp> {
       rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, zeroVal,
                                                    zeroUnk));
       return success();
+    }
+    if (Value consensus = findOrConsensus(lhsRaw, rhsRaw)) {
+      Value remapped = rewriter.getRemappedValue(consensus);
+      if (!remapped)
+        remapped = typeConverter->materializeTargetConversion(
+            rewriter, loc, resultType, consensus);
+      if (remapped) {
+        rewriter.replaceOp(op, remapped);
+        return success();
+      }
     }
 
     // 4-state AND with X-propagation
@@ -7928,18 +8267,49 @@ struct FourStateOrOpConversion : public OpConversionPattern<OrOp> {
       return success();
     }
 
+    auto strip = [](Value value) { return stripUnrealizedCast(value); };
+    auto getNotOperand = [&](Value value) -> Value {
+      value = strip(value);
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return strip(notOp.getInput());
+      return Value();
+    };
+    auto isComplement = [&](Value value, Value other) {
+      other = strip(other);
+      if (Value notOperand = getNotOperand(value))
+        return notOperand == other;
+      if (Value notOperand = getNotOperand(other))
+        return notOperand == strip(value);
+      return false;
+    };
+    auto findAndConsensus = [&](Value lhs, Value rhs) -> Value {
+      auto lhsAnd = strip(lhs).getDefiningOp<AndOp>();
+      auto rhsAnd = strip(rhs).getDefiningOp<AndOp>();
+      if (!lhsAnd || !rhsAnd)
+        return Value();
+      Value lhsA = strip(lhsAnd.getLhs());
+      Value lhsB = strip(lhsAnd.getRhs());
+      Value rhsA = strip(rhsAnd.getLhs());
+      Value rhsB = strip(rhsAnd.getRhs());
+      auto same = [&](Value a, Value b) { return strip(a) == strip(b); };
+      if (same(lhsA, rhsA) && isComplement(lhsB, rhsB))
+        return lhsA;
+      if (same(lhsA, rhsB) && isComplement(lhsB, rhsA))
+        return lhsA;
+      if (same(lhsB, rhsA) && isComplement(lhsA, rhsB))
+        return lhsB;
+      if (same(lhsB, rhsB) && isComplement(lhsA, rhsA))
+        return lhsB;
+      return Value();
+    };
+
     Value lhsRaw = op.getLhs();
     Value rhsRaw = op.getRhs();
     if (lhsRaw == rhsRaw) {
       rewriter.replaceOp(op, adaptor.getLhs());
       return success();
     }
-    auto isComplement = [&](Value value, Value other) {
-      if (auto notOp = value.getDefiningOp<NotOp>())
-        return notOp.getInput() == other;
-      return false;
-    };
-    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+    if (isComplement(lhsRaw, rhsRaw)) {
       Value allOnesVal =
           hw::ConstantOp::create(rewriter, loc,
                                  extractFourStateValue(rewriter, loc,
@@ -7955,6 +8325,16 @@ struct FourStateOrOpConversion : public OpConversionPattern<OrOp> {
       rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, allOnesVal,
                                                    zeroUnk));
       return success();
+    }
+    if (Value consensus = findAndConsensus(lhsRaw, rhsRaw)) {
+      Value remapped = rewriter.getRemappedValue(consensus);
+      if (!remapped)
+        remapped = typeConverter->materializeTargetConversion(
+            rewriter, loc, resultType, consensus);
+      if (remapped) {
+        rewriter.replaceOp(op, remapped);
+        return success();
+      }
     }
 
     // 4-state OR with X-propagation
@@ -8025,6 +8405,67 @@ struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
       return success();
     }
 
+    auto strip = [](Value value) { return stripUnrealizedCast(value); };
+    auto getNotOperand = [&](Value value) -> Value {
+      value = strip(value);
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return strip(notOp.getInput());
+      return Value();
+    };
+    auto isComplement = [&](Value value, Value other) {
+      other = strip(other);
+      if (Value notOperand = getNotOperand(value))
+        return notOperand == other;
+      if (Value notOperand = getNotOperand(other))
+        return notOperand == strip(value);
+      return false;
+    };
+    auto remapConsensus = [&](Value value) -> LogicalResult {
+      if (!value)
+        return failure();
+      Value remapped = rewriter.getRemappedValue(value);
+      if (!remapped)
+        remapped = typeConverter->materializeTargetConversion(
+            rewriter, loc, resultType, value);
+      if (!remapped)
+        return failure();
+      rewriter.replaceOp(op, remapped);
+      return success();
+    };
+    auto findAndConsensus = [&](Value lhs, Value rhs) -> Value {
+      auto lhsAnd = strip(lhs).getDefiningOp<AndOp>();
+      auto rhsAnd = strip(rhs).getDefiningOp<AndOp>();
+      if (!lhsAnd || !rhsAnd)
+        return Value();
+      Value lhsA = strip(lhsAnd.getLhs());
+      Value lhsB = strip(lhsAnd.getRhs());
+      Value rhsA = strip(rhsAnd.getLhs());
+      Value rhsB = strip(rhsAnd.getRhs());
+      auto same = [&](Value a, Value b) { return strip(a) == strip(b); };
+      if (same(lhsA, rhsA) && isComplement(lhsB, rhsB))
+        return lhsA;
+      if (same(lhsA, rhsB) && isComplement(lhsB, rhsA))
+        return lhsA;
+      if (same(lhsB, rhsA) && isComplement(lhsA, rhsB))
+        return lhsB;
+      if (same(lhsB, rhsB) && isComplement(lhsA, rhsA))
+        return lhsB;
+      return Value();
+    };
+    auto cancelNestedXor = [&](Value maybeXor, Value other) -> Value {
+      auto xorOp = strip(maybeXor).getDefiningOp<XorOp>();
+      if (!xorOp)
+        return Value();
+      Value xorLhs = strip(xorOp.getLhs());
+      Value xorRhs = strip(xorOp.getRhs());
+      Value otherStrip = strip(other);
+      if (xorLhs == otherStrip)
+        return xorRhs;
+      if (xorRhs == otherStrip)
+        return xorLhs;
+      return Value();
+    };
+
     Value lhsRaw = op.getLhs();
     Value rhsRaw = op.getRhs();
     if (lhsRaw == rhsRaw) {
@@ -8044,12 +8485,7 @@ struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
                                                    zeroUnk));
       return success();
     }
-    auto isComplement = [&](Value value, Value other) {
-      if (auto notOp = value.getDefiningOp<NotOp>())
-        return notOp.getInput() == other;
-      return false;
-    };
-    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+    if (isComplement(lhsRaw, rhsRaw)) {
       Value allOnesVal =
           hw::ConstantOp::create(rewriter, loc,
                                  extractFourStateValue(rewriter, loc,
@@ -8065,6 +8501,18 @@ struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
       rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, allOnesVal,
                                                    zeroUnk));
       return success();
+    }
+    if (Value reduced = cancelNestedXor(lhsRaw, rhsRaw)) {
+      if (succeeded(remapConsensus(reduced)))
+        return success();
+    }
+    if (Value reduced = cancelNestedXor(rhsRaw, lhsRaw)) {
+      if (succeeded(remapConsensus(reduced)))
+        return success();
+    }
+    if (Value consensus = findAndConsensus(lhsRaw, rhsRaw)) {
+      if (succeeded(remapConsensus(consensus)))
+        return success();
     }
 
     // 4-state XOR with X-propagation
@@ -22350,6 +22798,12 @@ void MooreToCorePass::runOnOperation() {
 
   ConversionTarget target(context);
   populateLegality(target, typeConverter);
+
+  RewritePatternSet prePatterns(&context);
+  prePatterns.add<SimplifyXorOpPattern, SimplifyAndOpPattern, SimplifyOrOpPattern>(
+      &context);
+  if (failed(applyPatternsGreedily(module, std::move(prePatterns))))
+    signalPassFailure();
 
   ConversionPatternSet patterns(&context, typeConverter);
   populateOpConversion(patterns, typeConverter, classCache, interfaceCache);

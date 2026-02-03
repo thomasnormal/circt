@@ -3841,8 +3841,7 @@ module Events;
   // CHECK: [[EVENT:%.+]] = moore.variable : <event>
   event e;
   // CHECK: moore.procedure initial {
-  // CHECK-NEXT: [[TMP1:%.+]] = moore.read [[EVENT]] : <event>
-  // CHECK-NEXT: moore.event_trigger [[TMP1]] : event
+  // CHECK-NEXT: moore.event_trigger [[EVENT]] : <event>
   initial ->e;
   // CHECK: moore.procedure initial {
   // CHECK-NEXT: moore.wait_event {
