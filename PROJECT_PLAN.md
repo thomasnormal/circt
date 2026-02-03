@@ -128,6 +128,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **LowerLECLLVM sanity**: `circt-opt -lower-lec-llvm` on `aes_sbox_lec.mlir` removes
   all `llvm.*`/`unrealized_conversion_cast` ops in the canright path; pointer phis
   become value phis, so the remaining X-prop is from 4-state logic modeling.
+- **StripLLHDProcesses dynamic-drive fix**: detect zero-time dynamic drives from
+  above and keep the drive value instead of injecting an unconstrained input.
+  Added regression in `test/Tools/circt-bmc/strip-llhd-process-drives.mlir`.
+  OpenTitan canright LEC still NEQ after this change (workdir:
+  `/tmp/opentitan-lec-canright-stripfix/aes_sbox_canright`).
 - **MooreToCore local extract_ref assigns**: added llvm.ptr static extract update path
   to mirror dyn_extract_ref (new regression: `test/Conversion/MooreToCore/extract-ref-local-assign.mlir`).
 
