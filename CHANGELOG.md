@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 326 - February 3, 2026
+
+### Summary
+
+Iteration 326: Special-cased 4-state `-1 - x` to preserve per-bit unknowns (bitwise NOT semantics), and gated constant-array unknown-index expansion so it only engages when the index is actually unknown. Added regression coverage for the `-1 - x` path. OpenTitan AES S-Box LEC remains NEQ under full X-prop, but assume-known remains EQ.
+
+### Accomplishments
+
+1. **4-state `-1 - x` fix** - Treat `-1 - x` as bitwise NOT with per-bit unknown propagation.
+2. **Unknown-index gating** - Constant-array unknown-index expansion now only applies when index has unknown bits.
+3. **Regression added** - New test `four-state-sub-neg1-mask.mlir` covers the `-1 - x` behavior.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-sub-neg1-mask.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-sub-neg1-mask.mlir`
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/unknown-index-const-array.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/unknown-index-const-array.mlir`
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**, full X-prop)
+
+### Notes
+
+- Full X-prop still NEQ for `aes_sbox_canright` with counterexample: `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A` vs `c2=16'h00FE` (packed value+unknown).
+
 ## Iteration 325 - February 3, 2026
 
 ### Summary
