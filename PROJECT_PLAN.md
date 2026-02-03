@@ -7,12 +7,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 332)
+## Current Status - February 3, 2026 (Iteration 332 - Wait Condition Fix)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
+| **Wait Condition Spurious Trigger Fix** | ✅ **FIXED** | Fixed wait conditions triggering spuriously (commit `b8517345f`) |
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
 | **AVIP Simulation 5/5 Running** | ✅ **RUNNING** | APB, UART, AHB, I2S, I3C all complete successfully (198-447ns) |
 | **AVIP Multi-Top Requirement** | ✅ WORKING | `--top HdlTop --top HvlTop` works correctly |
@@ -34,6 +35,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **MooreToCore eq/ne X-prop** | ✅ **IMPROVED** | Known mismatches now return definite results even with X/Z bits |
 | **OpenTitan LEC x-optimistic** | ✅ **AVAILABLE** | `LEC_X_OPTIMISTIC=1` forwards `--x-optimistic` for AES S-Box LEC EQ |
 | **MooreToCore correlation peepholes** | ✅ **IMPROVED** | AND/OR/XOR fold identical/complement operands (e.g. `a & ~a`) to reduce pessimism |
+| **MooreToCore XOR consensus simplification** | ✅ **IMPROVED** | Consensus `(a & b) ^ (a & ~b)` / `(a & b) | (a & ~b)` / `(a | b) & (a | ~b)` plus nested XOR cancellation; regression + unit test added |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -63,7 +65,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC Local Signal Init** | ✅ UPDATED | Local LLHD signal init uses unknown=0 in non-strict stripping |
 | **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
 | **LEC Counterexample Outputs** | ✅ ADDED | `--print-solver-output` prints c1/c2 output values |
-| **OpenTitan AES S-Box LEC (assume-known)** | ✅ EQ | Still EQ; full X-prop NEQ persists with same counterexample (`op_i=4'h8`, `data_i=16'h9C04`) |
+| **OpenTitan AES S-Box LEC (assume-known)** | ✅ EQ | Still EQ; full X-prop NEQ persists with counterexample (`op_i=4'h4`, `data_i=16'h6D10`, outputs `c1=16'h035C`, `c2=16'h00FF`) |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
 | **4-state LLVM Global Type Fix** | ✅ FIXED | `GlobalVariableOpConversion` converts `hw::StructType` to `LLVM::LLVMStructType`. All 12 Moore unit tests pass. |
@@ -118,7 +120,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 **Minor (not blocking current tests):**
 15. **Arithmetic X-prop precision** - `Div/Mod` still treat any unknown bit as all-unknown; `Mul` only handles const 0/1 and small-width const shift/add (<=16). Consider per-bit/interval propagation to reduce LUT vs canright divergence.
-16. **Correlation-aware X-prop** - 4-state bitwise logic is correlation-losing; AES canright remains more pessimistic than LUT under strict X-prop. Long-term: add correlation-aware X-prop (BDD/ternary simulation) or a LUT fallback when inputs contain X/Z.
+16. **Correlation-aware X-prop** - 4-state bitwise logic is correlation-losing; AES canright remains more pessimistic than LUT under strict X-prop (latest counterexample: `op_i=4'h4`, `data_i=16'h6D10`, `c1=16'h035C`, `c2=16'h00FF`). Long-term: add correlation-aware X-prop (BDD/ternary simulation) or a LUT fallback when inputs contain X/Z.
 14. **4-state unknown index on non-constant arrays** - still conservative (unknown index => all bits unknown); extend constant-array improvement to general cases.
 10. **`$readmemh` scope verification** - Warning on some testbenches
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase
@@ -166,6 +168,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-03, Iteration 333)
+- **APB AVIP Multi-Top Requirement**: APB AVIP (and other multi-top testbenches) require `--top=hdl_top --top=hvl_top` to properly instantiate both HDL and HVL top modules.
+- **SPI AVIP Simulation Progress**: SPI AVIP now runs and reaches 163ns in 60s wall-clock time. Still slow but making progress through UVM initialization.
+- **UART AVIP Status**: UART AVIP compiles and runs but has UVM phase issues (similar to other AVIPs).
+- **Test Fixes Committed**: Test fixes for circt-lec and circt-bmc committed:
+  - circt-lec: 98/98 pass, 0 fail (SMT naming, strict option, LoadOp handling, topo-sort fixes)
+  - circt-bmc: 74/74 pass, 0 fail (strip-llhd-process-drives FileCheck pattern fix)
 
 ### New Findings (2026-02-03, Iteration 331)
 - **process::self() IMPLEMENTED**: UVM's `run_test()` process context check now works
@@ -353,16 +363,17 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 | Protocol | Compile | Simulate | Notes |
 |----------|---------|----------|-------|
-| APB | ✅ | ✅ RUNS | Completes at 352.9 us (needs >120s) |
+| APB | ✅ | ✅ RUNS | Completes at 352.9 us (needs >120s). **Requires `--top=hdl_top --top=hvl_top`** |
 | AHB | ✅ | ✅ PASS | Completes at 177 us |
-| UART | ✅ | ✅ PASS | Completes at 368 us |
+| UART | ✅ | ✅ RUNS | Compiles and runs but has UVM phase issues |
 | I2S | ✅ | ✅ PASS | Completes at 181 us |
 | I3C | ✅ | ✅ PASS | Completes at 201 us |
-| SPI | ✅ | ⚠️ Needs testing | 3 slang patches: nested-block-comment, randomize-with-scope, virtual-arg-default |
+| SPI | ✅ | ✅ RUNS | Reaches 163ns in 60s wall-clock time. 3 slang patches applied |
 | JTAG | ✅ | ⚠️ Needs testing | slang patch: virtual-arg-default |
 | AXI4 | ❌ | - | `dist` constraints, needs investigation |
 | AXI4Lite | ❌ | - | Needs investigation |
-| I3C | ❌ | - | Needs investigation |
+
+**Multi-Top Testbench Note**: AVIPs with separate HDL and HVL top modules require `--top=hdl_top --top=hvl_top` to properly instantiate both halves of the testbench.
 
 ---
 
@@ -413,15 +424,17 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 **Status**: 9/9 compile, 7/8 simulate successfully
 **Simulation**: APB, UART, I2S, AHB, SPI, AXI4, I3C pass. JTAG blocked (slang).
 
+**Important**: Multi-top testbenches (HDL+HVL) require `--top=hdl_top --top=hvl_top` to work properly.
+
 **AVIP Status**:
 | Protocol | Compile | Simulate | Notes |
 |----------|---------|----------|-------|
-| APB | ✅ | ✅ RUNS | 352.9 us, needs longer timeout |
+| APB | ✅ | ✅ RUNS | 352.9 us, needs longer timeout. **Requires `--top=hdl_top --top=hvl_top`** |
 | AHB | ✅ | ✅ PASS | 177 us |
-| UART | ✅ | ✅ PASS | 368 us |
+| UART | ✅ | ✅ RUNS | Compiles and runs but has UVM phase issues |
 | I2S | ✅ | ✅ PASS | 181 us |
 | I3C | ✅ | ✅ PASS | 201 us |
-| SPI | ✅ | ✅ RUNS | 3 slang patches applied |
+| SPI | ✅ | ✅ RUNS | Reaches 163ns in 60s wall-clock time |
 | AXI4 | ✅ | ✅ RUNS | Vendor filelist (572K lines) |
 | AXI4Lite | ✅ | ⚠️ | `--compat=all -Wno-range-oob` required |
 | JTAG | ✅ | ❌ BLOCKED | slang virtual override issue |
