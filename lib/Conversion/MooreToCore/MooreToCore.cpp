@@ -7810,6 +7810,35 @@ struct FourStateAndOpConversion : public OpConversionPattern<AndOp> {
       return success();
     }
 
+    Value lhsRaw = op.getLhs();
+    Value rhsRaw = op.getRhs();
+    if (lhsRaw == rhsRaw) {
+      rewriter.replaceOp(op, adaptor.getLhs());
+      return success();
+    }
+    auto isComplement = [&](Value value, Value other) {
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return notOp.getInput() == other;
+      return false;
+    };
+    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+      Value zeroVal =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateValue(rewriter, loc,
+                                                       adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateUnknown(rewriter, loc,
+                                                         adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, zeroVal,
+                                                   zeroUnk));
+      return success();
+    }
+
     // 4-state AND with X-propagation
     Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
     Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
@@ -7899,6 +7928,35 @@ struct FourStateOrOpConversion : public OpConversionPattern<OrOp> {
       return success();
     }
 
+    Value lhsRaw = op.getLhs();
+    Value rhsRaw = op.getRhs();
+    if (lhsRaw == rhsRaw) {
+      rewriter.replaceOp(op, adaptor.getLhs());
+      return success();
+    }
+    auto isComplement = [&](Value value, Value other) {
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return notOp.getInput() == other;
+      return false;
+    };
+    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+      Value allOnesVal =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateValue(rewriter, loc,
+                                                       adaptor.getLhs())
+                                     .getType(),
+                                 -1);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateUnknown(rewriter, loc,
+                                                         adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, allOnesVal,
+                                                   zeroUnk));
+      return success();
+    }
+
     // 4-state OR with X-propagation
     Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
     Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
@@ -7964,6 +8022,48 @@ struct FourStateXorOpConversion : public OpConversionPattern<XorOp> {
       // Two-valued: simple XOR
       rewriter.replaceOpWithNewOp<comb::XorOp>(op, adaptor.getLhs(),
                                                adaptor.getRhs(), false);
+      return success();
+    }
+
+    Value lhsRaw = op.getLhs();
+    Value rhsRaw = op.getRhs();
+    if (lhsRaw == rhsRaw) {
+      Value zeroVal =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateValue(rewriter, loc,
+                                                       adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateUnknown(rewriter, loc,
+                                                         adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, zeroVal,
+                                                   zeroUnk));
+      return success();
+    }
+    auto isComplement = [&](Value value, Value other) {
+      if (auto notOp = value.getDefiningOp<NotOp>())
+        return notOp.getInput() == other;
+      return false;
+    };
+    if (isComplement(lhsRaw, rhsRaw) || isComplement(rhsRaw, lhsRaw)) {
+      Value allOnesVal =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateValue(rewriter, loc,
+                                                       adaptor.getLhs())
+                                     .getType(),
+                                 -1);
+      Value zeroUnk =
+          hw::ConstantOp::create(rewriter, loc,
+                                 extractFourStateUnknown(rewriter, loc,
+                                                         adaptor.getLhs())
+                                     .getType(),
+                                 0);
+      rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, allOnesVal,
+                                                   zeroUnk));
       return success();
     }
 
