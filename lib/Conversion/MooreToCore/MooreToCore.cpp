@@ -10175,6 +10175,164 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       return success();
     };
 
+    auto emitLLVMPtrExtractAssign = [&](Value baseRef, Type mooreBaseType,
+                                        Type mooreResultType,
+                                        Value idx) -> LogicalResult {
+      if (isa<AssocArrayType, WildcardAssocArrayType>(mooreBaseType))
+        return failure();
+
+      auto baseType = this->getTypeConverter()->convertType(mooreBaseType);
+      if (!baseType)
+        return failure();
+      auto resultElemType =
+          this->getTypeConverter()->convertType(mooreResultType);
+      if (!resultElemType)
+        return failure();
+
+      auto llvmBaseType = convertToLLVMType(baseType);
+      Value loaded = LLVM::LoadOp::create(rewriter, loc, llvmBaseType, baseRef);
+      if (baseType != llvmBaseType) {
+        loaded = UnrealizedConversionCastOp::create(rewriter, loc, baseType,
+                                                    loaded)
+                     .getResult(0);
+      }
+
+      if (isFourStateStructType(baseType)) {
+        auto structType = cast<hw::StructType>(baseType);
+        auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+        int64_t baseWidth = valueType.getWidth();
+        if (!isFourStateStructType(resultElemType))
+          return failure();
+        auto resultStructType = cast<hw::StructType>(resultElemType);
+        auto resultIntType =
+            cast<IntegerType>(resultStructType.getElements()[0].type);
+        int64_t sliceWidth = resultIntType.getWidth();
+        if (sliceWidth <= 0 || sliceWidth > baseWidth)
+          return failure();
+
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
+        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
+                                 loc);
+
+        Value baseValue = extractFourStateValue(rewriter, loc, loaded);
+        Value baseUnknown = extractFourStateUnknown(rewriter, loc, loaded);
+
+        Value driveValue = srcValue;
+        Value driveUnknown;
+        if (isFourStateStructType(driveValue.getType())) {
+          driveUnknown = extractFourStateUnknown(rewriter, loc, driveValue);
+          driveValue = extractFourStateValue(rewriter, loc, driveValue);
+        } else {
+          driveUnknown =
+              hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
+        }
+        driveValue =
+            adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
+        driveUnknown =
+            adjustIntegerWidth(rewriter, driveUnknown, sliceWidth, loc);
+
+        Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
+        APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
+        Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
+        Value shiftedMask = maskConst;
+        if (sliceWidth != baseWidth)
+          shiftedMask =
+              comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
+
+        Value allOnes = hw::ConstantOp::create(
+            rewriter, loc, APInt::getAllOnes(baseWidth));
+        Value maskInv =
+            comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
+
+        Value baseValueCleared =
+            comb::AndOp::create(rewriter, loc, baseValue, maskInv);
+        Value baseUnknownCleared =
+            comb::AndOp::create(rewriter, loc, baseUnknown, maskInv);
+
+        Value driveValueWide =
+            adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
+        Value driveUnknownWide =
+            adjustIntegerWidth(rewriter, driveUnknown, baseWidth, loc);
+        Value driveValueShifted = driveValueWide;
+        Value driveUnknownShifted = driveUnknownWide;
+        if (sliceWidth != baseWidth) {
+          driveValueShifted = comb::ShlOp::create(rewriter, loc, driveValueWide,
+                                                  shiftAmount);
+          driveUnknownShifted = comb::ShlOp::create(
+              rewriter, loc, driveUnknownWide, shiftAmount);
+        }
+        Value driveValueMasked =
+            comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
+        Value driveUnknownMasked =
+            comb::AndOp::create(rewriter, loc, driveUnknownShifted, shiftedMask);
+
+        Value newValue = comb::OrOp::create(rewriter, loc, baseValueCleared,
+                                            driveValueMasked);
+        Value newUnknown = comb::OrOp::create(rewriter, loc, baseUnknownCleared,
+                                              driveUnknownMasked);
+
+        Value newStruct =
+            createFourStateStruct(rewriter, loc, newValue, newUnknown);
+        Value storeVal =
+            convertValueToLLVMType(newStruct, loc, rewriter);
+        LLVM::StoreOp::create(rewriter, loc, storeVal, baseRef);
+        rewriter.eraseOp(op);
+        return success();
+      }
+
+      if (auto baseIntType = dyn_cast<IntegerType>(baseType)) {
+        int64_t baseWidth = baseIntType.getWidth();
+        int64_t sliceWidth = cast<IntegerType>(resultElemType).getWidth();
+        if (sliceWidth <= 0 || sliceWidth > baseWidth)
+          return failure();
+
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
+        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
+                                 loc);
+
+        Value baseValue = loaded;
+        Value driveValue = srcValue;
+        if (isFourStateStructType(driveValue.getType()))
+          driveValue = extractFourStateValue(rewriter, loc, driveValue);
+        driveValue =
+            adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
+
+        Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
+        APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
+        Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
+        Value shiftedMask = maskConst;
+        if (sliceWidth != baseWidth)
+          shiftedMask =
+              comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
+
+        Value allOnes = hw::ConstantOp::create(
+            rewriter, loc, APInt::getAllOnes(baseWidth));
+        Value maskInv =
+            comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
+
+        Value baseValueCleared =
+            comb::AndOp::create(rewriter, loc, baseValue, maskInv);
+        Value driveValueWide =
+            adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
+        Value driveValueShifted = driveValueWide;
+        if (sliceWidth != baseWidth)
+          driveValueShifted = comb::ShlOp::create(rewriter, loc,
+                                                  driveValueWide, shiftAmount);
+        Value driveValueMasked =
+            comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
+        Value newValue = comb::OrOp::create(rewriter, loc, baseValueCleared,
+                                            driveValueMasked);
+
+        LLVM::StoreOp::create(rewriter, loc, newValue, baseRef);
+        rewriter.eraseOp(op);
+        return success();
+      }
+
+      return failure();
+    };
+
     if (auto extractRef = op.getDst().template getDefiningOp<ExtractRefOp>()) {
       Value baseRef = getConvertedValue(extractRef.getInput());
       auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
@@ -10189,6 +10347,21 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         auto resultType =
             this->getTypeConverter()->convertType(extractRef.getResult().getType());
         if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
+          return failure();
+        return success();
+      }
+      if (!baseRefType && baseRef &&
+          isa<LLVM::LLVMPointerType>(baseRef.getType())) {
+        auto mooreRefType =
+            cast<moore::RefType>(extractRef.getInput().getType());
+        auto mooreResultRefType =
+            cast<moore::RefType>(extractRef.getResult().getType());
+        Value idx = hw::ConstantOp::create(
+            rewriter, loc, rewriter.getIntegerType(64),
+            extractRef.getLowBit());
+        if (failed(emitLLVMPtrExtractAssign(
+                baseRef, mooreRefType.getNestedType(),
+                mooreResultRefType.getNestedType(), idx)))
           return failure();
         return success();
       }
@@ -10219,19 +10392,10 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       }
       if (!baseRefType && baseRef &&
           isa<LLVM::LLVMPointerType>(baseRef.getType())) {
-        auto mooreRefType = cast<moore::RefType>(dynExtractRef.getInput().getType());
-        auto nestedType = mooreRefType.getNestedType();
-        auto baseType = this->getTypeConverter()->convertType(nestedType);
-        if (!baseType)
-          return failure();
-
-        auto llvmBaseType = convertToLLVMType(baseType);
-        Value loaded = LLVM::LoadOp::create(rewriter, loc, llvmBaseType, baseRef);
-        if (baseType != llvmBaseType) {
-          loaded = UnrealizedConversionCastOp::create(rewriter, loc, baseType,
-                                                      loaded)
-                       .getResult(0);
-        }
+        auto mooreRefType =
+            cast<moore::RefType>(dynExtractRef.getInput().getType());
+        auto mooreResultRefType =
+            cast<moore::RefType>(dynExtractRef.getResult().getType());
 
         Value idx = getConvertedValue(dynExtractRef.getLowBit());
         if (!idx)
@@ -10239,141 +10403,11 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         if (isFourStateStructType(idx.getType()))
           idx = extractFourStateValue(rewriter, loc, idx);
 
-        auto mooreResultRefType =
-            cast<moore::RefType>(dynExtractRef.getResult().getType());
-        auto resultElemType =
-            this->getTypeConverter()->convertType(mooreResultRefType.getNestedType());
-        if (!resultElemType)
+        if (failed(emitLLVMPtrExtractAssign(
+                baseRef, mooreRefType.getNestedType(),
+                mooreResultRefType.getNestedType(), idx)))
           return failure();
-
-        if (isFourStateStructType(baseType)) {
-          auto structType = cast<hw::StructType>(baseType);
-          auto valueType = cast<IntegerType>(structType.getElements()[0].type);
-          int64_t baseWidth = valueType.getWidth();
-          if (!isFourStateStructType(resultElemType))
-            return failure();
-          auto resultStructType = cast<hw::StructType>(resultElemType);
-          auto resultIntType =
-              cast<IntegerType>(resultStructType.getElements()[0].type);
-          int64_t sliceWidth = resultIntType.getWidth();
-          if (sliceWidth <= 0 || sliceWidth > baseWidth)
-            return failure();
-
-          idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
-                                   loc);
-
-          Value baseValue = extractFourStateValue(rewriter, loc, loaded);
-          Value baseUnknown = extractFourStateUnknown(rewriter, loc, loaded);
-
-          Value driveValue = srcValue;
-          Value driveUnknown;
-          if (isFourStateStructType(driveValue.getType())) {
-            driveUnknown = extractFourStateUnknown(rewriter, loc, driveValue);
-            driveValue = extractFourStateValue(rewriter, loc, driveValue);
-          } else {
-            driveUnknown =
-                hw::ConstantOp::create(rewriter, loc, resultIntType, 0);
-          }
-          driveValue =
-              adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
-          driveUnknown =
-              adjustIntegerWidth(rewriter, driveUnknown, sliceWidth, loc);
-
-          Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
-          APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
-          Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
-          Value shiftedMask = maskConst;
-          if (sliceWidth != baseWidth)
-            shiftedMask =
-                comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
-
-          Value allOnes = hw::ConstantOp::create(
-              rewriter, loc, APInt::getAllOnes(baseWidth));
-          Value maskInv =
-              comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
-
-          Value baseValueCleared =
-              comb::AndOp::create(rewriter, loc, baseValue, maskInv);
-          Value baseUnknownCleared =
-              comb::AndOp::create(rewriter, loc, baseUnknown, maskInv);
-
-          Value driveValueWide =
-              adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
-          Value driveUnknownWide =
-              adjustIntegerWidth(rewriter, driveUnknown, baseWidth, loc);
-          Value driveValueShifted = driveValueWide;
-          Value driveUnknownShifted = driveUnknownWide;
-          if (sliceWidth != baseWidth) {
-            driveValueShifted = comb::ShlOp::create(rewriter, loc,
-                                                    driveValueWide, shiftAmount);
-            driveUnknownShifted = comb::ShlOp::create(rewriter, loc,
-                                                      driveUnknownWide, shiftAmount);
-          }
-          Value driveValueMasked =
-              comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
-          Value driveUnknownMasked =
-              comb::AndOp::create(rewriter, loc, driveUnknownShifted, shiftedMask);
-
-          Value newValue = comb::OrOp::create(rewriter, loc, baseValueCleared,
-                                              driveValueMasked);
-          Value newUnknown = comb::OrOp::create(
-              rewriter, loc, baseUnknownCleared, driveUnknownMasked);
-
-          Value newStruct =
-              createFourStateStruct(rewriter, loc, newValue, newUnknown);
-          Value storeVal =
-              convertValueToLLVMType(newStruct, loc, rewriter);
-          LLVM::StoreOp::create(rewriter, loc, storeVal, baseRef);
-          rewriter.eraseOp(op);
-          return success();
-        }
-
-        if (auto baseIntType = dyn_cast<IntegerType>(baseType)) {
-          int64_t baseWidth = baseIntType.getWidth();
-          int64_t sliceWidth =
-              cast<IntegerType>(resultElemType).getWidth();
-          if (sliceWidth <= 0 || sliceWidth > baseWidth)
-            return failure();
-
-          idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
-                                   loc);
-
-          Value baseValue = loaded;
-          Value driveValue = srcValue;
-          if (isFourStateStructType(driveValue.getType()))
-            driveValue = extractFourStateValue(rewriter, loc, driveValue);
-          driveValue = adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
-
-          Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
-          APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
-          Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
-          Value shiftedMask = maskConst;
-          if (sliceWidth != baseWidth)
-            shiftedMask =
-                comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
-
-          Value allOnes = hw::ConstantOp::create(
-              rewriter, loc, APInt::getAllOnes(baseWidth));
-          Value maskInv =
-              comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
-
-          Value baseValueCleared =
-              comb::AndOp::create(rewriter, loc, baseValue, maskInv);
-          Value driveValueWide =
-              adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
-          Value driveValueShifted = driveValueWide;
-          if (sliceWidth != baseWidth)
-            driveValueShifted = comb::ShlOp::create(rewriter, loc,
-                                                    driveValueWide, shiftAmount);
-          Value driveValueMasked =
-              comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
-          Value newValue = comb::OrOp::create(rewriter, loc, baseValueCleared,
-                                              driveValueMasked);
-
-          LLVM::StoreOp::create(rewriter, loc, newValue, baseRef);
-          rewriter.eraseOp(op);
-          return success();
-        }
+        return success();
       }
     }
 
