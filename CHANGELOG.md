@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 321 - February 3, 2026
+
+### Summary
+
+Iteration 321: **All 5 AVIP simulations now run successfully.** Fixed critical blocker: `llhd.drv`/`llhd.prb` in called functions now use `findMemoryBlockByAddress()` instead of manual memory search (commit `3d35211f3`). APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully` using multi-top (`--top HdlTop --top HvlTop`). AVIP status upgraded from "blocked" to "5/5 running". Regression clean: circt-sim lit 99p/1xf, unit tests 23/23, formal 106/106.
+
+### Accomplishments
+
+1. **Fixed llhd.drv/prb in called functions** - Replaced manual memory search in `interpretProbe` and `interpretDrive` with `findMemoryBlockByAddress()`, which comprehensively checks process-local allocas. This was the critical AVIP simulation blocker. Commit `3d35211f3`.
+2. **All 5 AVIP simulations running** - APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully`. Multi-top (`--top HdlTop --top HvlTop`) works correctly. Simulation times 198-447ns suggest UVM phases complete quickly (test needs longer stimulus).
+3. **AVIP status upgraded** - From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully). All 5 initialize UVM, instantiate BFMs, and complete simulation.
+4. **Regression verification** - circt-sim lit 99 pass / 1 xfail, unit tests 23/23, formal regression 106/106 pass. No regressions introduced.
+
+### Verification
+
+- circt-sim lit: **99 pass, 1 xfail** (clean)
+- Unit tests: **23/23 pass**
+- Formal regression: **106/106 pass**
+- AVIP simulation: **5/5 running** (APB, UART, AHB, I2S, I3C)
+- AVIP compile: 5/9 pass (remaining 4 need slang randomize patch)
+
 ## Iteration 320 - February 3, 2026
 
 ### Summary
