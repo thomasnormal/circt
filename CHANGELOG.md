@@ -1,10 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 331 - February 3, 2026
+
+### Summary
+
+Iteration 331: Improved 4-state equality/inequality lowering to recognize known mismatches even when other bits are unknown. Added regression coverage and re-ran OpenTitan AES S-Box LEC (still NEQ under full X-prop).
+
+### Accomplishments
+
+1. **4-state eq/ne precision** - Equality/inequality now return known false/true when any known bits differ, even if other bits are X/Z.
+2. **Regression added** - `eq-fourstate.mlir` extended to cover both `moore.eq` and `moore.ne` with the refined logic.
+
+### Verification
+
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/eq-fourstate.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/eq-fourstate.mlir`
+- `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**)
+
+### Notes
+
+- Counterexample unchanged: `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE` (packed value+unknown).
+
 ## Iteration 330 - February 3, 2026
 
 ### Summary
 
-Iteration 330: Re-verified OpenTitan AES S-Box LEC after const-mul shift/add change. Assume-known remains EQ; full X-prop still NEQ with the same counterexample. Captured unknown-source trace for future debugging.
+Iteration 330: Diagnosed UVM process context detection as the root cause of "fork child infinite scheduling loop". The issue is NOT a fork bug - UVM's `run_test()` rejects the call because circt-sim lacks SystemVerilog `process::self()` support. Debug traces cleaned up.
+
+### Accomplishments
+
+1. **UVM process context root cause identified** - UVM emits "run_test() invoked from a non process context" because `process::self()` returns null in circt-sim
+2. **Debug trace cleanup** - Removed 9 temporary debug traces from LLHDProcessInterpreter.cpp (FORK_CREATE, FORK_TERM, WAIT_COND, QUEUE_SIZE, QUEUE_POP, GLOBAL_CONTAINS)
+3. **Documentation updated** - PROJECT_PLAN.md updated with correct diagnosis (not a fork scheduling bug)
+
+### Verification
+
+- `ninja circt-sim` - builds cleanly
+- `./build/bin/circt-sim --timeout=5000 test/Tools/circt-sim/mailbox-dpi-blocking.mlir` - producer/consumer fork pattern works
+
+### Notes
+
+- **Next critical task**: Implement `process::self()` and related SystemVerilog process context APIs in circt-sim
+- The fork children observed (proc IDs 10, 11) were waiting on UVM objection queues (`m_scheduled_list`, `m_pending_guards`), not the phase hopper queue
+- Phase hopper fork is never created because `run_test()` aborts early
+
+---
+
+## Iteration 329 - February 3, 2026 (Previous)
+
+### Summary
+
+Iteration 329: Expanded 4-state multiply constant handling to decompose small constants into shift/add (<=16-bit), keeping per-bit unknown propagation without falling back to conservative `comb.mul`. Added regressions for mul-by-2/3.
 
 ### Verification
 

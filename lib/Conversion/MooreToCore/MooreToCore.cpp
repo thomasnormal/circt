@@ -8185,16 +8185,49 @@ struct LogicalICmpOpConversion : public OpConversionPattern<SourceOp> {
       Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
       Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
 
-      Value cmpVal =
-          comb::ICmpOp::create(rewriter, loc, pred, lhsVal, rhsVal);
       Value zeroUnk =
           hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
-      Value lhsHasUnk = comb::ICmpOp::create(
-          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
-      Value rhsHasUnk = comb::ICmpOp::create(
-          rewriter, loc, comb::ICmpPredicate::ne, rhsUnk, zeroUnk);
-      Value hasUnk =
-          comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+      Value unknownMask =
+          comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+      Value hasUnk = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, unknownMask, zeroUnk);
+
+      if constexpr (pred == ICmpPredicate::eq ||
+                    pred == ICmpPredicate::ne) {
+        Value diff =
+            comb::XorOp::create(rewriter, loc, lhsVal, rhsVal, false);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, unknownMask.getType(), -1);
+        Value knownBits =
+            comb::XorOp::create(rewriter, loc, unknownMask, allOnes, false);
+        Value knownDiff =
+            comb::AndOp::create(rewriter, loc, diff, knownBits, false);
+        Value mismatch = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, knownDiff, zeroUnk);
+        Value one =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        Value noMismatch =
+            comb::XorOp::create(rewriter, loc, mismatch, one, false);
+
+        Value resultVal;
+        if constexpr (pred == ICmpPredicate::eq) {
+          Value noUnknown =
+              comb::XorOp::create(rewriter, loc, hasUnk, one, false);
+          resultVal =
+              comb::AndOp::create(rewriter, loc, noMismatch, noUnknown, false);
+        } else {
+          resultVal = mismatch;
+        }
+        Value resultUnknown =
+            comb::AndOp::create(rewriter, loc, noMismatch, hasUnk, false);
+        Value result =
+            createFourStateStruct(rewriter, loc, resultVal, resultUnknown);
+        rewriter.replaceOp(op, result);
+        return success();
+      }
+
+      Value cmpVal =
+          comb::ICmpOp::create(rewriter, loc, pred, lhsVal, rhsVal);
       Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
                                           0);
       Value resultVal = comb::MuxOp::create(rewriter, loc, hasUnk, zero, cmpVal);
