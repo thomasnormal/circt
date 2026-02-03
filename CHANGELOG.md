@@ -7,6 +7,7 @@
 Iteration 321: **All 5 AVIP simulations now run successfully.** Fixed critical blocker: `llhd.drv`/`llhd.prb` in called functions now use `findMemoryBlockByAddress()` instead of manual memory search (commit `3d35211f3`). APB, UART, AHB, I2S, I3C all complete with `Simulation finished successfully` using multi-top (`--top HdlTop --top HvlTop`). AVIP status upgraded from "blocked" to "5/5 running". Regression clean: circt-sim lit 99p/1xf, unit tests 23/23, formal 106/106.
 Lowered remaining LLVM struct mux/extract patterns in LEC to HW, resolving the OpenTitan AES S-Box canright NEQ under `--assume-known-inputs` (requires `--mlir-disable-threading` for `--run-smtlib`).
 circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output by running a model request only when needed.
+Added `--x-optimistic` LEC output comparison to ignore unknown-bit differences when checking equivalence.
 
 ### Accomplishments
 
@@ -16,6 +17,7 @@ circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output
 4. **Regression verification** - circt-sim lit 99 pass / 1 xfail, unit tests 23/23, formal regression 106/106 pass. No regressions introduced.
 5. **LEC LLVM struct mux lowering** - Lowered `llvm.insertvalue` + `comb.mux` + `llvm.extractvalue` to field-wise `comb.mux` + `hw.struct_create`, eliminating leftover LLVM ops in LEC. OpenTitan AES S-Box canright now EQ with `--assume-known-inputs`. Added MooreToCore + LEC regression tests.
 6. **circt-lec run-smtlib model request** - `--print-solver-output`/`--print-counterexample` now run z3 once without `(get-model)` and only request a model when needed, preventing z3 UNSAT failures while preserving model output for SAT/UNKNOWN cases.
+7. **X-optimistic LEC outputs** - Added `--x-optimistic` to compare outputs only on known bits (unknowns are don't-care). Includes a regression and unit test.
 
 ### Verification
 
@@ -25,6 +27,7 @@ circt-lec `--run-smtlib` now avoids UNSAT failures when requesting solver output
 - AVIP simulation: **5/5 running** (APB, UART, AHB, I2S, I3C)
 - AVIP compile: 5/9 pass (remaining 4 need slang randomize patch)
 - OpenTitan AES S-Box LEC (canright, assume-known, `--mlir-disable-threading`): **EQ**
+- OpenTitan AES S-Box LEC (canright, `--x-optimistic --mlir-disable-threading`): **EQ**
 
 ## Iteration 320 - February 3, 2026
 

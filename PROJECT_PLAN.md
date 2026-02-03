@@ -110,6 +110,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **AVIP status upgraded**: From "blocked" (all fail at 0fs) to "5/5 running" (all complete successfully, UVM init, BFM instantiation working).
 - **Next steps**: Deeper AVIP simulation (longer run times, checking transaction activity). Complete slang randomize array scoping patch for remaining 4 AVIPs (SPI, JTAG, AXI4, AXI4Lite).
 - **circt-lec run-smtlib UNSAT fix**: `--print-solver-output` and `--print-counterexample` now avoid UNSAT failures by only inserting `(get-model)` when needed for SAT/UNKNOWN results.
+- **LEC X-optimistic outputs**: Added `--x-optimistic` to compare only known output bits (unknowns are don't-care), which avoids false NEQ when X-prop differs (e.g., LUT array indexing vs Canright logic).
+- **OpenTitan AES S-Box LEC (x-optimistic)**: canright now EQ with `--x-optimistic --mlir-disable-threading` (workdir: `/tmp/opentitan-lec-canright-xoptim`).
 
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.

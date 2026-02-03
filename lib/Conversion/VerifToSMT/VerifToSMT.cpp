@@ -118,6 +118,35 @@ static void maybeAssertKnownInput(Type originalTy, Value smtVal, Location loc,
   smt::AssertOp::create(builder, loc, isKnown);
 }
 
+static Value buildXOptimisticDiff(Value lhs, Value rhs, Type originalTy,
+                                  Location loc, OpBuilder &builder) {
+  int64_t valueWidth = 0;
+  int64_t unknownWidth = 0;
+  if (!isFourStateStruct(originalTy, valueWidth, unknownWidth))
+    return Value();
+  auto bvTy = dyn_cast<smt::BitVectorType>(lhs.getType());
+  if (!bvTy || bvTy.getWidth() !=
+                   static_cast<unsigned>(valueWidth + unknownWidth))
+    return Value();
+  if (lhs.getType() != rhs.getType())
+    return Value();
+  auto valueTy = smt::BitVectorType::get(builder.getContext(), valueWidth);
+  auto unknownTy = smt::BitVectorType::get(builder.getContext(), unknownWidth);
+  Value lhsUnknown = smt::ExtractOp::create(builder, loc, unknownTy, 0, lhs);
+  Value rhsUnknown = smt::ExtractOp::create(builder, loc, unknownTy, 0, rhs);
+  Value lhsValue =
+      smt::ExtractOp::create(builder, loc, valueTy, unknownWidth, lhs);
+  Value rhsValue =
+      smt::ExtractOp::create(builder, loc, valueTy, unknownWidth, rhs);
+  Value diff = smt::BVXOrOp::create(builder, loc, lhsValue, rhsValue);
+  Value unknownAny = smt::BVOrOp::create(builder, loc, lhsUnknown, rhsUnknown);
+  Value knownMask = smt::BVNotOp::create(builder, loc, unknownAny);
+  Value maskedDiff = smt::BVAndOp::create(builder, loc, diff, knownMask);
+  Value zero =
+      smt::BVConstantOp::create(builder, loc, 0, valueWidth);
+  return smt::DistinctOp::create(builder, loc, maskedDiff, zero);
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
@@ -941,9 +970,11 @@ struct LogicEquivalenceCheckingOpConversion
       verif::LogicEquivalenceCheckingOp>::CircuitRelationCheckOpConversion;
   LogicEquivalenceCheckingOpConversion(TypeConverter &converter,
                                        MLIRContext *context,
-                                       bool assumeKnownInputs)
+                                       bool assumeKnownInputs,
+                                       bool xOptimisticOutputs)
       : CircuitRelationCheckOpConversion(converter, context),
-        assumeKnownInputs(assumeKnownInputs) {}
+        assumeKnownInputs(assumeKnownInputs),
+        xOptimisticOutputs(xOptimisticOutputs) {}
 
   LogicalResult
   matchAndRewrite(verif::LogicEquivalenceCheckingOp op, OpAdaptor adaptor,
@@ -951,6 +982,8 @@ struct LogicEquivalenceCheckingOpConversion
     Location loc = op.getLoc();
     auto *firstOutputs = adaptor.getFirstCircuit().front().getTerminator();
     auto *secondOutputs = adaptor.getSecondCircuit().front().getTerminator();
+    auto *origFirstOutputs = op.getFirstCircuit().front().getTerminator();
+    SmallVector<Type> originalOutputTypes(origFirstOutputs->getOperandTypes());
 
     auto hasNoResult = op.getNumResults() == 0;
 
@@ -1078,8 +1111,16 @@ struct LogicEquivalenceCheckingOpConversion
     SmallVector<Value> outputsDifferent;
     if (!outputSymbolsA.empty() &&
         outputSymbolsA.size() == outputSymbolsB.size()) {
-      for (auto [symA, symB] :
-           llvm::zip(outputSymbolsA, outputSymbolsB)) {
+      for (auto [index, outPair] :
+           llvm::enumerate(llvm::zip(outputSymbolsA, outputSymbolsB))) {
+        auto [symA, symB] = outPair;
+        if (xOptimisticOutputs && index < originalOutputTypes.size()) {
+          if (Value diff = buildXOptimisticDiff(
+                  symA, symB, originalOutputTypes[index], loc, rewriter)) {
+            outputsDifferent.emplace_back(diff);
+            continue;
+          }
+        }
         outputsDifferent.emplace_back(
             smt::DistinctOp::create(rewriter, loc, symA, symB));
       }
@@ -1109,6 +1150,7 @@ struct LogicEquivalenceCheckingOpConversion
 
 private:
   bool assumeKnownInputs = false;
+  bool xOptimisticOutputs = false;
 };
 
 struct RefinementCheckingOpConversion
@@ -1116,7 +1158,8 @@ struct RefinementCheckingOpConversion
   using CircuitRelationCheckOpConversion<
       verif::RefinementCheckingOp>::CircuitRelationCheckOpConversion;
   RefinementCheckingOpConversion(TypeConverter &converter, MLIRContext *context,
-                                 bool assumeKnownInputs)
+                                 bool assumeKnownInputs,
+                                 bool /*xOptimisticOutputs*/)
       : CircuitRelationCheckOpConversion(converter, context),
         assumeKnownInputs(assumeKnownInputs) {}
 
@@ -5412,7 +5455,8 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
 
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
-    bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
+    bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
+    bool forSMTLIBExport,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
   // Add LTL operation conversion patterns
@@ -5423,7 +5467,7 @@ void circt::populateVerifToSMTConversionPatterns(
                VerifCoverOpConversion>(converter, patterns.getContext());
   patterns.add<LogicEquivalenceCheckingOpConversion,
                RefinementCheckingOpConversion>(
-      converter, patterns.getContext(), assumeKnownInputs);
+      converter, patterns.getContext(), assumeKnownInputs, xOptimisticOutputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
       assumeKnownInputs,
@@ -5603,7 +5647,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
                VerifCoverOpConversion>(converter, patterns.getContext());
   patterns.add<LogicEquivalenceCheckingOpConversion,
                RefinementCheckingOpConversion>(
-      converter, patterns.getContext(), assumeKnownInputs);
+      converter, patterns.getContext(), assumeKnownInputs,
+      xOptimisticOutputs);
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, (bool)risingClocksOnly,
       (bool)this->assumeKnownInputs,

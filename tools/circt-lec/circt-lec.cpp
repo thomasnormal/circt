@@ -174,6 +174,12 @@ static cl::opt<bool>
                       cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<bool>
+    xOptimisticOutputs("x-optimistic",
+                       cl::desc("Treat unknown output bits as don't-care when "
+                                "checking equivalence"),
+                       cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
     dumpUnknownSources("dump-unknown-sources",
                        cl::desc("Dump backward slices for 4-state outputs"),
                        cl::init(false), cl::cat(mainCategory));
@@ -609,6 +615,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(createConvertCombToSMT());
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
+  convertVerifToSMTOptions.xOptimisticOutputs = xOptimisticOutputs;
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
   pm.addPass(createSimpleCanonicalizerPass());
 
