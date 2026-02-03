@@ -91,6 +91,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
+### New Findings (2026-02-03)
+- **OpenTitan AES S-Box LEC**: unknown-mask issue persists on canright output.
+  - Workdir: `/tmp/opentitan-lec-canright-extractref/aes_sbox_canright`
+  - Model: `op_i=4'h8`, `data_i=16'h0800` → canright `data_o=16'h00FF`, LUT `data_o=16'hBF00`
+  - Forcing canright unknown mask to zero is UNSAT, so the NEQ still hinges on X-prop.
+- **MooreToCore local extract_ref assigns**: added llvm.ptr static extract update path
+  to mirror dyn_extract_ref (new regression: `test/Conversion/MooreToCore/extract-ref-local-assign.mlir`).
+
 ### New Findings (2026-02-02)
 - **OpenTitan AES S-Box LEC**: `aes_sbox_canright` still NEQ with `--assume-known-inputs`,
   but the **forced-unknown mask issue is cleared** after rewriting `llhd.prb/llhd.drv`
@@ -101,6 +109,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   - `op_i=4'h4` (CIPH_FWD), `data_i=16'h1900` → canright `data_o=16'h2B00`, LUT `data_o=16'hD400`
   This points to a functional mismatch in the Canright arithmetic/bit-index path
   (likely loop/bit-select semantics), not unknown propagation. Root cause still open.
+  (Superseded by 2026-02-03 findings: unknown mask still present.)
 
 ### Full Regression Results (2026-02-03, Iteration 317)
 
