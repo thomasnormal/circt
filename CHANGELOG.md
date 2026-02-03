@@ -15,6 +15,11 @@ Iteration 325: Improved 4-state unknown-index handling for constant arrays in Mo
 
 - `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/unknown-index-const-array.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/unknown-index-const-array.mlir`
 - `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**, full X-prop)
+
+### Notes
+
+- Full X-prop still NEQ for `aes_sbox_canright` (model: `op_i=4'h8`, `data_i=16'hBF04` packed value+unknown, outputs `c1=16'h00FF` vs `c2=16'h00FE`).
 
 ## Iteration 324 - February 3, 2026
 
