@@ -132,6 +132,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 ### New Findings (2026-02-03, Iteration 325)
 - **OpenTitan AES S-Box LEC (canright)**: re-verified **EQ** under `--assume-known-inputs --mlir-disable-threading` after const-array unknown-index X-prop fix.
   - Command: `CIRCT_LEC_ARGS="--assume-known-inputs --mlir-disable-threading" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+- **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** without assume-known.
+  - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
+  - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'hBF04`, outputs `c1=16'h00FF`, `c2=16'h00FE`.
 
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
