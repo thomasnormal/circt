@@ -34,6 +34,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include <deque>
 #include <map>
 #include <optional>
 
@@ -1015,6 +1016,11 @@ private:
   /// Map of dynamic string pointers to their content (for runtime string
   /// handling). Key is the pointer value, value is {data, len}.
   llvm::DenseMap<int64_t, std::pair<const char *, int64_t>> dynamicStrings;
+
+  /// Persistent storage for strings created by the interpreter (e.g. from
+  /// __moore_int_to_string and __moore_string_concat). The deque ensures
+  /// stable pointers so that dynamicStrings entries remain valid.
+  std::deque<std::string> interpreterStrings;
 
   //===--------------------------------------------------------------------===//
   // Global Variable and VTable Support
