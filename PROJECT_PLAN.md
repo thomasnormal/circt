@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 331)
+## Current Status - February 3, 2026 (Iteration 332)
 
 ### Session Summary - Key Milestones
 
@@ -32,6 +32,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **MooreToCore add/sub X-prop** | ✅ **IMPROVED** | Per-bit unknown propagation using carry-possible tracking |
 | **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 and small-width const shift/add (<=16) avoid `comb.mul` |
 | **MooreToCore eq/ne X-prop** | ✅ **IMPROVED** | Known mismatches now return definite results even with X/Z bits |
+| **OpenTitan LEC x-optimistic** | ✅ **AVAILABLE** | `LEC_X_OPTIMISTIC=1` forwards `--x-optimistic` for AES S-Box LEC EQ |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -98,9 +99,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Critical (blocking UVM testbench execution):**
 1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
-3. **UVM process context detection** - UVM emits "run_test() invoked from a non process context" because circt-sim doesn't implement SystemVerilog `$process` context APIs. The phase hopper fork is never created. This is NOT a fork scheduling bug - the fork children never exist.
-4. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
-5. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
+3. ~~**UVM process context detection**~~ ✅ FIXED Iter 331 - `process::self()` implemented in LLHDProcessInterpreter.cpp
+4. **UVM phase hopper infinite loop** - After `process::self()` fix, UVM creates `uvm_test_top` but phase timeout watchdog enters infinite fork scheduling loop. Phase hopper fork is created but never completes.
+5. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
+6. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
 
 **Major (blocking specific testbenches):**
 4. ~~**SPI AVIP compile**~~: ✅ FIXED - All 3 slang patches applied, compiles cleanly. Simulation testing needed.
@@ -162,6 +164,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-03, Iteration 331)
+- **process::self() IMPLEMENTED**: UVM's `run_test()` process context check now works
+  - Handler added in `tools/circt-sim/LLHDProcessInterpreter.cpp` for `__moore_process_self`
+  - Stub added in `tools/circt-sim/MooreRuntime.cpp`
+  - ImportVerilog generates `__moore_process_self()` calls
+  - Tests: `process-self.sv`, `process-self-fork.sv`
+- **APB AVIP Progress**: Simulation now proceeds further
+  - BEFORE: "run_test() invoked from a non process context" at 0fs
+  - AFTER: UVM creates `uvm_test_top`, tries to find build phase
+  - NEW BLOCKER: Infinite fork scheduling loop (phase timeout watchdog)
+- **Lit Test Investigation**:
+  - `strip-llhd-process-drives.mlir`: FileCheck pattern bug (test fix)
+  - `lec-strip-llhd-comb-alloca-phi-ref.mlir`: LLVM alloca lowering gap (code fix)
+  - `llhd-process-moore-delay-multi.mlir`: Known delay accumulation issue (mark XFAIL)
+- **Track Status**:
+  - Track A (Simulation): `process::self()` DONE, next is phase hopper infinite loop
+  - Track B (Formal): No regressions
+  - Track C (External): OpenTitan regression running
 
 ### New Findings (2026-02-03, Iteration 329)
 - **UVM process context detection root cause identified**: Investigated "fork child infinite scheduling loop" and found the real issue:
@@ -343,24 +364,23 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ---
 
-## Workstreams & Next Tasks (Updated February 3, 2026 - Iteration 330)
+## Workstreams & Next Tasks (Updated February 3, 2026 - Iteration 331)
 
 ### Track 1: UVM Phase Execution (CRITICAL PRIORITY)
-**Status**: Mailbox codegen DONE. Process context detection BLOCKING.
-**Done**: Mailbox DPI hooks (blocking + non-blocking), mailbox codegen in ImportVerilog
-**Blocker**: UVM `run_test()` rejects call because `process::self()` returns null
+**Status**: `process::self()` DONE. Phase hopper infinite loop BLOCKING.
+**Done**: Mailbox DPI hooks, mailbox codegen, `process::self()` runtime
+**Blocker**: Infinite fork scheduling loop in UVM phase timeout watchdog
 
-**Root Cause** (diagnosed Iter 330):
-- UVM checks `process::self()` to detect process context
-- circt-sim doesn't implement SystemVerilog process APIs
-- Error: "run_test() invoked from a non process context"
-- Phase hopper fork is never created
+**Progress** (Iter 331):
+- `process::self()` implemented - UVM now creates `uvm_test_top`
+- APB AVIP gets further (UVM tries to find build phase)
+- NEW BLOCKER: Phase hopper fork loops infinitely
 
 **Next Tasks** (in order):
-1. **Implement `process::self()` runtime** - Return non-null inside llhd.process/sim.fork
-   - File: `tools/circt-sim/LLHDProcessInterpreter.cpp` (add handler for `__moore_process_self`)
-   - May need ImportVerilog changes if not already lowered
-2. **Test with UVM run_test()** - Verify phase hopper fork gets created
+1. **Debug infinite fork scheduling loop** - Identify why phase watchdog loops
+   - Check UVM phase hopper logic vs circt-sim fork/wait behavior
+   - May be related to `process::await()` or timeout scheduling
+2. **Test with APB AVIP** - Verify build/connect/run phases complete
 3. **Run full UVM testbench** - APB AVIP with transaction activity
 
 ### Track 2: Test Suite Coverage & Regression
