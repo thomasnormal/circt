@@ -181,7 +181,7 @@ index 327a400..0349403 100644
 +            // fall back to the bind directive scope per LRM 23.11.
 +            ll = LookupLocation::after(parentInstance);
 +            scope = ll.getScope();
-+            if (exprSyntax) {
++            if (!connectedSymbol && exprSyntax) {
 +                auto firstToken = exprSyntax->getFirstToken();
 +                if (firstToken.kind == TokenKind::Identifier) {
 +                    auto rootName = firstToken.valueText();

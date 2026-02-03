@@ -7,12 +7,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 317)
+## Current Status - February 3, 2026 (Iteration 318)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
+| **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with Lookup::unqualified |
+| **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
+| **Yosys BMC Improvement** | ✅ **11/14** | Up from 6/14; basic02 was segfault, now clean error |
+| **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
+| **AVIP Compilation** | ⚠️ **5/9** | apb,uart,i2s,ahb,i3c pass; spi,jtag fail; axi4 timeout; axi4Lite filelist |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
 | **Debug Trace Cleanup** | ✅ DONE | 9 temporary debug blocks removed from LLHDProcessInterpreter.cpp |
 | **RefType Unwrapping Fix** | ✅ FIXED | alloca field drive `dyn_cast<StructType>` failed on RefType; now unwraps first |
@@ -91,6 +96,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 12. **APB AVIP timeout** - Completes but needs >120s (current default timeout)
 13. ~~**spi_host_reg_top segfault**~~ ✅ FIXED Iter 314 (DenseMap→std::map)
 
+### New Findings (2026-02-03, Iteration 318)
+- **slang-bind-scope.patch wildcard segfault**: `PortConnection::getExpression` accessed inactive union member when `connectedSymbol` was null and `exprSyntax` had a wildcard token. Fixed with `Lookup::unqualified` guard before fallback scope switch.
+- **Lit tests all green**: 540 total (99 circt-sim + 107 MooreToCore + 98 circt-lec + 74 circt-bmc + 7 LTLToCore = 385 pass, 21 xfail, 141 unsup, 0 fail)
+- **AVIP compilation regression**: 5/9 pass (apb, uart, i2s, ahb, i3c), 2 fail (spi, jtag), 1 timeout (axi4), 1 filelist issue (axi4Lite)
+- **Yosys BMC**: improved from 6/14 to 11/14 pass. basic02 was segfault, now produces clean error.
+- **Fork shared memory**: parent process chain committed as `c76d665ef`
+
 ### New Findings (2026-02-03)
 - **OpenTitan AES S-Box LEC**: unknown-mask issue persists on canright output.
   - Workdir: `/tmp/opentitan-lec-canright-extractref/aes_sbox_canright`
@@ -111,9 +123,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   (likely loop/bit-select semantics), not unknown propagation. Root cause still open.
   (Superseded by 2026-02-03 findings: unknown mask still present.)
 
-### Full Regression Results (2026-02-03, Iteration 317)
+### Full Regression Results (2026-02-03, Iteration 318)
 
-All key regression suites **ALL CLEAN**. circt-lec 98/98, circt-bmc 74/74, circt-sim 99+1xfail, MooreToCore 106/106+1xfail, LTLToCore 16/16.
+All key regression suites **ALL CLEAN**. 540 total lit tests: 385 pass, 21 xfail, 141 unsup, 0 fail. Yosys BMC 11/14 pass (up from 6/14).
 
 | Suite | Mode | Result | vs Baseline |
 |-------|------|--------|-------------|
