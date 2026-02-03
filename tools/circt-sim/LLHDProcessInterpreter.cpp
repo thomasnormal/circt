@@ -281,6 +281,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(initializeGlobals()))
     return failure();
 
+  inGlobalInit = true;
   // Execute LLVM global constructors (e.g., __moore_global_init_uvm_pkg::uvm_top)
   // This initializes UVM globals like uvm_top before processes start
   if (failed(executeGlobalConstructors()))
@@ -290,6 +291,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // module-level variables like strings before processes start.
   if (failed(executeModuleLevelLLVMOps(hwModule)))
     return failure();
+
+  inGlobalInit = false;
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Registered "
                           << getNumSignals() << " signals and "
@@ -8689,7 +8692,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         tookBranch = true;
         break;
       }
-
       if (failed(interpretOperation(procId, &op))) {
         llvm::errs() << "circt-sim: Failed in func body for process " << procId
                      << "\n";
@@ -9542,6 +9544,19 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     terminateCallback(success, verbose);
   }
 
+  // During global initialization (e.g., UVM global constructors), do not halt
+  // the process. UVM's m_uvm_get_root() can be called re-entrantly during
+  // uvm_root::new(), which triggers uvm_fatal -> die() -> sim.terminate.
+  // If we halt here, the first call to m_uvm_get_root() never stores to
+  // uvm_top, causing the m_inst != uvm_top check to fail permanently.
+  // Instead, record termination was requested but let the init code finish.
+  if (inGlobalInit) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  sim.terminate during global init - not halting process "
+               << procId << " (termination deferred to after init)\n");
+    return mlir::success();
+  }
+
   // Mark the process as halted
   state.halted = true;
 
@@ -9560,6 +9575,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork with "
                           << forkOp.getBranches().size() << " branches, join_type="
                           << forkOp.getJoinType() << "\n");
+
 
   // Parse the join type
   ForkJoinType joinType = parseForkJoinType(forkOp.getJoinType());
@@ -10279,6 +10295,7 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
 
   uint64_t nativeOffset = 0;
   size_t nativeSize = 0;
+
   if (findNativeMemoryBlockByAddress(strPtrVal, &nativeOffset, &nativeSize)) {
     if (nativeOffset + static_cast<size_t>(strLen) > nativeSize)
       return false;
@@ -10742,6 +10759,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                           << (storeVal.isX() ? "X" : std::to_string(storeVal.getUInt64()))
                           << " (" << storeSize << " bytes) at offset " << offset << "\n");
 
+  // UVM fix: when m_inst is stored during global init, also mirror to uvm_top.
+  // This prevents the re-entrant m_uvm_get_root() call from seeing
+  // m_inst != uvm_top and triggering an infinite fatal loop.
+  if (inGlobalInit && !storeVal.isX() && storeVal.getUInt64() != 0) {
+    if (auto addrOfOp = storeOp.getAddr().getDefiningOp<LLVM::AddressOfOp>()) {
+      if (addrOfOp.getGlobalName().contains("uvm_root::m_inst")) {
+        StringRef uvmTopName = "uvm_pkg::uvm_top";
+        auto topBlockIt = globalMemoryBlocks.find(uvmTopName);
+        if (topBlockIt != globalMemoryBlocks.end()) {
+          auto &topBlock = topBlockIt->second;
+          uint64_t value = storeVal.getUInt64();
+          for (unsigned i = 0; i < storeSize && i < 8 && i < topBlock.size; ++i)
+            topBlock.data[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+          topBlock.initialized = true;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  UVM fix: mirrored m_inst store to uvm_top ("
+                     << llvm::format_hex(value, 18) << ")\n");
+        }
+      }
+    }
+  }
   // Check if any processes are waiting on memory events at this location.
   // If the stored value changed, wake those processes.
   checkMemoryEventWaiters();

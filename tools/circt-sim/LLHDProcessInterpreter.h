@@ -1007,6 +1007,10 @@ private:
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
+  /// Whether we are currently in global initialization (constructors, etc.).
+  /// During this phase, sim.terminate should not halt the process to allow
+  /// UVM initialization to complete (re-entrant calls set uvm_top properly).
+  bool inGlobalInit = false;
 
   /// Map of dynamic string pointers to their content (for runtime string
   /// handling). Key is the pointer value, value is {data, len}.
