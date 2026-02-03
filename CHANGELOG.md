@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 337 - February 3, 2026
+
+### Summary
+
+Iteration 337: Fixed stop hook blocking on error/rate limits (was sleeping 1h instead of allowing stop). Committed uncommitted process control work (kill/status/await/randstate/srandom). All regression suites pass.
+
+### Accomplishments
+
+1. **Stop hook fix** - Fixed `.claude/hooks/stop_on_limits.py` where `return 0` was commented out, causing 1-hour sleep on errors/rate limits instead of graceful stop.
+2. **Process control commit** - Committed 50 files (+1252/-167 lines) with process::kill/status/await/get_randstate/set_randstate/srandom support.
+3. **VerifToSMT test additions** - 8 new BMC test files for assume-known, clock handling, etc.
+
+### Regression Results
+
+| Suite | Result | Notes |
+|-------|--------|-------|
+| sv-tests BMC | 23/26 pass | 0 fail, 3 xfail |
+| sv-tests LEC | 23/23 pass | 0 fail |
+| verilator BMC | 17/17 pass | 0 fail |
+| verilator LEC | 17/17 pass | 0 fail |
+| yosys BMC | 12/14 pass | 2 skip (VHDL) |
+| yosys LEC | 14/14 pass | 2 skip (VHDL) |
+| circt-bmc lit | 74 pass | 16 xfail, 0 fail |
+| circt-lec lit | 99 pass | 3 xfail, 0 fail |
+| circt-sim lit | 104 pass | 1 xfail, 2 timeout |
+| AVIP compile | 5/5 pass | apb, uart, i2s, ahb, spi |
+
+### Commits
+
+- `da4ffb211` - [Hooks] Fix stop hook blocking on error/rate limit
+- `1d4a0afce` - [Multi] Process control, MooreToCore, and test improvements
+
+---
+
 ## Iteration 336 - February 3, 2026
 
 ### Summary

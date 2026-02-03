@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 336 - Process Control + Fork Disable Fix)
+## Current Status - February 3, 2026 (Iteration 337 - Stop Hook Fix + Process Control Commit)
 
 ### Session Summary - Key Milestones
 
@@ -384,28 +384,30 @@ typedef uvm_component_registry #(my_test, "my_test") type_id;  // ✅ Now proper
 
 ---
 
-## Workstreams & Next Tasks (Updated February 3, 2026 - Iteration 331)
+## Workstreams & Next Tasks (Updated February 3, 2026 - Iteration 337)
 
 ### Track 1: UVM Phase Execution (CRITICAL PRIORITY)
-**Status**: `process::self()` DONE. Phase hopper infinite loop BLOCKING.
-**Done**: Mailbox DPI hooks, mailbox codegen, `process::self()` runtime
-**Blocker**: Infinite fork scheduling loop in UVM phase timeout watchdog
+**Status**: Process control DONE (kill/status/await/randstate/srandom). Phase hopper loop BLOCKING.
+**Done**: Mailbox DPI, `process::self()`, `process::kill/status/await`, randstate/srandom
+**Blocker**: UVM phase hopper infinite loop - needs investigation
 
-**Progress** (Iter 331):
-- `process::self()` implemented - UVM now creates `uvm_test_top`
+**Progress** (Iter 337):
+- `process::self()` implemented - UVM creates `uvm_test_top`
+- `process::kill/status/await` implemented - for UVM phase control
+- `process::get_randstate/set_randstate/srandom` implemented - for UVM RNG stability
 - APB AVIP gets further (UVM tries to find build phase)
-- NEW BLOCKER: Phase hopper fork loops infinitely
+- BLOCKER: Phase hopper fork loops infinitely
 
 **Next Tasks** (in order):
-1. **Debug infinite fork scheduling loop** - Identify why phase watchdog loops
-   - Check UVM phase hopper logic vs circt-sim fork/wait behavior
-   - May be related to `process::await()` or timeout scheduling
-2. **Test with APB AVIP** - Verify build/connect/run phases complete
-3. **Run full UVM testbench** - APB AVIP with transaction activity
+1. **Debug UVM phase hopper loop** - Run APB AVIP with extended timeout (300s)
+   - Check if it's wall-clock timeout vs actual infinite loop
+   - Add debug traces to phase hopper fork if needed
+2. **Test AVIP simulations** - Run APB, SPI, UART with longer timeouts
+3. **Verify UVM phases** - Check build/connect/run phase progression
 
 ### Track 2: Test Suite Coverage & Regression
-**Status**: ✅ circt-sim 99/99, circt-lec 98/98, circt-bmc 74/74, LTLToCore green
-**Focus**: Maintain 100%, run continuous regression
+**Status**: ✅ circt-sim 104/107 (2 timeout), circt-lec 99/121 (0 fail), circt-bmc 74/214 (0 fail)
+**Focus**: Maintain 0 failures, run continuous regression
 
 **Test Suites**:
 - `sv-tests`: BMC/LEC formal tests
