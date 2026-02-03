@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 329)
+## Current Status - February 3, 2026 (Iteration 330)
 
 ### Session Summary - Key Milestones
 
@@ -27,7 +27,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **AVIP Compilation** | ✅ **9/9** | apb,uart,i2s,ahb,i3c,spi,axi4 pass; jtag + axi4Lite pass with `--compat=all -Wno-range-oob` |
 | **SPI AVIP compile workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites nested comments, trailing `$sformatf` comma, `$` dist ranges, and inline `randomize() with` constraints (use FILELIST_BASE for vendor filelists) |
 | **MooreToCore const-array unknown index** | ✅ **IMPROVED** | Unknown-index dyn_extract now preserves partial knowns for 4-state constant arrays |
-| **OpenTitan AES S-Box LEC (canright, assume-known)** | ✅ EQ | Re-verified after const-array X-prop fix (`--assume-known-inputs --mlir-disable-threading`) |
+| **OpenTitan AES S-Box LEC (canright, assume-known)** | ✅ EQ | Re-verified after const-mul shift/add (`--assume-known-inputs --mlir-disable-threading`) |
 | **MooreToCore `-1 - x` X-prop** | ✅ **FIXED** | Bitwise NOT now preserves per-bit unknowns instead of all-ones unknown |
 | **MooreToCore add/sub X-prop** | ✅ **IMPROVED** | Per-bit unknown propagation using carry-possible tracking |
 | **MooreToCore mul const fast-path** | ✅ **IMPROVED** | Mul by constant 0/1 and small-width const shift/add (<=16) avoid `comb.mul` |
@@ -60,7 +60,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **LEC Local Signal Init** | ✅ UPDATED | Local LLHD signal init uses unknown=0 in non-strict stripping |
 | **LEC SMT Model** | ✅ ADDED | `--run-smtlib` inserts `(get-model)` for counterexample printing |
 | **LEC Counterexample Outputs** | ✅ ADDED | `--print-solver-output` prints c1/c2 output values |
-| **OpenTitan AES S-Box LEC (assume-known)** | ✅ EQ | LowerLECLLVM lowers LLVM struct mux/extract; use `--mlir-disable-threading --assume-known-inputs` |
+| **OpenTitan AES S-Box LEC (assume-known)** | ✅ EQ | Still EQ; full X-prop NEQ persists with same counterexample (`op_i=4'h8`, `data_i=16'h9C04`) |
 | **4-state X-Init Fix** | ✅ FIXED | Undriven nets init to 0 instead of X (commit `cccb3395c`) |
 | **Mailbox Codegen** | ✅ ALREADY DONE | All 5 methods already wired in ImportVerilog/Expressions.cpp |
 | **4-state LLVM Global Type Fix** | ✅ FIXED | `GlobalVariableOpConversion` converts `hw::StructType` to `LLVM::LLVMStructType`. All 12 Moore unit tests pass. |
@@ -86,7 +86,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **UVM Root Init Re-entrancy Fix** | ✅ FIXED | Mirror `m_inst` store to `uvm_top` + defer `sim.terminate` during init (commit `2db5b8bfa`) |
 | **$sformatf Runtime Functions** | ✅ FIXED | `__moore_int_to_string`, `__moore_string_concat` handlers (commit `72ea6abf4`) |
 | **UVM Factory Creates Test** | ✅ WORKING | `run_test("apb_base_test")` creates `uvm_test_top` object successfully |
-| **Phase Hopper Fork** | ⚠️ IN PROGRESS | Fork children created but stuck in infinite scheduling loop |
+| **UVM Process Context Detection** | ⚠️ DIAGNOSED | UVM `run_test()` rejects call - circt-sim lacks SystemVerilog `$process` context |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
 | APB AVIP Simulation | ✅ RUNS | Completes at 352940000000 fs with uvm-core |
@@ -97,10 +97,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Critical (blocking UVM testbench execution):**
 1. ~~**4-state X initialization of undriven nets**~~ ✅ FIXED in commit `cccb3395c`
 2. ~~**ImportVerilog doesn't emit mailbox put/get DPI calls**~~ ✅ ALREADY IMPLEMENTED (Expressions.cpp:3433-3621)
-3. ~~**UVM phase hopper interleaving**~~ ⚠️ PARTIAL - Test created, fork launched, but child processes stuck in infinite scheduling loop
+3. **UVM process context detection** - UVM emits "run_test() invoked from a non process context" because circt-sim doesn't implement SystemVerilog `$process` context APIs. The phase hopper fork is never created. This is NOT a fork scheduling bug - the fork children never exist.
 4. ~~**OpenTitan X-init regression**~~ ✅ RECOVERED - csrng_reg_top, i2c_reg_top now PASS after DAG fix (commit `a488f68f9`)
 5. ~~**TL adapter d_valid=0**~~ ✅ FIXED - RefType unwrapping (write err=0) + recursive probe path conversion (read data). OpenTitan 20/23 pass.
-6. **Fork child infinite scheduling** - Phase hopper children keep getting added to ready queue without making progress
 
 **Major (blocking specific testbenches):**
 4. ~~**SPI AVIP compile**~~: ✅ FIXED - All 3 slang patches applied, compiles cleanly. Simulation testing needed.
@@ -162,6 +161,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-03, Iteration 329)
+- **UVM process context detection root cause identified**: Investigated "fork child infinite scheduling loop" and found the real issue:
+  - UVM's `run_test()` issues error "run_test() invoked from a non process context" which prevents it from creating the phase hopper fork
+  - The error comes from UVM checking `process::self()` which returns null in circt-sim because SystemVerilog process context APIs aren't implemented
+  - **Not a fork bug**: The fork children we see (proc IDs 10, 11) are waiting on UVM objection queues (`m_scheduled_list`, `m_pending_guards`), not the phase hopper queue - they're different forks entirely
+  - **Fix required**: Implement `$process` / `process::self()` / `std::process` support in circt-sim so UVM can detect it's running inside an `initial` block
+- **Debug trace cleanup**: Removed 9 temporary debug traces from LLHDProcessInterpreter.cpp added during investigation
+- **circt-sim smoke test**: mailbox-dpi-blocking.mlir passes (producer/consumer fork pattern working)
 
 ### New Findings (2026-02-03, Iteration 320)
 - **Yosys BMC regression fix**: BMC_ASSUME_KNOWN_INPUTS override and `rg` portability fix (commit `fc02d2ddc`). All 14/14 yosys SVA tests pass through regression script.
