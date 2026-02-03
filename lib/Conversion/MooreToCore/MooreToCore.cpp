@@ -15801,6 +15801,38 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       return hw::ConstantOp::create(rewriter, loc, constAPInt);
     }
 
+    // Handle builtin.unrealized_conversion_cast
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(mooreOp)) {
+      if (castOp.getNumOperands() != 1 || castOp.getNumResults() != 1)
+        return nullptr;
+      Value operand = getConvertedOperand(castOp.getOperand(0));
+      if (!operand)
+        return nullptr;
+      Type targetType =
+          typeConverter->convertType(castOp.getResult(0).getType());
+      if (!targetType)
+        targetType = castOp.getResult(0).getType();
+      if (operand.getType() == targetType)
+        return operand;
+      return UnrealizedConversionCastOp::create(rewriter, loc, targetType, operand)
+          .getResult(0);
+    }
+
+    // Handle llvm.call (e.g. process::status lowered in ImportVerilog).
+    if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(mooreOp)) {
+      IRMapping mapping;
+      for (Value operand : llvmCallOp.getOperands()) {
+        Value converted = getConvertedOperand(operand);
+        if (!converted)
+          return nullptr;
+        mapping.map(operand, converted);
+      }
+      Operation *cloned = rewriter.clone(*llvmCallOp, mapping);
+      if (llvmCallOp.getNumResults() == 1)
+        return cloned->getResult(0);
+      return nullptr;
+    }
+
     // Handle moore.read
     if (auto readOp = dyn_cast<ReadOp>(mooreOp)) {
       Value input = getConvertedOperand(readOp.getInput());

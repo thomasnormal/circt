@@ -421,6 +421,40 @@ bool __moore_event_triggered(bool *event);
 /// @return A process handle (non-null if inside a process, null otherwise)
 void *__moore_process_self(void);
 
+/// Kill a process handle.
+/// Implements SystemVerilog `process::kill()`.
+/// @param handle Process handle (as 64-bit value)
+void __moore_process_kill(int64_t handle);
+
+/// Query process status.
+/// Implements SystemVerilog `process::status()`.
+/// @param handle Process handle (as 64-bit value)
+/// @return process::state enum value (FINISHED/RUNNING/WAITING/SUSPENDED/KILLED)
+int32_t __moore_process_status(int64_t handle);
+
+/// Await process completion (finished or killed).
+/// Implements SystemVerilog `process::await()`.
+/// @param handle Process handle (as 64-bit value)
+void __moore_process_await(int64_t handle);
+
+/// Get the random state for a process as a string.
+/// Implements SystemVerilog `process::get_randstate()`.
+/// @param handle Process handle (as 64-bit value)
+/// @return MooreString containing the serialized RNG state
+MooreString __moore_process_get_randstate(int64_t handle);
+
+/// Restore the random state for a process from a string.
+/// Implements SystemVerilog `process::set_randstate()`.
+/// @param handle Process handle (as 64-bit value)
+/// @param state MooreString containing the serialized RNG state
+void __moore_process_set_randstate(int64_t handle, MooreString state);
+
+/// Seed the process random generator.
+/// Implements SystemVerilog `process::srandom()`.
+/// @param handle Process handle (as 64-bit value)
+/// @param seed Seed value
+void __moore_process_srandom(int64_t handle, int32_t seed);
+
 //===----------------------------------------------------------------------===//
 // Mailbox Operations (Inter-process Communication)
 //===----------------------------------------------------------------------===//
@@ -453,11 +487,24 @@ bool __moore_mailbox_tryput(int64_t mbox_id, int64_t msg);
 /// @return true if a message was retrieved, false if mailbox is empty
 bool __moore_mailbox_tryget(int64_t mbox_id, int64_t *msg_out);
 
+/// Try to peek a message from a mailbox (non-blocking, does not remove).
+/// Implements SystemVerilog `mailbox.try_peek(msg)`.
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg_out Pointer to store the peeked message
+/// @return true if a message was available, false if mailbox is empty
+bool __moore_mailbox_trypeek(int64_t mbox_id, int64_t *msg_out);
+
 /// Get the number of messages in a mailbox.
 /// Implements SystemVerilog `mailbox.num()`.
 /// @param mbox_id Mailbox identifier from __moore_mailbox_create
 /// @return Number of messages currently in the mailbox
 int64_t __moore_mailbox_num(int64_t mbox_id);
+
+/// Peek a message from a mailbox (blocking, does not remove).
+/// Implements SystemVerilog `mailbox.peek(msg)`.
+/// @param mbox_id Mailbox identifier from __moore_mailbox_create
+/// @param msg_out Pointer to store the peeked message
+void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out);
 
 //===----------------------------------------------------------------------===//
 // Simulation Control Operations

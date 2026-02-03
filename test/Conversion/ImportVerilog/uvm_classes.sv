@@ -198,7 +198,7 @@ endclass
 // CHECK: }
 
 // CHECK-LABEL: moore.module @ThisTypePatternTest() {
-// CHECK:   %pool_handle = moore.variable : <class<@this_type_pool>>
+// CHECK:   %pool_handle = moore.variable : <class<@this_type_pool{{(_[0-9]+)?}}>>
 // CHECK:   moore.procedure initial {
 // CHECK:     %[[HANDLE:.*]] = moore.read %pool_handle
 // CHECK:     %[[METHOD:.*]] = moore.vtable.load_method %[[HANDLE]] : @get_global_pool

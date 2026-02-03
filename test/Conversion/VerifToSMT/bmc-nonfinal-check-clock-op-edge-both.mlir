@@ -5,10 +5,11 @@
 
 // CHECK-LABEL: func.func @bmc_clock_op_check_edge_both() -> i1
 // CHECK: scf.for
+// Loop is called first
+// CHECK:   func.call @bmc_loop
 // Circuit returns outputs + !smt.bool for the clocked property
 // CHECK:   func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bool)
-// CHECK:   func.call @bmc_loop
 // CHECK:   smt.not
 // CHECK:   smt.and
 func.func @bmc_clock_op_check_edge_both() -> i1 {

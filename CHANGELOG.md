@@ -4,22 +4,34 @@
 
 ### Summary
 
-Iteration 336: Added 4-state consensus simplifications for AND/OR/XOR (e.g. `(a & b) ^ (a & ~b) -> a`) plus nested XOR cancellation, with new regression and unit coverage. OpenTitan AES S-Box LEC still NEQ under strict X-prop; counterexample unchanged (LUT more precise than canright).
+Iteration 336: Added 4-state consensus simplifications for AND/OR/XOR (e.g. `(a & b) ^ (a & ~b) -> a`) plus nested XOR cancellation, with new regression and unit coverage. Process control now implements `process::kill/status/await` plus `process::get_randstate/set_randstate/srandom` for UVM RNG stability. Mailbox `peek/try_peek` is now supported for UVM TLM FIFO paths. MooreToCore array locator predicates now tolerate runtime calls (e.g. `process::status` in UVM queue finds). AVIP filelist resolution now tolerates `../../src` layouts. OpenTitan AES S-Box LEC still NEQ under strict X-prop; counterexample unchanged (LUT more precise than canright).
 
 ### Accomplishments
 
 1. **4-state consensus + XOR cancellation** - MooreToCore simplifies consensus patterns and cancels nested XOR duplicates before lowering.
 2. **Regression added** - `four-state-consensus.mlir` covers consensus reductions across XOR/OR/AND.
 3. **Unit test added** - `FourStateConsensusSimplifiesToInput` verifies pass-through conversion.
+4. **Fork disable completion fix** - `disableFork()` now marks children complete so `wait_fork`/halt can proceed; new unit and circt-sim regression coverage added.
+5. **Process kill/status/await support** - `process::kill()`, `process::status()`, and `process::await()` wired through ImportVerilog + circt-sim, with regression coverage.
+6. **Process randstate/srandom support** - `process::get_randstate/set_randstate/srandom` wired through ImportVerilog + circt-sim, with regression coverage.
+7. **Mailbox peek/try_peek support** - `mailbox.peek/try_peek` wired through ImportVerilog + circt-sim, with regression coverage.
+8. **Array locator runtime calls** - MooreToCore now lowers `moore.array.locator` predicates containing `llvm.call`/casts (UVM process status), with regression coverage.
+9. **circt-sim skip-passes flag** - `--skip-passes` skips preprocessing for already-lowered MLIR, enabling faster AVIP sims.
+10. **AVIP compile IR mode** - `run_avip_circt_verilog.sh` now honors `CIRCT_VERILOG_IR=hw|moore`, with test coverage.
+11. **AVIP filelist up-dir fallback** - `run_avip_circt_verilog.sh` now resolves `../../src` filelists against `avip_dir/src` when the default base is wrong, with new test coverage.
 
 ### Verification
 
 - `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/four-state-consensus.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/four-state-consensus.mlir`
+- `./build/bin/circt-opt --convert-moore-to-core test/Conversion/MooreToCore/array-locator-llvm-call.mlir | ./build/bin/FileCheck test/Conversion/MooreToCore/array-locator-llvm-call.mlir`
+- `./build/bin/circt-verilog test/Tools/circt-sim/process-randstate.sv --ir-hw -o /tmp/process-randstate.mlir && ./build/bin/circt-sim /tmp/process-randstate.mlir --max-time=1000000000 | ./build/bin/FileCheck test/Tools/circt-sim/process-randstate.sv`
+- `./build/bin/circt-verilog test/Tools/circt-sim/mailbox-peek.sv --ir-hw -o /tmp/mailbox-peek.mlir && ./build/bin/circt-sim /tmp/mailbox-peek.mlir --max-time=1000000000 | ./build/bin/FileCheck test/Tools/circt-sim/mailbox-peek.sv`
 - `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir` (**NEQ**)
 
 ### Notes
 
 - Counterexample (packed value+unknown): `op_i=4'h4`, `data_i=16'h6D10`, outputs `c1=16'h035C` (LUT), `c2=16'h00FF` (canright).
+- AVIP sim artifacts generated before Iteration 331 lack `process::self()` calls; recompile AVIP MLIR to avoid "run_test() invoked from a non process context".
 
 ## Iteration 332 - February 3, 2026
 

@@ -6,19 +6,20 @@
 
 // CHECK-LABEL: func.func @bmc_delay_buffer_edge_both() -> i1
 // CHECK: scf.for
+// Loop is called first
+// CHECK:   func.call @bmc_loop
+// Edge detection: posedge OR negedge (before circuit call)
+// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
+// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
+// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
 // Circuit returns outputs + delay buffer + !smt.bool for the property
 // CHECK:   func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
-// CHECK:   func.call @bmc_loop
-// Edge detection: posedge OR negedge
-// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
-// CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
-// CHECK:   smt.or {{%.+}}, {{%.+}}
 // Delay buffer update conditioned on edge
+// CHECK:   smt.or {{%.+}}, {{%.+}}
 // CHECK:   smt.ite {{%.+}}, {{%.+}}, {{%.+}} : !smt.bv<1>
 func.func @bmc_delay_buffer_edge_both() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {

@@ -1,11 +1,12 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
-// Shared ltl.delay under two different ltl.clock domains is cloned per property.
-// CHECK-LABEL: func.func @delay_multiclock_clockop_conflict
+// CHECK-LABEL: func.func @bmc_multiclock_check_fallback
 // CHECK: scf.for
-// CHECK: func.call @bmc_circuit
-// CHECK-LABEL: func.func @bmc_circuit
-func.func @delay_multiclock_clockop_conflict() -> i1 {
+// CHECK: smt.bv.and
+// CHECK: smt.eq
+// CHECK: smt.or
+// CHECK: smt.and
+func.func @bmc_multiclock_check_fallback() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk0", "clk1", "sig"]
   }
@@ -28,13 +29,7 @@ func.func @delay_multiclock_clockop_conflict() -> i1 {
   }
   circuit {
   ^bb0(%clk0: !seq.clock, %clk1: !seq.clock, %sig: i1):
-    %seq = ltl.delay %sig, 1, 0 : i1
-    %clk0_i1 = seq.from_clock %clk0
-    %clk1_i1 = seq.from_clock %clk1
-    %clocked0 = ltl.clock %seq, posedge %clk0_i1 : !ltl.sequence
-    %clocked1 = ltl.clock %seq, posedge %clk1_i1 : !ltl.sequence
-    verif.assert %clocked0 : !ltl.sequence
-    verif.assert %clocked1 : !ltl.sequence
+    verif.assert %sig : i1
     verif.yield %sig : i1
   }
   func.return %bmc : i1

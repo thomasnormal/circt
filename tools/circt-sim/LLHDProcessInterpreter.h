@@ -37,6 +37,7 @@
 #include <deque>
 #include <map>
 #include <optional>
+#include <random>
 
 // Forward declarations for SCF, Func, and LLVM dialects
 namespace mlir {
@@ -224,6 +225,12 @@ struct ProcessExecutionState {
   /// Flag indicating whether the process has halted.
   bool halted = false;
 
+  /// Flag indicating whether the process was killed via process::kill().
+  bool killed = false;
+
+  /// Per-process random generator for process::srandom/get_randstate.
+  std::mt19937 randomGenerator;
+
   /// Flag indicating whether the process is waiting.
   bool waiting = false;
 
@@ -316,6 +323,15 @@ struct ProcessExecutionState {
   /// The mailbox ID for a pending blocking get operation.
   /// Non-zero when this process is waiting for a mailbox message.
   uint64_t pendingMailboxGetId = 0;
+
+  /// Address to write the result of a pending mailbox peek operation.
+  /// When a blocking mailbox peek is waiting for a message, this stores where
+  /// to write the message value when it becomes available.
+  uint64_t pendingMailboxPeekResultAddr = 0;
+
+  /// The mailbox ID for a pending blocking peek operation.
+  /// Non-zero when this process is waiting to peek a mailbox.
+  uint64_t pendingMailboxPeekId = 0;
 
   /// Parent process ID for shared memory in fork/join.
   /// When a child process is created by sim.fork, parent-scope allocas are
@@ -832,6 +848,18 @@ private:
   /// Set the interpreted value for an SSA value.
   void setValue(ProcessId procId, mlir::Value value, InterpretedValue val);
 
+  /// Resolve a process handle to a process ID.
+  ProcessId resolveProcessHandle(uint64_t handle);
+
+  /// Register a process execution state and its stable handle mapping.
+  void registerProcessState(ProcessId procId, ProcessExecutionState &&state);
+
+  /// Resume any processes awaiting completion of the target process.
+  void notifyProcessAwaiters(ProcessId procId);
+
+  /// Finalize a process (finished or killed) and wake awaiters.
+  void finalizeProcess(ProcessId procId, bool killed);
+
   //===--------------------------------------------------------------------===//
   // Signal Registry Bridge
   //===--------------------------------------------------------------------===//
@@ -942,6 +970,12 @@ private:
   /// `auto &state = processStates[procId]`).  std::map provides stable
   /// references across inserts and erases.
   std::map<ProcessId, ProcessExecutionState> processStates;
+
+  /// Map from process handle values to process IDs.
+  llvm::DenseMap<uint64_t, ProcessId> processHandleToId;
+
+  /// Map from process IDs to lists of awaiters.
+  llvm::DenseMap<ProcessId, llvm::SmallVector<ProcessId, 4>> processAwaiters;
 
   /// Next temporary process ID used for combinational evaluation.
   ProcessId nextTempProcId = 1ull << 60;

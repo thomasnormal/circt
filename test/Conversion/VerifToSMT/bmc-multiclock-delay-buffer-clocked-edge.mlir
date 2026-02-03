@@ -2,6 +2,7 @@
 
 // CHECK-LABEL: func.func @delay_multiclock_clocked_edge
 // CHECK: scf.for
+// CHECK: func.call @bmc_loop
 // CHECK: func.call @bmc_circuit
 // The bmc_circuit function checks delay buffer values and applies clock edge
 // CHECK-LABEL: func.func @bmc_circuit

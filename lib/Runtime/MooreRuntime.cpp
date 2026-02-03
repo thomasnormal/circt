@@ -1769,6 +1769,39 @@ extern "C" void *__moore_process_self(void) {
   return nullptr;
 }
 
+extern "C" void __moore_process_kill(int64_t /*handle*/) {
+  // Stub implementation for process::kill().
+  // In the interpreter, this is handled by LLHDProcessInterpreter.
+}
+
+extern "C" int32_t __moore_process_status(int64_t /*handle*/) {
+  // Stub implementation for process::status().
+  // Return FINISHED (0) by default in compiled simulation.
+  return 0;
+}
+
+extern "C" void __moore_process_await(int64_t /*handle*/) {
+  // Stub implementation for process::await().
+  // In the interpreter, this suspends until process completion.
+}
+
+extern "C" MooreString __moore_process_get_randstate(int64_t /*handle*/) {
+  // Stub implementation for process::get_randstate().
+  // Return empty string in compiled simulation.
+  return MooreString{nullptr, 0};
+}
+
+extern "C" void __moore_process_set_randstate(int64_t /*handle*/,
+                                              MooreString /*state*/) {
+  // Stub implementation for process::set_randstate().
+  // No-op in compiled simulation.
+}
+
+extern "C" void __moore_process_srandom(int64_t /*handle*/, int32_t /*seed*/) {
+  // Stub implementation for process::srandom().
+  // No-op in compiled simulation.
+}
+
 //===----------------------------------------------------------------------===//
 // Mailbox Operations (Stubs)
 //===----------------------------------------------------------------------===//
@@ -1801,10 +1834,23 @@ extern "C" bool __moore_mailbox_tryget(int64_t mbox_id, int64_t *msg_out) {
   return false;
 }
 
+extern "C" bool __moore_mailbox_trypeek(int64_t mbox_id, int64_t *msg_out) {
+  // Stub: Non-blocking peek - returns false (mailbox empty/invalid)
+  (void)mbox_id;
+  (void)msg_out;
+  return false;
+}
+
 extern "C" int64_t __moore_mailbox_num(int64_t mbox_id) {
   // Stub: Returns 0 (empty or invalid mailbox)
   (void)mbox_id;
   return 0;
+}
+
+extern "C" void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out) {
+  // Stub: Blocking peek - no-op in compiled simulation.
+  (void)mbox_id;
+  (void)msg_out;
 }
 
 //===----------------------------------------------------------------------===//

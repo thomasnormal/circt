@@ -29,6 +29,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <sstream>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -460,7 +461,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
 
       state.currentBlock = &processOp.getBody().front();
       state.currentOp = state.currentBlock->begin();
-      processStates[procId] = std::move(state);
+      registerProcessState(procId, std::move(state));
       instanceOpToProcessId[instanceId][processOp.getOperation()] = procId;
 
       LLVM_DEBUG(llvm::dbgs() << "    Registered child process '" << procName
@@ -489,7 +490,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
 
       state.currentBlock = initialOp.getBodyBlock();
       state.currentOp = state.currentBlock->begin();
-      processStates[procId] = std::move(state);
+      registerProcessState(procId, std::move(state));
       instanceOpToProcessId[instanceId][initialOp.getOperation()] = procId;
 
       LLVM_DEBUG(llvm::dbgs() << "    Registered child initial block '" << initName
@@ -1346,7 +1347,7 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   // Store the state
   state.currentBlock = &processOp.getBody().front();
   state.currentOp = state.currentBlock->begin();
-  processStates[procId] = std::move(state);
+  registerProcessState(procId, std::move(state));
   opToProcessId[processOp.getOperation()] = procId;
 
   LLVM_DEBUG(llvm::dbgs() << "  Registered process '" << name << "' with ID "
@@ -1374,7 +1375,7 @@ ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp)
   // Store the state - initial blocks have a body with a single block
   state.currentBlock = initialOp.getBodyBlock();
   state.currentOp = state.currentBlock->begin();
-  processStates[procId] = std::move(state);
+  registerProcessState(procId, std::move(state));
   opToProcessId[initialOp.getOperation()] = procId;
 
   LLVM_DEBUG(llvm::dbgs() << "  Registered initial block '" << name
@@ -3730,8 +3731,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         LLVM_DEBUG(llvm::dbgs()
                    << "    Function '" << frame.funcOp.getName()
                    << "' failed during resume\n");
-        state.halted = true;
-        scheduler.terminateProcess(procId);
+        finalizeProcess(procId, /*killed=*/false);
         return;
       }
 
@@ -3794,8 +3794,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     // Periodically check for abort requests (e.g., from timeout watchdog)
     if (stepCount % kAbortCheckInterval == 0 && isAbortRequested()) {
       LLVM_DEBUG(llvm::dbgs() << "  Abort requested, halting process\n");
-      state.halted = true;
-      scheduler.terminateProcess(procId);
+      finalizeProcess(procId, /*killed=*/false);
       if (abortCallback)
         abortCallback();
       break;
@@ -3840,8 +3839,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         llvm::errs() << " (lastOp=" << state.lastOp->getName().getStringRef()
                      << ")";
       llvm::errs() << "\n";
-      state.halted = true;
-      scheduler.terminateProcess(procId);
+      finalizeProcess(procId, /*killed=*/false);
       break;
     }
     if (!executeStep(procId))
@@ -3917,6 +3915,71 @@ void LLHDProcessInterpreter::resumeProcess(ProcessId procId) {
   // Clear waiting state and schedule for execution
   it->second.waiting = false;
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+}
+
+ProcessId LLHDProcessInterpreter::resolveProcessHandle(uint64_t handle) {
+  if (handle == 0)
+    return InvalidProcessId;
+
+  auto it = processHandleToId.find(handle);
+  if (it != processHandleToId.end())
+    return it->second;
+
+  for (auto &entry : processStates) {
+    if (reinterpret_cast<uint64_t>(&entry.second) == handle) {
+      processHandleToId[handle] = entry.first;
+      return entry.first;
+    }
+  }
+
+  return InvalidProcessId;
+}
+
+void LLHDProcessInterpreter::registerProcessState(ProcessId procId,
+                                                  ProcessExecutionState &&state) {
+  auto insertResult = processStates.try_emplace(procId, std::move(state));
+  if (!insertResult.second)
+    insertResult.first->second = std::move(state);
+
+  insertResult.first->second.randomGenerator.seed(
+      static_cast<uint32_t>(procId) ^ 0xC0FFEEu);
+
+  uint64_t handle =
+      reinterpret_cast<uint64_t>(&insertResult.first->second);
+  processHandleToId[handle] = procId;
+}
+
+void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
+  auto it = processAwaiters.find(procId);
+  if (it == processAwaiters.end())
+    return;
+
+  for (ProcessId waiterId : it->second)
+    resumeProcess(waiterId);
+
+  processAwaiters.erase(it);
+}
+
+void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
+  if (auto *proc = scheduler.getProcess(procId)) {
+    if (proc->getState() == ProcessState::Terminated) {
+      notifyProcessAwaiters(procId);
+      return;
+    }
+  }
+
+  auto it = processStates.find(procId);
+  if (it != processStates.end()) {
+    it->second.halted = true;
+    if (killed)
+      it->second.killed = true;
+  }
+
+  if (forkJoinManager.getForkGroupForChild(procId))
+    forkJoinManager.markChildComplete(procId);
+
+  scheduler.terminateProcess(procId);
+  notifyProcessAwaiters(procId);
 }
 
 //===----------------------------------------------------------------------===//
@@ -5670,9 +5733,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   // Halt the process when this is reached
   if (isa<LLVM::UnreachableOp>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.unreachable reached - halting process\n");
-    auto &state = processStates[procId];
-    state.halted = true;
-    scheduler.terminateProcess(procId);
+    finalizeProcess(procId, /*killed=*/false);
     return success();
   }
 
@@ -8187,12 +8248,9 @@ LogicalResult LLHDProcessInterpreter::interpretHalt(ProcessId procId,
     executeInstanceOutputUpdates(procId);
   }
 
-  state.halted = true;
-
   LLVM_DEBUG(llvm::dbgs() << "  Process halted\n");
 
-  // Terminate the process in the scheduler
-  scheduler.terminateProcess(procId);
+  finalizeProcess(procId, /*killed=*/false);
 
   return success();
 }
@@ -9571,11 +9629,7 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     return mlir::success();
   }
 
-  // Mark the process as halted
-  state.halted = true;
-
-  // Terminate the process in the scheduler
-  scheduler.terminateProcess(procId);
+  finalizeProcess(procId, /*killed=*/false);
 
   return mlir::success();
 }
@@ -9651,7 +9705,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     childState.processOrInitialOp = parentState.processOrInitialOp;
 
     // Store the child state
-    processStates[childId] = std::move(childState);
+    registerProcessState(childId, std::move(childState));
 
     // Set up the callback to execute the child process
     if (auto *proc = scheduler.getProcess(childId))
@@ -9703,15 +9757,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimForkTerminator(
     ProcessId procId, sim::SimForkTerminatorOp termOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork.terminator\n");
 
-  // Mark this forked child process as complete
-  forkJoinManager.markChildComplete(procId);
-
-  // Mark the process as halted
-  auto &state = processStates[procId];
-  state.halted = true;
-
-  // Terminate the process in the scheduler
-  scheduler.terminateProcess(procId);
+  finalizeProcess(procId, /*killed=*/false);
 
   LLVM_DEBUG(llvm::dbgs() << "    Fork branch " << procId << " completed\n");
 
@@ -9797,7 +9843,12 @@ LogicalResult LLHDProcessInterpreter::interpretSimDisableFork(
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.disable_fork\n");
 
   // Disable all fork groups created by this process
-  forkJoinManager.disableAllForks(procId);
+  for (ForkId forkId : forkJoinManager.getForksForParent(procId)) {
+    if (auto *group = forkJoinManager.getForkGroup(forkId)) {
+      for (ProcessId childId : group->childProcesses)
+        finalizeProcess(childId, /*killed=*/true);
+    }
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "    All child processes disabled\n");
   return success();
@@ -9811,13 +9862,8 @@ LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
                                                          seq::YieldOp yieldOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting seq.yield - terminating initial block\n");
 
-  auto &state = processStates[procId];
-
-  // seq.yield terminates the initial block - mark it as halted
-  state.halted = true;
-
-  // Terminate the process in the scheduler
-  scheduler.terminateProcess(procId);
+  // seq.yield terminates the initial block
+  finalizeProcess(procId, /*killed=*/false);
 
   return success();
 }
@@ -9848,8 +9894,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
   // Check if the body is empty - if so, just halt (infinite wait)
   if (waitEventOp.getBody().front().empty()) {
     LLVM_DEBUG(llvm::dbgs() << "    Empty wait_event body - halting process\n");
-    state.halted = true;
-    scheduler.terminateProcess(procId);
+    finalizeProcess(procId, /*killed=*/false);
     return success();
   }
 
@@ -11530,6 +11575,199 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_process_status - query process state.
+    // Implements SystemVerilog process::status().
+    if (calleeName == "__moore_process_status") {
+      uint32_t status = 0; // FINISHED
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            bool killed = false;
+            auto stateIt = processStates.find(targetId);
+            if (stateIt != processStates.end())
+              killed = stateIt->second.killed;
+
+            if (killed) {
+              status = 4; // KILLED
+            } else if (auto *proc = scheduler.getProcess(targetId)) {
+              switch (proc->getState()) {
+              case ProcessState::Waiting:
+                status = 2; // WAITING
+                break;
+              case ProcessState::Suspended:
+                status = 3; // SUSPENDED
+                break;
+              case ProcessState::Terminated:
+                status = 0; // FINISHED
+                break;
+              default:
+                status = 1; // RUNNING (Ready/Running/Uninitialized)
+                break;
+              }
+            } else {
+              status = 0;
+            }
+          }
+        }
+      }
+
+      if (callOp.getNumResults() >= 1) {
+        Value result = callOp.getResult();
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(APInt(width, status)));
+      }
+      return success();
+    }
+
+    // Handle __moore_process_get_randstate - serialize process RNG state.
+    // Implements SystemVerilog process::get_randstate().
+    if (calleeName == "__moore_process_get_randstate") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        std::string stateStr;
+
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            auto it = processStates.find(targetId);
+            if (it != processStates.end()) {
+              std::ostringstream oss;
+              oss << it->second.randomGenerator;
+              stateStr = oss.str();
+            }
+          }
+        }
+
+        int64_t ptrVal = 0;
+        int64_t lenVal = 0;
+        if (!stateStr.empty()) {
+          interpreterStrings.push_back(std::move(stateStr));
+          const std::string &stored = interpreterStrings.back();
+          ptrVal = reinterpret_cast<int64_t>(stored.data());
+          lenVal = static_cast<int64_t>(stored.size());
+          dynamicStrings[ptrVal] = {stored.data(), lenVal};
+        }
+
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
+
+        LLVM_DEBUG({
+          llvm::dbgs() << "  llvm.call: __moore_process_get_randstate(";
+          if (handleVal.isX())
+            llvm::dbgs() << "X";
+          else
+            llvm::dbgs() << llvm::format_hex(handleVal.getUInt64(), 16);
+          llvm::dbgs() << ") len=" << lenVal << "\n";
+        });
+      }
+      return success();
+    }
+
+    // Handle __moore_process_set_randstate - restore process RNG state.
+    // Implements SystemVerilog process::set_randstate().
+    if (calleeName == "__moore_process_set_randstate") {
+      if (callOp.getNumOperands() >= 2) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
+
+        if (!handleVal.isX() && !stateVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            auto it = processStates.find(targetId);
+            if (it != processStates.end()) {
+              APInt bits = stateVal.getAPInt();
+              uint64_t ptrVal =
+                  bits.extractBits(64, 0).getZExtValue();
+              uint64_t lenVal =
+                  bits.extractBits(64, 64).getZExtValue();
+
+              std::string stateStr =
+                  resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
+
+              if (!stateStr.empty()) {
+                std::istringstream iss(stateStr);
+                iss >> it->second.randomGenerator;
+              }
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_srandom - seed the process RNG.
+    // Implements SystemVerilog process::srandom().
+    if (calleeName == "__moore_process_srandom") {
+      if (callOp.getNumOperands() >= 2) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        InterpretedValue seedVal = getValue(procId, callOp.getOperand(1));
+
+        if (!handleVal.isX() && !seedVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            auto it = processStates.find(targetId);
+            if (it != processStates.end()) {
+              it->second.randomGenerator.seed(
+                  static_cast<uint32_t>(seedVal.getUInt64()));
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_kill - terminate a process.
+    // Implements SystemVerilog process::kill().
+    if (calleeName == "__moore_process_kill") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId)
+            finalizeProcess(targetId, /*killed=*/true);
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_await - wait for a process to finish or be killed.
+    // Implements SystemVerilog process::await().
+    if (calleeName == "__moore_process_await") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            bool targetKilled = false;
+            auto targetStateIt = processStates.find(targetId);
+            if (targetStateIt != processStates.end())
+              targetKilled = targetStateIt->second.killed;
+
+            bool targetDone = targetKilled;
+            if (!targetDone) {
+              if (auto *proc = scheduler.getProcess(targetId))
+                targetDone = (proc->getState() == ProcessState::Terminated);
+              else
+                targetDone = true;
+            }
+
+            if (!targetDone) {
+              processAwaiters[targetId].push_back(procId);
+              auto &state = processStates[procId];
+              state.waiting = true;
+              if (auto *proc = scheduler.getProcess(procId))
+                proc->setState(ProcessState::Waiting);
+            }
+          }
+        }
+      }
+      return success();
+    }
+
     // Handle __moore_wait_condition - wait until condition becomes true.
     // Implements the SystemVerilog `wait(condition)` statement.
     // Signature: __moore_wait_condition(i32 condition)
@@ -12526,6 +12764,43 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    auto wakePeekWaiters = [&](Mailbox *mbox, MailboxId mboxId) {
+      if (!mbox || mbox->isEmpty())
+        return;
+      llvm::SmallVector<ProcessId, 4> peekWaiters;
+      mbox->takePeekWaiters(peekWaiters);
+      if (peekWaiters.empty())
+        return;
+
+      uint64_t peekMsg = 0;
+      if (!mbox->tryPeek(peekMsg))
+        return;
+
+      for (ProcessId waiterId : peekWaiters) {
+        auto waiterIt = processStates.find(waiterId);
+        if (waiterIt == processStates.end())
+          continue;
+        auto &waiterState = waiterIt->second;
+        if (waiterState.pendingMailboxPeekResultAddr != 0) {
+          uint64_t outOffset = 0;
+          auto *outBlock = findMemoryBlockByAddress(
+              waiterState.pendingMailboxPeekResultAddr, waiterId, &outOffset);
+          if (outBlock) { outBlock->initialized = true;
+            for (int i = 0; i < 8; ++i)
+              outBlock->data[outOffset + i] =
+                  static_cast<uint8_t>((peekMsg >> (i * 8)) & 0xFF);
+          }
+        }
+        waiterState.pendingMailboxPeekResultAddr = 0;
+        waiterState.pendingMailboxPeekId = 0;
+        waiterState.waiting = false;
+        scheduler.scheduleProcess(waiterId, SchedulingRegion::Active);
+        LLVM_DEBUG(llvm::dbgs() << "    Woke peek waiter process "
+                                << waiterId << " on mailbox " << mboxId
+                                << " with message " << peekMsg << "\n");
+      }
+    };
+
     // Handle __moore_mailbox_tryput - non-blocking put
     // Signature: (mbox_id: i64, msg: i64) -> i1
     if (calleeName == "__moore_mailbox_tryput") {
@@ -12573,6 +12848,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                         << waiterMsg << "\n");
               }
             }
+            wakePeekWaiters(mbox, mboxId);
           }
         }
       }
@@ -12627,8 +12903,45 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                         << waiterId << "\n");
               }
             }
+            wakePeekWaiters(mbox, mboxId);
           }
         }
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_trypeek - non-blocking peek (no removal)
+    // Signature: (mbox_id: i64, msg_out: ptr) -> i1
+    if (calleeName == "__moore_mailbox_trypeek") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msgOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        uint64_t msg = 0;
+        bool peekSuccess = syncPrimitivesManager.mailboxPeek(mboxId, msg);
+
+        // Write the message to the output pointer if successful
+        if (peekSuccess && msgOutAddr != 0) {
+          uint64_t outOffset = 0;
+          auto *outBlock = findMemoryBlockByAddress(msgOutAddr, procId, &outOffset);
+          if (outBlock) { outBlock->initialized = true;
+            // Write 64-bit message value
+            for (int i = 0; i < 8; ++i)
+              outBlock->data[outOffset + i] =
+                  static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(peekSuccess ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_trypeek("
+                                << mboxId << ", 0x"
+                                << llvm::format_hex(msgOutAddr, 16) << ") = "
+                                << (peekSuccess ? "true" : "false");
+                   if (peekSuccess) llvm::dbgs() << ", msg=" << msg;
+                   llvm::dbgs() << "\n");
       }
       return success();
     }
@@ -12695,6 +13008,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                         << waiterMsg << "\n");
               }
             }
+            wakePeekWaiters(mbox, mboxId);
           }
         } else {
           // Mailbox is full - block until space is available
@@ -12765,6 +13079,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                         << waiterId << "\n");
               }
             }
+            wakePeekWaiters(mbox, mboxId);
           }
         } else {
           // Mailbox is empty - block until a message is available
@@ -12780,6 +13095,64 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto &state = processStates[procId];
           state.pendingMailboxGetResultAddr = msgOutAddr;
           state.pendingMailboxGetId = mboxId;
+          state.waiting = true;
+
+          // Set up to resume at the next operation after the call
+          state.destBlock = callOp->getBlock();
+          state.currentOp = std::next(Block::iterator(callOp));
+          state.resumeAtCurrentOp = true;
+
+          Process *proc = scheduler.getProcess(procId);
+          if (proc)
+            proc->setState(ProcessState::Waiting);
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_mailbox_peek - blocking peek (no removal)
+    // Signature: (mbox_id: i64, msg_out: ptr) -> void
+    // Blocks if the mailbox is empty
+    if (calleeName == "__moore_mailbox_peek") {
+      if (callOp.getNumOperands() >= 2) {
+        MailboxId mboxId = static_cast<MailboxId>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t msgOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        // Try non-blocking peek first
+        uint64_t msg = 0;
+        if (syncPrimitivesManager.mailboxPeek(mboxId, msg)) {
+          // Got a message - write it to the output pointer
+          if (msgOutAddr != 0) {
+            uint64_t outOffset = 0;
+            auto *outBlock = findMemoryBlockByAddress(msgOutAddr, procId, &outOffset);
+            if (outBlock) { outBlock->initialized = true;
+              // Write 64-bit message value
+              for (int i = 0; i < 8; ++i)
+                outBlock->data[outOffset + i] =
+                    static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
+            }
+          }
+
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_peek("
+                                  << mboxId << ", 0x"
+                                  << llvm::format_hex(msgOutAddr, 16)
+                                  << ") - got message " << msg << "\n");
+        } else {
+          // Mailbox is empty - block until a message is available
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_mailbox_peek("
+                                  << mboxId << ", 0x"
+                                  << llvm::format_hex(msgOutAddr, 16)
+                                  << ") - blocking (mailbox empty)\n");
+
+          Mailbox *mbox = syncPrimitivesManager.getOrCreateMailbox(mboxId);
+          if (mbox)
+            mbox->addPeekWaiter(procId);
+
+          // Save the output address so we can write the result when resumed
+          auto &state = processStates[procId];
+          state.pendingMailboxPeekResultAddr = msgOutAddr;
+          state.pendingMailboxPeekId = mboxId;
           state.waiting = true;
 
           // Set up to resume at the next operation after the call

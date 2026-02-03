@@ -89,15 +89,15 @@ func.func @test_assert_with_label(%cond: i1) {
 // CHECK:         smt.solver
 // CHECK:         func.call @bmc_init
 // CHECK:         scf.for
-// Circuit returns outputs + property (!smt.bv<1>)
-// CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        -> (!smt.bv<8>, !smt.bv<1>)
-// Loop is called after circuit
+// Loop is called first
 // CHECK:           func.call @bmc_loop
 // Edge detection for register updates
 // CHECK:           smt.bv.not
 // CHECK:           smt.bv.and
 // CHECK:           smt.eq
+// Circuit returns outputs + property (!smt.bv<1>)
+// CHECK:           func.call @bmc_circuit
+// CHECK-SAME:        -> (!smt.bv<8>, !smt.bv<1>)
 // Property check
 // CHECK:           smt.not
 // CHECK:           smt.and

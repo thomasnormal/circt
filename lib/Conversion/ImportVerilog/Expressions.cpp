@@ -3473,33 +3473,174 @@ struct RvalueExprVisitor : public ExprVisitor {
                                 "regular function call";
     }
 
-    // Handle process::self() built-in static method.
+    // Handle process built-in methods.
     // IEEE 1800-2017 Section 9.7 "Process control"
-    // The process class is a built-in class with a static self() method that
-    // returns a handle to the currently executing process, or null if called
-    // from outside a process context (e.g., from a module's initial context).
-    if ((subroutine->flags & slang::ast::MethodFlags::BuiltIn) &&
-        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+    if (parentSym.kind == slang::ast::SymbolKind::ClassType) {
       const auto *classType = parentSym.as_if<slang::ast::ClassType>();
-      if (classType && classType->name == "process" && subroutine->name == "self") {
+      if (classType && classType->name == "process") {
         // process::self() is a static method - no 'this' object needed.
-        // Generate a call to __moore_process_self() runtime function which
-        // returns a non-null handle when called from inside a process context
-        // (llhd.process or sim.fork child), or null otherwise.
-        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
-        auto selfFuncTy = mlir::LLVM::LLVMFunctionType::get(ptrTy, {});
-        auto selfFunc = getOrCreateRuntimeFunc(context, "__moore_process_self",
-                                               selfFuncTy);
-        auto callOp = mlir::LLVM::CallOp::create(builder, loc, selfFunc,
-                                                 ValueRange{});
-        // Convert the result to the expected class handle type
-        auto resultType = context.convertType(*expr.type);
-        if (!resultType)
+        if (subroutine->name == "self") {
+          // Generate a call to __moore_process_self() runtime function which
+          // returns a non-null handle when called from inside a process context
+          // (llhd.process or sim.fork child), or null otherwise.
+          auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+          auto selfFuncTy = mlir::LLVM::LLVMFunctionType::get(ptrTy, {});
+          auto selfFunc = getOrCreateRuntimeFunc(context, "__moore_process_self",
+                                                 selfFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, selfFunc,
+                                                   ValueRange{});
+          // Convert the result to the expected class handle type
+          auto resultType = context.convertType(*expr.type);
+          if (!resultType)
+            return {};
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        // Instance methods: require a process handle ('this')
+        Value procInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          procInstance = context.convertRvalueExpression(*recvExpr);
+          if (!procInstance)
+            return {};
+        }
+
+        if (!procInstance) {
+          mlir::emitError(loc)
+              << "process method call requires process handle";
           return {};
-        return mlir::UnrealizedConversionCastOp::create(builder, loc,
-                                                        resultType,
-                                                        callOp.getResult())
-            .getResult(0);
+        }
+
+        auto i64Ty = builder.getIntegerType(64);
+        auto i32Ty = builder.getIntegerType(32);
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+        auto stringStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+            context.getContext(), {ptrTy, i64Ty});
+
+        // Convert the process handle to an i64
+        Value handle = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, i64Ty, procInstance)
+                           .getResult(0);
+
+        if (subroutine->name == "kill") {
+          auto killFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()), {i64Ty});
+          auto killFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_kill", killFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, killFunc,
+                                     ValueRange{handle});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        if (subroutine->name == "await") {
+          auto awaitFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()), {i64Ty});
+          auto awaitFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_await", awaitFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, awaitFunc,
+                                     ValueRange{handle});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        if (subroutine->name == "status") {
+          auto statusFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(i32Ty, {i64Ty});
+          auto statusFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_status", statusFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(
+              builder, loc, statusFunc, ValueRange{handle});
+          auto resultType = context.convertType(*expr.type);
+          if (!resultType)
+            return {};
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        if (subroutine->name == "get_randstate") {
+          auto getFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
+          auto getFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_get_randstate", getFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, getFunc,
+                                                   ValueRange{handle});
+          auto resultType = context.convertType(*expr.type);
+          if (!resultType)
+            return {};
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        if (subroutine->name == "set_randstate") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc)
+                << "process::set_randstate() requires a string argument";
+            return {};
+          }
+          Value stateArg =
+              context.convertRvalueExpression(*expr.arguments()[0]);
+          if (!stateArg)
+            return {};
+          Value stateStruct =
+              mlir::UnrealizedConversionCastOp::create(
+                  builder, loc, stringStructTy, stateArg)
+                  .getResult(0);
+          auto setFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()),
+              {i64Ty, stringStructTy});
+          auto setFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_set_randstate", setFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, setFunc,
+                                     ValueRange{handle, stateStruct});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        if (subroutine->name == "srandom") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc)
+                << "process::srandom() requires a seed argument";
+            return {};
+          }
+          Value seedArg =
+              context.convertRvalueExpression(*expr.arguments()[0]);
+          if (!seedArg)
+            return {};
+          auto intTy = moore::IntType::getInt(context.getContext(), 32);
+          seedArg = context.materializeConversion(
+              intTy, seedArg, expr.arguments()[0]->type->isSigned(), loc);
+          if (!seedArg)
+            return {};
+          Value seedVal = mlir::UnrealizedConversionCastOp::create(
+                              builder, loc, i32Ty, seedArg)
+                              .getResult(0);
+          auto seedFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()),
+              {i64Ty, i32Ty});
+          auto seedFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_srandom", seedFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, seedFunc,
+                                     ValueRange{handle, seedVal});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Fall through for unhandled process methods.
+        mlir::emitWarning(loc)
+            << "process method '" << subroutine->name
+            << "' is not yet implemented; lowering as regular function call";
       }
     }
 
@@ -3654,6 +3795,83 @@ struct RvalueExprVisitor : public ExprVisitor {
           auto trygetFunc = getOrCreateRuntimeFunc(
               context, "__moore_mailbox_tryget", trygetFuncTy);
           auto callOp = mlir::LLVM::CallOp::create(builder, loc, trygetFunc,
+                                                   ValueRange{mboxId, msgOut});
+
+          // Load the result and store it to the output argument
+          Value msgResult = mlir::LLVM::LoadOp::create(builder, loc, i64Ty, msgOut);
+          auto outType = cast<moore::RefType>(msgOutLvalue.getType()).getNestedType();
+          Value convertedMsg = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, outType, msgResult)
+                                   .getResult(0);
+          moore::BlockingAssignOp::create(builder, loc, msgOutLvalue, convertedMsg);
+
+          // Convert result to moore int type
+          auto resultType = context.convertType(*expr.type);
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callOp.getResult())
+              .getResult(0);
+        }
+
+        // Handle blocking peek: mbox.peek(msg)
+        if (subroutine->name == "peek") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.peek() requires an output argument";
+            return {};
+          }
+          // Get the lvalue for the output argument
+          Value msgOutLvalue = context.convertLvalueExpression(*expr.arguments()[0]);
+          if (!msgOutLvalue)
+            return {};
+
+          // Allocate temporary storage for the message
+          auto c1 = builder.create<mlir::LLVM::ConstantOp>(
+              loc, i64Ty, builder.getI64IntegerAttr(1));
+          Value msgOut = mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, i64Ty, c1, 0);
+
+          // Declare and call __moore_mailbox_peek
+          auto peekFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(mlir::LLVM::LLVMVoidType::get(context.getContext()),
+                                                {i64Ty, ptrTy});
+          auto peekFunc =
+              getOrCreateRuntimeFunc(context, "__moore_mailbox_peek", peekFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, peekFunc, ValueRange{mboxId, msgOut});
+
+          // Load the result and store it to the output argument
+          Value msgResult = mlir::LLVM::LoadOp::create(builder, loc, i64Ty, msgOut);
+          auto outType = cast<moore::RefType>(msgOutLvalue.getType()).getNestedType();
+          Value convertedMsg = mlir::UnrealizedConversionCastOp::create(
+                                   builder, loc, outType, msgResult)
+                                   .getResult(0);
+          moore::BlockingAssignOp::create(builder, loc, msgOutLvalue, convertedMsg);
+
+          // peek() returns void - return a dummy value
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Handle non-blocking try_peek: mbox.try_peek(msg)
+        if (subroutine->name == "try_peek") {
+          if (expr.arguments().size() < 1) {
+            mlir::emitError(loc) << "mailbox.try_peek() requires an output argument";
+            return {};
+          }
+          // Get the lvalue for the output argument
+          Value msgOutLvalue = context.convertLvalueExpression(*expr.arguments()[0]);
+          if (!msgOutLvalue)
+            return {};
+
+          // Allocate temporary storage for the message
+          auto c1 = builder.create<mlir::LLVM::ConstantOp>(
+              loc, i64Ty, builder.getI64IntegerAttr(1));
+          Value msgOut = mlir::LLVM::AllocaOp::create(builder, loc, ptrTy, i64Ty, c1, 0);
+
+          // Declare and call __moore_mailbox_trypeek
+          auto trypeekFuncTy = mlir::LLVM::LLVMFunctionType::get(i1Ty, {i64Ty, ptrTy});
+          auto trypeekFunc = getOrCreateRuntimeFunc(
+              context, "__moore_mailbox_trypeek", trypeekFuncTy);
+          auto callOp = mlir::LLVM::CallOp::create(builder, loc, trypeekFunc,
                                                    ValueRange{mboxId, msgOut});
 
           // Load the result and store it to the output argument

@@ -4,14 +4,15 @@
 
 // CHECK-LABEL: func.func @past_multiclock_clocked
 // CHECK: scf.for
-// Circuit returns outputs + past buffer + !smt.bool property
-// CHECK: func.call @bmc_circuit
-// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
+// Loop is called first
 // CHECK: func.call @bmc_loop
 // Clock edge detection
 // CHECK: smt.bv.not
 // CHECK: smt.bv.and
 // CHECK: smt.eq
+// Circuit returns outputs + past buffer + !smt.bool property
+// CHECK: func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // Property checking
 // CHECK: smt.not
 // CHECK: smt.and

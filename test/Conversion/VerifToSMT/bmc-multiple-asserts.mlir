@@ -6,16 +6,16 @@
 
 // CHECK-LABEL: func.func @test_multi_asserts
 // CHECK:         scf.for
+// Loop is called first
+// CHECK:           func.call @bmc_loop
 // Circuit returns original outputs + one !smt.bv<1> per assert
 // CHECK:           func.call @bmc_circuit
 // CHECK-SAME:        -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>)
-// Properties are checked separately and combined with smt.and/smt.or
+// Properties are checked separately and combined with smt.or
 // CHECK:           smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:           smt.not
-// CHECK:           smt.and
 // CHECK:           smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:           smt.not
-// CHECK:           smt.and
 // CHECK:           smt.or
 // CHECK:           smt.push 1
 // CHECK:           smt.assert

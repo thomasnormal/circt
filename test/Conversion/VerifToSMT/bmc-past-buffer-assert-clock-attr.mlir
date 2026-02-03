@@ -4,14 +4,15 @@
 
 // CHECK-LABEL: func.func @bmc_past_buffer_assert_clock_attr() -> i1
 // CHECK: scf.for
-// Circuit returns outputs + past buffer + !smt.bool for the property
-// CHECK:   func.call @bmc_circuit
-// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
+// Loop is called first
 // CHECK:   func.call @bmc_loop
 // Negedge detection: old_clock AND NOT new_clock
 // CHECK:   smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK:   smt.bv.and {{%.+}}, {{%.+}} : !smt.bv<1>
 // CHECK:   smt.eq {{%.+}}, {{%.+}} : !smt.bv<1>
+// Circuit returns outputs + past buffer + !smt.bool for the property
+// CHECK:   func.call @bmc_circuit
+// CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // Past buffer update conditioned on negedge
 // CHECK:   smt.ite {{%.+}}, {{%.+}}, {{%.+}} : !smt.bv<1>
 func.func @bmc_past_buffer_assert_clock_attr() -> i1 {
