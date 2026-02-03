@@ -203,6 +203,12 @@ struct Context {
   void setInlineConstraintThisRef(Value value) {
     inlineConstraintThisRef = value;
   }
+  const slang::ast::Symbol *getInlineConstraintThisSymbol() const {
+    return inlineConstraintThisSymbol;
+  }
+  void setInlineConstraintThisSymbol(const slang::ast::Symbol *symbol) {
+    inlineConstraintThisSymbol = symbol;
+  }
   // Convert a statement AST node to MLIR ops.
   LogicalResult convertStatement(const slang::ast::Statement &stmt);
 
@@ -582,6 +588,7 @@ struct Context {
   /// Temporary override for inline randomize constraints so unqualified
   /// properties resolve against the randomized object.
   Value inlineConstraintThisRef = {};
+  const slang::ast::Symbol *inlineConstraintThisSymbol = nullptr;
 
   /// True while converting an assertion expression.
   bool inAssertionExpr = false;

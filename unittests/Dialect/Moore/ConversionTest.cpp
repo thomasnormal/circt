@@ -204,6 +204,108 @@ TEST(MooreToCoreConversionTest, FourStateAddMasksUnknownValue) {
   EXPECT_TRUE(hasMaskedUnknownStructCreate(*module));
 }
 
+TEST(MooreToCoreConversionTest, FourStateConsensusSimplifiesToInput) {
+  MLIRContext context;
+  context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,
+                      seq::SeqDialect, llhd::LLHDDialect, ltl::LTLDialect,
+                      verif::VerifDialect, LLVM::LLVMDialect,
+                      arith::ArithDialect>();
+
+  const char *ir = R"mlir(
+    moore.module @consensus(in %a : !moore.l4, in %b : !moore.l4, out out : !moore.l4) {
+      %nb = moore.not %b : l4
+      %and0 = moore.and %a, %b : l4
+      %and1 = moore.and %a, %nb : l4
+      %x = moore.xor %and0, %and1 : l4
+      moore.output %x : !moore.l4
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createConvertMooreToCorePass());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  auto hwModule = module->lookupSymbol<hw::HWModuleOp>("consensus");
+  ASSERT_TRUE(hwModule);
+
+  auto outputOp = *hwModule.getBodyBlock()->getOps<hw::OutputOp>().begin();
+  ASSERT_EQ(outputOp.getNumOperands(), 1u);
+
+  Value outVal = outputOp.getOperand(0);
+  Value arg0 = hwModule.getBodyBlock()->getArgument(0);
+  bool passThrough = outVal == arg0;
+  if (!passThrough) {
+    if (auto create = outVal.getDefiningOp<hw::StructCreateOp>()) {
+      if (create.getInput().size() == 2) {
+        auto valExtract = create.getInput()[0].getDefiningOp<hw::StructExtractOp>();
+        auto unkExtract = create.getInput()[1].getDefiningOp<hw::StructExtractOp>();
+        if (valExtract && unkExtract && valExtract.getInput() == arg0 &&
+            unkExtract.getInput() == arg0)
+          passThrough = true;
+      }
+    }
+  }
+  EXPECT_TRUE(passThrough);
+}
+
+TEST(MooreToCoreConversionTest, FourStateAbsorptionSimplifiesToInput) {
+  MLIRContext context;
+  context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,
+                      seq::SeqDialect, llhd::LLHDDialect, ltl::LTLDialect,
+                      verif::VerifDialect, LLVM::LLVMDialect,
+                      arith::ArithDialect>();
+
+  const char *ir = R"mlir(
+    moore.module @absorb(in %a : !moore.l4, in %b : !moore.l4, out out : !moore.l4) {
+      %and0 = moore.and %a, %b : l4
+      %or0 = moore.or %a, %b : l4
+      %x0 = moore.or %a, %and0 : l4
+      %x1 = moore.and %a, %or0 : l4
+      %x2 = moore.xor %x0, %x1 : l4
+      moore.output %x2 : !moore.l4
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createConvertMooreToCorePass());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  auto hwModule = module->lookupSymbol<hw::HWModuleOp>("absorb");
+  ASSERT_TRUE(hwModule);
+
+  auto outputOp = *hwModule.getBodyBlock()->getOps<hw::OutputOp>().begin();
+  ASSERT_EQ(outputOp.getNumOperands(), 1u);
+
+  Value outVal = outputOp.getOperand(0);
+  bool zeroConst = false;
+  if (auto agg = outVal.getDefiningOp<hw::AggregateConstantOp>()) {
+    if (isFourStateStructType(agg.getType())) {
+      auto fields = agg.getFieldsAttr();
+      auto valueAttr = dyn_cast<IntegerAttr>(fields[0]);
+      auto unknownAttr = dyn_cast<IntegerAttr>(fields[1]);
+      if (valueAttr && unknownAttr && valueAttr.getValue().isZero() &&
+          unknownAttr.getValue().isZero())
+        zeroConst = true;
+    }
+  } else if (auto create = outVal.getDefiningOp<hw::StructCreateOp>()) {
+    if (create.getInput().size() == 2) {
+      auto valueCst = create.getInput()[0].getDefiningOp<hw::ConstantOp>();
+      auto unknownCst = create.getInput()[1].getDefiningOp<hw::ConstantOp>();
+      if (valueCst && unknownCst && valueCst.getValue().isZero() &&
+          unknownCst.getValue().isZero())
+        zeroConst = true;
+    }
+  }
+
+  EXPECT_TRUE(zeroConst);
+}
+
 TEST(MooreToCoreConversionTest, FourStateGlobalVariableUsesLLVMType) {
   MLIRContext context;
   context.loadDialect<moore::MooreDialect, hw::HWDialect, comb::CombDialect,

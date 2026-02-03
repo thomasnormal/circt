@@ -13,6 +13,8 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -968,6 +970,7 @@ LogicalResult AndOp::canonicalize(AndOp op, PatternRewriter &rewriter) {
 
   auto inputs = op.getInputs();
   auto size = inputs.size();
+  unsigned width = cast<IntegerType>(op.getType()).getWidth();
 
   // and(x, and(...)) -> and(x, ...) -- flatten
   if (tryFlatteningOperands(op, rewriter))
@@ -980,6 +983,79 @@ LogicalResult AndOp::canonicalize(AndOp op, PatternRewriter &rewriter) {
     return success();
 
   assert(size > 1 && "expected 2 or more operands, `fold` should handle this");
+
+  // and(..., x, ..., ~x, ...) -> 0
+  {
+    llvm::DenseSet<Value> inputSet(inputs.begin(), inputs.end());
+    for (Value arg : inputs) {
+      Value subExpr;
+      if (matchPattern(arg, m_Complement(m_Any(&subExpr)))) {
+        if (inputSet.contains(subExpr)) {
+          auto zero = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                             APInt::getZero(width));
+          rewriter.replaceOp(op, zero);
+          return success();
+        }
+      }
+    }
+  }
+
+  // and(x, or(x, y), ...) -> and(x, ...)
+  {
+    llvm::DenseSet<Value> inputSet(inputs.begin(), inputs.end());
+    for (size_t i = 0; i < size; ++i) {
+      auto orOp = inputs[i].getDefiningOp<OrOp>();
+      if (!orOp || orOp.getTwoState() != op.getTwoState())
+        continue;
+      for (Value orTerm : orOp.getInputs()) {
+        if (inputSet.contains(orTerm)) {
+          SmallVector<Value, 4> newOperands(inputs);
+          newOperands.erase(newOperands.begin() + i);
+          replaceOpWithNewOpAndCopyNamehint<AndOp>(rewriter, op, op.getType(),
+                                                   newOperands,
+                                                   op.getTwoState());
+          return success();
+        }
+      }
+    }
+  }
+
+  // Combine constants regardless of their position.
+  {
+    APInt constAccum = APInt::getAllOnes(width);
+    SmallVector<Value, 4> newOperands;
+    bool sawConst = false;
+    for (Value operand : inputs) {
+      APInt value;
+      if (matchPattern(operand, m_ConstantInt(&value))) {
+        constAccum &= value;
+        sawConst = true;
+        continue;
+      }
+      newOperands.push_back(operand);
+    }
+    if (sawConst) {
+      if (constAccum.isZero()) {
+        auto zero = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                           APInt::getZero(width));
+        rewriter.replaceOp(op, zero);
+        return success();
+      }
+      if (!constAccum.isAllOnes())
+        newOperands.push_back(
+            hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      if (newOperands.size() == 1) {
+        rewriter.replaceOp(op, newOperands.front());
+        return success();
+      }
+      if (newOperands.size() != inputs.size() ||
+          !llvm::equal(newOperands, inputs)) {
+        replaceOpWithNewOpAndCopyNamehint<AndOp>(rewriter, op, op.getType(),
+                                                 newOperands, op.getTwoState());
+        return success();
+      }
+    }
+  }
 
   // Patterns for and with a constant on RHS.
   APInt value;
@@ -1166,6 +1242,7 @@ LogicalResult OrOp::canonicalize(OrOp op, PatternRewriter &rewriter) {
 
   auto inputs = op.getInputs();
   auto size = inputs.size();
+  unsigned width = cast<IntegerType>(op.getType()).getWidth();
 
   // or(x, or(...)) -> or(x, ...) -- flatten
   if (tryFlatteningOperands(op, rewriter))
@@ -1178,6 +1255,62 @@ LogicalResult OrOp::canonicalize(OrOp op, PatternRewriter &rewriter) {
     return success();
 
   assert(size > 1 && "expected 2 or more operands");
+
+  // or(x, and(x, y), ...) -> or(x, ...)
+  {
+    llvm::DenseSet<Value> inputSet(inputs.begin(), inputs.end());
+    for (size_t i = 0; i < size; ++i) {
+      auto andOp = inputs[i].getDefiningOp<AndOp>();
+      if (!andOp || andOp.getTwoState() != op.getTwoState())
+        continue;
+      for (Value andTerm : andOp.getInputs()) {
+        if (inputSet.contains(andTerm)) {
+          SmallVector<Value, 4> newOperands(inputs);
+          newOperands.erase(newOperands.begin() + i);
+          replaceOpWithNewOpAndCopyNamehint<OrOp>(rewriter, op, op.getType(),
+                                                  newOperands, op.getTwoState());
+          return success();
+        }
+      }
+    }
+  }
+
+  // Combine constants regardless of their position.
+  {
+    APInt constAccum = APInt::getZero(width);
+    SmallVector<Value, 4> newOperands;
+    bool sawConst = false;
+    for (Value operand : inputs) {
+      APInt value;
+      if (matchPattern(operand, m_ConstantInt(&value))) {
+        constAccum |= value;
+        sawConst = true;
+        continue;
+      }
+      newOperands.push_back(operand);
+    }
+    if (sawConst) {
+      if (constAccum.isAllOnes()) {
+        auto allOnes = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                              APInt::getAllOnes(width));
+        rewriter.replaceOp(op, allOnes);
+        return success();
+      }
+      if (!constAccum.isZero())
+        newOperands.push_back(
+            hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      if (newOperands.size() == 1) {
+        rewriter.replaceOp(op, newOperands.front());
+        return success();
+      }
+      if (newOperands.size() != inputs.size() ||
+          !llvm::equal(newOperands, inputs)) {
+        replaceOpWithNewOpAndCopyNamehint<OrOp>(rewriter, op, op.getType(),
+                                                newOperands, op.getTwoState());
+        return success();
+      }
+    }
+  }
 
   // Patterns for and with a constant on RHS.
   APInt value;
@@ -1317,7 +1450,62 @@ LogicalResult XorOp::canonicalize(XorOp op, PatternRewriter &rewriter) {
 
   auto inputs = op.getInputs();
   auto size = inputs.size();
+  unsigned width = cast<IntegerType>(op.getType()).getWidth();
   assert(size > 1 && "expected 2 or more operands");
+
+  // Cancel duplicate terms and combine constants across the whole xor.
+  {
+    APInt constAccum = APInt::getZero(width);
+    bool sawConst = false;
+    llvm::DenseMap<Value, unsigned> parity;
+    for (Value term : inputs) {
+      APInt value;
+      if (matchPattern(term, m_ConstantInt(&value))) {
+        constAccum ^= value;
+        sawConst = true;
+        continue;
+      }
+      parity[term] ^= 1u;
+    }
+
+    SmallVector<Value, 4> remaining;
+    remaining.reserve(parity.size() + (sawConst && !constAccum.isZero()));
+    llvm::DenseSet<Value> seen;
+    bool changed = false;
+    for (Value term : inputs) {
+      APInt value;
+      if (matchPattern(term, m_ConstantInt(&value)))
+        continue;
+      if (parity[term] == 0 || !seen.insert(term).second) {
+        changed = true;
+        continue;
+      }
+      remaining.push_back(term);
+    }
+    if (sawConst) {
+      if (!constAccum.isZero())
+        remaining.push_back(
+            hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      else
+        changed = true;
+    }
+
+    if (changed) {
+      if (remaining.empty()) {
+        auto zero = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                           APInt::getZero(width));
+        rewriter.replaceOp(op, zero);
+        return success();
+      }
+      if (remaining.size() == 1) {
+        rewriter.replaceOp(op, remaining.front());
+        return success();
+      }
+      replaceOpWithNewOpAndCopyNamehint<XorOp>(rewriter, op, op.getType(),
+                                               remaining, op.getTwoState());
+      return success();
+    }
+  }
 
   // xor(..., x, x) -> xor (...) -- idempotent
   if (inputs[size - 1] == inputs[size - 2]) {

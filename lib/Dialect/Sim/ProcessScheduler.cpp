@@ -523,19 +523,26 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
 
 void ProcessScheduler::scheduleProcess(ProcessId id, SchedulingRegion region) {
   Process *proc = getProcess(id);
-  if (!proc)
+  if (!proc) {
+    LLVM_DEBUG(llvm::dbgs() << "scheduleProcess(" << id << "): process not found!\n");
     return;
+  }
 
-  if (proc->getState() == ProcessState::Terminated)
+  if (proc->getState() == ProcessState::Terminated) {
+    LLVM_DEBUG(llvm::dbgs() << "scheduleProcess(" << id << "): process terminated, skipping\n");
     return;
+  }
 
   // Add to ready queue if not already there
   auto &queue = readyQueues[static_cast<size_t>(region)];
   if (std::find(queue.begin(), queue.end(), id) == queue.end()) {
     queue.push_back(id);
     proc->setState(ProcessState::Ready);
-    LLVM_DEBUG(llvm::dbgs() << "Scheduled process " << id << " in region "
-                            << getSchedulingRegionName(region) << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Scheduled process " << id << " ('" << proc->getName()
+                 << "') in region " << getSchedulingRegionName(region)
+                 << ", queue size=" << queue.size() << "\n");
+  } else {
+    LLVM_DEBUG(llvm::dbgs() << "Process " << id << " already in queue\n");
   }
 }
 
@@ -684,6 +691,15 @@ size_t ProcessScheduler::executeReadyProcesses(SchedulingRegion region) {
   auto &queue = readyQueues[static_cast<size_t>(region)];
   if (queue.empty())
     return 0;
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "executeReadyProcesses region=" << getSchedulingRegionName(region)
+                 << " queue size=" << queue.size() << "\n";
+    for (ProcessId id : queue) {
+      if (auto *p = getProcess(id))
+        llvm::dbgs() << "  queued: " << id << " ('" << p->getName() << "')\n";
+    }
+  });
 
   // Copy the queue since execution may modify it
   std::vector<ProcessId> toExecute = std::move(queue);
