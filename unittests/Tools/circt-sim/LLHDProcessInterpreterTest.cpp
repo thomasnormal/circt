@@ -1608,4 +1608,75 @@ module {
             parentId);
 }
 
+// Test IR for driving a signal via llhd.drv inside a function called from
+// an LLHD process.  The function @drive_ref receives an !llhd.ref<i8> and
+// drives the value 42 to it.  This exercises the signal-mapping propagation
+// through func.call chains (the path that failed for
+// uvm_resource_debug::init_access_record).
+static constexpr llvm::StringLiteral kDriveRefInFuncIR = R"MLIR(
+module {
+  func.func @drive_ref(%ref: !llhd.ref<i8>, %val: i8, %time: !llhd.time) {
+    llhd.drv %ref, %val after %time : i8
+    return
+  }
+  hw.module @test() {
+    %c42 = hw.constant 42 : i8
+    %c0 = hw.constant 0 : i8
+    %eps = llhd.constant_time <0ns, 0d, 1e>
+    %sig = llhd.sig name "out" %c0 : i8
+    llhd.process {
+      func.call @drive_ref(%sig, %c42, %eps) : (!llhd.ref<i8>, i8, !llhd.time) -> ()
+      llhd.halt
+    }
+    hw.output
+  }
+}
+)MLIR";
+
+TEST(LLHDProcessInterpreterToolTest, DriveRefInFuncCall) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, llhd::LLHDDialect, comb::CombDialect,
+                       mlir::cf::ControlFlowDialect, mlir::func::FuncDialect>();
+
+  OwningOpRef<ModuleOp> module =
+      parseSourceString<ModuleOp>(kDriveRefInFuncIR, &context);
+  ASSERT_TRUE(module);
+
+  SymbolTable symbols(*module);
+  auto hwModule = symbols.lookup<hw::HWModuleOp>("test");
+  ASSERT_TRUE(hwModule);
+
+  ProcessScheduler scheduler;
+  LLHDProcessInterpreter interpreter(scheduler);
+  ASSERT_TRUE(succeeded(interpreter.initialize(hwModule)));
+
+  llhd::ProcessOp procOp;
+  hwModule.walk([&](llhd::ProcessOp op) { procOp = op; });
+  ASSERT_TRUE(procOp);
+
+  llhd::SignalOp outOp;
+  hwModule.walk([&](llhd::SignalOp op) {
+    auto nameAttr = op.getName();
+    if (nameAttr && *nameAttr == "out")
+      outOp = op;
+  });
+  ASSERT_TRUE(outOp);
+
+  ProcessId procId =
+      LLHDProcessInterpreterTest::getProcessId(interpreter, procOp);
+  ASSERT_NE(procId, InvalidProcessId);
+  LLHDProcessInterpreterTest::executeProcess(interpreter, procId);
+
+  // Step through delta cycles so the scheduled drive takes effect.
+  auto &eventScheduler = scheduler.getEventScheduler();
+  for (int i = 0; i < 3; ++i)
+    (void)eventScheduler.stepDelta();
+
+  SignalId outId = interpreter.getSignalId(outOp.getResult());
+  ASSERT_NE(outId, 0u);
+  const SignalValue &outVal = scheduler.getSignalValue(outId);
+  EXPECT_FALSE(outVal.isUnknown());
+  EXPECT_EQ(outVal.getAPInt().getZExtValue(), 42u);
+}
+
 } // namespace
