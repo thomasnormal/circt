@@ -2653,16 +2653,24 @@ struct VerifBoundedModelCheckingOpConversion
     // forth
     SmallVector<Type> loopInputTy, circuitInputTy, initOutputTy,
         circuitOutputTy;
-    if (failed(typeConverter->convertTypes(oldLoopInputTy, loopInputTy)))
+    if (failed(typeConverter->convertTypes(oldLoopInputTy, loopInputTy))) {
+      op.emitError("failed to convert verif.bmc loop input types");
       return failure();
-    if (failed(typeConverter->convertTypes(oldCircuitInputTy, circuitInputTy)))
+    }
+    if (failed(typeConverter->convertTypes(oldCircuitInputTy, circuitInputTy))) {
+      op.emitError("failed to convert verif.bmc circuit input types");
       return failure();
+    }
     if (failed(typeConverter->convertTypes(
-            op.getInit().front().back().getOperandTypes(), initOutputTy)))
+            op.getInit().front().back().getOperandTypes(), initOutputTy))) {
+      op.emitError("failed to convert verif.bmc init yield types");
       return failure();
+    }
     if (failed(typeConverter->convertTypes(
-            op.getCircuit().front().back().getOperandTypes(), circuitOutputTy)))
+            op.getCircuit().front().back().getOperandTypes(), circuitOutputTy))) {
+      op.emitError("failed to convert verif.bmc circuit yield types");
       return failure();
+    }
 
     unsigned numRegs = op.getNumRegs();
     auto initialValues = op.getInitialValues();
@@ -3254,7 +3262,7 @@ struct VerifBoundedModelCheckingOpConversion
 
     func::FuncOp initFuncOp, loopFuncOp, circuitFuncOp;
 
-    {
+    if (!emitSMTLIB) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(
           op->getParentOfType<ModuleOp>().getBody());
@@ -3263,23 +3271,29 @@ struct VerifBoundedModelCheckingOpConversion
       rewriter.inlineRegionBefore(op.getInit(), initFuncOp.getFunctionBody(),
                                   initFuncOp.end());
       if (failed(rewriter.convertRegionTypes(&initFuncOp.getFunctionBody(),
-                                             *typeConverter)))
+                                             *typeConverter))) {
+        op.emitError("failed to convert verif.bmc init region types");
         return failure();
+      }
       loopFuncOp = func::FuncOp::create(rewriter, loc,
                                         names.newName("bmc_loop"), loopFuncTy);
       rewriter.inlineRegionBefore(op.getLoop(), loopFuncOp.getFunctionBody(),
                                   loopFuncOp.end());
       if (failed(rewriter.convertRegionTypes(&loopFuncOp.getFunctionBody(),
-                                             *typeConverter)))
+                                             *typeConverter))) {
+        op.emitError("failed to convert verif.bmc loop region types");
         return failure();
+      }
       circuitFuncOp = func::FuncOp::create(
           rewriter, loc, names.newName("bmc_circuit"), circuitFuncTy);
       rewriter.inlineRegionBefore(op.getCircuit(),
                                   circuitFuncOp.getFunctionBody(),
                                   circuitFuncOp.end());
       if (failed(rewriter.convertRegionTypes(&circuitFuncOp.getFunctionBody(),
-                                             *typeConverter)))
+                                             *typeConverter))) {
+        op.emitError("failed to convert verif.bmc circuit region types");
         return failure();
+      }
       auto funcOps = {&initFuncOp, &loopFuncOp, &circuitFuncOp};
       // initOutputTy is the same as loop output types
       auto outputTys = {initOutputTy, initOutputTy, circuitOutputTy};
@@ -3302,42 +3316,70 @@ struct VerifBoundedModelCheckingOpConversion
                                     ValueRange{});
     rewriter.createBlock(&solver.getBodyRegion());
 
-    auto inlineCall = [&](func::FuncOp func,
-                          ValueRange inputs) -> SmallVector<Value> {
-      if (!func || func.getBody().empty())
-        return {};
-      Block &entry = func.getBody().front();
-      if (entry.getNumArguments() != inputs.size())
-        return {};
+    auto inlineBMCBlock =
+        [&](Block &block, ValueRange inputs,
+            ArrayRef<Type> resultTypes) -> FailureOr<SmallVector<Value>> {
+      if (block.getNumArguments() != inputs.size()) {
+        op.emitError("verif.bmc region has unexpected argument count when "
+                     "exporting SMT-LIB");
+        return failure();
+      }
+      auto yieldOp = dyn_cast<verif::YieldOp>(block.getTerminator());
+      if (!yieldOp) {
+        op.emitError(
+            "expected verif.yield terminator when exporting SMT-LIB");
+        return failure();
+      }
+      if (yieldOp.getNumOperands() != resultTypes.size()) {
+        op.emitError("verif.yield operand count does not match expected output "
+                     "arity when exporting SMT-LIB");
+        return failure();
+      }
+
       IRMapping mapping;
-      for (auto [arg, input] : llvm::zip(entry.getArguments(), inputs))
-        mapping.map(arg, input);
-      for (Operation &op : entry.without_terminator()) {
-        Operation *cloned = rewriter.clone(op, mapping);
+      for (auto [arg, input] : llvm::zip(block.getArguments(), inputs)) {
+        Value mappedInput = input;
+        if (mappedInput.getType() != arg.getType()) {
+          auto cast = UnrealizedConversionCastOp::create(
+              rewriter, loc, TypeRange{arg.getType()}, mappedInput);
+          mappedInput = cast.getResult(0);
+        }
+        mapping.map(arg, mappedInput);
+      }
+
+      for (Operation &nestedOp : block.without_terminator()) {
+        // Assert/assume/cover are handled by the BMC conversion, and are erased
+        // using the conversion rewriter (which can be deferred). Skip them so
+        // we don't clone ops slated for deletion.
+        if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(nestedOp))
+          continue;
+        Operation *cloned = rewriter.clone(nestedOp, mapping);
         for (auto [oldRes, newRes] :
-             llvm::zip(op.getResults(), cloned->getResults()))
+             llvm::zip(nestedOp.getResults(), cloned->getResults()))
           mapping.map(oldRes, newRes);
       }
-      auto ret = cast<func::ReturnOp>(entry.getTerminator());
+
       SmallVector<Value> results;
-      results.reserve(ret.getNumOperands());
-      for (Value operand : ret.getOperands())
-        results.push_back(mapping.lookup(operand));
+      results.reserve(resultTypes.size());
+      for (auto [operand, resultTy] :
+           llvm::zip(yieldOp.getOperands(), resultTypes))
+        results.push_back(typeConverter->materializeTargetConversion(
+            rewriter, loc, resultTy, mapping.lookup(operand)));
       return results;
     };
 
-    auto callOrInline = [&](func::FuncOp func,
-                            ValueRange inputs) -> SmallVector<Value> {
-      if (!emitSMTLIB) {
-        auto call = func::CallOp::create(rewriter, loc, func, inputs);
-        return SmallVector<Value>(call.getResults().begin(),
-                                  call.getResults().end());
-      }
-      return inlineCall(func, inputs);
-    };
-
-    // Call init func to get initial clock values
-    SmallVector<Value> initVals = callOrInline(initFuncOp, ValueRange{});
+    // Call/init or inline the init region to get initial clock values.
+    SmallVector<Value> initVals;
+    if (emitSMTLIB) {
+      auto initValsOr = inlineBMCBlock(op.getInit().front(), ValueRange{},
+                                       initOutputTy);
+      if (failed(initValsOr))
+        return failure();
+      initVals = std::move(*initValsOr);
+    } else {
+      auto call = func::CallOp::create(rewriter, loc, initFuncOp, ValueRange{});
+      initVals.append(call.getResults().begin(), call.getResults().end());
+    }
 
     // InputDecls order should be <circuit arguments> <state arguments>
     // <finalChecks> <wasViolated>
@@ -3415,6 +3457,11 @@ struct VerifBoundedModelCheckingOpConversion
         continue;
       }
       if (isClock) {
+        if (initIndex >= initVals.size()) {
+          op.emitError("verif.bmc init region does not yield enough clock/state "
+                       "values for SMT-LIB export");
+          return failure();
+        }
         inputDecls.push_back(initVals[initIndex++]);
         clockIndexes.push_back(curIndex);
         nonRegIndex++;
@@ -4136,7 +4183,7 @@ struct VerifBoundedModelCheckingOpConversion
         ValueRange iterRange(iterArgs);
 
         // Assert 2-state constraints on the current iteration inputs.
-        size_t numCircuitArgs = circuitFuncOp.getNumArguments();
+        size_t numCircuitArgs = circuitInputTy.size();
         for (auto [oldTy, arg] :
              llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
                        iterRange.take_front(numCircuitArgs))) {
@@ -4150,7 +4197,11 @@ struct VerifBoundedModelCheckingOpConversion
         for (auto stateArg :
              iterRange.drop_back(1 + numFinalChecks).take_back(numStateArgs))
           loopCallInputs.push_back(stateArg);
-        SmallVector<Value> loopValsVec = callOrInline(loopFuncOp, loopCallInputs);
+        auto loopValsVecOr =
+            inlineBMCBlock(op.getLoop().front(), loopCallInputs, initOutputTy);
+        if (failed(loopValsVecOr))
+          return failure();
+        SmallVector<Value> loopValsVec = std::move(*loopValsVecOr);
         ValueRange loopVals(loopValsVec);
 
         // Compute clock edges for this iteration.
@@ -4357,8 +4408,11 @@ struct VerifBoundedModelCheckingOpConversion
         }
 
         // Execute the circuit.
-        SmallVector<Value> circuitCallOutsVec =
-            callOrInline(circuitFuncOp, circuitInputs);
+        auto circuitCallOutsVecOr = inlineBMCBlock(
+            op.getCircuit().front(), circuitInputs, circuitOutputTy);
+        if (failed(circuitCallOutsVecOr))
+          return failure();
+        SmallVector<Value> circuitCallOutsVec = std::move(*circuitCallOutsVecOr);
         ValueRange circuitCallOuts(circuitCallOutsVec);
 
         ValueRange finalCheckOutputs =
@@ -4485,6 +4539,11 @@ struct VerifBoundedModelCheckingOpConversion
               return failure();
             newDecls.push_back(initVal);
           } else if (isClock) {
+            if (loopIndex >= loopVals.size()) {
+              op.emitError("verif.bmc loop region did not produce expected "
+                           "clock/state values for SMT-LIB export");
+              return failure();
+            }
             newDecls.push_back(loopVals[loopIndex++]);
           } else {
             auto decl = smt::DeclareFunOp::create(
@@ -4506,7 +4565,7 @@ struct VerifBoundedModelCheckingOpConversion
               newDecls.append(regInputs);
             } else {
               auto regStates =
-                  iterRange.take_front(circuitFuncOp.getNumArguments())
+                  iterRange.take_front(numCircuitArgs)
                       .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
                       .drop_back(totalDelaySlots + totalNFAStateSlots);
               SmallVector<Value> nextRegStates;
@@ -4519,7 +4578,7 @@ struct VerifBoundedModelCheckingOpConversion
             }
           } else if (usePerRegPosedge) {
             auto regStates =
-                iterRange.take_front(circuitFuncOp.getNumArguments())
+                iterRange.take_front(numCircuitArgs)
                     .take_back(numRegs + totalDelaySlots + totalNFAStateSlots)
                     .drop_back(totalDelaySlots + totalNFAStateSlots);
             SmallVector<Value> nextRegStates;
@@ -4540,7 +4599,7 @@ struct VerifBoundedModelCheckingOpConversion
         if (totalDelaySlots > 0) {
 
           auto delayStates =
-              iterRange.take_front(circuitFuncOp.getNumArguments())
+              iterRange.take_front(numCircuitArgs)
                   .take_back(totalDelaySlots + totalNFAStateSlots)
                   .drop_back(totalNFAStateSlots);
           size_t delayIndex = 0;

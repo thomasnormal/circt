@@ -17,7 +17,7 @@ Options:
   --plan-file FILE       Project plan file to update (default: PROJECT_PLAN.md)
   --update-baselines     Update baseline file and PROJECT_PLAN.md table
   --fail-on-diff         Fail if results differ from baseline file
-  --bmc-run-smtlib        Use circt-bmc --run-smtlib in suite runs
+  --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --with-opentitan       Run OpenTitan LEC script

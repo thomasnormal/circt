@@ -12,6 +12,8 @@ CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
+BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
+Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
@@ -38,6 +40,22 @@ fi
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
   exit 1
+fi
+
+if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
+  if [[ -z "$Z3_BIN" ]]; then
+    if command -v z3 >/dev/null 2>&1; then
+      Z3_BIN="z3"
+    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    fi
+  fi
+  if [[ -z "$Z3_BIN" ]]; then
+    echo "z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB" >&2
+    exit 1
+  fi
 fi
 
 tmpdir="$(mktemp -d)"
@@ -243,7 +261,12 @@ while IFS= read -r -d '' sv; do
   fi
 
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-    "--module" "$top_module" "--shared-libs=$Z3_LIB")
+    "--module" "$top_module")
+  if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
+    bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+  elif [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
+    bmc_args+=("--shared-libs=$Z3_LIB")
+  fi
   if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
     bmc_args+=("--rising-clocks-only")
   fi
@@ -288,9 +311,9 @@ while IFS= read -r -d '' sv; do
       result="ERROR"
     fi
   else
-    if grep -q "Bound reached with no violations!" <<<"$out"; then
+    if grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
       result="PASS"
-    elif grep -q "Assertion can be violated!" <<<"$out"; then
+    elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
       result="FAIL"
     else
       result="ERROR"

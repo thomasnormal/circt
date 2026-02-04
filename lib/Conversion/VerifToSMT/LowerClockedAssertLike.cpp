@@ -57,7 +57,7 @@ static Value buildClockedProperty(OpBuilder &builder, Location loc, Value prop,
   llvm_unreachable("unknown clock edge");
 }
 
-/// Convert verif.clocked_assert with i1 property to verif.assert
+/// Convert verif.clocked_assert to verif.assert.
 struct ClockedAssertOpConversion
     : OpConversionPattern<verif::ClockedAssertOp> {
   using OpConversionPattern<verif::ClockedAssertOp>::OpConversionPattern;
@@ -65,10 +65,6 @@ struct ClockedAssertOpConversion
   LogicalResult
   matchAndRewrite(verif::ClockedAssertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Only handle i1 properties - LTL properties should be handled by LTLToCore
-    if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
-      return failure();
-
     Value clockedProp = buildClockedProperty(
         rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
         adaptor.getClock());
@@ -79,7 +75,7 @@ struct ClockedAssertOpConversion
   }
 };
 
-/// Convert verif.clocked_assume with i1 property to verif.assume
+/// Convert verif.clocked_assume to verif.assume.
 struct ClockedAssumeOpConversion
     : OpConversionPattern<verif::ClockedAssumeOp> {
   using OpConversionPattern<verif::ClockedAssumeOp>::OpConversionPattern;
@@ -87,10 +83,6 @@ struct ClockedAssumeOpConversion
   LogicalResult
   matchAndRewrite(verif::ClockedAssumeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Only handle i1 properties - LTL properties should be handled by LTLToCore
-    if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
-      return failure();
-
     Value clockedProp = buildClockedProperty(
         rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
         adaptor.getClock());
@@ -101,7 +93,7 @@ struct ClockedAssumeOpConversion
   }
 };
 
-/// Convert verif.clocked_cover with i1 property to verif.cover
+/// Convert verif.clocked_cover to verif.cover.
 struct ClockedCoverOpConversion
     : OpConversionPattern<verif::ClockedCoverOp> {
   using OpConversionPattern<verif::ClockedCoverOp>::OpConversionPattern;
@@ -109,10 +101,6 @@ struct ClockedCoverOpConversion
   LogicalResult
   matchAndRewrite(verif::ClockedCoverOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Only handle i1 properties - LTL properties should be handled by LTLToCore
-    if (isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
-      return failure();
-
     Value clockedProp = buildClockedProperty(
         rewriter, op.getLoc(), adaptor.getProperty(), op.getEdge(),
         adaptor.getClock());
@@ -140,28 +128,13 @@ struct LowerClockedAssertLikePass
 void LowerClockedAssertLikePass::runOnOperation() {
   ConversionTarget target(getContext());
 
-  // Keep the verif dialect legal, but make clocked ops with i1 properties
-  // illegal
+  // Keep the verif dialect legal, but make clocked ops illegal.
   target.addLegalDialect<verif::VerifDialect>();
   target.addLegalDialect<hw::HWDialect>();
   target.addLegalDialect<ltl::LTLDialect>();
 
-  // Mark clocked assertions with i1 properties as illegal
-  target.addDynamicallyLegalOp<verif::ClockedAssertOp>(
-      [](verif::ClockedAssertOp op) {
-        return isa<ltl::PropertyType, ltl::SequenceType>(
-            op.getProperty().getType());
-      });
-  target.addDynamicallyLegalOp<verif::ClockedAssumeOp>(
-      [](verif::ClockedAssumeOp op) {
-        return isa<ltl::PropertyType, ltl::SequenceType>(
-            op.getProperty().getType());
-      });
-  target.addDynamicallyLegalOp<verif::ClockedCoverOp>(
-      [](verif::ClockedCoverOp op) {
-        return isa<ltl::PropertyType, ltl::SequenceType>(
-            op.getProperty().getType());
-      });
+  target.addIllegalOp<verif::ClockedAssertOp, verif::ClockedAssumeOp,
+                      verif::ClockedCoverOp>();
 
   TypeConverter converter;
   converter.addConversion([](Type type) { return type; });

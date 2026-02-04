@@ -12,6 +12,30 @@ hw.module @test_clocked_assert(in %clock : i1, in %prop : i1, in %enable : i1) {
 
 // -----
 
+// Test lowering of clocked_assert with !ltl.property property to assert.
+// CHECK-LABEL: hw.module @test_clocked_assert_ltl_property
+hw.module @test_clocked_assert_ltl_property(in %clock : i1, in %prop : !ltl.property) {
+  // CHECK-NOT: verif.clocked_assert
+  // CHECK: ltl.clock %prop, posedge %clock
+  // CHECK: verif.assert %{{.*}} : !ltl.property
+  verif.clocked_assert %prop, posedge %clock : !ltl.property
+  hw.output
+}
+
+// -----
+
+// Test lowering of clocked_assert with !ltl.sequence property to assert.
+// CHECK-LABEL: hw.module @test_clocked_assert_ltl_sequence
+hw.module @test_clocked_assert_ltl_sequence(in %clock : i1, in %seq : !ltl.sequence) {
+  // CHECK-NOT: verif.clocked_assert
+  // CHECK: ltl.clock %seq, posedge %clock
+  // CHECK: verif.assert %{{.*}} : !ltl.sequence
+  verif.clocked_assert %seq, posedge %clock : !ltl.sequence
+  hw.output
+}
+
+// -----
+
 // Test lowering of clocked_assert without enable
 // CHECK-LABEL: hw.module @test_clocked_assert_no_enable
 hw.module @test_clocked_assert_no_enable(in %clock : i1, in %prop : i1) {
