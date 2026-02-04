@@ -14,18 +14,18 @@ module test;
         // CHECK: Fork branch 1 - waiting
         $display("T=%0t: Fork branch 1 - waiting for q.size() != 0", $time);
         wait (q.size() != 0);
-        // CHECK: Fork branch 1 - done
+        // CHECK-DAG: Fork branch 1 - done
         $display("T=%0t: Fork branch 1 - done, q.size()=%0d", $time, q.size());
       end
       begin
         #2;
-        // CHECK: Fork branch 2 - pushing
+        // CHECK-DAG: Fork branch 2 - pushing
         $display("T=%0t: Fork branch 2 - pushing to queue", $time);
         q.push_back(42);
         $display("T=%0t: Fork branch 2 - pushed, q.size()=%0d", $time, q.size());
       end
     join
-    // CHECK: Test complete
+    // CHECK-DAG: Test complete
     $display("T=%0t: Test complete", $time);
     $finish;
   end
