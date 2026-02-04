@@ -32,6 +32,7 @@
 #include "circt/Dialect/Synth/Transforms/SynthesisPipeline.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Transforms/Passes.h"
 #include "mlir/Bytecode/BytecodeReader.h"
@@ -417,7 +418,7 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
@@ -431,6 +432,7 @@ int main(int argc, char **argv) {
 
   // Parse the command-line options provided by the user.
   cl::ParseCommandLineOptions(argc, argv, "Logic synthesis tool\n\n");
+  circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.

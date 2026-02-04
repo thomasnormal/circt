@@ -23,6 +23,7 @@
 #include "circt/Support/JSON.h"
 #include "circt/Support/LoweringOptionsParser.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -1209,9 +1210,11 @@ int main(int argc, char **argv) {
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
   cl::HideUnrelatedOptions(
-      {&opts.cat, &opts.testCat, &llvm::getColorCategory()});
+      {&opts.cat, &opts.testCat, &llvm::getColorCategory(),
+       &circt::getResourceGuardCategory()});
   cl::ParseCommandLineOptions(
       argc, argv, "Hardware unit test discovery and execution tool\n");
+  circt::installResourceGuard();
 
   MLIRContext context(registry);
   exit(failed(execute(&context)));

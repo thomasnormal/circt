@@ -20,6 +20,7 @@
 #include "circt/InitAllDialects.h"
 #include "circt/Reduce/GenericReductions.h"
 #include "circt/Reduce/Tester.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -549,10 +550,12 @@ int main(int argc, char **argv) {
   // Register and hide default LLVM options, other than for this tool.
   registerMLIRContextCLOptions();
   registerAsmPrinterCLOptions();
-  cl::HideUnrelatedOptions({&mainCategory, &granularityCategory});
+  cl::HideUnrelatedOptions({&mainCategory, &granularityCategory,
+                            &circt::getResourceGuardCategory()});
 
   // Parse the command line options provided by the user.
   cl::ParseCommandLineOptions(argc, argv, "CIRCT test case reduction tool\n");
+  circt::installResourceGuard();
 
   // Create a context.
   mlir::MLIRContext context(registry);

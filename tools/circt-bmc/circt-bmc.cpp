@@ -39,6 +39,7 @@
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Dialect/Verif/VerifPasses.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/SMTModel.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
@@ -847,7 +848,7 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
@@ -864,6 +865,7 @@ int main(int argc, char **argv) {
       "\tThis tool checks all possible executions of a hardware module up to a "
       "given time bound to check whether any asserted properties can be "
       "violated.\n");
+  circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.

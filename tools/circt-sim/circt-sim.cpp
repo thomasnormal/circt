@@ -52,6 +52,7 @@
 #include "circt/Dialect/Sim/SimulationControl.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Support/WallClockTimeout.h"
 #include "mlir/Bytecode/BytecodeReader.h"
@@ -1535,7 +1536,7 @@ int main(int argc, char **argv) {
   // Hide default LLVM options
   llvm::cl::HideUnrelatedOptions(
       {&mainCategory, &simCategory, &waveCategory, &parallelCategory,
-       &debugCategory});
+       &debugCategory, &circt::getResourceGuardCategory()});
 
   // Register pass command line options
   registerMLIRContextCLOptions();
@@ -1553,6 +1554,7 @@ int main(int argc, char **argv) {
       "CIRCT Event-Driven Simulation Tool\n\n"
       "This tool simulates hardware designs using CIRCT's event-driven\n"
       "simulation infrastructure with IEEE 1800 scheduling semantics.\n");
+  circt::installResourceGuard();
 
   // Set up MLIR context with required dialects
   MLIRContext context;

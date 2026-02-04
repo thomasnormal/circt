@@ -14,6 +14,7 @@
 #include "circt/Dialect/FIRRTL/FIRRTLOps.h"
 #include "circt/Dialect/FIRRTL/Passes.h"
 #include "circt/InitAllDialects.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
@@ -179,8 +180,11 @@ int main(int argc, char **argv) {
   DialectRegistry registry;
   circt::registerAllDialects(registry);
 
-  cl::HideUnrelatedOptions({&mainCategory, &getColorCategory()});
+  cl::HideUnrelatedOptions(
+      {&mainCategory, &getColorCategory(), &circt::getResourceGuardCategory()});
   cl::ParseCommandLineOptions(argc, argv, "FIRRTL Circuits Linker\n");
+
+  circt::installResourceGuard();
 
   MLIRContext context(registry);
   exit(failed(execute(context)));

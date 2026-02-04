@@ -26,6 +26,7 @@
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Diagnostics.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -706,6 +707,7 @@ int main(int argc, char **argv) {
   // Parse pass names in main to ensure static initialization completed.
   cl::ParseCommandLineOptions(argc, argv,
                               "Verilog and SystemVerilog frontend\n");
+  circt::installResourceGuard();
 
   // Register the dialects.
   // clang-format off

@@ -41,6 +41,7 @@
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "circt/Tools/circt-lec/Passes.h"
@@ -989,7 +990,7 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
@@ -1005,6 +1006,7 @@ int main(int argc, char **argv) {
       "circt-lec - logical equivalence checker\n\n"
       "\tThis tool compares two input circuit descriptions to determine whether"
       " they are logically equivalent.\n");
+  circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.

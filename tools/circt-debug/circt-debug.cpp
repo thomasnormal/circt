@@ -28,6 +28,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/InitAllDialects.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-debug/Debug.h"
 #include "circt/Tools/circt-debug/DebugSession.h"
@@ -295,7 +296,7 @@ int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
 
   // Hide default LLVM options
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Set the bug report message
   setBugReportMsg(circtBugReportMsg);
@@ -315,6 +316,7 @@ int main(int argc, char **argv) {
       "  circt-debug design.mlir --top myModule\n"
       "  circt-debug design.mlir --vcd trace.vcd\n"
       "  circt-debug design.mlir -x commands.txt --batch\n");
+  circt::installResourceGuard();
 
   // Create debug configuration
   DebugConfig config;
