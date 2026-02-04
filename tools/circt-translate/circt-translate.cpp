@@ -13,6 +13,7 @@
 
 #include "circt/Dialect/HW/HWSymCache.h"
 #include "circt/InitAllTranslations.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Tools/mlir-translate/MlirTranslateMain.h"
@@ -23,6 +24,8 @@
 #endif
 
 int main(int argc, char **argv) {
+  circt::installResourceGuard();
+
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.
   llvm::setBugReportMsg(circt::circtBugReportMsg);

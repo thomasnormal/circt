@@ -55,6 +55,7 @@
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Support/LoweringOptions.h"
 #include "circt/Support/LoweringOptionsParser.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Transforms/Passes.h"
 
@@ -613,7 +614,7 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
@@ -623,6 +624,8 @@ int main(int argc, char **argv) {
 
   // Parse pass names in main to ensure static initialization completed.
   cl::ParseCommandLineOptions(argc, argv, "CIRCT HLS tool\n");
+
+  circt::installResourceGuard();
 
   DialectRegistry registry;
   // Register MLIR dialects.

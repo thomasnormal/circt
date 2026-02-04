@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/InitAllDialects.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Bytecode/BytecodeReader.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -119,12 +120,14 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions({&mainCategory, &llvm::getColorCategory()});
+  cl::HideUnrelatedOptions({&mainCategory, &llvm::getColorCategory(),
+                            &circt::getResourceGuardCategory()});
 
   registerAsmPrinterCLOptions();
 
   cl::ParseCommandLineOptions(argc, argv,
                               "CIRCT .mlirbc -> .mlir disassembler\n");
+  circt::installResourceGuard();
 
   MLIRContext context(registry);
   exit(failed(execute(context)));

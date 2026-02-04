@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Support/Version.h"
+#include "circt/Support/ResourceGuard.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -57,6 +58,8 @@ int main(int argc, char **argv) {
       "Arguments to the function are passed on the command line and\n"
       "results are returned on stdout.\n"
       "Memref types are specified as a comma-separated list of values.\n");
+
+  circt::installResourceGuard();
 
   auto file_or_err = MemoryBuffer::getFileOrSTDIN(inputFileName.c_str());
   if (std::error_code error = file_or_err.getError()) {

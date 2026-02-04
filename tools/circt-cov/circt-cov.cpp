@@ -21,6 +21,7 @@
 
 #include "circt/Support/CoverageDatabase.h"
 #include "circt/Support/CoverageReportGenerator.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
@@ -791,8 +792,9 @@ int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
   llvm::setBugReportMsg(circtBugReportMsg);
 
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
   cl::ParseCommandLineOptions(argc, argv, "CIRCT Coverage Database Tool\n");
+  circt::installResourceGuard();
 
   // If no command specified, show help
   if (command == None) {

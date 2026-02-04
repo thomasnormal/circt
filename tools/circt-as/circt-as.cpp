@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/InitAllDialects.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -140,9 +141,11 @@ int main(int argc, char **argv) {
   registry.insert<mlir::emitc::EmitCDialect>();
 
   // Hide default LLVM options, other than for this tool.
-  cl::HideUnrelatedOptions({&mainCategory, &llvm::getColorCategory()});
+  cl::HideUnrelatedOptions({&mainCategory, &llvm::getColorCategory(),
+                            &circt::getResourceGuardCategory()});
 
   cl::ParseCommandLineOptions(argc, argv, "CIRCT .mlir -> .mlirbc assembler\n");
+  circt::installResourceGuard();
 
   MLIRContext context(registry);
   exit(failed(execute(context)));

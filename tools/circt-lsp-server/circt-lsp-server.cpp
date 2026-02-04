@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/InitAllDialects.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/MLIRContext.h"
@@ -17,6 +18,8 @@
 using namespace mlir;
 
 int main(int argc, char **argv) {
+  circt::installResourceGuard();
+
   DialectRegistry registry;
 
   // Set the bug report message to indicate users should file issues on

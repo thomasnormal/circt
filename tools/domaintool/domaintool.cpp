@@ -15,6 +15,7 @@
 #include "circt/Dialect/OM/Evaluator/Evaluator.h"
 #include "circt/InitAllDialects.h"
 #include "circt/Support/LLVM.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -391,6 +392,8 @@ int main(int argc, char **argv) {
   cl::ParseCommandLineOptions(argc, argv,
                               "Utility for generating constraint files/formats "
                               "from MLIR containing domain information\n");
+
+  circt::installResourceGuard();
 
   DialectRegistry registry;
   registerAllDialects(registry);

@@ -19,6 +19,7 @@
 #include "circt/Dialect/OM/OMPasses.h"
 #include "circt/Dialect/SV/SVDialect.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -196,7 +197,7 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  cl::HideUnrelatedOptions(mainCategory);
+  cl::HideUnrelatedOptions({&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
@@ -207,6 +208,7 @@ int main(int argc, char **argv) {
       [](raw_ostream &os) { os << getCirctVersion() << '\n'; });
   // Parse pass names in main to ensure static initialization completed.
   cl::ParseCommandLineOptions(argc, argv, "OM linker\n");
+  circt::installResourceGuard();
 
   MLIRContext context;
   // Register post-export dialects.

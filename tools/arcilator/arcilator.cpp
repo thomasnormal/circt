@@ -35,6 +35,7 @@
 #include "circt/Dialect/Sim/SimPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/arcilator/pipelines.h"
 #include "mlir/Bytecode/BytecodeReader.h"
@@ -700,7 +701,8 @@ int main(int argc, char **argv) {
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
-  llvm::cl::HideUnrelatedOptions(mainCategory);
+  llvm::cl::HideUnrelatedOptions(
+      {&mainCategory, &circt::getResourceGuardCategory()});
 
   // Register passes before parsing command-line options, so that they are
   // available for use with options like `--mlir-print-ir-before`.
@@ -728,6 +730,8 @@ int main(int argc, char **argv) {
   // Parse pass names in main to ensure static initialization completed.
   llvm::cl::ParseCommandLineOptions(argc, argv,
                                     "MLIR-based circuit simulator\n");
+
+  circt::installResourceGuard();
 
   if (outputFormat == OutputRunJIT) {
 #ifdef ARCILATOR_ENABLE_JIT

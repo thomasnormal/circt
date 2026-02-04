@@ -12,6 +12,8 @@
 
 #include "circt/Tools/circt-verilog-lsp-server/CirctVerilogLspServerMain.h"
 
+#include "circt/Support/ResourceGuard.h"
+
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LSP/Logging.h"
@@ -129,6 +131,7 @@ int main(int argc, char **argv) {
   };
 
   llvm::cl::ParseCommandLineOptions(argc, argv, "Verilog LSP Language Server");
+  circt::installResourceGuard();
 
   if (litTest) {
     inputStyle = llvm::lsp::JSONStreamStyle::Delimited;
