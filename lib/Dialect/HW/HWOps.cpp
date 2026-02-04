@@ -2950,6 +2950,14 @@ LogicalResult ArrayGetOp::canonicalize(ArrayGetOp op,
     if (!innerGet.getIndex().getDefiningOp<hw::ConstantOp>()) {
       if (auto create =
               innerGet.getInput().getDefiningOp<hw::ArrayCreateOp>()) {
+        // This rewrite transposes an index through an array create, which can
+        // be beneficial for small arrays. For large `hw.array_create` ops it
+        // can explode IR size (and compile time), especially when repeatedly
+        // applied (e.g., indexing into large constant LUTs represented as
+        // array-of-arrays). Bail out beyond a conservative threshold.
+        constexpr size_t kMaxSwapConstantIndexInputs = 32;
+        if (create.getOperands().size() > kMaxSwapConstantIndexInputs)
+          return failure();
 
         SmallVector<Value> newValues;
         for (auto operand : create.getOperands())
