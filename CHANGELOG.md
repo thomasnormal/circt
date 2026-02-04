@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 339 - February 4, 2026
+
+### Summary
+
+Iteration 339: Stabilized the SMT-LIB-based BMC flow (`circt-bmc --emit-smtlib` / `--run-smtlib`) and fixed `lower-clocked-assert-like` to properly lower clocked assertions with LTL properties/sequences (not just i1). This eliminates empty SMT-LIB output and spurious "no property provided" paths that previously caused many harness tests to report ERROR when using SMT-LIB execution.
+
+### Accomplishments
+
+1. **Propertyless SMT-LIB handling** - `circt-bmc --emit-smtlib` now emits a stub `(assert false) / (check-sat)` query instead of an empty file when no SMT solver is produced (e.g. no properties after canonicalization). `circt-bmc --run-smtlib` now short-circuits such cases and reports `BMC_RESULT=UNSAT`.
+2. **LowerClockedAssertLike for LTL properties** - `--lower-clocked-assert-like` now lowers `verif.clocked_{assert,assume,cover}` regardless of property type (`i1`, `!ltl.property`, `!ltl.sequence`) by wrapping the property in `ltl.clock` and converting to the unclocked op.
+3. **Test harness compatibility** - Updated the `test/Tools/circt-bmc/Inputs/fake-bmc.sh` helper to emit `BMC_RESULT=...` tokens, matching the harness scripts' result detection.
+4. **SMT-LIB :named assertions** - The SMT-LIB exporter now prints `:named` for `smt.assert` ops carrying the `smtlib.name` attribute (used by `verif.assert label` lowering). This restores the `circt-lec --emit-smtlib` regression for named assertions.
+5. **Regression coverage** - Added tool-level regressions for propertyless SMT-LIB emit/run, plus extended `lower-clocked-assert-like` conversion tests to cover `!ltl.property` and `!ltl.sequence`.
+6. **OpenTitan LEC runner reliability** - `utils/run_opentitan_circt_lec.py` now compiles via `circt-verilog --ir-moore` + `circt-opt --convert-moore-to-core` (avoids expensive canonicalization in `circt-verilog --ir-hw` on large constant LUTs) and flushes progress output during long runs.
+
+### Verification (February 4, 2026)
+
+- `BMC_RUN_SMTLIB=1 Z3_BIN=/home/thomas-ahle/z3-install/bin/z3 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` (**17/17 pass**)
+- `BMC_RUN_SMTLIB=1 Z3_BIN=/home/thomas-ahle/z3-install/bin/z3 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` (**26 total: 15 pass, 8 fail, 3 xfail, 0 error**)
+- `build/bin/llvm-lit -sv test/Tools/circt-bmc` (**pass**)
+- `build/bin/llvm-lit -sv test/Conversion/VerifToSMT/lower-clocked-assert-like.mlir` (**pass**)
+- `build/bin/llvm-lit -sv test/Tools/circt-lec` (**pass**)
+
+### Files Changed
+
+- `lib/Conversion/VerifToSMT/LowerClockedAssertLike.cpp`
+- `tools/circt-bmc/circt-bmc.cpp`
+- `test/Conversion/VerifToSMT/lower-clocked-assert-like.mlir`
+- `test/Tools/circt-bmc/bmc-emit-smtlib-propertyless.mlir`
+- `test/Tools/circt-bmc/bmc-run-smtlib-propertyless.mlir`
+- `test/Tools/circt-bmc/Inputs/fake-bmc.sh`
+- `llvm/mlir/lib/Target/SMTLIB/ExportSMTLIB.cpp`
+- `utils/run_opentitan_circt_lec.py`
+
+---
+
 ## Iteration 338 - February 3, 2026
 
 ### Summary
@@ -20,12 +56,30 @@ Iteration 338: Fixed critical UVM phase hopper infinite loop bug. Root cause was
 2. **New test added** - `test/Tools/circt-sim/wait-queue-size.sv` verifies `wait(q.size() != 0)` properly wakes up when queue is modified.
 3. **UVM phase hopper unblocked** - APB AVIP simulation no longer immediately hangs on fork+wait patterns.
 
-### Verification
+### Verification (February 4, 2026)
 
 - `wait (q.size() != 0)` works correctly - wait wakes up when queue is pushed
 - `wait (count != 0)` on simple variables still works
 - `wait (obj.member == 0)` on class members still works
 - All existing circt-sim tests pass
+
+**Full Regression Results:**
+
+| Suite | Result | Status |
+|-------|--------|--------|
+| sv-tests BMC | 10/10 + 2 XFAIL | ✅ No regression |
+| sv-tests LEC | 5/5 + 3 XFAIL | ✅ No regression |
+| Yosys SVA BMC | 14/14 pass | ✅ 100% |
+| Yosys SVA LEC | 14/14 pass | ✅ 100% |
+| verilator-verification BMC | 16/16 pass | ✅ 100% |
+| OpenTitan testbenches | 5 pass, 33 memory timeout | ⚠️ Memory constraints |
+| AVIP simulation | SPI, I2S, UART, AHB init | ✅ Fix verified |
+
+**AVIP Simulation Progress:**
+- Wait(queue.size()) fix enables UVM phase hopper pattern
+- Mailbox-based consumer/producer patterns work correctly
+- SPI, I2S, UART, AHB AVIPs initialize BFM agents successfully
+- Full UVM phase progression requires extended compilation time (10+ min)
 
 ### Files Changed
 

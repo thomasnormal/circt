@@ -196,7 +196,7 @@ Key work:
 - ✅ Add SMT-LIB regression for `--assume-known-inputs` in LEC.
 - ✅ Allow BMC harness scripts to use `--run-smtlib` via `BMC_RUN_SMTLIB=1`.
 - ✅ Add `run_formal_all.sh` switches for BMC/LEC assume-known-inputs and
-  run-smtlib flows.
+  SMT-LIB flows.
 - ✅ Make OpenTitan LEC script honor `LEC_ASSUME_KNOWN_INPUTS` for 4-state
   control.
 - ✅ Default OpenTitan LEC to `--run-smtlib` via `LEC_RUN_SMTLIB=1` and `Z3_BIN`.
@@ -292,8 +292,8 @@ Key work:
 - SMT encoding for SVA and LTL constructs with documented truth tables.
 - Counterexample/trace reporting suitable for debugging.
 - Stable Z3 integration with deterministic solver configs.
-- ✅ Add `circt-bmc --run-smtlib` (external z3, `--z3-path` support) with model
-  printing parity to the JIT path.
+- ✅ Add `circt-bmc --run-smtlib` (external z3, `--z3-path`) with model printing
+  parity to the JIT path.
 
 Deliverables:
 - VerifToSMT and SMT dialect test coverage.
