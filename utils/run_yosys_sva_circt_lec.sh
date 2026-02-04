@@ -3,6 +3,19 @@ set -euo pipefail
 
 YOSYS_SVA_DIR="${1:-/home/thomas-ahle/yosys/tests/sva}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
+
+# Memory limit settings to prevent system hangs
+CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
+CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
+CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+
+# Run a command with memory limit
+run_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
 CIRCT_OPT="${CIRCT_OPT:-build/bin/circt-opt}"
 CIRCT_LEC="${CIRCT_LEC:-build/bin/circt-lec}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
@@ -100,8 +113,8 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     verilog_args+=("${extra_args[@]}")
   fi
 
-  if ! "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "$sv" > "$mlir" \
-      2> "$verilog_log"; then
+  if ! run_limited "$CIRCT_VERILOG" --ir-hw "${verilog_args[@]}" "$sv" \
+      > "$mlir" 2> "$verilog_log"; then
     printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
@@ -117,7 +130,7 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   fi
   opt_args+=("$mlir")
 
-  if ! "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
+  if ! run_limited "$CIRCT_OPT" "${opt_args[@]}" > "$opt_mlir" 2> "$opt_log"; then
     printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
@@ -140,7 +153,7 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   lec_args+=("-c1=top" "-c2=top" "$opt_mlir" "$opt_mlir")
 
   lec_out=""
-  if lec_out="$($CIRCT_LEC "${lec_args[@]}" 2> "$lec_log")"; then
+  if lec_out="$(run_limited "$CIRCT_LEC" "${lec_args[@]}" 2> "$lec_log")"; then
     lec_status=0
   else
     lec_status=$?

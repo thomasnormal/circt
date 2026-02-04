@@ -3,6 +3,19 @@ set -euo pipefail
 
 SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
 TAG_REGEX="${TAG_REGEX:-(^| )16\\.|(^| )9\\.4\\.4}"
+
+# Memory limit settings to prevent system hangs
+CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
+CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
+CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+
+# Run a command with memory limit
+run_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
 TEST_FILTER="${TEST_FILTER:-}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
@@ -209,7 +222,7 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+  if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
@@ -225,7 +238,7 @@ while IFS= read -r -d '' sv; do
   fi
   opt_cmd+=("$mlir")
 
-  if ! "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
+  if ! run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
     printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
@@ -257,7 +270,7 @@ while IFS= read -r -d '' sv; do
   lec_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir" "$opt_mlir")
 
   lec_out=""
-  if lec_out="$($CIRCT_LEC "${lec_args[@]}" 2> "$lec_log")"; then
+  if lec_out="$(run_limited $CIRCT_LEC "${lec_args[@]}" 2> "$lec_log")"; then
     lec_status=0
   else
     lec_status=$?

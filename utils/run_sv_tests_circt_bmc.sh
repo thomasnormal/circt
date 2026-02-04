@@ -3,6 +3,19 @@ set -euo pipefail
 
 SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
 BOUND="${BOUND:-10}"
+
+# Memory limit settings to prevent system hangs
+CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
+CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
+CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+
+# Run a command with memory limit
+run_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
@@ -230,7 +243,7 @@ while IFS= read -r -d '' sv; do
   fi
   cmd+=("${files[@]}")
 
-  if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+  if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     result="ERROR"
     if [[ "$should_fail" == "1" ]]; then
       result="XFAIL"
@@ -278,7 +291,7 @@ while IFS= read -r -d '' sv; do
     bmc_args+=("${extra_bmc_args[@]}")
   fi
   out=""
-  if out="$("$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
+  if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
     bmc_status=0
   else
     bmc_status=$?

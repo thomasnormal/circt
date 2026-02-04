@@ -3,6 +3,19 @@ set -euo pipefail
 
 YOSYS_SVA_DIR="${1:-/home/thomas-ahle/yosys/tests/sva}"
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
+
+# Memory limit settings to prevent system hangs
+CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
+CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-300}"
+CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
+
+# Run a command with memory limit
+run_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
 CIRCT_VERILOG="${CIRCT_VERILOG:-build/bin/circt-verilog}"
 CIRCT_BMC="${CIRCT_BMC:-build/bin/circt-bmc}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
@@ -74,7 +87,8 @@ run_case() {
     read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
     verilog_args+=("${extra_args[@]}")
   fi
-  if ! "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "${extra_def[@]}" "$sv" > "$mlir"; then
+  if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" \
+      "${extra_def[@]}" "$sv" > "$mlir"; then
     echo "FAIL($mode): $base"
     failures=$((failures + 1))
     return
@@ -96,7 +110,8 @@ run_case() {
     bmc_args+=("${extra_bmc_args[@]}")
   fi
   out=""
-  if out="$("$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
+  if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" \
+      2> "$bmc_log")"; then
     bmc_status=0
   else
     bmc_status=$?
