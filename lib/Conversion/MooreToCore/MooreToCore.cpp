@@ -12578,6 +12578,21 @@ struct ToBuiltinBoolOpConversion : public OpConversionPattern<ToBuiltinBoolOp> {
   }
 };
 
+/// For casts that are automatically resolved by type conversion.
+template <typename SourceOp>
+struct NoOpConversion : public OpConversionPattern<SourceOp> {
+  using OpConversionPattern<SourceOp>::OpConversionPattern;
+  using OpAdaptor = typename SourceOp::Adaptor;
+  using ConversionPattern::typeConverter;
+
+  LogicalResult
+  matchAndRewrite(SourceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getInput());
+    return success();
+  }
+};
+
 struct TruncOpConversion : public OpConversionPattern<TruncOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -31480,6 +31495,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     BitcastConversion<SBVToPackedOp>,
     LogicToIntOpConversion,
     IntToLogicOpConversion,
+    NoOpConversion<ToBuiltinIntOp>,
     ToBuiltinBoolOpConversion,
     TruncOpConversion,
     ZExtOpConversion,
