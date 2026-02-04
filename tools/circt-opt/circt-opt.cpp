@@ -14,7 +14,6 @@
 #include "circt/InitAllDialects.h"
 #include "circt/InitAllPasses.h"
 #include "circt/Support/LoweringOptions.h"
-#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -33,7 +32,6 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
-#include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/PrettyStackTrace.h"
 
 // Defined in the test directory, no public header.
@@ -44,9 +42,6 @@ void registerAnalysisTestPasses();
 } // namespace circt
 
 int main(int argc, char **argv) {
-  llvm::InitLLVM y(argc, argv);
-  llvm::PrettyStackTraceProgram stackTrace(argc, argv);
-
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.
   llvm::setBugReportMsg(circt::circtBugReportMsg);
@@ -88,12 +83,6 @@ int main(int argc, char **argv) {
   mlir::registerSROA();
   mlir::registerMem2RegPass();
 
-  auto [inputFilename, outputFilename] =
-      mlir::registerAndParseCLIOptions(argc, argv,
-                                       "CIRCT modular optimizer driver",
-                                       registry);
-  circt::installResourceGuard();
-
-  return mlir::asMainReturnCode(
-      mlir::MlirOptMain(argc, argv, inputFilename, outputFilename, registry));
+  return mlir::failed(mlir::MlirOptMain(
+      argc, argv, "CIRCT modular optimizer driver", registry));
 }
