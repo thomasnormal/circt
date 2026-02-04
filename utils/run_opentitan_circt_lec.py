@@ -132,6 +132,8 @@ def main() -> int:
 
     circt_verilog = os.environ.get("CIRCT_VERILOG", "build/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
+    circt_opt = os.environ.get("CIRCT_OPT", "build/bin/circt-opt")
+    circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "0") == "1"
@@ -202,7 +204,10 @@ def main() -> int:
 
     failures = 0
     try:
-        print(f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...")
+        print(
+            f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
+            flush=True,
+        )
         for impl in sorted(impl_list):
             impl_dir = workdir / impl
             impl_dir.mkdir(parents=True, exist_ok=True)
@@ -241,13 +246,17 @@ def main() -> int:
                 extra_files.append(str(dut_wrapper_path))
                 dut_module = dut_wrapper
 
+            out_moore = impl_dir / "aes_sbox_lec.moore.mlir"
             out_mlir = impl_dir / "aes_sbox_lec.mlir"
             verilog_cmd = [
                 circt_verilog,
-                "--ir-hw",
+                "--ir-moore",
                 "-o",
-                str(out_mlir),
+                str(out_moore),
+                "--single-unit",
                 "--no-uvm-auto-include",
+                f"--top={ref_module}",
+                f"--top={dut_module}",
                 "-I",
                 str(prim_path),
                 "-I",
@@ -257,6 +266,16 @@ def main() -> int:
             ]
             verilog_cmd += circt_verilog_args
             verilog_cmd += dep_list + [str(ref_file)] + extra_files
+
+            opt_cmd = [
+                circt_opt,
+                str(out_moore),
+                "--convert-moore-to-core",
+                "--mlir-disable-threading",
+                "-o",
+                str(out_mlir),
+            ]
+            opt_cmd += circt_opt_args
 
             lec_cmd = [
                 circt_lec,
@@ -274,6 +293,7 @@ def main() -> int:
 
             try:
                 run_and_log(verilog_cmd, impl_dir / "circt-verilog.log")
+                run_and_log(opt_cmd, impl_dir / "circt-opt.log")
                 lec_stdout = run_and_log(
                     lec_cmd,
                     impl_dir / "circt-lec.log",
@@ -286,10 +306,10 @@ def main() -> int:
                         raise subprocess.CalledProcessError(
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
-                print(f"{impl:24} OK")
+                print(f"{impl:24} OK", flush=True)
             except subprocess.CalledProcessError:
                 failures += 1
-                print(f"{impl:24} FAIL (logs in {impl_dir})")
+                print(f"{impl:24} FAIL (logs in {impl_dir})", flush=True)
 
     finally:
         if not keep_workdir:
@@ -298,7 +318,7 @@ def main() -> int:
     if failures:
         print(f"LEC failures: {failures}", file=sys.stderr)
         return 1
-    print("LEC completed successfully.")
+    print("LEC completed successfully.", flush=True)
     return 0
 
 
