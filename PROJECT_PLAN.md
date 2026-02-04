@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 3, 2026 (Iteration 338 - Wait Condition Extract Fix)
+## Current Status - February 4, 2026 (Iteration 339 - SMT-LIB BMC Robustness)
 
 ### Session Summary - Key Milestones
 
@@ -23,7 +23,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
 | **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
-| **Verilator BMC Script Fix** | ⚠️ DIAGNOSED | `--run-smtlib --z3-path` flags removed; script needs update to `--emit-smtlib` |
+| **Verilator BMC Script Fix** | ✅ FIXED | `BMC_RUN_SMTLIB=1` now uses `circt-bmc --run-smtlib --z3-path=...` (no JIT z3 link) |
+| **BMC SMT-LIB Robustness** | ✅ **FIXED** | `--emit-smtlib`/`--run-smtlib` no longer produce empty output for propertyless cases; `lower-clocked-assert-like` now lowers LTL-typed clocked asserts |
 | **SPI AVIP randomize scoping** | ✅ FIXED | `array[i].randomize() with {this.member}` now resolves `this` to element receiver |
 | **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
 | **AVIP Compilation** | ✅ **9/9** | apb,uart,i2s,ahb,i3c,spi,axi4 pass; jtag + axi4Lite pass with `--compat=all -Wno-range-oob` |
@@ -295,7 +296,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 5. Lower coverpoint `iff` conditions
 
 **What's needed (Track 3 - Test Infrastructure)**:
-6. **Fix verilator BMC script** - Update deprecated `--run-smtlib --z3-path` to `--emit-smtlib` + z3 pipe
+6. **Fix verilator BMC script** - Update deprecated flags to use `circt-bmc --run-smtlib --z3-path`
 7. Debug alert_handler_tb wall-clock timeout (334 processes, needs optimization)
 
 **What's needed (Track 4 - OpenTitan & Formal)**:
