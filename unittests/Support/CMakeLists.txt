@@ -11,6 +11,7 @@ add_circt_unittest(CIRCTSupportTests
   NPNClassTest.cpp
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
+  ResourceGuardTest.cpp
   TestReportingTest.cpp
   TwoStateUtilsTest.cpp
   WallClockTimeoutTest.cpp
