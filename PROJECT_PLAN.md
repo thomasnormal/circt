@@ -7,12 +7,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 4, 2026 (Iteration 339 - SMT-LIB BMC Robustness)
+## Current Status - February 4, 2026 (Iteration 341 - Runner Script Memory Limits)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
+| **Runner Script Memory Limits** | ✅ **IMPLEMENTED** | `ulimit -v` + `timeout --signal=KILL` wrappers in all utils/run_* scripts (commit `1afdc6df8`) |
 | **Wait Condition Spurious Trigger Fix** | ✅ **FIXED** | Fixed wait conditions triggering spuriously (commit `b8517345f`) |
 | **Wait Condition Extract Tracing Fix** | ✅ **FIXED** | Fixed `wait(q.size()!=0)` not waking up - added `comb::ExtractOp` and `LLVM::ExtractValueOp` to tracing |
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |

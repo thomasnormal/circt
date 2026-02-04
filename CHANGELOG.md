@@ -1,5 +1,84 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 341 - February 4, 2026
+
+### Summary
+
+Iteration 341: Added memory limits and timeouts to all runner scripts using `ulimit -v` and `timeout --signal=KILL` to prevent circt tools from consuming >30GB memory and hanging the system. Scripts now have configurable limits via `CIRCT_MEMORY_LIMIT_GB` (default 20GB) and `CIRCT_TIMEOUT_SECS` (default 300s) environment variables.
+
+### Accomplishments
+
+1. **Runner script memory limits** - All `utils/run_*` scripts now wrap tool invocations with memory limit protection using:
+   ```bash
+   run_limited() {
+     (
+       ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+       timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+     )
+   }
+   ```
+2. **Standalone wrapper script** - Added `utils/run_with_memory_limit.sh` for ad-hoc use with `-m` (memory GB), `-t` (timeout seconds), and `-v` (verbose) options.
+3. **Environment variable configuration** - `CIRCT_MEMORY_LIMIT_GB` (default 20) and `CIRCT_TIMEOUT_SECS` (default 300) allow customization without script edits.
+4. **Verified working** - Tested with reduced limits (4GB, 8GB, 10GB) confirming `ulimit` correctly sets virtual memory cap.
+
+### Verification (February 4, 2026)
+
+| Suite | Result | Status |
+|-------|--------|--------|
+| Memory limit test (4GB) | ulimit shows 4194304 KB | ✅ Working |
+| circt-sim lit | 105 pass, 1 xfail, 2 timeout | ✅ No regression |
+| sv-tests BMC | 15 pass, 8 fail, 3 xfail | ✅ Expected |
+| sv-tests LEC | 23 pass, 0 fail | ✅ 100% |
+| verilator BMC | 17 pass, 0 fail | ✅ 100% |
+| yosys BMC | 14/14 pass | ✅ 100% |
+| yosys LEC | 14/14 pass | ✅ 100% |
+| OpenTitan | 3/3 pass | ✅ Working |
+
+### Files Changed
+
+- `utils/run_sv_tests_circt_bmc.sh` - Added run_limited wrapper
+- `utils/run_sv_tests_circt_lec.sh` - Added run_limited wrapper
+- `utils/run_verilator_verification_circt_bmc.sh` - Added run_limited wrapper
+- `utils/run_yosys_sva_circt_bmc.sh` - Added run_limited wrapper
+- `utils/run_yosys_sva_circt_lec.sh` - Added run_limited wrapper
+- `utils/run_with_memory_limit.sh` - New standalone wrapper script
+
+### Commits
+
+- `1afdc6df8` - [Utils] Add memory limits to runner scripts
+
+---
+
+## Iteration 340 - February 4, 2026
+
+### Summary
+
+Iteration 340: Added an opt-in "resource guard" across CIRCT command-line tools to prevent runaway memory usage (e.g. IR explosion / non-terminating pipelines) from hanging a machine. The guard can cap RSS or malloc usage (watchdog), and can optionally apply a virtual memory (address space) limit via `RLIMIT_AS`.
+
+### Accomplishments
+
+1. **Cross-tool resource guard** - New `circt::installResourceGuard()` installs a watchdog thread (RSS/malloc) and/or an address space limit. Configuration via flags (`--max-rss-mb`, `--max-malloc-mb`, `--max-vmem-mb`) or environment variables (`CIRCT_MAX_RSS_MB`, `CIRCT_MAX_MALLOC_MB`, `CIRCT_MAX_VMEM_MB`).
+2. **Tool integration** - Wired the resource guard into CIRCT tools so the options are available and take effect early in execution (including tools that use `cl::HideUnrelatedOptions`).
+3. **Test runners hardened** - Added optional `ulimit` + `timeout` wrappers to several `utils/run_*` scripts to reduce the risk of long-running integration test jobs hanging the machine.
+4. **Unit test coverage** - Added a small unit test for resource-guard option parsing.
+
+### Verification (February 4, 2026)
+
+- `ninja -C build circt-opt circt-verilog circt-bmc circt-lec firtool firld hlstool handshake-runner domaintool kanagawatool arcilator CIRCTSupportTests` (**pass**)
+- `./build/tools/circt/unittests/Support/CIRCTSupportTests` (**217/217 pass**)
+
+### Files Changed
+
+- `include/circt/Support/ResourceGuard.h`
+- `lib/Support/ResourceGuard.cpp`
+- `tools/*` (resource guard wiring)
+- `unittests/Support/ResourceGuardTest.cpp`
+- `utils/run_sv_tests_circt_{bmc,lec}.sh`
+- `utils/run_verilator_verification_circt_bmc.sh`
+- `utils/run_yosys_sva_circt_{bmc,lec}.sh`
+
+---
+
 ## Iteration 339 - February 4, 2026
 
 ### Summary
