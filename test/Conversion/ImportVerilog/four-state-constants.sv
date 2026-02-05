@@ -5,6 +5,7 @@
 
 // MOORE-LABEL: moore.module @XZConstants
 // HW-LABEL: hw.module @XZConstants
+// HW-COUNT-1: hw.constant -8 : i4
 module XZConstants(
   input logic [3:0] in,
   output logic [3:0] out_and,
