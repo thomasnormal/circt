@@ -207,22 +207,43 @@ static uint64_t getMallocBytes() {
   return static_cast<uint64_t>(llvm::sys::Process::GetMallocUsage());
 }
 
+static uint64_t getRUsageMaxRSSBytes() {
+#if defined(__unix__) || defined(__APPLE__)
+  struct rusage usage;
+  if (::getrusage(RUSAGE_SELF, &usage) != 0)
+    return 0;
+#if defined(__APPLE__)
+  // On macOS, ru_maxrss is in bytes.
+  return static_cast<uint64_t>(usage.ru_maxrss);
+#else
+  // On Linux and many other Unix platforms, ru_maxrss is in kilobytes.
+  return static_cast<uint64_t>(usage.ru_maxrss) * 1024ull;
+#endif
+#else
+  return 0;
+#endif
+}
+
 static uint64_t getRSSBytes() {
 #if defined(__linux__)
   // /proc/self/statm: size resident shared text lib data dt
   // resident is in pages.
   FILE *f = ::fopen("/proc/self/statm", "r");
   if (!f)
-    return 0;
+    return getRUsageMaxRSSBytes();
   unsigned long sizePages = 0, residentPages = 0;
   int scanned = ::fscanf(f, "%lu %lu", &sizePages, &residentPages);
   ::fclose(f);
   if (scanned != 2)
-    return 0;
+    return getRUsageMaxRSSBytes();
   long pageSize = ::sysconf(_SC_PAGESIZE);
   if (pageSize <= 0)
-    return 0;
+    return getRUsageMaxRSSBytes();
   return static_cast<uint64_t>(residentPages) * static_cast<uint64_t>(pageSize);
+#elif defined(__unix__) || defined(__APPLE__)
+  if (uint64_t rss = getRUsageMaxRSSBytes())
+    return rss;
+  return getMallocBytes();
 #else
   // Fallback: best-effort approximation.
   return getMallocBytes();
@@ -417,6 +438,26 @@ void circt::installResourceGuard() {
 
   if (effectiveMaxVMemMB)
     setAddressSpaceLimitBytes(megabytesToBytes(effectiveMaxVMemMB));
+
+  // If resource guard is enabled, but all explicit limits are disabled, warn to
+  // avoid accidentally running tools without safeguards due to e.g. a script
+  // passing `--max-rss-mb=0` or an environment variable such as
+  // `CIRCT_MAX_RSS_MB=0`.
+  if (optResourceGuard && !effectiveMaxRSSMB && !effectiveMaxMallocMB &&
+      !effectiveMaxVMemMB && !effectiveMaxWallMs) {
+    const bool anyLimitMentioned =
+        (optMaxRSSMB.getNumOccurrences() > 0) ||
+        (optMaxMallocMB.getNumOccurrences() > 0) ||
+        (optMaxVMemMB.getNumOccurrences() > 0) ||
+        (optMaxWallMs.getNumOccurrences() > 0) || envMaxRSSMB ||
+        envMaxMallocMB || envMaxVMemMB || envMaxWallMs;
+    if (anyLimitMentioned) {
+      llvm::errs()
+          << "warning: resource guard enabled but all limits are disabled; "
+             "tool execution is unbounded. Use --no-resource-guard to silence, "
+             "or set a limit such as --max-rss-mb / CIRCT_MAX_RSS_MB.\n";
+    }
+  }
 
   if (!effectiveMaxRSSMB && !effectiveMaxMallocMB && !effectiveMaxWallMs)
     return;
