@@ -73,6 +73,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Module.h"
@@ -200,6 +201,15 @@ static cl::opt<bool>
     dumpUnknownSources("dump-unknown-sources",
                        cl::desc("Dump backward slices for 4-state outputs"),
                        cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
+    diagnoseXProp("diagnose-xprop",
+                  cl::desc("If LEC is SAT/UNKNOWN, re-check under additional "
+                           "constraints that 4-state inputs are known "
+                           "(unknown=0) and report whether the mismatch only "
+                           "exists due to unconstrained X/Z inputs. "
+                           "Only supported with --run-smtlib."),
+                  cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<std::string>
     z3PathOpt("z3-path",
@@ -573,7 +583,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   SmallVector<std::string> lecOutputNames;
   SmallVector<Type> lecInputTypes;
   SmallVector<Type> lecOutputTypes;
-  if (outputFormat == OutputRunSMTLIB && wantSolverOutput) {
+  if (outputFormat == OutputRunSMTLIB && (wantSolverOutput || diagnoseXProp)) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
       auto inputTypes = moduleA.getInputTypes();
@@ -581,16 +591,20 @@ static LogicalResult executeLEC(MLIRContext &context) {
         if (auto strAttr = dyn_cast<StringAttr>(name))
           if (!strAttr.getValue().empty())
             lecInputNames.push_back(strAttr.getValue().str());
-        lecInputTypes.push_back(idx < inputTypes.size() ? inputTypes[idx]
-                                                        : Type{});
+        if (auto strAttr = dyn_cast<StringAttr>(name))
+          if (!strAttr.getValue().empty())
+            lecInputTypes.push_back(idx < inputTypes.size() ? inputTypes[idx]
+                                                            : Type{});
       }
       auto outputTypes = moduleA.getOutputTypes();
       for (auto [idx, name] : llvm::enumerate(moduleA.getOutputNames())) {
         if (auto strAttr = dyn_cast<StringAttr>(name))
           if (!strAttr.getValue().empty())
             lecOutputNames.push_back(strAttr.getValue().str());
-        lecOutputTypes.push_back(idx < outputTypes.size() ? outputTypes[idx]
-                                                          : Type{});
+        if (auto strAttr = dyn_cast<StringAttr>(name))
+          if (!strAttr.getValue().empty())
+            lecOutputTypes.push_back(idx < outputTypes.size() ? outputTypes[idx]
+                                                              : Type{});
       }
     }
   }
@@ -783,6 +797,71 @@ static LogicalResult executeLEC(MLIRContext &context) {
         return failure();
     }
 
+    auto escapeSMTSymbol = [](StringRef name) -> std::string {
+      if (name.empty())
+        return "||";
+      bool simple = true;
+      for (char c : name) {
+        if (!(llvm::isAlnum(static_cast<unsigned char>(c)) || c == '_' ||
+              c == '.' || c == '$' || c == '-' || c == '+' || c == ':' ||
+              c == '/' || c == '@')) {
+          simple = false;
+          break;
+        }
+      }
+      if (simple)
+        return name.str();
+      return ("|" + name.str() + "|");
+    };
+
+    auto insertAssumeKnownInputs = [&](StringRef inPath) -> FailureOr<SmallString<128>> {
+      // If we don't have typed input names, there is nothing we can safely do.
+      if (lecInputNames.empty() || lecInputTypes.size() != lecInputNames.size())
+        return failure();
+
+      auto buffer = llvm::MemoryBuffer::getFile(inPath);
+      if (!buffer) {
+        llvm::errs() << "failed to read SMT file for X-prop diagnosis\n";
+        return failure();
+      }
+      std::string contents = buffer.get()->getBuffer().str();
+
+      std::string injected;
+      injected.append("; circt-lec: assume-known-inputs\n");
+      for (size_t i = 0; i < lecInputNames.size(); ++i) {
+        auto widthOpt = circt::getFourStateValueWidth(lecInputTypes[i]);
+        if (!widthOpt)
+          continue;
+        unsigned w = *widthOpt;
+        std::string sym = escapeSMTSymbol(lecInputNames[i]);
+        injected.append("(assert (= ((_ extract ");
+        injected.append(std::to_string(w - 1));
+        injected.append(" 0) ");
+        injected.append(sym);
+        injected.append(") (_ bv0 ");
+        injected.append(std::to_string(w));
+        injected.append(")))\n");
+      }
+
+      size_t checkPos = contents.find("(check-sat");
+      if (checkPos != std::string::npos)
+        contents.insert(checkPos, injected);
+      else
+        contents.append("\n" + injected);
+
+      SmallString<128> outPath;
+      int outFd = -1;
+      if (auto ec = llvm::sys::fs::createTemporaryFile("circt-lec-xdiag", "smt2",
+                                                       outFd, outPath)) {
+        llvm::errs() << "failed to create temporary SMT file: "
+                     << ec.message() << "\n";
+        return failure();
+      }
+      llvm::raw_fd_ostream os(outFd, true);
+      os << contents;
+      return outPath;
+    };
+
     auto findResultToken = [](StringRef text) -> std::optional<std::string> {
       StringRef remaining = text;
       std::optional<std::string> result;
@@ -926,6 +1005,22 @@ static LogicalResult executeLEC(MLIRContext &context) {
     }
 
     auto token = selectedRun->token;
+    std::optional<bool> xpropOnly;
+    if (diagnoseXProp && token && (*token == "sat" || *token == "unknown")) {
+      auto smtAssumeKnownPath = insertAssumeKnownInputs(smtPath);
+      if (succeeded(smtAssumeKnownPath)) {
+        llvm::FileRemover diagRemover(*smtAssumeKnownPath);
+        Z3Run diagRun;
+        if (failed(runZ3(*smtAssumeKnownPath, /*requestModel=*/false, diagRun)))
+          return failure();
+        if (diagRun.token && *diagRun.token == "unsat") {
+          xpropOnly = true;
+        } else if (diagRun.token && (*diagRun.token == "sat" ||
+                                     *diagRun.token == "unknown")) {
+          xpropOnly = false;
+        }
+      }
+    }
     auto maybePrintCounterexample = [&](StringRef result) {
       if (!wantSolverOutput)
         return;
@@ -1010,6 +1105,12 @@ static LogicalResult executeLEC(MLIRContext &context) {
       outputFile.value()->os() << "c1 != c2\n";
       outputFile.value()->os()
           << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
+      if (xpropOnly && *xpropOnly) {
+        outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
+        llvm::errs() << "note: LEC mismatch only exists when 4-state inputs "
+                        "are unconstrained; under assume-known-inputs "
+                        "(unknown=0), the circuits are equivalent.\n";
+      }
       maybePrintCounterexample(*token);
     } else {
       llvm::errs() << "unexpected z3 output: "
