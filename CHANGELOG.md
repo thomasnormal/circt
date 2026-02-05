@@ -1,10 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 345 - February 5, 2026
+
+### Summary
+
+Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's canonicalize pass to `createBottomUpSimpleCanonicalizerPass()` (region simplification disabled, max 200k rewrites). This unXFAILs 2 tests, bringing circt-sim to **107 pass, 1 xfail**. Agent investigation of OpenTitan AES S-Box Canright LEC revealed a **real computational bug** in CIRCT's lowering of GF(2^8) arithmetic. AVIP simulations stall after UVM factory registration - BFM processes halt after ~282 steps with no transaction activity.
+
+### Accomplishments
+
+1. **circt-sim canonicalize OOM fix** - Switched from bare `mlir::createCanonicalizerPass()` to `circt::createBottomUpSimpleCanonicalizerPass()` which disables region simplification and caps rewrites at 200k. This prevents exponential blowup in the GreedyPatternRewriteDriver on LLHD+comb IR patterns (diamond-shaped DAGs, wide arithmetic chains). Two previously-XFAIL tests now pass.
+2. **Un-XFAIL `dag-false-cycle-detection.mlir`** - DAG diamond pattern test now runs successfully (result=13 as expected).
+3. **Un-XFAIL `apint-width-normalization.mlir`** - APInt width normalization test passes all 9 arithmetic operations.
+4. **OpenTitan AES S-Box LEC investigation** - Discovered real NEQ in `aes_sbox_canright`: input 0x63 produces output 0x63 (should be 0xFB). The Canright GF(2^8) inversion treats data_i as all-zeros, indicating a lowering bug in the XOR/AND trees from the GF arithmetic package.
+5. **AVIP simulation deep investigation** - Identified that APB/UART AVIPs register ~1600 signals and 7-9 processes but only advance 1 delta cycle per time step. BFM processes halt after ~282 steps. UVM phases never progress beyond factory registration.
+
+### Verification (February 5, 2026)
+
+| Suite | Result | Status |
+|-------|--------|--------|
+| circt-lec lit | 102 pass, 3 xfail, 19 unsup | ✅ 100% |
+| circt-bmc lit | 82 pass, 13 xfail, 122 unsup | ✅ 100% |
+| circt-sim lit | 107 pass, 1 xfail, 0 fail | +2 pass, -2 xfail |
+| yosys LEC | 14/14 pass | Baseline |
+| yosys BMC | 14/14 pass | Baseline |
+| sv-tests LEC | 23/23 pass | Baseline |
+| verilator BMC | 17/17 pass | Baseline |
+
+### Known Issues
+
+- **OpenTitan AES S-Box Canright**: Real NEQ in GF(2^8) arithmetic lowering through `circt-verilog`/MooreToCore
+- **AVIP simulation stall**: UVM testbenches register but never advance past factory init; BFM processes halt early
+- **Masked S-Box LLHD**: `llhd.sig.array_get` not supported in circt-lec
+
+### Files Changed
+
+- `tools/circt-sim/circt-sim.cpp` - Switch to `createBottomUpSimpleCanonicalizerPass()`
+- `test/Tools/circt-sim/apint-width-normalization.mlir` - Remove XFAIL marker
+- `test/Tools/circt-sim/dag-false-cycle-detection.mlir` - Remove XFAIL marker
+
+---
+
 ## Iteration 344 - February 5, 2026
 
 ### Summary
 
-Iteration 344: Tightened circt-sim resource guard defaults (4GB RSS, 8GB VMEM, 5-minute wall-clock) to prevent parallel tests from consuming >40% system memory. VerifToSMT temporal soundness improvements with `approxTemporalOps` flag. All lit tests pass: circt-lec 102, circt-bmc 82, circt-sim 105+3xfail.
+Iteration 344: Tightened circt-sim resource guard defaults (4GB RSS, 8GB VMEM, 5-minute wall-clock) to prevent parallel tests from consuming >40% system memory. VerifToSMT temporal soundness improvements with `approxTemporalOps` flag. All lit tests pass: circt-lec 102, circt-bmc 82, circt-sim 105+3xfail. All integration tests green (sv-tests 23+23, yosys 14+14, verilator 17). AVIP 6/9 compile, 3 blocked (AXI4Lite/JTAG/SPI).
 
 ### Accomplishments
 
