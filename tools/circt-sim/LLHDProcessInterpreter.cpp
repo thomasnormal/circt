@@ -8546,6 +8546,23 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // so that re-entrant calls (via uvm_component::new -> get_root) can skip
   // the m_inst != uvm_top comparison that fails during construction.
   StringRef calleeName = callOp.getCallee();
+
+  // Handle process::self() - both the old stub (@self) and the runtime function.
+  // Old compilations of circt-verilog generated a stub @self() that returns null.
+  // Intercept it here to return the actual process handle, fixing UVM's
+  // "run_test() invoked from a non process context" error.
+  if (calleeName == "self" && callOp.getNumOperands() == 0 &&
+      callOp.getNumResults() == 1 &&
+      isa<LLVM::LLVMPointerType>(callOp.getResult(0).getType())) {
+    auto &state = processStates[procId];
+    void *processHandle = &state;
+    uint64_t handleVal = reinterpret_cast<uint64_t>(processHandle);
+    LLVM_DEBUG(llvm::dbgs() << "  func.call @self(): returning process handle 0x"
+                            << llvm::format_hex(handleVal, 16) << "\n");
+    setValue(procId, callOp.getResult(0), InterpretedValue(APInt(64, handleVal)));
+    return success();
+  }
+
   bool isGetRoot = calleeName == "m_uvm_get_root";
   if (isGetRoot) {
     ++uvmGetRootDepth;
