@@ -98,6 +98,107 @@ TEST(StripLLHDSignalPtrCastTest, HandlesPtrCastLoadStore) {
   EXPECT_FALSE(hasCombInput);
 }
 
+TEST(StripLLHDSignalPtrCastTest, ResolvesSingleEpsilonDrivenSignals) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @epsilon_driven_signal(in %in : i8, out out : i8) {
+      %t0 = llhd.constant_time <0ns, 0d, 0e>
+      %te = llhd.constant_time <0ns, 0d, 1e>
+      %c0 = hw.constant 0 : i8
+      %src = llhd.sig name "src" %c0 : i8
+      llhd.drv %src, %in after %t0 : i8
+      %src_val = llhd.prb %src : i8
+
+      %dst = llhd.sig name "dst" %c0 : i8
+      %dst_val = llhd.prb %dst : i8
+      llhd.drv %dst, %src_val after %te : i8
+
+      hw.output %dst_val : i8
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createStripLLHDInterfaceSignals());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLHD = false;
+  module->walk([&](Operation *op) {
+    if (auto *dialect = op->getDialect())
+      if (dialect->getNamespace() == "llhd")
+        hasLLHD = true;
+  });
+  EXPECT_FALSE(hasLLHD);
+
+  bool checkedOutput = false;
+  module->walk([&](circt::hw::HWModuleOp hwModule) {
+    if (hwModule.getSymName() != "epsilon_driven_signal")
+      return;
+    auto outputOp =
+        cast<circt::hw::OutputOp>(hwModule.getBodyBlock()->getTerminator());
+    Value input = hwModule.getArgumentForInput(0);
+    EXPECT_EQ(outputOp.getOperand(0), input);
+    checkedOutput = true;
+  });
+  EXPECT_TRUE(checkedOutput);
+}
+
+TEST(StripLLHDSignalPtrCastTest, ResolvesDriveAfterProbeAtZeroTime) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
+                      mlir::cf::ControlFlowDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @drive_after_probe(in %in : i8, out out : i8) {
+      %t0 = llhd.constant_time <0ns, 0d, 0e>
+      %c0 = hw.constant 0 : i8
+      %sig = llhd.sig name "sig" %c0 : i8
+      %prb = llhd.prb %sig : i8
+
+      // The drive is scheduled at zero time, but placed after the combinational
+      // region in IR. Stripping should still treat the signal as a wire driven
+      // by `%in`, not by its init value.
+      %comb = llhd.combinational -> i8 {
+        llhd.yield %prb : i8
+      }
+
+      llhd.drv %sig, %in after %t0 : i8
+      hw.output %comb : i8
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createStripLLHDInterfaceSignals());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLHD = false;
+  module->walk([&](Operation *op) {
+    if (auto *dialect = op->getDialect())
+      if (dialect->getNamespace() == "llhd")
+        hasLLHD = true;
+  });
+  EXPECT_FALSE(hasLLHD);
+
+  bool checkedOutput = false;
+  module->walk([&](circt::hw::HWModuleOp hwModule) {
+    if (hwModule.getSymName() != "drive_after_probe")
+      return;
+    auto outputOp =
+        cast<circt::hw::OutputOp>(hwModule.getBodyBlock()->getTerminator());
+    Value input = hwModule.getArgumentForInput(0);
+    EXPECT_EQ(outputOp.getOperand(0), input);
+    checkedOutput = true;
+  });
+  EXPECT_TRUE(checkedOutput);
+}
+
 TEST(StripLLHDSignalPtrCastTest, HandlesAllocaPhiRefMerge) {
   MLIRContext context;
   context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
