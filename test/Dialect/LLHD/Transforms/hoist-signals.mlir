@@ -28,6 +28,27 @@ hw.module @SimpleProbesInProcessOp() {
   }
 }
 
+// CHECK-LABEL: @HoistProbesAfterAncestorDrives
+hw.module @HoistProbesAfterAncestorDrives(in %in: i42) {
+  %c0_i42 = hw.constant 0 : i42
+  %t0 = llhd.constant_time <0ns, 0d, 0e>
+  %a = llhd.sig %c0_i42 : i42
+  // The probe is hoisted out of the process, but must not be placed before the
+  // drive that assigns the signal from the module input.
+  // CHECK: [[T0:%.+]] = llhd.constant_time <0ns, 0d, 0e>
+  // CHECK: llhd.process
+  llhd.process {
+    // CHECK-NOT: llhd.prb
+    %0 = llhd.prb %a : i42
+    // CHECK: call @use_i42([[A:%[0-9A-Za-z_\\.]+]])
+    func.call @use_i42(%0) : (i42) -> ()
+    llhd.halt
+  }
+  // CHECK: llhd.drv %a, %in after [[T0]]
+  // CHECK-NEXT: [[A]] = llhd.prb %a
+  llhd.drv %a, %in after %t0 : i42
+}
+
 // CHECK-LABEL: @SimpleProbesInCombinationalOp
 hw.module @SimpleProbesInCombinationalOp() {
   %c0_i42 = hw.constant 0 : i42
@@ -180,6 +201,27 @@ hw.module @DontHoistDrivesAcrossSideEffects() {
     func.call @maybe_side_effecting() : () -> ()
     llhd.halt
   }
+}
+
+// CHECK-LABEL: @HoistDrivesAcrossUnrelatedProbes
+hw.module @HoistDrivesAcrossUnrelatedProbes() {
+  %0 = llhd.constant_time <0ns, 0d, 1e>
+  %c0_i1 = hw.constant 0 : i1
+  %c1_i1 = hw.constant 1 : i1
+  %a = llhd.sig %c0_i1 : i1
+  %b = llhd.sig %c0_i1 : i1
+  // CHECK: [[A:%.+]] = llhd.sig
+  // CHECK: [[B:%.+]] = llhd.sig
+  // CHECK: llhd.process
+  // CHECK-NOT: llhd.drv [[A]]
+  // CHECK: llhd.prb [[B]]
+  // CHECK: llhd.halt
+  llhd.process {
+    llhd.drv %a, %c1_i1 after %0 : i1
+    llhd.prb %b : i1
+    llhd.halt
+  }
+  // CHECK: llhd.drv [[A]], {{.*}} after {{.*}} : i1
 }
 
 // CHECK-LABEL: @DontHoistDrivesOfSlotsWithUnsavoryUsers
