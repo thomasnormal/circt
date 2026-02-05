@@ -273,6 +273,19 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
+  # Determine how to interpret SAT/UNSAT for this test.
+  #
+  # By convention, `circt-bmc` reports SAT when it finds an "interesting"
+  # condition:
+  # - for asserts: a violation exists
+  # - for covers: a witness exists
+  #
+  # For cover-only tests, SAT is therefore a PASS, while UNSAT is a FAIL.
+  check_mode="assert"
+  if grep -Fq "verif.cover" "$mlir" && ! grep -Fq "verif.assert" "$mlir"; then
+    check_mode="cover"
+  fi
+
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
     "--module" "$top_module")
   if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
@@ -324,7 +337,15 @@ while IFS= read -r -d '' sv; do
       result="ERROR"
     fi
   else
-    if grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+    if [[ "$check_mode" == "cover" ]]; then
+      if grep -q "BMC_RESULT=SAT" <<<"$out"; then
+        result="PASS"
+      elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+        result="FAIL"
+      else
+        result="ERROR"
+      fi
+    elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
       result="PASS"
     elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
       result="FAIL"
