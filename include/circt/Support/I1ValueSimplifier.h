@@ -24,6 +24,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <optional>
 #include <string>
 
@@ -491,7 +492,10 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
   return {value, invert};
 }
 
-inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
+namespace detail {
+template <typename GetBlockArgNameT>
+inline std::optional<std::string>
+getI1ValueKeyImpl(mlir::Value value, GetBlockArgNameT getBlockArgName) {
   if (!value)
     return std::nullopt;
   auto simplified = simplifyI1Value(value);
@@ -507,7 +511,12 @@ inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
 
   mlir::BlockArgument root;
   if (traceI1ValueRoot(value, root) && root) {
-    std::string key = ("arg" + llvm::Twine(root.getArgNumber())).str();
+    llvm::StringRef name = getBlockArgName(root);
+    std::string key;
+    if (!name.empty())
+      key = ("port:" + name).str();
+    else
+      key = ("arg" + llvm::Twine(root.getArgNumber())).str();
     if (invert)
       key.append(":inv");
     return key;
@@ -537,7 +546,11 @@ inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
 
     llvm::hash_code result = llvm::hash_code{};
     if (auto arg = llvm::dyn_cast<mlir::BlockArgument>(v)) {
-      result = llvm::hash_combine("arg", arg.getArgNumber());
+      llvm::StringRef name = getBlockArgName(arg);
+      if (!name.empty())
+        result = llvm::hash_combine("port", name);
+      else
+        result = llvm::hash_combine("arg", arg.getArgNumber());
     } else if (auto literal = getConstI1Value(v)) {
       result = llvm::hash_combine("const", *literal ? 1 : 0);
     } else if (auto *op = v.getDefiningOp()) {
@@ -663,6 +676,21 @@ inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
   if (invert)
     key.append(":inv");
   return key;
+}
+} // namespace detail
+
+inline std::optional<std::string> getI1ValueKey(mlir::Value value) {
+  return detail::getI1ValueKeyImpl(
+      value, [](mlir::BlockArgument) -> llvm::StringRef { return {}; });
+}
+
+/// Like getI1ValueKey(Value), but keys block arguments by a stable name when
+/// provided by `getBlockArgName`. This is useful when values must be keyed
+/// across IR rewrites that insert or remove arguments (changing arg numbers).
+inline std::optional<std::string> getI1ValueKeyWithBlockArgNames(
+    mlir::Value value,
+    llvm::function_ref<llvm::StringRef(mlir::BlockArgument)> getBlockArgName) {
+  return detail::getI1ValueKeyImpl(value, getBlockArgName);
 }
 
 } // namespace circt

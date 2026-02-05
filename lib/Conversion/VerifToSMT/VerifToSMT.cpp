@@ -4358,13 +4358,31 @@ struct VerifBoundedModelCheckingOpConversion
           auto dict = dyn_cast<DictionaryAttr>(
               regClockSourcesAttr[regIndex]);
           if (dict) {
-            auto argAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
-            auto invertAttr = dyn_cast<BoolAttr>(dict.get("invert"));
-            if (argAttr && invertAttr) {
+            auto invertAttr = dyn_cast_or_null<BoolAttr>(dict.get("invert"));
+            bool dictInvert = invertAttr ? invertAttr.getValue() : false;
+
+            // Support clock-key-based mapping for derived clocks. This is used
+            // when a register clock cannot be traced to a single module input
+            // (e.g. clocks derived from complex i1 expressions). LowerToBMC
+            // supplies bmc_clock_keys to map expression keys to inserted BMC
+            // clock inputs.
+            auto keyAttr = dyn_cast_or_null<StringAttr>(dict.get("clock_key"));
+            if (keyAttr && !keyAttr.getValue().empty()) {
+              auto it = clockKeyToPos.find(keyAttr.getValue());
+              if (it != clockKeyToPos.end()) {
+                regClockToLoopIndex.push_back(it->second.pos);
+                invert = dictInvert ^ it->second.invert;
+                mapped = true;
+              }
+            }
+
+            auto argAttr =
+                dyn_cast_or_null<IntegerAttr>(dict.get("arg_index"));
+            if (!mapped && argAttr) {
               unsigned argIndex = argAttr.getValue().getZExtValue();
               if (auto pos = mapArgIndexToClockPos(argIndex)) {
                 regClockToLoopIndex.push_back(*pos);
-                invert = invertAttr.getValue();
+                invert = dictInvert;
                 mapped = true;
               }
             }

@@ -464,6 +464,79 @@ TEST(I1ValueSimplifierTest, I1ValueKeyRootsAndConsts) {
   EXPECT_EQ(*keyOne, "const1");
 }
 
+TEST(I1ValueSimplifierTest, I1ValueKeyWithNamedArgsStableAcrossArgShifts) {
+  MLIRContext context;
+  context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();
+
+  auto loc = UnknownLoc::get(&context);
+  auto module = ModuleOp::create(loc);
+  auto builder = ImplicitLocOpBuilder::atBlockEnd(loc, module.getBody());
+
+  auto i1 = builder.getI1Type();
+
+  SmallVector<hw::PortInfo> portsAB;
+  portsAB.push_back(
+      {builder.getStringAttr("a"), i1, hw::ModulePort::Direction::Input});
+  portsAB.push_back(
+      {builder.getStringAttr("b"), i1, hw::ModulePort::Direction::Input});
+  auto topAB =
+      hw::HWModuleOp::create(builder, builder.getStringAttr("TopAB"), portsAB);
+  builder.setInsertionPointToStart(topAB.getBodyBlock());
+  auto aAB = topAB.getBodyBlock()->getArgument(0);
+  auto bAB = topAB.getBodyBlock()->getArgument(1);
+  auto andAB = comb::AndOp::create(builder, loc, aAB, bAB).getResult();
+
+  builder.setInsertionPointToEnd(module.getBody());
+  SmallVector<hw::PortInfo> portsXYAB;
+  portsXYAB.push_back(
+      {builder.getStringAttr("x"), i1, hw::ModulePort::Direction::Input});
+  portsXYAB.push_back(
+      {builder.getStringAttr("y"), i1, hw::ModulePort::Direction::Input});
+  portsXYAB.push_back(
+      {builder.getStringAttr("a"), i1, hw::ModulePort::Direction::Input});
+  portsXYAB.push_back(
+      {builder.getStringAttr("b"), i1, hw::ModulePort::Direction::Input});
+  auto topXYAB = hw::HWModuleOp::create(builder, builder.getStringAttr("TopXYAB"),
+                                        portsXYAB);
+  builder.setInsertionPointToStart(topXYAB.getBodyBlock());
+  auto aXYAB = topXYAB.getBodyBlock()->getArgument(2);
+  auto bXYAB = topXYAB.getBodyBlock()->getArgument(3);
+  auto andXYAB = comb::AndOp::create(builder, loc, aXYAB, bXYAB).getResult();
+
+  auto keyAB = getI1ValueKey(andAB);
+  auto keyXYAB = getI1ValueKey(andXYAB);
+  ASSERT_TRUE(keyAB && keyXYAB);
+  EXPECT_NE(*keyAB, *keyXYAB);
+
+  auto resolveAB = [&](mlir::BlockArgument arg) -> llvm::StringRef {
+    if (!arg || arg.getOwner() != topAB.getBodyBlock())
+      return {};
+    auto inputNames = topAB.getInputNames();
+    if (arg.getArgNumber() >= inputNames.size())
+      return {};
+    if (auto nameAttr =
+            dyn_cast_or_null<StringAttr>(inputNames[arg.getArgNumber()]))
+      return nameAttr.getValue();
+    return {};
+  };
+  auto resolveXYAB = [&](mlir::BlockArgument arg) -> llvm::StringRef {
+    if (!arg || arg.getOwner() != topXYAB.getBodyBlock())
+      return {};
+    auto inputNames = topXYAB.getInputNames();
+    if (arg.getArgNumber() >= inputNames.size())
+      return {};
+    if (auto nameAttr =
+            dyn_cast_or_null<StringAttr>(inputNames[arg.getArgNumber()]))
+      return nameAttr.getValue();
+    return {};
+  };
+
+  auto namedKeyAB = getI1ValueKeyWithBlockArgNames(andAB, resolveAB);
+  auto namedKeyXYAB = getI1ValueKeyWithBlockArgNames(andXYAB, resolveXYAB);
+  ASSERT_TRUE(namedKeyAB && namedKeyXYAB);
+  EXPECT_EQ(*namedKeyAB, *namedKeyXYAB);
+}
+
 TEST(I1ValueSimplifierTest, I1ValueKeyStructuralEquivalence) {
   MLIRContext context;
   context.loadDialect<hw::HWDialect, comb::CombDialect, seq::SeqDialect>();

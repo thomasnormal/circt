@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -276,21 +277,24 @@ static uint64_t getRSSBytes() {
 #endif
 }
 
-static void setAddressSpaceLimitBytes(uint64_t bytes) {
+static bool setAddressSpaceLimitBytes(uint64_t bytes) {
 #if defined(__unix__) || defined(__APPLE__)
   if (bytes == 0)
-    return;
+    return true;
   struct rlimit rlim;
   if (::getrlimit(RLIMIT_AS, &rlim) != 0)
-    return;
+    return false;
   // Keep the hard limit unchanged unless it is lower than our requested limit.
   rlim_t requested = static_cast<rlim_t>(bytes);
   if (rlim.rlim_max != RLIM_INFINITY && requested > rlim.rlim_max)
     requested = rlim.rlim_max;
   rlim.rlim_cur = requested;
-  (void)::setrlimit(RLIMIT_AS, &rlim);
+  if (::setrlimit(RLIMIT_AS, &rlim) != 0)
+    return false;
+  return true;
 #else
   (void)bytes;
+  return true;
 #endif
 }
 
@@ -505,8 +509,14 @@ void circt::installResourceGuard() {
     effectiveMaxVMemMB = effectiveMaxRSSMB + overheadMB;
   }
 
-  if (effectiveMaxVMemMB)
-    setAddressSpaceLimitBytes(megabytesToBytes(effectiveMaxVMemMB));
+  if (effectiveMaxVMemMB) {
+    if (!setAddressSpaceLimitBytes(megabytesToBytes(effectiveMaxVMemMB))) {
+      llvm::errs()
+          << "warning: resource guard: failed to set RLIMIT_AS address-space "
+             "limit to "
+          << effectiveMaxVMemMB << " MB: " << std::strerror(errno) << "\n";
+    }
+  }
 
   if (verbose) {
     llvm::errs() << "note: resource guard: ";

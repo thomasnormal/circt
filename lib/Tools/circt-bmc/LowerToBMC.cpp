@@ -599,6 +599,24 @@ void LowerToBMCPass::runOnOperation() {
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+
+    // Use stable argument names when building clock keys, so they remain valid
+    // across transformations that insert or remove module inputs (which shifts
+    // argument numbers).
+    auto getBlockArgName = [&](BlockArgument arg) -> StringRef {
+      if (!arg || arg.getOwner() != hwModule.getBodyBlock())
+        return {};
+      auto inputNames = hwModule.getInputNames();
+      if (arg.getArgNumber() >= inputNames.size())
+        return {};
+      if (auto nameAttr =
+              dyn_cast_or_null<StringAttr>(inputNames[arg.getArgNumber()])) {
+        if (!nameAttr.getValue().empty())
+          return nameAttr.getValue();
+      }
+      return {};
+    };
+
     auto canonicalizeClockValue = [&](Value value, bool &invert) -> Value {
       auto simplified = simplifyI1Value(value);
       invert = simplified.invert;
@@ -650,7 +668,7 @@ void LowerToBMCPass::runOnOperation() {
       Value base = getFourStateClockBase(canonical);
       if (!base)
         base = getFourStateClockBase(input);
-      auto inputKey = getI1ValueKey(input);
+      auto inputKey = getI1ValueKeyWithBlockArgNames(input, getBlockArgName);
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
@@ -756,7 +774,8 @@ void LowerToBMCPass::runOnOperation() {
       };
 
       auto makeClockKey = [&](Value clockValue) -> StringAttr {
-        if (auto key = getI1ValueKey(clockValue))
+        if (auto key =
+                getI1ValueKeyWithBlockArgNames(clockValue, getBlockArgName))
           return builder.getStringAttr(*key);
         return StringAttr{};
       };
@@ -809,7 +828,8 @@ void LowerToBMCPass::runOnOperation() {
       auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
         bool invert = false;
         Value canonical = canonicalizeClockValue(input, invert);
-        auto inputKey = getI1ValueKey(input);
+        auto inputKey =
+            getI1ValueKeyWithBlockArgNames(input, getBlockArgName);
         Value base = getFourStateClockBase(canonical);
         if (!base)
           base = getFourStateClockBase(input);
@@ -956,7 +976,8 @@ void LowerToBMCPass::runOnOperation() {
       // input. This avoids treating structurally equivalent clock expressions
       // as unrelated to the inserted clock ports.
       for (auto clockOp : ltlClockOps) {
-        if (auto key = getI1ValueKey(clockOp.getClock()))
+        if (auto key = getI1ValueKeyWithBlockArgNames(clockOp.getClock(),
+                                                      getBlockArgName))
           clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {

@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 366 - February 5, 2026
+
+### Summary
+
+Iteration 366: Stabilized multi-clock BMC clock keying across IR rewrites so registers driven by derived i1 clock expressions can be mapped reliably. This unblocks sv-tests-style designs where clocks are `seq.to_clock` of complex combinational i1 expressions. Also hardened resource-guard diagnostics when the OS refuses the address-space limit.
+
+### Accomplishments
+
+1. **Stable derived clock keys** - `getI1ValueKeyWithBlockArgNames` keys block arguments by port name (when available) to keep expression keys stable when module inputs are inserted/removed (e.g. by LowerToBMC clock port insertion).
+2. **Multi-clock derived reg mapping** - Externalized register clocks may now be recorded as `{clock_key, invert}` and mapped via `bmc_clock_keys` in VerifToSMT.
+3. **Tests** - Added a `circt-bmc` regression (`bmc-multiclock-reg-clock-keys.mlir`) and a unit test covering named-argument value key stability.
+4. **Resource guard diagnostics** - Emit a warning if setting `RLIMIT_AS` fails, since the address-space backstop is a key defense against runaway memory use.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Tools/circt-bmc/bmc-multiclock-reg-clock-keys.mlir`
+- `build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=I1ValueSimplifierTest.I1ValueKeyWithNamedArgsStableAcrossArgShifts`
+
 ## Iteration 365 - February 5, 2026
 
 ### Summary
