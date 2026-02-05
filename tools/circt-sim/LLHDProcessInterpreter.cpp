@@ -29,6 +29,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <fstream>
 #include <sstream>
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -13664,6 +13665,272 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_readmemh / __moore_readmemb - load memory from file
+    // Signature: void(filename_ptr, mem_ptr, elem_width_i32, num_elems_i32)
+    // filename_ptr points to a stack-allocated {ptr, i64} string struct
+    // mem_ptr is the !llhd.ref (signal) or alloca ptr for the memory array
+    // elem_width is the logical bit width of each element (e.g. 8 for logic [7:0])
+    // num_elems is the number of array elements
+    if (calleeName == "__moore_readmemh" ||
+        calleeName == "__moore_readmemb") {
+      bool isHex = (calleeName == "__moore_readmemh");
+      if (callOp.getNumOperands() >= 4) {
+        // Extract filename from the string struct pointer (arg 0)
+        InterpretedValue filenamePtrVal = getValue(procId, callOp.getOperand(0));
+        std::string filename;
+        if (!filenamePtrVal.isX()) {
+          uint64_t structAddr = filenamePtrVal.getUInt64();
+          uint64_t structOffset = 0;
+          auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
+          if (block && block->initialized && structOffset + 16 <= block->data.size()) {
+            uint64_t strPtr = 0;
+            int64_t strLen = 0;
+            for (int i = 0; i < 8; ++i) {
+              strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+            }
+            if (strPtr != 0 && strLen > 0) {
+              // Look up in dynamicStrings first
+              auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+              if (dynIt != dynamicStrings.end() && dynIt->second.first) {
+                filename = std::string(dynIt->second.first,
+                    std::min(static_cast<size_t>(strLen),
+                             static_cast<size_t>(dynIt->second.second)));
+              } else {
+                // Try global memory
+                uint64_t strOffset = 0;
+                auto *strBlock = findMemoryBlockByAddress(strPtr, procId, &strOffset);
+                if (strBlock && strBlock->initialized &&
+                    strOffset + strLen <= strBlock->data.size()) {
+                  filename = std::string(
+                      reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+                      strLen);
+                }
+              }
+            }
+          }
+        }
+
+        // Get elem_width and num_elems from args 2 and 3
+        InterpretedValue elemWidthVal = getValue(procId, callOp.getOperand(2));
+        InterpretedValue numElemsVal = getValue(procId, callOp.getOperand(3));
+        unsigned elemBitWidth = elemWidthVal.isX() ? 0 : static_cast<unsigned>(elemWidthVal.getUInt64());
+        unsigned numElems = numElemsVal.isX() ? 0 : static_cast<unsigned>(numElemsVal.getUInt64());
+
+        if (filename.empty() || elemBitWidth == 0 || numElems == 0) {
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
+                                  << " - invalid args (filename=\"" << filename
+                                  << "\", elemWidth=" << elemBitWidth
+                                  << ", numElems=" << numElems << ")\n");
+          return success();
+        }
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: " << calleeName
+                                << "(\"" << filename << "\", elemWidth="
+                                << elemBitWidth << ", numElems=" << numElems
+                                << ")\n");
+
+        // Parse the file - each line may contain: @addr, value, or // comment
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+          llvm::errs() << "Warning: " << (isHex ? "$readmemh" : "$readmemb")
+                       << ": cannot open file \"" << filename << "\"\n";
+          return success();
+        }
+
+        // Parse values from the file
+        std::vector<std::pair<unsigned, APInt>> indexedValues;
+        unsigned currentAddr = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+          // Strip comments (// style and /* */ style)
+          auto commentPos = line.find("//");
+          if (commentPos != std::string::npos)
+            line = line.substr(0, commentPos);
+
+          std::istringstream iss(line);
+          std::string token;
+          while (iss >> token) {
+            if (token.empty())
+              continue;
+
+            // Address specification: @hex_addr
+            if (token[0] == '@') {
+              std::string addrStr = token.substr(1);
+              currentAddr = std::stoul(addrStr, nullptr, 16);
+              continue;
+            }
+
+            // Parse value token
+            APInt val(elemBitWidth, 0);
+            bool valid = true;
+            if (isHex) {
+              // Hex format - allow x/X/z/Z characters (treat as 0)
+              std::string cleanToken;
+              for (char c : token) {
+                if (c == '_') continue; // Skip underscores
+                if (c == 'x' || c == 'X' || c == 'z' || c == 'Z')
+                  cleanToken += '0';
+                else if (std::isxdigit(c))
+                  cleanToken += c;
+                else {
+                  valid = false;
+                  break;
+                }
+              }
+              if (valid && !cleanToken.empty()) {
+                // Parse hex value, truncating/extending to elemBitWidth
+                unsigned numBits = cleanToken.size() * 4;
+                if (numBits > elemBitWidth)
+                  numBits = elemBitWidth;
+                APInt parsed(std::max(numBits, elemBitWidth), cleanToken, 16);
+                val = parsed.trunc(elemBitWidth);
+              } else {
+                valid = false;
+              }
+            } else {
+              // Binary format - allow x/X/z/Z characters (treat as 0)
+              std::string cleanToken;
+              for (char c : token) {
+                if (c == '_') continue;
+                if (c == 'x' || c == 'X' || c == 'z' || c == 'Z')
+                  cleanToken += '0';
+                else if (c == '0' || c == '1')
+                  cleanToken += c;
+                else {
+                  valid = false;
+                  break;
+                }
+              }
+              if (valid && !cleanToken.empty()) {
+                unsigned numBits = cleanToken.size();
+                if (numBits > elemBitWidth)
+                  numBits = elemBitWidth;
+                APInt parsed(std::max(numBits, elemBitWidth), cleanToken, 2);
+                val = parsed.trunc(elemBitWidth);
+              } else {
+                valid = false;
+              }
+            }
+
+            if (valid && currentAddr < numElems) {
+              indexedValues.push_back({currentAddr, val});
+              LLVM_DEBUG(llvm::dbgs() << "    [" << currentAddr << "] = 0x"
+                                      << llvm::format_hex_no_prefix(
+                                             val.getZExtValue(), (elemBitWidth + 3) / 4)
+                                      << "\n");
+              ++currentAddr;
+            }
+          }
+        }
+        file.close();
+
+        if (indexedValues.empty()) {
+          LLVM_DEBUG(llvm::dbgs() << "    No values parsed from file\n");
+          return success();
+        }
+
+        // Now write the parsed values into the memory array.
+        // The mem_ptr operand (arg 1) traces back to the !llhd.ref signal.
+        Value memOperand = callOp.getOperand(1);
+        SignalId sigId = resolveSignalId(memOperand);
+
+        if (sigId != 0) {
+          // Signal-backed memory: read current value, modify, write back
+          const SignalValue &currentSV = scheduler.getSignalValue(sigId);
+          unsigned totalWidth = currentSV.getWidth();
+          APInt arrayBits = currentSV.isUnknown()
+                                ? APInt(totalWidth, 0)
+                                : currentSV.getAPInt();
+
+          // Determine the total element width in the signal (including unknown bits)
+          // For 4-state types: totalElemWidth = 2 * elemBitWidth
+          // (struct<value: iN, unknown: iN>)
+          unsigned totalElemWidth = totalWidth / numElems;
+
+          for (auto &[idx, val] : indexedValues) {
+            if (idx >= numElems)
+              continue;
+            // MooreToCore maps SV index i to hw.array index (N-1-i).
+            // SV mem[0] is at the MSB end (hw.array index N-1).
+            unsigned hwIdx = numElems - 1 - idx;
+            unsigned elemBase = hwIdx * totalElemWidth;
+
+            if (totalElemWidth == 2 * elemBitWidth) {
+              // 4-state element: struct<value: iN, unknown: iN>
+              // HW struct layout: field 0 ("value") at high bits,
+              //                   field 1 ("unknown") at low bits
+              // Set value bits (upper half of element) to the parsed value
+              APInt valBits = val;
+              if (valBits.getBitWidth() < elemBitWidth)
+                valBits = valBits.zext(elemBitWidth);
+              else if (valBits.getBitWidth() > elemBitWidth)
+                valBits = valBits.trunc(elemBitWidth);
+              arrayBits.insertBits(valBits, elemBase + elemBitWidth);
+              // Clear unknown bits (lower half of element)
+              APInt zeroBits(elemBitWidth, 0);
+              arrayBits.insertBits(zeroBits, elemBase);
+            } else {
+              // 2-state or other: just insert the value directly
+              APInt valBits = val;
+              if (valBits.getBitWidth() < totalElemWidth)
+                valBits = valBits.zext(totalElemWidth);
+              else if (valBits.getBitWidth() > totalElemWidth)
+                valBits = valBits.trunc(totalElemWidth);
+              arrayBits.insertBits(valBits, elemBase);
+            }
+          }
+
+          scheduler.updateSignal(sigId, SignalValue(arrayBits));
+          LLVM_DEBUG(llvm::dbgs() << "    Updated signal " << sigId
+                                  << " with " << indexedValues.size()
+                                  << " values\n");
+        } else {
+          // Alloca-backed memory: write values to the memory block
+          InterpretedValue memPtrVal = getValue(procId, memOperand);
+          if (!memPtrVal.isX()) {
+            uint64_t memAddr = memPtrVal.getUInt64();
+            uint64_t memOffset = 0;
+            auto *memBlock = findMemoryBlockByAddress(memAddr, procId, &memOffset);
+            if (memBlock && memBlock->initialized) {
+              // For alloca-backed memory, the layout is LLVM-style:
+              // each element is stored as a contiguous block of bytes.
+              // For 4-state types in LLVM layout: struct{iN, iN} -> {value, unknown}
+              // In LLVM layout, field 0 is at offset 0 (low bytes).
+              unsigned totalElemWidth = (memBlock->data.size() - memOffset) * 8 / numElems;
+              unsigned elemBytes = totalElemWidth / 8;
+
+              for (auto &[idx, val] : indexedValues) {
+                if (idx >= numElems)
+                  continue;
+                unsigned byteBase = memOffset + idx * elemBytes;
+                unsigned valueBytes = (elemBitWidth + 7) / 8;
+
+                // Write value bytes (in LLVM layout, value field is first)
+                APInt valBits = val;
+                if (valBits.getBitWidth() < elemBitWidth)
+                  valBits = valBits.zext(elemBitWidth);
+                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->data.size(); ++b) {
+                  memBlock->data[byteBase + b] =
+                      static_cast<uint8_t>(valBits.extractBitsAsZExtValue(8, b * 8));
+                }
+                // Clear unknown bytes (in LLVM layout, unknown field follows value)
+                for (unsigned b = valueBytes; b < elemBytes && byteBase + b < memBlock->data.size(); ++b) {
+                  memBlock->data[byteBase + b] = 0;
+                }
+              }
+
+              LLVM_DEBUG(llvm::dbgs() << "    Updated alloca memory at 0x"
+                                      << llvm::format_hex(memAddr, 16)
+                                      << " with " << indexedValues.size()
+                                      << " values\n");
+            }
+          }
+        }
+      }
+      return success();
+    }
+
     // Handle __moore_string_concat - concatenate two string structs
     // Signature: (lhs_ptr: ptr, rhs_ptr: ptr) -> struct{ptr, i64}
     // lhs_ptr and rhs_ptr point to stack-allocated {ptr, i64} structs
@@ -14148,8 +14415,8 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
 
       // Allocate a 4-byte block for the i32 core state value (1 =
       // UVM_CORE_INITIALIZING)
-      uint64_t stateValueAddr = nextMallocAddress;
-      nextMallocAddress += 8; // Align to 8 bytes
+      uint64_t stateValueAddr = globalNextAddress;
+      globalNextAddress += 8; // Align to 8 bytes
 
       MemoryBlock valueBlock(4, 32);
       // Store value 1 (UVM_CORE_INITIALIZING) as little-endian i32
