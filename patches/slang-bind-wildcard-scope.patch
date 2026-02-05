@@ -1,0 +1,41 @@
+diff --git a/source/ast/symbols/PortSymbols.cpp b/source/ast/symbols/PortSymbols.cpp
+index 327a40043..ceed456c8 100644
+--- a/source/ast/symbols/PortSymbols.cpp
++++ b/source/ast/symbols/PortSymbols.cpp
+@@ -1086,6 +1086,14 @@ private:
+             flags |= LookupFlags::DisallowWildcardImport | LookupFlags::DisallowUnitReferences;
+ 
+         auto symbol = Lookup::unqualified(scope, port.name, flags);
++        bool usedParentScope = false;
++        if (!symbol && instance.body.flags.has(InstanceFlags::FromBind)) {
++            auto parentScope = instance.getParentScope();
++            if (parentScope && parentScope != &scope) {
++                symbol = Lookup::unqualified(*parentScope, port.name, flags);
++                usedParentScope = symbol != nullptr;
++            }
++        }
+         if (!symbol) {
+             // If this is a wildcard connection, we're allowed to use the port's default value,
+             // if it has one.
+@@ -1096,7 +1104,8 @@ private:
+             return emptyConnection(port);
+         }
+ 
+-        if (!symbol->isDeclaredBefore(lookupLocation).value_or(true) &&
++        auto useLookupLocation = usedParentScope ? LookupLocation::after(instance) : lookupLocation;
++        if (!symbol->isDeclaredBefore(useLookupLocation).value_or(true) &&
+             !comp.hasFlag(CompilationFlags::AllowUseBeforeDeclare)) {
+ 
+             auto& diag = scope.addDiag(diag::UsedBeforeDeclared, range);
+@@ -1126,6 +1135,11 @@ private:
+                                          std::span<const AttributeSymbol* const> attributes,
+                                          bool isWildcard) {
+         auto symbol = Lookup::unqualified(scope, port.name);
++        if (!symbol && instance.body.flags.has(InstanceFlags::FromBind)) {
++            auto parentScope = instance.getParentScope();
++            if (parentScope && parentScope != &scope)
++                symbol = Lookup::unqualified(*parentScope, port.name);
++        }
+         if (!symbol) {
+             scope.addDiag(diag::ImplicitNamedPortNotFound, range) << port.name;
+             return emptyConnection(port);

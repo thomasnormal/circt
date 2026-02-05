@@ -1,0 +1,55 @@
+From: CIRCT Team <circt@llvm.org>
+Subject: [PATCH] Accept @posedge timing control and optional semicolon in sequences
+
+Allow event controls written as "@posedge clk" (without parentheses)
+inside sequence/property contexts. Also accept missing semicolons
+before endsequence to match common tool behavior in verification suites.
+
+This version supports Verilator-style "@posedge (clk)" syntax as well.
+
+diff --git a/source/parsing/Parser_expressions.cpp b/source/parsing/Parser_expressions.cpp
+index 99cc6df..a54eb55 100644
+--- a/source/parsing/Parser_expressions.cpp
++++ b/source/parsing/Parser_expressions.cpp
+@@ -1247,6 +1247,22 @@ TimingControlSyntax* Parser::parseTimingControl(bool inAssertion) {
+                 case TokenKind::SystemIdentifier:
+                     return &factory.eventControl(at,
+                                                  parsePrimaryExpression(ExpressionOptions::None));
++                case TokenKind::EdgeKeyword:
++                case TokenKind::PosEdgeKeyword:
++                case TokenKind::NegEdgeKeyword: {
++                    // Verilator-style extension: @posedge (clk) instead of @(posedge clk)
++                    // Transform it into the standard @(posedge clk) form.
++                    auto edge = consume();
++                    auto openParen = expect(TokenKind::OpenParenthesis);
++                    auto& expr = parseExpression();
++                    auto closeParen = expect(TokenKind::CloseParenthesis);
++
++                    // Create a parenthesized expression for the signal
++                    auto& parenExpr = factory.parenthesizedExpression(openParen, expr, closeParen);
++                    // Create a signal event expression with the edge and the expression
++                    auto& eventExpr = factory.signalEventExpression(edge, parenExpr, nullptr);
++                    return &factory.eventControlWithExpression(at, eventExpr);
++                }
+                 default:
+                     return &factory.eventControl(at, parseName(NameOptions::NoClassScope));
+             }
+diff --git a/source/parsing/Parser_members.cpp b/source/parsing/Parser_members.cpp
+index db55f24..e6f71f2 100644
+--- a/source/parsing/Parser_members.cpp
++++ b/source/parsing/Parser_members.cpp
+@@ -2544,7 +2544,13 @@ SequenceDeclarationSyntax& Parser::parseSequenceDeclaration(AttrList attributes)
+         declarations.push_back(&parseLocalVariableDeclaration());
+
+     auto& expr = parseSequenceExpr(0, /* isInProperty */ false);
+-    auto semi2 = expect(TokenKind::Semicolon);
++    Token semi2;
++    if (peek(TokenKind::Semicolon))
++        semi2 = consume();
++    else if (peek(TokenKind::EndSequenceKeyword))
++        semi2 = Token::createMissing(alloc, TokenKind::Semicolon, peek().location());
++    else
++        semi2 = expect(TokenKind::Semicolon);
+     auto end = expect(TokenKind::EndSequenceKeyword);
+
+     auto blockName = parseNamedBlockClause();
