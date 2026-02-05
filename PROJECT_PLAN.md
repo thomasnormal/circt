@@ -7,13 +7,14 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 4, 2026 (Iteration 342 - Canonicalizer Blowup Mitigation)
+## Current Status - February 5, 2026 (Iteration 343 - Build Stability)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | **Runner Script Memory Limits** | ✅ **IMPLEMENTED** | `ulimit -v` + `timeout --signal=KILL` wrappers in all utils/run_* scripts (commit `1afdc6df8`) |
+| **Tool Resource Guard Defaults** | ✅ **IMPLEMENTED** | Resource guard enabled by default with conservative RSS limit when no explicit limits are set (opt-out `--no-resource-guard`, override with `--max-*-mb` / `CIRCT_MAX_*`). Tools label major phases and current pass so guard aborts include a "phase" hint. circt-opt installs it after CLI parsing. |
 | **Wait Condition Spurious Trigger Fix** | ✅ **FIXED** | Fixed wait conditions triggering spuriously (commit `b8517345f`) |
 | **Wait Condition Extract Tracing Fix** | ✅ **FIXED** | Fixed `wait(q.size()!=0)` not waking up - added `comb::ExtractOp` and `LLVM::ExtractValueOp` to tracing |
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
@@ -25,6 +26,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
 | **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
 | **LLHD Canonicalizer Blowup Mitigation** | ✅ **FIXED** | Switched `circt-lec`/`circt-bmc` LLHD pipeline canonicalizers to bottom-up traversal to avoid runaway IR growth/memory spikes |
+| **circt-opt InitLLVM Crash Fix** | ✅ **FIXED** | Fixed double InitLLVM crash in MlirOptMain by using simple overload (commit `ec44c07b3`) |
+| **ArrayGetOp Size Guard** | ✅ **FIXED** | Large arrays (>32 elements) no longer explode canonicalizer via `ArrayGetOp` (commit `4b8cdc33d`) |
+| **LLHD Pointer Collapse** | ✅ **ADDED** | StripLLHDInterfaceSignals handles pointer-typed block arguments selecting between allocas (commit `9b7744ba2`) |
 | **Verilator BMC Script Fix** | ✅ FIXED | `BMC_RUN_SMTLIB=1` now uses `circt-bmc --run-smtlib --z3-path=...` (no JIT z3 link) |
 | **BMC SMT-LIB Robustness** | ✅ **FIXED** | `--emit-smtlib`/`--run-smtlib` no longer produce empty output for propertyless cases; `lower-clocked-assert-like` now lowers LTL-typed clocked asserts |
 | **SPI AVIP randomize scoping** | ✅ FIXED | `array[i].randomize() with {this.member}` now resolves `this` to element receiver |
