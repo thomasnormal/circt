@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 343 - February 5, 2026
+
+### Summary
+
+Iteration 343: Build stability improvements including circt-opt InitLLVM crash fix, ArrayGetOp size guard for large arrays, and LLHD pointer collapse optimization. All LEC (101/101) and BMC (82/82) lit tests pass.
+
+### Accomplishments
+
+1. **circt-opt InitLLVM crash fix** - Fixed double InitLLVM crash by using simple `MlirOptMain(argc, argv, toolName, registry)` overload instead of creating a separate `InitLLVM` object (commit `ec44c07b3`).
+2. **ArrayGetOp size guard** - Prevented canonicalizer IR explosion by adding a 32-element threshold guard to ArrayGetOp canonicalization (commit `4b8cdc33d`).
+3. **LLHD pointer collapse optimization** - StripLLHDInterfaceSignals now handles pointer-typed block arguments that select between multiple allocas, replacing them with merged alloca + conditional stores (commit `9b7744ba2`).
+4. **Tool-wide resource guard defaults** - Resource guard is enabled by default and applies a conservative RSS limit when no explicit limits are provided (opt-out with `--no-resource-guard`; override with `--max-*-mb` or `CIRCT_MAX_*` env vars). circt-opt now installs the guard after command line parsing.
+5. **Resource guard phase diagnostics** - Tools annotate major phases and current pass name so resource guard aborts include a "phase" hint (e.g. pass argument) to make memory blowups easier to triage.
+6. **LEC regression coverage** - Added a unit test for the strict LLHD pointer-phi store/load collapse to ensure strict LEC lowering stays concrete (no `llhd_comb` abstraction).
+7. **Build verified** - All tools compile cleanly including circt-opt, circt-bmc, circt-lec.
+
+### Verification (February 5, 2026)
+
+| Suite | Result | Status |
+|-------|--------|--------|
+| circt-lec lit | 101 pass, 3 xfail, 19 unsup | ✅ 100% |
+| circt-bmc lit | 82 pass, 13 xfail, 122 unsup | ✅ 100% |
+| yosys LEC | 14/14 pass | ✅ 100% |
+| sv-tests LEC | 23/23 pass | ✅ 100% |
+| verilator BMC | 17/17 pass | ✅ 100% |
+
+### Files Changed
+
+- `tools/circt-opt/circt-opt.cpp` - InitLLVM fix; install resource guard after CLI parsing
+- `lib/Dialect/HW/HWOps.cpp` - ArrayGetOp size guard
+- `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp` - Pointer collapse
+- `lib/Support/ResourceGuard.cpp` - Default-on resource guard behavior/help text
+- `include/circt/Support/ResourceGuard.h` - Resource guard phase API
+- `tools/circt-bmc/circt-bmc.cpp` - Set resource guard phase labels
+- `tools/circt-lec/circt-lec.cpp` - Set resource guard phase labels
+- `unittests/Support/ResourceGuardTest.cpp` - Assert phase is reported on abort
+- `unittests/Tools/circt-lec/StripLLHDSignalPtrCastTest.cpp` - Add regression for pointer-phi store/load collapse
+
+### Commits
+
+- `9b7744ba2` - [Multi] Bottom-up canonicalizer and LLHD pointer collapse optimization
+- `ec44c07b3` - [circt-opt] Fix double InitLLVM crash by using simple MlirOptMain
+- `4b8cdc33d` - [HW] Add size guard to ArrayGetOp canonicalization for large arrays
+
+---
+
 ## Iteration 342 - February 4, 2026
 
 ### Summary
