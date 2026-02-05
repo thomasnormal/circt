@@ -13991,6 +13991,16 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
     LLVM_DEBUG(llvm::dbgs() << "  Calling constructor: " << ctorName
                             << " (priority " << priority << ")\n");
 
+    // Reset the temporary process state between constructors.
+    // Global constructors are independent; if one sets halted/waiting
+    // (e.g., due to an X vtable dispatch that triggers llvm.unreachable),
+    // subsequent constructors must not inherit that state.
+    {
+      auto &ts = processStates[tempProcId];
+      ts.halted = false;
+      ts.waiting = false;
+    }
+
     // Look up the LLVM function
     auto funcOp = rootModule.lookupSymbol<LLVM::LLVMFuncOp>(ctorName);
     if (!funcOp) {
