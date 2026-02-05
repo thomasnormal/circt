@@ -819,8 +819,17 @@ private:
                         llvm::SmallVectorImpl<InterpretedValue> &results,
                         llvm::ArrayRef<mlir::Value> callOperands = {});
 
-  /// Get the size in bytes for an LLVM type.
+  /// Get the size in bytes for an LLVM type (sum of field sizes, no alignment
+  /// padding, matching MooreToCore's sizeof computation).
   unsigned getLLVMTypeSize(mlir::Type type);
+
+  /// Get the natural alignment in bytes for an LLVM type.
+  unsigned getLLVMTypeAlignment(mlir::Type type);
+
+  /// Get the byte offset of a field within an LLVM struct type (unaligned,
+  /// matching MooreToCore's layout).
+  unsigned getLLVMStructFieldOffset(mlir::LLVM::LLVMStructType structType,
+                                   unsigned fieldIndex);
 
   /// Find the memory block for a pointer value.
   MemoryBlock *findMemoryBlock(ProcessId procId, mlir::Value ptr);
