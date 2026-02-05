@@ -6401,16 +6401,20 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     if (castOp.getNumOperands() == castOp.getNumResults()) {
       // Simple 1:1 mapping
       for (auto [input, output] : llvm::zip(castOp.getInputs(), castOp.getOutputs())) {
-        // Special case: !llvm.ptr to !llhd.ref casts should NOT cache the value.
-        // The !llhd.ref semantics mean we need to read from memory at probe time,
-        // not reuse a cached pointer address value.
+        // For !llvm.ptr to !llhd.ref casts, propagate the pointer address.
+        // The probe/drive handlers use SSA tracing (getDefiningOp) first,
+        // but the address value is needed as a fallback when the ref is
+        // passed through function arguments (where SSA tracing fails).
         Type inputType = input.getType();
         Type outputType = output.getType();
         if (isa<LLVM::LLVMPointerType>(inputType) &&
             isa<llhd::RefType>(outputType)) {
-          // Skip caching for ptr->ref casts - let llhd.prb handle the memory read
+          InterpretedValue ptrVal = getValue(procId, input);
+          setValue(procId, output, ptrVal);
           LLVM_DEBUG(llvm::dbgs() << "  builtin.unrealized_conversion_cast: "
-                                  << "skipping ptr->ref cast (will read at probe)\n");
+                                  << "ptr->ref cast, propagating address "
+                                  << (ptrVal.isX() ? "X" : std::to_string(ptrVal.getUInt64()))
+                                  << "\n");
           continue;
         }
 
@@ -6766,6 +6770,85 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
           parentSigId = getSignalId(parentSignal);
         } else {
           break;
+        }
+      }
+
+      // If still not found, try resolveSignalId which handles more cases.
+      if (parentSigId == 0) {
+        parentSigId = resolveSignalId(parentSignal);
+      }
+
+      // Handle memory-backed !llhd.ref (e.g., from llvm.alloca via
+      // unrealized_conversion_cast, or passed as function argument).
+      // The runtime value contains the alloca address.
+      if (parentSigId == 0) {
+        InterpretedValue parentPtrVal = getValue(procId, parentSignal);
+        if (!parentPtrVal.isX() && parentPtrVal.getUInt64() != 0) {
+          uint64_t addr = parentPtrVal.getUInt64();
+          uint64_t blockOffset = 0;
+          MemoryBlock *block =
+              findMemoryBlockByAddress(addr, procId, &blockOffset);
+          if (block) {
+            // Compute field bit offset using LLVM layout (low-to-high bits,
+            // field 0 at bit 0).
+            unsigned bitOffset = 0;
+            Type currentType = parentSignal.getType();
+            if (auto refType = dyn_cast<llhd::RefType>(currentType))
+              currentType = refType.getNestedType();
+
+            for (auto it = extractChain.rbegin(); it != extractChain.rend();
+                 ++it) {
+              auto extractOp = *it;
+              auto structType = cast<hw::StructType>(currentType);
+              auto elements = structType.getElements();
+              StringRef fieldName = extractOp.getField();
+              auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+              if (!fieldIndexOpt)
+                return failure();
+              unsigned fieldIndex = *fieldIndexOpt;
+              unsigned fieldOff = 0;
+              for (size_t i = 0; i < fieldIndex; ++i)
+                fieldOff += getTypeWidth(elements[i].type);
+              bitOffset += fieldOff;
+              currentType = elements[fieldIndex].type;
+            }
+
+            unsigned fieldWidth = getTypeWidth(currentType);
+            unsigned parentWidth = getTypeWidth(parentSignal.getType());
+            unsigned parentStoreSize = (parentWidth + 7) / 8;
+
+            if (blockOffset + parentStoreSize <= block->size) {
+              if (!block->initialized) {
+                setValue(procId, probeOp.getResult(),
+                         InterpretedValue::makeX(fieldWidth));
+              } else {
+                // Read the parent struct value from memory
+                APInt parentBits = APInt::getZero(parentWidth);
+                for (unsigned i = 0; i < parentStoreSize; ++i) {
+                  unsigned insertPos = i * 8;
+                  unsigned bitsToInsert =
+                      std::min(8u, parentWidth - insertPos);
+                  if (bitsToInsert > 0 && insertPos < parentWidth) {
+                    APInt byteVal(bitsToInsert,
+                                  block->data[blockOffset + i] &
+                                      ((1u << bitsToInsert) - 1));
+                    parentBits.insertBits(byteVal, insertPos);
+                  }
+                }
+                // Extract the field
+                APInt fieldBits =
+                    parentBits.extractBits(fieldWidth, bitOffset);
+                setValue(procId, probeOp.getResult(),
+                         InterpretedValue(fieldBits));
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Probe struct field from memory-backed ref at "
+                            "offset "
+                         << bitOffset << " width " << fieldWidth << "\n");
+              return success();
+            }
+          }
         }
       }
 
@@ -7403,6 +7486,96 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
               LLVM_DEBUG(llvm::dbgs()
                          << "  Drive to struct field in alloca at offset "
+                         << bitOffset << " width " << fieldWidth << "\n");
+              return success();
+            }
+          }
+        }
+      }
+
+      // Handle memory-backed !llhd.ref passed as function argument or through
+      // other indirect paths. The runtime value contains the alloca address.
+      if (parentSigId == 0) {
+        InterpretedValue parentPtrVal = getValue(procId, parentSignal);
+        if (!parentPtrVal.isX() && parentPtrVal.getUInt64() != 0) {
+          uint64_t addr = parentPtrVal.getUInt64();
+          uint64_t blockOffset = 0;
+          MemoryBlock *block =
+              findMemoryBlockByAddress(addr, procId, &blockOffset);
+          if (block) {
+            InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+            // Compute field bit offset using LLVM layout (low-to-high bits).
+            unsigned bitOffset = 0;
+            Type currentType = parentSignal.getType();
+            if (auto refType = dyn_cast<llhd::RefType>(currentType))
+              currentType = refType.getNestedType();
+
+            for (auto it = extractChain.rbegin(); it != extractChain.rend();
+                 ++it) {
+              auto extractOp = *it;
+              auto structType = cast<hw::StructType>(currentType);
+              auto elements = structType.getElements();
+              StringRef fieldName = extractOp.getField();
+              auto fieldIndexOpt = structType.getFieldIndex(fieldName);
+              if (!fieldIndexOpt)
+                return failure();
+              unsigned fieldIndex = *fieldIndexOpt;
+              unsigned fieldOff = 0;
+              for (size_t i = 0; i < fieldIndex; ++i)
+                fieldOff += getTypeWidth(elements[i].type);
+              bitOffset += fieldOff;
+              currentType = elements[fieldIndex].type;
+            }
+
+            unsigned fieldWidth = getTypeWidth(currentType);
+            unsigned parentWidth = getTypeWidth(parentSignal.getType());
+            unsigned storeSize = (parentWidth + 7) / 8;
+
+            if (blockOffset + storeSize <= block->size) {
+              // Read current parent value from memory
+              APInt currentVal = APInt::getZero(parentWidth);
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned insertPos = i * 8;
+                unsigned bitsToInsert =
+                    std::min(8u, parentWidth - insertPos);
+                if (bitsToInsert > 0 && insertPos < parentWidth) {
+                  APInt byteVal(bitsToInsert,
+                                block->data[blockOffset + i] &
+                                    ((1u << bitsToInsert) - 1));
+                  currentVal.insertBits(byteVal, insertPos);
+                }
+              }
+
+              // Insert the new field value
+              APInt fieldValue = driveVal.isX()
+                                     ? APInt::getZero(fieldWidth)
+                                     : driveVal.getAPInt();
+              if (fieldValue.getBitWidth() < fieldWidth)
+                fieldValue = fieldValue.zext(fieldWidth);
+              else if (fieldValue.getBitWidth() > fieldWidth)
+                fieldValue = fieldValue.trunc(fieldWidth);
+
+              currentVal.insertBits(fieldValue, bitOffset);
+
+              // Write back to memory
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned extractPos = i * 8;
+                unsigned bitsToExtract =
+                    std::min(8u, parentWidth - extractPos);
+                if (bitsToExtract > 0 && extractPos < parentWidth) {
+                  block->data[blockOffset + i] =
+                      currentVal.extractBits(bitsToExtract, extractPos)
+                          .getZExtValue();
+                } else {
+                  block->data[blockOffset + i] = 0;
+                }
+              }
+              block->initialized = !driveVal.isX();
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to struct field in memory-backed ref at "
+                            "offset "
                          << bitOffset << " width " << fieldWidth << "\n");
               return success();
             }
