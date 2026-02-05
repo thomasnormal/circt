@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 359 - February 5, 2026
+
+### Summary
+
+Iteration 359: Added a first-class `circt-lec --accept-xprop-only` mode for 2-state equivalence workflows. When a reported mismatch is diagnosed as `LEC_DIAG=XPROP_ONLY` (i.e. it disappears under `assume-known-inputs`), `circt-lec` can now treat the circuits as equivalent (`LEC_RESULT=EQ`) and avoid failing under `--fail-on-inequivalent`.
+
+### Accomplishments
+
+1. **Accept XPROP_ONLY** - New `--accept-xprop-only` flag converts SAT results that are X-prop-only into `LEC_RESULT=EQ` while still reporting `LEC_DIAG=XPROP_ONLY` and printing the counterexample (if requested).
+2. **Tool regression** - Added `test/Tools/circt-lec/lec-run-smtlib-accept-xprop-only.mlir`.
+3. **OpenTitan AES S-Box Canright** - `utils/run_opentitan_circt_lec.py --impl-filter canright` now reports OK when passing `CIRCT_LEC_ARGS=--accept-xprop-only`, since the mismatch is `XPROP_ONLY`.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Tools/circt-lec/lec-run-smtlib-accept-xprop-only.mlir`
+
 ## Iteration 358 - February 5, 2026
 
 ### Summary
