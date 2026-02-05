@@ -998,6 +998,139 @@ static Value buildUnknownIndexedConstantArray(OpBuilder &builder, Location loc,
   return createFourStateStruct(builder, loc, value, unknown);
 }
 
+static Value buildUnknownIndexedRuntimeArray(OpBuilder &builder, Location loc,
+                                             hw::ArrayType arrType, Value array,
+                                             Value idxValue, Value idxUnknown) {
+  if (!llvm::isPowerOf2_64(arrType.getNumElements()))
+    return Value();
+  constexpr uint64_t kMaxUnknownIndexElements = 16;
+  if (arrType.getNumElements() > kMaxUnknownIndexElements)
+    return Value();
+
+  auto elemStructTy = dyn_cast<hw::StructType>(arrType.getElementType());
+  if (!elemStructTy || !isFourStateStructType(elemStructTy))
+    return Value();
+  const unsigned numElems = arrType.getNumElements();
+  const unsigned idxWidth = llvm::Log2_64_Ceil(numElems);
+  const unsigned elemWidth =
+      cast<IntegerType>(elemStructTy.getElements()[0].type).getWidth();
+  // Keep this transformation from exploding IR in large element widths.
+  constexpr unsigned kMaxUnknownIndexElementWidth = 256;
+  if (elemWidth > kMaxUnknownIndexElementWidth)
+    return Value();
+
+  auto i1Ty = builder.getI1Type();
+  Value one = hw::ConstantOp::create(builder, loc, i1Ty, 1);
+
+  // Compute a mask of possible indices given the known bits of idxValue.
+  // This mirrors buildUnknownIndexedConstantArray, but symbolically.
+  Value mask = hw::ConstantOp::create(builder, loc,
+                                      APInt::getAllOnes(numElems));
+
+  for (unsigned bit = 0; bit < idxWidth; ++bit) {
+    APInt maskOne = APInt::getZero(numElems);
+    for (unsigned idx = 0; idx < numElems; ++idx) {
+      if ((idx >> bit) & 1)
+        maskOne.setBit(idx);
+    }
+    APInt maskZero = ~maskOne;
+    maskZero = maskZero & APInt::getAllOnes(numElems);
+
+    Value idxValBit =
+        comb::ExtractOp::create(builder, loc, idxValue, bit, 1);
+    Value idxUnkBit =
+        comb::ExtractOp::create(builder, loc, idxUnknown, bit, 1);
+    Value knownBit = comb::XorOp::create(builder, loc, idxUnkBit, one, false);
+
+    Value maskOneConst = hw::ConstantOp::create(builder, loc, maskOne);
+    Value maskZeroConst = hw::ConstantOp::create(builder, loc, maskZero);
+    Value selectedMask =
+        comb::MuxOp::create(builder, loc, idxValBit, maskOneConst, maskZeroConst,
+                            false);
+    Value filtered = comb::AndOp::create(builder, loc, mask, selectedMask, false);
+    mask = comb::MuxOp::create(builder, loc, knownBit, filtered, mask, false);
+  }
+
+  auto iNType = cast<IntegerType>(mask.getType());
+  (void)iNType;
+
+  auto getMaskBit = [&](unsigned idx) -> Value {
+    return comb::ExtractOp::create(builder, loc, mask, idx, 1);
+  };
+
+  // Collect element values once so we don't duplicate array_gets per bit.
+  SmallVector<Value, 16> elems;
+  elems.reserve(numElems);
+  for (unsigned idx = 0; idx < numElems; ++idx) {
+    Value idxConst = hw::ConstantOp::create(builder, loc, idxValue.getType(),
+                                            static_cast<int64_t>(idx));
+    elems.push_back(
+        hw::ArrayGetOp::create(builder, loc, arrType.getElementType(), array,
+                               idxConst));
+  }
+
+  SmallVector<Value, 8> valueBits;
+  SmallVector<Value, 8> unknownBits;
+  valueBits.reserve(elemWidth);
+  unknownBits.reserve(elemWidth);
+
+  // For each output bit:
+  // - maybeOne: exists an element that could be 1 under mask
+  // - maybeZero: exists an element that could be 0 under mask
+  // From these, derive the resolved value/unknown bit.
+  for (unsigned bit = 0; bit < elemWidth; ++bit) {
+    Value maybeOne = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+    Value maybeZero = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+
+    for (unsigned idx = 0; idx < numElems; ++idx) {
+      Value elem = elems[idx];
+      Value elemVal = extractFourStateValue(builder, loc, elem);
+      Value elemUnk = extractFourStateUnknown(builder, loc, elem);
+
+      Value valBit = comb::ExtractOp::create(builder, loc, elemVal, bit, 1);
+      Value unkBit = comb::ExtractOp::create(builder, loc, elemUnk, bit, 1);
+      Value known = comb::XorOp::create(builder, loc, unkBit, one, false);
+      Value notValBit = comb::XorOp::create(builder, loc, valBit, one, false);
+
+      Value knownOne = comb::AndOp::create(builder, loc, valBit, known, false);
+      Value knownZero =
+          comb::AndOp::create(builder, loc, notValBit, known, false);
+      Value maybeOneElem =
+          comb::OrOp::create(builder, loc, knownOne, unkBit, false);
+      Value maybeZeroElem =
+          comb::OrOp::create(builder, loc, knownZero, unkBit, false);
+
+      Value maskBit = getMaskBit(idx);
+      maybeOneElem = comb::AndOp::create(builder, loc, maybeOneElem, maskBit,
+                                         false);
+      maybeZeroElem = comb::AndOp::create(builder, loc, maybeZeroElem, maskBit,
+                                          false);
+      maybeOne =
+          comb::OrOp::create(builder, loc, maybeOne, maybeOneElem, false);
+      maybeZero =
+          comb::OrOp::create(builder, loc, maybeZero, maybeZeroElem, false);
+    }
+
+    Value notMaybeZero = comb::XorOp::create(builder, loc, maybeZero, one, false);
+    Value valueBit =
+        comb::AndOp::create(builder, loc, maybeOne, notMaybeZero, false);
+    Value unknownBit =
+        comb::AndOp::create(builder, loc, maybeOne, maybeZero, false);
+    valueBits.push_back(valueBit);
+    unknownBits.push_back(unknownBit);
+  }
+
+  Value value = valueBits.back();
+  Value unknown = unknownBits.back();
+  for (int bit = static_cast<int>(elemWidth) - 2; bit >= 0; --bit) {
+    value =
+        comb::ConcatOp::create(builder, loc, ValueRange{value, valueBits[bit]});
+    unknown = comb::ConcatOp::create(builder, loc,
+                                     ValueRange{unknown, unknownBits[bit]});
+  }
+  return createFourStateStruct(builder, loc, value, unknown);
+}
+
 /// Convert a Moore type to its packed representation (plain integers for
 /// 4-state types). This is used for packed unions where all members share
 /// the same bit storage and we cannot expand 4-state types.
@@ -6851,6 +6984,9 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
         Value unknownIndexed;
         if (hasUnknownIndex)
           unknownIndexed = buildUnknownIndexedConstantArray(
+              rewriter, loc, arrType, adaptor.getInput(), idx, idxUnknown);
+        if (hasUnknownIndex && !unknownIndexed)
+          unknownIndexed = buildUnknownIndexedRuntimeArray(
               rewriter, loc, arrType, adaptor.getInput(), idx, idxUnknown);
 
         Value outOfBoundsCond =

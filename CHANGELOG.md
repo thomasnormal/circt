@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 360 - February 5, 2026
+
+### Summary
+
+Iteration 360: Improved MooreToCore lowering for 4-state array extracts with unknown indices on *non-constant* arrays. For small power-of-two arrays, CIRCT now computes a symbolic "consensus" value across all possible indices (given the known index bits) instead of pessimizing to all-unknown when any index bit is X/Z.
+
+### Accomplishments
+
+1. **Runtime unknown-index consensus** - `moore.dyn_extract` from a `hw.array` with a 4-state index now produces a computed 4-state result when the index is partially/fully unknown (for small arrays), rather than forcing `unknown=all-ones`.
+2. **Regression tests** - Added `test/Conversion/MooreToCore/unknown-index-runtime-array.mlir` and updated `dyn-extract-array-xprop.mlir` expectations to match the new lowering.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Conversion/MooreToCore`
+
 ## Iteration 359 - February 5, 2026
 
 ### Summary

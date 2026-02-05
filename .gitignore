@@ -21,6 +21,8 @@ xrun.log
 xrun.key
 *.swp
 *.vcd
+formal-results-*/
+formal-results-*
 
 # Pip artifacts
 /lib/Bindings/Python/build
