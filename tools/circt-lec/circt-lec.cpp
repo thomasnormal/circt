@@ -211,6 +211,16 @@ static cl::opt<bool>
                            "Only supported with --run-smtlib."),
                   cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool>
+    acceptXPropOnly("accept-xprop-only",
+                    cl::desc("If LEC is SAT but the mismatch disappears under "
+                             "assume-known-inputs (unknown=0), treat the "
+                             "circuits as equivalent (LEC_RESULT=EQ). This is "
+                             "useful for 2-state equivalence workflows when "
+                             "the only differences are due to X-propagation. "
+                             "Only supported with --run-smtlib."),
+                    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to the z3 binary for --run-smtlib"),
@@ -583,7 +593,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
   SmallVector<std::string> lecOutputNames;
   SmallVector<Type> lecInputTypes;
   SmallVector<Type> lecOutputTypes;
-  if (outputFormat == OutputRunSMTLIB && (wantSolverOutput || diagnoseXProp)) {
+  if (outputFormat == OutputRunSMTLIB &&
+      (wantSolverOutput || diagnoseXProp || acceptXPropOnly)) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
       auto inputTypes = moduleA.getInputTypes();
@@ -1005,8 +1016,10 @@ static LogicalResult executeLEC(MLIRContext &context) {
     }
 
     auto token = selectedRun->token;
+    bool acceptedXPropOnly = false;
     std::optional<bool> xpropOnly;
-    if (diagnoseXProp && token && (*token == "sat" || *token == "unknown")) {
+    if ((diagnoseXProp || acceptXPropOnly) && token &&
+        (*token == "sat" || *token == "unknown")) {
       auto smtAssumeKnownPath = insertAssumeKnownInputs(smtPath);
       if (succeeded(smtAssumeKnownPath)) {
         llvm::FileRemover diagRemover(*smtAssumeKnownPath);
@@ -1102,23 +1115,37 @@ static LogicalResult executeLEC(MLIRContext &context) {
       outputFile.value()->os() << "c1 == c2\n";
       outputFile.value()->os() << "LEC_RESULT=EQ\n";
     } else if (token && (*token == "sat" || *token == "unknown")) {
-      outputFile.value()->os() << "c1 != c2\n";
-      outputFile.value()->os()
-          << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
-      if (xpropOnly && *xpropOnly) {
+      acceptedXPropOnly =
+          (*token == "sat") && acceptXPropOnly && xpropOnly && *xpropOnly;
+      if (acceptedXPropOnly) {
+        outputFile.value()->os() << "c1 == c2\n";
+        outputFile.value()->os() << "LEC_RESULT=EQ\n";
         outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
-        llvm::errs() << "note: LEC mismatch only exists when 4-state inputs "
-                        "are unconstrained; under assume-known-inputs "
-                        "(unknown=0), the circuits are equivalent.\n";
+        llvm::errs()
+            << "note: accepting XPROP_ONLY mismatch (--accept-xprop-only): "
+               "the circuits are equivalent under assume-known-inputs "
+               "(unknown=0).\n";
+        maybePrintCounterexample(*token);
+      } else {
+        outputFile.value()->os() << "c1 != c2\n";
+        outputFile.value()->os()
+            << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
+        if (xpropOnly && *xpropOnly) {
+          outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
+          llvm::errs() << "note: LEC mismatch only exists when 4-state inputs "
+                          "are unconstrained; under assume-known-inputs "
+                          "(unknown=0), the circuits are equivalent.\n";
+        }
+        maybePrintCounterexample(*token);
       }
-      maybePrintCounterexample(*token);
     } else {
       llvm::errs() << "unexpected z3 output: "
                    << selectedRun->combinedOutput << "\n";
       return failure();
     }
     outputFile.value()->keep();
-    if (failOnInequivalent && token && (*token == "sat" || *token == "unknown"))
+    if (failOnInequivalent && token && (*token == "sat" || *token == "unknown") &&
+        !acceptedXPropOnly)
       return failure();
     return success();
   }
