@@ -1,5 +1,85 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 357 - February 5, 2026
+
+### Summary
+
+Iteration 357: Unblocked formal conversion pipelines by teaching `ConvertCombToSMT` how to lower `comb.truth_table` (previously marked illegal but left unconverted), and refreshed a few FileCheck expectations to match current lowering behavior.
+
+### Accomplishments
+
+1. **CombToSMT truth table lowering** - `--convert-comb-to-smt` now lowers `comb.truth_table` into an SMT array `broadcast` + `store` + `select` encoding, fixing legalization failures in `CombToSMT/comb-truth-table.mlir`.
+2. **Conversion test stability** - Updated `SMTToZ3LLVM/smt-to-z3-llvm.mlir` and `DatapathToComb/datapath-to-comb.mlir` to tolerate valid lowering differences (ordering and `bin`/two-state markers). Updated `ImportVerilog/uvm_classes.sv` to match specialization conversions robustly.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build check-circt-conversion`
+
+## Iteration 356 - February 5, 2026
+
+### Summary
+
+Iteration 356: Fixed a Comb dialect canonicalization non-convergence bug that could create unbounded numbers of duplicate constants (and effectively hang tools) when canonicalizing `comb.or` / `comb.and` with constants. This was a root cause for `circt-verilog --ir-hw` spending tens of seconds in canonicalizers and ballooning memory/IR size on tiny inputs.
+
+### Accomplishments
+
+1. **Canonicalization convergence** - `comb.or` / `comb.and` now reuse an existing identical constant operand instead of materializing a fresh constant op on each rewrite, avoiding rewrite loops and massive `hw.constant` duplication.
+2. **New lit regression** - Added `canonicalize-constant-loop.mlir` to ensure canonicalization does not emit thousands of duplicate constants under a rewrite cap.
+3. **ImportVerilog test hardening** - Updated `four-state-constants.sv` to assert only one `hw.constant -8 : i4` is produced, catching regressions that would otherwise manifest as time/memory blowups.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Dialect/Comb/canonicalize-constant-loop.mlir test/Conversion/ImportVerilog/four-state-constants.sv`
+- `CIRCT_MAX_RSS_MB=2000 build/bin/circt-verilog --ir-hw test/Conversion/ImportVerilog/four-state-constants.sv -o /dev/null --mlir-disable-threading --mlir-timing`
+
+## Iteration 355 - February 5, 2026
+
+### Summary
+
+Iteration 355: Made the default tool-wide resource guard harder to partially disable. When `--resource-guard` is enabled (the default), setting `--max-rss-mb=0` / `CIRCT_MAX_RSS_MB=0` no longer disables RSS checking; instead, CIRCT tools apply the conservative default RSS cap. Use `--no-resource-guard` to run unbounded.
+
+### Accomplishments
+
+1. **No "RSS-only opt-out"** - `--resource-guard` now always enforces an RSS cap (explicit or default), preventing accidental unbounded memory runs when other limits (e.g. wall-clock) are enabled.
+2. **Regression test** - Added a gtest ensuring `CIRCT_MAX_RSS_MB=0` still results in an enforced default RSS limit while the guard is enabled.
+
+### Verification (February 5, 2026)
+
+- `./build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=ResourceGuardTest.*`
+
+## Iteration 354 - February 5, 2026
+
+### Summary
+
+Iteration 354: Improved 4-state `mul` X-propagation for small widths to avoid the extremely conservative "any X/Z => all X" behavior, which causes spurious mismatches in strict LEC and makes debugging harder. Both constant folding and MooreToCore lowering now compute a more precise unknown mask for `!moore.l*` multiplies up to 16 bits.
+
+### Accomplishments
+
+1. **More precise 4-state multiply lowering** - `ConvertMooreToCore` now lowers `moore.mul` on 4-state values (<=16-bit) using a shift-and-add expansion that propagates per-bit unknowns rather than marking the entire result unknown.
+2. **Consistent constant folding** - `MulOp::fold` now uses the same approximation (<=16-bit) so compile-time constant evaluation matches the lowered behavior.
+3. **Regression test** - Added `four-state-mul-partial-unknown.mlir` to ensure `4'b0001 * 4'bX000` produces `unknown=4'b1000` rather than all-unknown.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv build/tools/circt/test/Conversion/MooreToCore`
+- `ninja -C build check-circt-tools-circt-bmc`
+- `python3 utils/run_opentitan_circt_lec.py --impl-filter canright` (reports `XPROP_ONLY`)
+
+## Iteration 353 - February 5, 2026
+
+### Summary
+
+Iteration 353: Made the tool-wide resource guard harder to accidentally disable. When `--resource-guard` is enabled (the default) but all limits are configured to 0, CIRCT tools now fall back to a conservative default RSS cap and print a warning/note, instead of running unbounded.
+
+### Accomplishments
+
+1. **Unbounded-run prevention** - If all limits are disabled while `--resource-guard` is enabled (e.g. `CIRCT_MAX_RSS_MB=0` + friends), the guard now still applies the default RSS limit and emits a diagnostic telling users to use `--no-resource-guard` to run unbounded.
+2. **Unit test hardening** - Updated `ResourceGuardTest` to validate the new behavior without leaving a watchdog thread running in the parent test process.
+
+### Verification (February 5, 2026)
+
+- `./build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=ResourceGuardTest.*`
+
 ## Iteration 352 - February 5, 2026
 
 ### Summary
