@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 364 - February 5, 2026
+
+### Summary
+
+Iteration 364: Fixed MooreToCore lowering for `moore.dyn_extract` array slices with unknown indices. Previously, slice extraction ignored X/Z bits in the index and could deterministically select a slice. CIRCT now conservatively (and for small cases, precisely) models unknown/out-of-bounds slice indices as producing all-unknown elements.
+
+### Accomplishments
+
+1. **Array slice X-prop** - `moore.dyn_extract` returning an array slice now treats unknown base indices as producing an unknown slice (rather than indexing deterministically). A bounded consensus encoding is used for small slices to preserve known bits where possible.
+2. **Regression test** - Added `test/Conversion/MooreToCore/dyn-extract-array-slice-xprop.mlir`.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Conversion/MooreToCore`
+- `OUT=/tmp/verilator-bmc-results.txt utils/run_verilator_verification_circt_bmc.sh`
+- `OUT=/tmp/verilator-lec-results.txt utils/run_verilator_verification_circt_lec.sh`
+
 ## Iteration 363 - February 5, 2026
 
 ### Summary
