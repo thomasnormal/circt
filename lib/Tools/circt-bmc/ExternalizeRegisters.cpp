@@ -151,6 +151,39 @@ static Attribute makeClockSourceAttr(OpBuilder &builder, BlockArgument root,
            "arg_index", builder.getI32IntegerAttr(root.getArgNumber())),
        builder.getNamedAttr("invert", builder.getBoolAttr(invert))});
 }
+
+static Attribute makeClockKeySourceAttr(OpBuilder &builder, StringRef key,
+                                        bool invert) {
+  if (key.empty())
+    return UnitAttr::get(builder.getContext());
+  return builder.getDictionaryAttr(
+      {builder.getNamedAttr("clock_key", builder.getStringAttr(key)),
+       builder.getNamedAttr("invert", builder.getBoolAttr(invert))});
+}
+
+static Value getI1ClockValueForKey(Value clock, bool &invert) {
+  invert = false;
+  Value cur = clock;
+  while (cur) {
+    if (auto invOp = cur.getDefiningOp<seq::ClockInverterOp>()) {
+      invert = !invert;
+      cur = invOp.getInput();
+      continue;
+    }
+    if (auto toClock = cur.getDefiningOp<seq::ToClockOp>()) {
+      auto simplified = simplifyI1Value(toClock.getInput());
+      invert ^= simplified.invert;
+      return simplified.value ? simplified.value : toClock.getInput();
+    }
+    if (cur.getType().isInteger(1)) {
+      auto simplified = simplifyI1Value(cur);
+      invert ^= simplified.invert;
+      return simplified.value ? simplified.value : cur;
+    }
+    break;
+  }
+  return Value();
+}
 static StringAttr getClockPortName(HWModuleOp module, Value clock) {
   auto arg = dyn_cast<BlockArgument>(clock);
   if (!arg || arg.getOwner() != module.getBodyBlock())
@@ -592,11 +625,31 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
     Value next) {
   // Look through ToClockOp and simple combinational logic to find the clock
   // root. If the clock cannot be traced to a block argument or constant, we
-  // currently bail out.
+  // fall back to using a stable expression key.
   Value root;
-  if (!traceClockRoot(clock, root)) {
-    op->emitError("only clocks derived from block arguments, constants, or "
-                  "process results are supported");
+  bool tracedRoot = traceClockRoot(clock, root);
+  bool keyInvert = false;
+  Value keyValue = getI1ClockValueForKey(clock, keyInvert);
+  std::optional<std::string> clockKey;
+  if (keyValue) {
+    auto getBlockArgName = [&](BlockArgument arg) -> StringRef {
+      if (!arg || arg.getOwner() != module.getBodyBlock())
+        return {};
+      auto inputNames = module.getInputNames();
+      if (arg.getArgNumber() >= inputNames.size())
+        return {};
+      if (auto nameAttr =
+              dyn_cast_or_null<StringAttr>(inputNames[arg.getArgNumber()])) {
+        if (!nameAttr.getValue().empty())
+          return nameAttr.getValue();
+      }
+      return {};
+    };
+    clockKey = getI1ValueKeyWithBlockArgNames(keyValue, getBlockArgName);
+  }
+  if (!tracedRoot && !clockKey) {
+    op->emitError("only clocks derived from block arguments, constants, "
+                  "process results, or keyable i1 expressions are supported");
     return failure();
   }
 
@@ -626,8 +679,17 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
       getClockPortName(module, root ? root : clock);
   regClockNames[module.getSymNameAttr()].push_back(clockName);
   Attribute clockSource = UnitAttr::get(builder.getContext());
-  if (auto info = getClockSourceInfo(clock, module))
+  if (auto info = getClockSourceInfo(clock, module)) {
     clockSource = makeClockSourceAttr(builder, info->first, info->second);
+  } else if (clockKey) {
+    // If the clock isn't traceable to a single input root (e.g. it's derived
+    // from a more complex i1 expression), fall back to a stable expression key.
+    //
+    // This is primarily used to support multi-clock BMC when the clock is a
+    // derived expression not rooted in a single module input. LowerToBMC will
+    // map derived clock keys to inserted BMC clock inputs.
+    clockSource = makeClockKeySourceAttr(builder, *clockKey, keyInvert);
+  }
   regClockSources[module.getSymNameAttr()].push_back(clockSource);
   if (reset) {
     if (isAsync) {
