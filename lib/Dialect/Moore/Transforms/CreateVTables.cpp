@@ -104,10 +104,6 @@ static bool noneHaveImpl(const MethodMap &methods) {
                       [](const auto &kv) { return !kv.second.has_value(); });
 }
 
-static bool allHaveImpl(const MethodMap &methods) {
-  return llvm::all_of(methods,
-                      [](const auto &kv) { return kv.second.has_value(); });
-}
 
 static inline SymbolRefAttr getVTableName(ClassDeclOp &clsDecl) {
 
@@ -152,11 +148,13 @@ void CreateVTablesPass::emitVTablePerDependencyClass(
       emitVTablePerDependencyClass(mod, symTab, builder, clsDecl,
                                    cast<SymbolRefAttr>(intf));
 
-  // Last, emit any own method symbol entries
+  // Last, emit any own method symbol entries (skip pure-virtual / unimplemented)
   for (auto methodDecl : dependencyDecl.getBody().getOps<ClassMethodDeclOp>()) {
     auto methodName = methodDecl.getSymName();
-    VTableEntryOp::create(builder, methodDecl.getLoc(), methodName,
-                          clsMethodMap[methodName].value());
+    auto &impl = clsMethodMap[methodName];
+    if (impl.has_value())
+      VTableEntryOp::create(builder, methodDecl.getLoc(), methodName,
+                            impl.value());
   }
 }
 
@@ -165,11 +163,11 @@ void CreateVTablesPass::emitVTablePerClass(ModuleOp mod, SymbolTable &symTab,
   // Check emission for every top-level class decl
   for (auto [clsDecl, methodMap] : classToMethodMap) {
 
-    // Skip abstract classes (classes with any unimplemented/pure virtual
-    // methods). In SystemVerilog, a "virtual class" (abstract class) can have
-    // both concrete methods and pure virtual methods - this is standard OOP.
-    // We only generate vtables for fully concrete classes.
-    if (!allHaveImpl(methodMap))
+    // Skip classes with no implemented methods at all (fully abstract /
+    // interface classes).  Classes that have at least *some* implemented
+    // methods still get a vtable - unimplemented slots stay null and the
+    // runtime reports a warning if they are dispatched.
+    if (noneHaveImpl(methodMap))
       continue;
 
     auto vTableName = getVTableName(clsDecl);
