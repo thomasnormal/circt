@@ -15,6 +15,7 @@ lit.site.cfg.py
 
 # Local scratch / simulator artifacts
 .tmp/
+.codex/auto_continue.last*.json
 xcelium.d/
 xrun.history
 xrun.log

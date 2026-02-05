@@ -46,7 +46,15 @@ cwd = payload.get("cwd") or os.getcwd()
 def write_debug(payload: dict, cwd: str) -> None:
     try:
         os.makedirs(os.path.join(cwd, ".codex"), exist_ok=True)
-        debug_path = os.path.join(cwd, ".codex", "auto_continue.last.json")
+        # NOTE: Avoid writing to tracked files by default. The `auto_continue`
+        # runner frequently updates debug state, which is useful locally but
+        # should not show up in `git status` during development.
+        #
+        # Use CODEX_AUTO_CONTINUE_WRITE_TRACKED_DEBUG=1 to restore the previous
+        # behavior of writing to `.codex/auto_continue.last.json`.
+        debug_path = os.path.join(cwd, ".codex", "auto_continue.last.local.json")
+        if os.environ.get("CODEX_AUTO_CONTINUE_WRITE_TRACKED_DEBUG", "") == "1":
+            debug_path = os.path.join(cwd, ".codex", "auto_continue.last.json")
         panes = None
         try:
             panes_out = subprocess.run(
