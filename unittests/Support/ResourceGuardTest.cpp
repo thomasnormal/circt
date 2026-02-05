@@ -67,11 +67,42 @@ TEST(ResourceGuardTest, PrintsEffectiveLimitsWhenVerbose) {
       ::testing::ExitedWithCode(0), "interval-ms=123");
 }
 
+TEST(ResourceGuardTest, AppliesDefaultVMemWhenUnspecified) {
+  EXPECT_EXIT(
+      {
+        ::setenv("CIRCT_RESOURCE_GUARD_VERBOSE", "1", 1);
+        ::setenv("CIRCT_MAX_RSS_MB", "123", 1);
+        ::unsetenv("CIRCT_MAX_VMEM_MB");
+        ::setenv("CIRCT_MAX_MALLOC_MB", "0", 1);
+        ::setenv("CIRCT_MAX_WALL_MS", "0", 1);
+
+        installResourceGuard();
+        std::exit(0);
+      },
+      ::testing::ExitedWithCode(0), "max-vmem-mb=246");
+}
+
+TEST(ResourceGuardTest, RespectsExplicitDisabledVMem) {
+  EXPECT_EXIT(
+      {
+        ::setenv("CIRCT_RESOURCE_GUARD_VERBOSE", "1", 1);
+        ::setenv("CIRCT_MAX_RSS_MB", "123", 1);
+        ::setenv("CIRCT_MAX_VMEM_MB", "0", 1);
+        ::setenv("CIRCT_MAX_MALLOC_MB", "0", 1);
+        ::setenv("CIRCT_MAX_WALL_MS", "0", 1);
+
+        installResourceGuard();
+        std::exit(0);
+      },
+      ::testing::ExitedWithCode(0), "max-vmem-mb=0");
+}
+
 TEST(ResourceGuardTest, ReportsPhaseOnAbort) {
   EXPECT_EXIT(
       {
         // Keep the limit low enough to reliably trigger in the child process.
         ::setenv("CIRCT_MAX_RSS_MB", "16", 1);
+        ::setenv("CIRCT_MAX_VMEM_MB", "0", 1);
         ::unsetenv("CIRCT_MAX_WALL_MS");
         setResourceGuardPhase("unit-test");
         installResourceGuard();
