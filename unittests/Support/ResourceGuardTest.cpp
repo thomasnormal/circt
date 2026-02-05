@@ -25,6 +25,26 @@ TEST(ResourceGuardTest, ParseMegabytes) {
   EXPECT_FALSE(parseMegabytes("-1"));
 }
 
+TEST(ResourceGuardTest, WarnsWhenAllLimitsDisabledExplicitly) {
+  ::setenv("CIRCT_MAX_RSS_MB", "0", 1);
+  ::setenv("CIRCT_MAX_MALLOC_MB", "0", 1);
+  ::setenv("CIRCT_MAX_VMEM_MB", "0", 1);
+  ::setenv("CIRCT_MAX_WALL_MS", "0", 1);
+
+  testing::internal::CaptureStderr();
+  installResourceGuard();
+  std::string stderrText = testing::internal::GetCapturedStderr();
+  EXPECT_NE(
+      stderrText.find(
+          "warning: resource guard enabled but all limits are disabled"),
+      std::string::npos);
+
+  ::unsetenv("CIRCT_MAX_RSS_MB");
+  ::unsetenv("CIRCT_MAX_MALLOC_MB");
+  ::unsetenv("CIRCT_MAX_VMEM_MB");
+  ::unsetenv("CIRCT_MAX_WALL_MS");
+}
+
 TEST(ResourceGuardTest, ReportsPhaseOnAbort) {
   EXPECT_EXIT(
       {
