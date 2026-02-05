@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 352 - February 5, 2026
+
+### Summary
+
+Iteration 352: Fixed vtable dispatch for classes that inherit virtual methods without overriding them. `ClassNewOpConversion` in MooreToCore now walks the class hierarchy to populate `circt.vtable_entries` on placeholder vtable globals, fixing "address 0 not found in vtable map" errors during UVM simulation.
+
+### Accomplishments
+
+1. **VTable inherited method entries** - `ClassNewOpConversion` now resolves method targets by walking the `ClassDeclOp` chain using `ClassMethodDeclOp::getImpl()`. Previously, 230 of 995 UART AVIP vtable globals had empty entries because those classes lacked `moore.vtable` ops (commit `f9d3bd302`).
+2. **New lit tests** - Added `vtable-dispatch-inherited.mlir` (MLIR-level vtable dispatch with inherited entries) and `vtable-dispatch-inherit-no-override.sv` (end-to-end SV test with 3-level inheritance).
+
+### Verification (February 5, 2026)
+
+- circt-sim lit tests: 118 total (117 pass + 1 xfail, 0 unexpected failures)
+- sv-tests BMC: 26 (23 pass + 3 xfail), sv-tests LEC: 23 (23 pass)
+- End-to-end SV test confirms polymorphic dispatch through 3-level hierarchy
+
+## Iteration 351 - February 5, 2026
+
+### Summary
+
+Iteration 351: Added an `--run-smtlib` diagnostic mode for classifying LEC mismatches that only exist due to unconstrained 4-state (X/Z) inputs. When enabled, `circt-lec` re-checks a SAT/UNKNOWN result under additional constraints `unknown=0` on named 4-state inputs and reports `LEC_DIAG=XPROP_ONLY` if the mismatch disappears.
+
+### Accomplishments
+
+1. **X-prop diagnosis mode** - New `circt-lec --diagnose-xprop` re-runs the check with injected SMT-LIB asserts constraining named 4-state input unknown masks to zero and prints `LEC_DIAG=XPROP_ONLY` when the mismatch is eliminated.
+2. **Regression test** - Added a fake-z3 lit test that is SAT without assume-known constraints and UNSAT with them, ensuring the classification is stable.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build check-circt-tools-circt-lec`
+
 ## Iteration 350 - February 5, 2026
 
 ### Summary
