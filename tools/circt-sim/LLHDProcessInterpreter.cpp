@@ -5239,12 +5239,20 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
 
     if (funcPtrVal.isX()) {
-      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X\n");
-      llvm::errs() << "[circt-sim] WARNING: virtual method call (func.call_indirect) "
-                   << "failed: function pointer is X (uninitialized). "
-                   << "Callee operand: ";
-      calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
-      llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
+      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
+                              << "(uninitialized vtable pointer)\n");
+      static unsigned xCallCount = 0;
+      if (xCallCount < 3) {
+        ++xCallCount;
+        llvm::errs() << "[circt-sim] WARNING: virtual method call "
+                     << "(func.call_indirect) failed: function pointer is X "
+                     << "(uninitialized). Callee operand: ";
+        calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+        llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
+      } else if (xCallCount == 3) {
+        ++xCallCount;
+        llvm::errs() << "[circt-sim] (suppressing further X vtable warnings)\n";
+      }
       for (Value result : callIndirectOp.getResults()) {
         setValue(procId, result,
                  InterpretedValue::makeX(getTypeWidth(result.getType())));
@@ -10193,12 +10201,51 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 // LLVM Dialect Operation Handlers
 //===----------------------------------------------------------------------===//
 
+unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) {
+  // Note: This function exists for future use. Currently the interpreter
+  // uses unaligned struct layout to match MooreToCore's sizeof computation
+  // (which sums field sizes without alignment padding).
+  if (isa<LLVM::LLVMPointerType>(type))
+    return 8;
+  if (auto intType = dyn_cast<IntegerType>(type)) {
+    unsigned bytes = (intType.getWidth() + 7) / 8;
+    if (bytes <= 1) return 1;
+    if (bytes <= 2) return 2;
+    if (bytes <= 4) return 4;
+    return 8;
+  }
+  if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
+    unsigned maxAlign = 1;
+    for (Type field : structType.getBody())
+      maxAlign = std::max(maxAlign, getLLVMTypeAlignment(field));
+    return maxAlign;
+  }
+  if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type))
+    return getLLVMTypeAlignment(arrayType.getElementType());
+  return 1;
+}
+
+unsigned LLHDProcessInterpreter::getLLVMStructFieldOffset(
+    LLVM::LLVMStructType structType, unsigned fieldIndex) {
+  // Use unaligned layout to match MooreToCore's sizeof computation.
+  // MooreToCore computes struct sizes as the sum of field sizes without
+  // alignment padding, so we must use the same layout here.
+  auto body = structType.getBody();
+  unsigned offset = 0;
+  for (unsigned i = 0; i < fieldIndex && i < body.size(); ++i)
+    offset += getLLVMTypeSize(body[i]);
+  return offset;
+}
+
 unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) {
   // For LLVM pointer types, use 64 bits (8 bytes)
   if (isa<LLVM::LLVMPointerType>(type))
     return 8;
 
-  // For LLVM struct types, sum the sizes of all elements
+  // For LLVM struct types, sum the sizes of all elements.
+  // NOTE: This uses unaligned layout (no padding between fields) to match
+  // MooreToCore's sizeof computation. MooreToCore embeds struct sizes as
+  // constants in malloc/alloca calls without alignment padding.
   if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
     unsigned size = 0;
     for (Type elemType : structType.getBody()) {
@@ -10866,6 +10913,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMGEP(ProcessId procId,
   }
 
   uint64_t baseAddr = baseVal.getUInt64();
+
+  // Detect null pointer dereference: GEP on NULL (address 0) or near-null
+  // addresses (< 0x1000) indicates a null object handle dereference.
+  if (baseAddr < 0x1000 && baseAddr != 0) {
+    // Non-zero but very small address - likely result of GEP on null
+    LLVM_DEBUG(llvm::dbgs() << "  llvm.getelementptr: near-null base address 0x"
+                            << llvm::format_hex(baseAddr, 16) << " -> X\n");
+    setValue(procId, gepOp.getResult(), InterpretedValue::makeX(64));
+    return success();
+  }
   uint64_t offset = 0;
 
   // Get the element type
@@ -11031,8 +11088,54 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   auto moduleOp = cast<ModuleOp>(parent);
   auto funcOp = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(calleeName);
   if (!funcOp) {
+    // Fallback: try looking up as func::FuncOp (common in UVM where
+    // LLVM global constructors call func.func methods)
+    auto mlirFuncOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
+    if (mlirFuncOp) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
+                              << "' as func.func (cross-dialect call)\n");
+      // Gather arguments
+      SmallVector<InterpretedValue, 4> args;
+      SmallVector<Value, 4> callOperands;
+      for (Value arg : callOp.getOperands()) {
+        args.push_back(getValue(procId, arg));
+        callOperands.push_back(arg);
+      }
+
+      // Check call depth
+      auto &crossState = processStates[procId];
+      constexpr size_t maxCallDepth = 50;
+      if (crossState.callDepth >= maxCallDepth) {
+        for (Value result : callOp.getResults()) {
+          setValue(procId, result,
+                   InterpretedValue::makeX(getTypeWidth(result.getType())));
+        }
+        return success();
+      }
+
+      ++crossState.callDepth;
+      SmallVector<InterpretedValue, 2> results;
+      LogicalResult funcResult =
+          interpretFuncBody(procId, mlirFuncOp, args, results,
+                            callOp.getOperation());
+      --processStates[procId].callDepth;
+
+      if (failed(funcResult))
+        return failure();
+
+      // Check if process suspended
+      if (processStates[procId].waiting)
+        return success();
+
+      // Set return values
+      for (auto [result, retVal] : llvm::zip(callOp.getResults(), results)) {
+        setValue(procId, result, retVal);
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
-                            << "' not found\n");
+                            << "' not found as llvm.func or func.func\n");
     for (Value result : callOp.getResults()) {
       setValue(procId, result,
                InterpretedValue::makeX(getTypeWidth(result.getType())));
