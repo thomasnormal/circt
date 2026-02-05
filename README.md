@@ -166,6 +166,17 @@ To get something that runs faster but is still easy to debug, use the `-DCMAKE_B
 To do a release build that runs very fast, use the `-DCMAKE_BUILD_TYPE=Release` flag.
 Release mode makes a very large difference in performance.
 
+#### Tool Resource Guard (Memory/Time Caps)
+
+Most CIRCT command-line tools enable a built-in "resource guard" by default to
+avoid runaway memory growth (e.g., IR explosion / non-convergent pipelines)
+from consuming tens of GB of RAM and hanging a machine.
+
+- Disable: `--no-resource-guard`
+- Adjust limits: `--max-rss-mb=...` / `--max-malloc-mb=...` / `--max-vmem-mb=...` /
+  `--max-wall-ms=...` (or `CIRCT_MAX_RSS_MB`, `CIRCT_MAX_WALL_MS`, ...)
+- Diagnose effective limits: `--resource-guard-verbose` (or `CIRCT_RESOURCE_GUARD_VERBOSE=1`)
+
 Consult the [Getting Started](docs/GettingStarted.md) page for detailed information on configuring and compiling CIRCT.
 
 Consult the [Python Bindings](docs/PythonBindings.md) page if you are mainly interested in using CIRCT from a Python prompt or script.

@@ -1,0 +1,65 @@
+diff --git a/include/slang/parsing/ParserBase.h b/include/slang/parsing/ParserBase.h
+--- a/include/slang/parsing/ParserBase.h
++++ b/include/slang/parsing/ParserBase.h
+@@ -107,6 +107,7 @@ public:
+     }
+ 
+     enum class AllowEmpty { False, True };
++    enum class AllowTrailingSeparator { False, True };
+     enum class RequireItems { False, True };
+ 
+     /// This is a generalized method for parsing a delimiter separated list of things
+@@ -115,7 +116,8 @@ public:
+     void parseList(TokenKind openKind, TokenKind closeKind, TokenKind separatorKind,
+                    Token& openToken, std::span<syntax::TokenOrSyntax>& list, Token& closeToken,
+                    RequireItems requireItems, DiagCode code, TParserFunc&& parseItem,
+-                   AllowEmpty allowEmpty = {}) {
++                   AllowEmpty allowEmpty = {},
++                   AllowTrailingSeparator allowTrailingSeparator = {}) {
+         openToken = expect(openKind);
+         if (openToken.isMissing()) {
+             closeToken = missingToken(closeKind, openToken.location());
+@@ -125,7 +127,8 @@ public:
+         SmallVector<syntax::TokenOrSyntax, 16> buffer;
+         parseList<IsExpected, IsEnd, TParserFunc>(buffer, closeKind, separatorKind, closeToken,
+                                                   requireItems, code,
+-                                                  std::forward<TParserFunc>(parseItem), allowEmpty);
++                                                  std::forward<TParserFunc>(parseItem), allowEmpty,
++                                                  allowTrailingSeparator);
+         list = buffer.copy(alloc);
+     }
+ 
+@@ -133,6 +136,7 @@ public:
+     void parseList(SmallVectorBase<syntax::TokenOrSyntax>& buffer, TokenKind closeKind,
+                    TokenKind separatorKind, Token& closeToken, RequireItems requireItems,
+-                   DiagCode code, TParserFunc&& parseItem, AllowEmpty allowEmpty = {}) {
++                   DiagCode code, TParserFunc&& parseItem, AllowEmpty allowEmpty = {},
++                   AllowTrailingSeparator allowTrailingSeparator = {}) {
+         auto current = peek();
+         if (IsEnd(current.kind)) {
+             if (requireItems == RequireItems::True && !haveDiagAtCurrentLoc())
+@@ -195,9 +199,8 @@ public:
+                     // Empty items are allowed, so call the parse function
+                     // to get one here and then we're finished.
+                     buffer.push_back(parseItem());
+-                }
+-                else {
++                } else if (allowTrailingSeparator == AllowTrailingSeparator::False) {
+                     // Specific check for misplaced trailing separators here.
+                     reportMisplacedSeparator();
+                 }
+                 break;
+diff --git a/source/parsing/Parser.cpp b/source/parsing/Parser.cpp
+--- a/source/parsing/Parser.cpp
++++ b/source/parsing/Parser.cpp
+@@ -83,7 +83,9 @@ AnsiPortListSyntax& Parser::parseAnsiPortList(Token openParen) {
+     parseList<isPossibleAnsiPort, isEndOfParenList>(buffer, TokenKind::CloseParenthesis,
+                                                     TokenKind::Comma, closeParen,
+                                                     RequireItems::False, diag::ExpectedAnsiPort,
+-                                                    [this] { return &parseAnsiPort(); });
++                                                    [this] { return &parseAnsiPort(); },
++                                                    AllowEmpty::False,
++                                                    AllowTrailingSeparator::True);
+ 
+     auto& result = factory.ansiPortList(openParen, buffer.copy(alloc), closeParen);
+     result.previewNode = std::exchange(previewNode, nullptr);

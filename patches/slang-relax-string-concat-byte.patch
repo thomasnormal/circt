@@ -1,0 +1,34 @@
+From: CIRCT Team <circt@llvm.org>
+Subject: [PATCH] Allow byte-sized integral types in string concatenations
+
+Allow byte-sized integral types in string concatenations under
+relaxed string conversion rules (VCS compatibility). This enables
+code like {str, 8'h20} when RelaxStringConversions is enabled.
+
+diff --git a/source/ast/expressions/OperatorExpressions.cpp b/source/ast/expressions/OperatorExpressions.cpp
+index c2961dd..0df4440 100644
+--- a/source/ast/expressions/OperatorExpressions.cpp
++++ b/source/ast/expressions/OperatorExpressions.cpp
+@@ -1887,6 +1887,22 @@ Expression& ConcatenationExpression::fromSyntax(Compilation& comp,
+                                                                ConversionKind::Implicit, *expr,
+                                                                nullptr, {});
+                 }
++                else if (expr->type->isIntegral() &&
++                         context.getCompilation().hasFlag(
++                             CompilationFlags::RelaxStringConversions)) {
++                    // Allow byte-sized integral types in string concatenations under
++                    // relaxed string conversion rules (VCS compatibility).
++                    if (expr->type->getBitWidth() == 8) {
++                        expr = comp.emplace<ConversionExpression>(
++                            comp.getStringType(), ConversionKind::Explicit, *expr,
++                            expr->sourceRange);
++                    }
++                    else {
++                        errored = true;
++                        context.addDiag(diag::ConcatWithStringInt, expr->sourceRange);
++                        break;
++                    }
++                }
+                 else {
+                     errored = true;
+                     context.addDiag(diag::ConcatWithStringInt, expr->sourceRange);

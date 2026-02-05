@@ -1,0 +1,17 @@
+date	suite	mode	result
+2026-01-29	avip/ahb_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/apb_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/axi4Lite_avip	compile	total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/axi4_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/i2s_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/i3c_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/jtag_avip	compile	total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/spi_avip	compile	total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	avip/uart_avip	compile	total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	opentitan	LEC	total=1 pass=0 fail=1 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	sv-tests	BMC	total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1010
+2026-01-29	sv-tests	LEC	total=23 pass=23 fail=0 xfail=0 xpass=0 error=0 skip=1013
+2026-01-29	verilator-verification	BMC	total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	verilator-verification	LEC	total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0
+2026-01-29	yosys/tests/sva	BMC	total=14 pass=12 fail=0 xfail=0 xpass=0 error=0 skip=2
+2026-01-29	yosys/tests/sva	LEC	total=14 pass=14 fail=0 xfail=0 xpass=0 error=0 skip=2

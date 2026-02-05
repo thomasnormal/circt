@@ -1,0 +1,18 @@
+diff --git a/source/ast/FmtHelpers.cpp b/source/ast/FmtHelpers.cpp
+index 54d1d80..d5a9f59 100644
+--- a/source/ast/FmtHelpers.cpp
++++ b/source/ast/FmtHelpers.cpp
+@@ -45,7 +45,8 @@ static bool checkArgType(TContext& context, const Expression& arg, char spec, Sou
+         case 'x':
+         case 'd':
+         case 'o':
+         case 'b':
+         case 'c':
+-            if (type.isIntegral() || type.isString())
++            if (type.isIntegral() || type.isString() || type.isClass() ||
++                type.isNull() || type.isCHandle())
+                 return true;
+             if (type.isFloating()) {
+                 // Just a warning, we will implicitly convert.
+                 context.addDiag(diag::FormatRealInt, arg.sourceRange) << spec << range;
+                 return true;

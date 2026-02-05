@@ -349,7 +349,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 4. **Simulation performance** - AVIP sims are slow (SPI: 163ns in 60s wall-clock).
 5. **`$readmemh` support** - Needed for some OpenTitan testbenches.
 
-### Previous Blocker: UVM Factory Registration - ✅ FIXED
+### Previous Blocker: UVM Factory Registration (typedef specialization) - ✅ FIXED
 
 **Root Cause**: Parameterized class `uvm_component_registry #(T, Tname)` specializations referenced via nested typedefs were not being converted.
 

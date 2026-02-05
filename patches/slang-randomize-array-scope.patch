@@ -1,0 +1,80 @@
+diff --git a/source/ast/Lookup.cpp b/source/ast/Lookup.cpp
+index 5920ead..a325002 100644
+--- a/source/ast/Lookup.cpp
++++ b/source/ast/Lookup.cpp
+@@ -1568,7 +1568,8 @@ bool Lookup::ensureAccessible(const Symbol& symbol, const ASTContext& context,
+     }
+ 
+     auto [parent, inStatic] = getContainingClass(*context.scope);
+-    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope)) {
++    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope) &&
++        !context.randomizeDetails) {
+         if (sourceRange) {
+             auto& diag = context.addDiag(diag::NestedNonStaticClassProperty, *sourceRange);
+             diag << symbol.name << parent->name;
+@@ -1639,9 +1640,16 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+         if (details.thisVar) {
+             auto dt = details.thisVar->getDeclaredType();
+             SLANG_ASSERT(dt);
+-            return dt->getType().getCanonicalType().as<ClassType>();
++            auto& canonical = dt->getType().getCanonicalType();
++            if (canonical.kind == SymbolKind::ClassType)
++                return canonical.as<ClassType>();
+         }
+ 
++        // Fall back to classScope if thisVar's type is not a class
++        // (e.g. when randomizing an array element).
++        if (classScope.asSymbol().kind == SymbolKind::ClassType)
++            return classScope;
++
+        return *context.scope;
+    };
+
+@@ -1669,6 +1677,17 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+             break;
+         case SyntaxKind::ThisHandle:
+             result.found = details.thisVar;
++            // When the randomize target is an array element select
++            // (e.g. arr[i].randomize()), thisVar may point to the array
++            // variable whose type doesn't match the class scope.  Fall back
++            // to the class's own thisVar so that 'this' resolves to the
++            // element (class) type, not the array type.
++            if (result.found && result.found->getDeclaredType() &&
++                result.found->getDeclaredType()->getType().getCanonicalType().kind !=
++                    SymbolKind::ClassType) {
++                if (classScope.asSymbol().kind == SymbolKind::ClassType)
++                    result.found = classScope.asSymbol().as<ClassType>().thisVar;
++            }
+            if (!result.found)
+                result.found = findThisHandle(*context.scope, flags, name.range, result);
+
+diff --git a/source/ast/expressions/CallExpression.cpp b/source/ast/expressions/CallExpression.cpp
+index f38be5ffa..36b0fd5e4 100644
+--- a/source/ast/expressions/CallExpression.cpp
++++ b/source/ast/expressions/CallExpression.cpp
+@@ -530,8 +530,18 @@ Expression& CallExpression::createSystemCall(
+             // so that class members can be found in the constraint block.
+             argContext.randomizeDetails = &randomizeDetails;
+             if (firstArg) {
+-                randomizeDetails.classType = &firstArg->type->getCanonicalType().as<ClassType>();
+-                randomizeDetails.thisVar = firstArg->getSymbolReference();
++                auto& canonType = firstArg->type->getCanonicalType();
++                if (canonType.isClass()) {
++                    randomizeDetails.classType = &canonType.as<ClassType>();
++                    if (auto symRef = firstArg->getSymbolReference()) {
++                        if (auto valueSym = symRef->as_if<ValueSymbol>();
++                            valueSym && valueSym->getType().getCanonicalType().isClass()) {
++                            randomizeDetails.thisVar = valueSym;
++                        }
++                    }
++                    if (!randomizeDetails.thisVar) {
++                        if (auto classSym =
++                                randomizeDetails.classType->asSymbol().as_if<ClassType>();
++                            classSym && classSym->thisVar) {
++                            randomizeDetails.thisVar = classSym->thisVar;
++                        }
++                    }
++                }
+             }
+             else if (randomizeScope && randomizeScope->asSymbol().kind == SymbolKind::ClassType) {
+                 randomizeDetails.classType = randomizeScope;
