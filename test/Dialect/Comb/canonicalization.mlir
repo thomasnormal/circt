@@ -2066,9 +2066,10 @@ hw.module @xorCancelParity(in %a: i4, in %b: i4, in %c: i4, out o: i4) {
 
 // CHECK-LABEL: @andConstCombine
 hw.module @andConstCombine(in %a: i4, out o: i4) {
-// CHECK-NEXT: %[[CST:%.+]] = hw.constant 1 : i4
-// CHECK-NEXT: %[[AND:%.+]] = comb.and %a, %[[CST]] : i4
-// CHECK-NEXT: hw.output %[[AND]] : i4
+// CHECK-NEXT: %[[C0:.*]] = hw.constant 0 : i3
+// CHECK-NEXT: %[[BIT0:.*]] = comb.extract %a from 0 : (i4) -> i1
+// CHECK-NEXT: %[[RES:.*]] = comb.concat %[[C0]], %[[BIT0]] : i3, i1
+// CHECK-NEXT: hw.output %[[RES]] : i4
   %c3 = hw.constant 3 : i4
   %c5 = hw.constant 5 : i4
   %0 = comb.and %a, %c3, %c5 : i4

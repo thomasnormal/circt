@@ -1026,11 +1026,18 @@ LogicalResult AndOp::canonicalize(AndOp op, PatternRewriter &rewriter) {
     APInt constAccum = APInt::getAllOnes(width);
     SmallVector<Value, 4> newOperands;
     bool sawConst = false;
+    unsigned constCount = 0;
+    Value singleConstOperand;
+    APInt singleConstValue(width, 0);
     for (Value operand : inputs) {
       APInt value;
       if (matchPattern(operand, m_ConstantInt(&value))) {
         constAccum &= value;
         sawConst = true;
+        if (++constCount == 1) {
+          singleConstOperand = operand;
+          singleConstValue = value;
+        }
         continue;
       }
       newOperands.push_back(operand);
@@ -1042,9 +1049,16 @@ LogicalResult AndOp::canonicalize(AndOp op, PatternRewriter &rewriter) {
         rewriter.replaceOp(op, zero);
         return success();
       }
-      if (!constAccum.isAllOnes())
-        newOperands.push_back(
-            hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      if (!constAccum.isAllOnes()) {
+        // Avoid a canonicalization loop when there is already exactly one
+        // constant operand equal to the accumulated constant. In that case, we
+        // can reuse it instead of materializing a fresh identical constant op.
+        if (constCount == 1 && singleConstValue == constAccum)
+          newOperands.push_back(singleConstOperand);
+        else
+          newOperands.push_back(
+              hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      }
       if (newOperands.size() == 1) {
         rewriter.replaceOp(op, newOperands.front());
         return success();
@@ -1281,11 +1295,18 @@ LogicalResult OrOp::canonicalize(OrOp op, PatternRewriter &rewriter) {
     APInt constAccum = APInt::getZero(width);
     SmallVector<Value, 4> newOperands;
     bool sawConst = false;
+    unsigned constCount = 0;
+    Value singleConstOperand;
+    APInt singleConstValue(width, 0);
     for (Value operand : inputs) {
       APInt value;
       if (matchPattern(operand, m_ConstantInt(&value))) {
         constAccum |= value;
         sawConst = true;
+        if (++constCount == 1) {
+          singleConstOperand = operand;
+          singleConstValue = value;
+        }
         continue;
       }
       newOperands.push_back(operand);
@@ -1297,9 +1318,16 @@ LogicalResult OrOp::canonicalize(OrOp op, PatternRewriter &rewriter) {
         rewriter.replaceOp(op, allOnes);
         return success();
       }
-      if (!constAccum.isZero())
-        newOperands.push_back(
-            hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      if (!constAccum.isZero()) {
+        // Avoid a canonicalization loop when there is already exactly one
+        // constant operand equal to the accumulated constant. In that case, we
+        // can reuse it instead of materializing a fresh identical constant op.
+        if (constCount == 1 && singleConstValue == constAccum)
+          newOperands.push_back(singleConstOperand);
+        else
+          newOperands.push_back(
+              hw::ConstantOp::create(rewriter, op.getLoc(), constAccum));
+      }
       if (newOperands.size() == 1) {
         rewriter.replaceOp(op, newOperands.front());
         return success();
