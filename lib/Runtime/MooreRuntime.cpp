@@ -1279,6 +1279,175 @@ extern "C" int64_t __moore_string_to_int(MooreString *str) {
   return result;
 }
 
+extern "C" MooreString __moore_string_putc(MooreString *str, int32_t index,
+                                            int8_t ch) {
+  // Return a copy of the string with the character at index replaced.
+  // If str is null/empty, return an empty string.
+  if (!str || !str->data || str->len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+
+  // IEEE 1800-2017: putc is a no-op if index is out of bounds
+  if (index < 0 || index >= str->len) {
+    // Return a copy of the original string
+    MooreString result = allocateString(str->len);
+    std::memcpy(result.data, str->data, str->len);
+    return result;
+  }
+
+  MooreString result = allocateString(str->len);
+  std::memcpy(result.data, str->data, str->len);
+  result.data[index] = static_cast<char>(ch);
+  return result;
+}
+
+// str.atoi() - parse decimal integer from string
+extern "C" int32_t __moore_string_atoi(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return 0;
+
+  char *buffer = static_cast<char *>(std::malloc(str->len + 1));
+  std::memcpy(buffer, str->data, str->len);
+  buffer[str->len] = '\0';
+
+  char *endptr = nullptr;
+  long result = std::strtol(buffer, &endptr, 10);
+
+  std::free(buffer);
+  return static_cast<int32_t>(result);
+}
+
+// str.atohex() - parse hexadecimal integer from string
+extern "C" int32_t __moore_string_atohex(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return 0;
+
+  char *buffer = static_cast<char *>(std::malloc(str->len + 1));
+  std::memcpy(buffer, str->data, str->len);
+  buffer[str->len] = '\0';
+
+  char *endptr = nullptr;
+  long result = std::strtol(buffer, &endptr, 16);
+
+  std::free(buffer);
+  return static_cast<int32_t>(result);
+}
+
+// str.atooct() - parse octal integer from string
+extern "C" int32_t __moore_string_atooct(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return 0;
+
+  char *buffer = static_cast<char *>(std::malloc(str->len + 1));
+  std::memcpy(buffer, str->data, str->len);
+  buffer[str->len] = '\0';
+
+  char *endptr = nullptr;
+  long result = std::strtol(buffer, &endptr, 8);
+
+  std::free(buffer);
+  return static_cast<int32_t>(result);
+}
+
+// str.atobin() - parse binary integer from string
+extern "C" int32_t __moore_string_atobin(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return 0;
+
+  char *buffer = static_cast<char *>(std::malloc(str->len + 1));
+  std::memcpy(buffer, str->data, str->len);
+  buffer[str->len] = '\0';
+
+  char *endptr = nullptr;
+  long result = std::strtol(buffer, &endptr, 2);
+
+  std::free(buffer);
+  return static_cast<int32_t>(result);
+}
+
+// str.atoreal() - parse real number from string
+extern "C" double __moore_string_atoreal(MooreString *str) {
+  if (!str || !str->data || str->len <= 0)
+    return 0.0;
+
+  char *buffer = static_cast<char *>(std::malloc(str->len + 1));
+  std::memcpy(buffer, str->data, str->len);
+  buffer[str->len] = '\0';
+
+  char *endptr = nullptr;
+  double result = std::strtod(buffer, &endptr);
+
+  std::free(buffer);
+  return result;
+}
+
+// str.hextoa(value) - convert integer to hex string
+extern "C" MooreString __moore_string_hextoa(int64_t value) {
+  char buffer[32];
+  int len =
+      std::snprintf(buffer, sizeof(buffer), "%lx", static_cast<uint64_t>(value));
+  if (len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
+// str.octtoa(value) - convert integer to octal string
+extern "C" MooreString __moore_string_octtoa(int64_t value) {
+  char buffer[32];
+  int len =
+      std::snprintf(buffer, sizeof(buffer), "%lo", static_cast<uint64_t>(value));
+  if (len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
+// str.bintoa(value) - convert integer to binary string
+extern "C" MooreString __moore_string_bintoa(int64_t value) {
+  if (value == 0) {
+    MooreString result = allocateString(1);
+    result.data[0] = '0';
+    return result;
+  }
+
+  char buffer[65];
+  int len = 0;
+  uint64_t uval = static_cast<uint64_t>(value);
+
+  // Find the highest set bit
+  int highBit = 63;
+  while (highBit > 0 && !((uval >> highBit) & 1))
+    --highBit;
+
+  for (int i = highBit; i >= 0; --i)
+    buffer[len++] = ((uval >> i) & 1) ? '1' : '0';
+
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
+// str.realtoa(value) - convert real to string
+extern "C" MooreString __moore_string_realtoa(double value) {
+  char buffer[64];
+  int len = std::snprintf(buffer, sizeof(buffer), "%g", value);
+  if (len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
 //===----------------------------------------------------------------------===//
 // Streaming Concatenation Operations
 //===----------------------------------------------------------------------===//
