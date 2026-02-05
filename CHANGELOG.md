@@ -1,5 +1,19 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 368 - February 5, 2026
+
+### Summary
+
+Iteration 368: Added a `circt-sim` regression test to validate correct semantics for recursive `func.call` where the caller uses its argument value after a nested call returns (a common recursion pattern).
+
+### Accomplishments
+
+1. **Regression test** - Added `test/circt-sim/llhd-process-func-recursion-args.mlir` to check that `sum_to(4)` evaluates to `10` under `circt-sim`.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/circt-sim/llhd-process-func-recursion-args.mlir`
+
 ## Iteration 367 - February 5, 2026
 
 ### Summary
