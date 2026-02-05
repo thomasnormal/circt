@@ -1,6 +1,4 @@
-// XFAIL: *
 // RUN: circt-sim %s | FileCheck %s
-// GreedyPatternRewriteDriver OOMs during pass pipeline on this IR.
 
 // Test that arithmetic operations correctly normalize APInt widths when operands
 // have mismatched bit widths. This can occur when a value read from a signal

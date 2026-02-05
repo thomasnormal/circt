@@ -1484,8 +1484,11 @@ static LogicalResult processInput(MLIRContext &context,
     PassManager pm(&context);
     pm.enableVerifier(verifyPasses);
 
-    // Add passes to lower to simulation-friendly form
-    pm.addPass(createCanonicalizerPass());
+    // Add passes to lower to simulation-friendly form.
+    // Use the CIRCT bottom-up simple canonicalizer (region simplification
+    // disabled, max 200k rewrites) to prevent OOM when canonicalization
+    // patterns interact to cause exponential blowup on LLHD+comb IR.
+    pm.addPass(circt::createBottomUpSimpleCanonicalizerPass());
 
     if (failed(pm.run(*module))) {
       llvm::errs() << "Error: Pass pipeline failed\n";
