@@ -59,7 +59,9 @@ static cl::opt<unsigned> optMaxMallocMB(
 static cl::opt<unsigned> optMaxVMemMB(
     "max-vmem-mb",
     cl::desc("Set an address-space (virtual memory) soft limit in megabytes "
-             "(0 = disabled; env: CIRCT_MAX_VMEM_MB)"),
+             "(0 = disabled; if left unspecified and --resource-guard is "
+             "enabled, a default is derived from the effective RSS limit; "
+             "env: CIRCT_MAX_VMEM_MB)"),
     cl::init(0), cl::cat(resourceGuardCategory));
 
 static cl::opt<unsigned> optMaxWallMs(
@@ -404,6 +406,7 @@ void circt::installResourceGuard() {
   GuardState &state = getGuardState();
 
   auto envMaxRSSMB = parseEnvMegabytes("CIRCT_MAX_RSS_MB");
+  auto envMaxVMemMB = parseEnvMegabytes("CIRCT_MAX_VMEM_MB");
   auto envMaxWallMs = parseEnvMilliseconds("CIRCT_MAX_WALL_MS");
   auto envIntervalMs =
       parseEnvMilliseconds("CIRCT_RESOURCE_GUARD_INTERVAL_MS");
@@ -489,6 +492,17 @@ void circt::installResourceGuard() {
         << (verbose ? "note" : "warning")
         << ": resource guard enabled but all limits are disabled; applying "
            "default RSS limit. Use --no-resource-guard to run unbounded.\n";
+  }
+
+  // Apply a best-effort address-space limit when the guard is enabled and the
+  // user did not explicitly configure a virtual memory cap. This adds a
+  // kernel-enforced backstop in cases where the watchdog thread cannot run in
+  // time due to system-wide memory pressure (swap/OOM thrash).
+  const bool vmemSpecified =
+      (optMaxVMemMB.getNumOccurrences() > 0) || envMaxVMemMB.has_value();
+  if (!vmemSpecified && effectiveMaxVMemMB == 0 && effectiveMaxRSSMB != 0) {
+    const uint64_t overheadMB = std::min<uint64_t>(8192ull, effectiveMaxRSSMB);
+    effectiveMaxVMemMB = effectiveMaxRSSMB + overheadMB;
   }
 
   if (effectiveMaxVMemMB)

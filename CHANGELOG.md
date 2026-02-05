@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 361 - February 5, 2026
+
+### Summary
+
+Iteration 361: Strengthened the tool Resource Guard to include a best-effort virtual memory (address space) cap by default (derived from the effective RSS limit). This provides a kernel-enforced backstop to prevent CIRCT tools (e.g. `circt-opt`) from consuming tens of GB of RAM and hanging a machine under swap/OOM thrash.
+
+### Accomplishments
+
+1. **Default VMem cap** - When `--resource-guard` is enabled and `--max-vmem-mb` / `CIRCT_MAX_VMEM_MB` is not explicitly set, CIRCT now sets a conservative address-space soft limit derived from the effective RSS limit.
+2. **Unit tests** - Added coverage to ensure the default VMem cap is applied when unspecified and can still be explicitly disabled with `CIRCT_MAX_VMEM_MB=0`.
+3. **Docs** - Updated `README.md` to document the default VMem behavior and how to disable it.
+
+### Verification (February 5, 2026)
+
+- `./build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=ResourceGuardTest.*`
+
 ## Iteration 360 - February 5, 2026
 
 ### Summary
