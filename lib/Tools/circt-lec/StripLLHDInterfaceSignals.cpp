@@ -2118,6 +2118,33 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   }
 
 
+  auto dominatesUse = [&](Value value, Operation *use) -> bool {
+    if (!value || !use)
+      return false;
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Block *argBlock = arg.getOwner();
+      Block *useBlock = use->getBlock();
+      if (argBlock == useBlock)
+        return true;
+      return dom.dominates(argBlock, useBlock);
+    }
+    if (auto *def = value.getDefiningOp()) {
+      if (def->getBlock() == use->getBlock())
+        return def->isBeforeInBlock(use);
+      return dom.dominates(def, use);
+    }
+    return false;
+  };
+
+  auto isZeroTimeLike = [&](llhd::DriveOp driveOp) -> bool {
+    auto timeOp = driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+    if (!timeOp)
+      return false;
+    auto t = timeOp.getValue();
+    // Accept 0-time drives, including epsilon scheduling used to model
+    // combinational propagation in LLHD.
+    return t.getTime() == 0 && t.getDelta() == 0;
+  };
 
   if (drives.size() == 1) {
     llhd::DriveOp driveOp = drives.front();
@@ -2150,6 +2177,53 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             def->erase();
       }
       return success();
+    }
+  }
+
+  // Fast-path: a single unconditional 0-time (or epsilon-scheduled) drive.
+  //
+  // LLHD lowering for combinational logic may schedule drives with an epsilon
+  // delay (`llhd.constant_time <0ns, 0d, 1e>`). For LEC, interpret such signals
+  // as combinational wires (their driven value) when that driven value
+  // dominates all probes.
+  if (forwardedArgs.empty() && drives.size() == 1) {
+    llhd::DriveOp driveOp = drives.front();
+    if (drivePaths.lookup(driveOp).empty() && !driveOp.getEnable() &&
+        isZeroTimeLike(driveOp)) {
+      Value drivenValue = unwrapStoredValue(driveOp.getValue());
+      if (!drivenValue)
+        return driveOp.emitError("unsupported LLHD drive value in LEC");
+
+      bool dominatesAllProbes = llvm::all_of(probes, [&](llhd::ProbeOp probe) {
+        return dominatesUse(drivenValue, probe.getOperation());
+      });
+      if (dominatesAllProbes) {
+        for (auto probe : probes) {
+          OpBuilder probeBuilder(probe);
+          Value replacement = materializePath(probeBuilder, drivenValue,
+                                              probePaths.lookup(probe),
+                                              probe.getLoc());
+          if (!replacement)
+            return probe.emitError("unsupported LLHD probe path in LEC");
+          if (replacement.getType() != probe.getResult().getType())
+            return probe.emitError("signal probe type mismatch in LEC");
+          probe.getResult().replaceAllUsesWith(replacement);
+          probe.erase();
+        }
+        driveOp.erase();
+        for (Operation *refOp : llvm::reverse(derivedRefs)) {
+          if (refOp->use_empty())
+            refOp->erase();
+        }
+        if (sigOp.use_empty()) {
+          Value init = sigOp.getInit();
+          sigOp.erase();
+          if (auto *def = init.getDefiningOp())
+            if (def->use_empty())
+              def->erase();
+        }
+        return success();
+      }
     }
   }
 
