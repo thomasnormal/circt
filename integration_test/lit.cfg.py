@@ -218,9 +218,23 @@ if config.z3_path != "":
   config.available_features.add('z3')
 
 # Enable libz3 if it has been detected.
+#
+# Note: some CMake configurations may populate this with an imported target name
+# (e.g. "z3::libz3") instead of a filesystem path. Only enable the feature when
+# the substitution expands to a real file, otherwise tests guarded by
+# `REQUIRES: libz3` will fail instead of being skipped.
 if config.z3_library not in ("", "Z3_LIBRARIES-NOTFOUND"):
-  tools.append(ToolSubst(f"%libz3", config.z3_library))
-  config.available_features.add('libz3')
+  def _first_existing_path(text):
+    for candidate in text.split(";"):
+      candidate = candidate.strip()
+      if candidate and os.path.exists(candidate):
+        return candidate
+    return ""
+
+  z3_library_path = _first_existing_path(config.z3_library)
+  if z3_library_path:
+    tools.append(ToolSubst(f"%libz3", z3_library_path))
+    config.available_features.add('libz3')
 
 # Enable SymbiYosys if it has been detected.
 if config.sby_path != "":
