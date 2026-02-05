@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 349 - February 5, 2026
+
+### Summary
+
+Iteration 349: Hardened the tool-wide resource guard to better prevent runaway memory usage and to make its status easier to diagnose. The guard now applies its default RSS limit whenever RSS is not explicitly configured (even if other limits like wall-clock are set), `--no-resource-guard` reliably disables all limits (including env/CLI overrides), and a new verbose mode prints the effective limits at startup.
+
+### Accomplishments
+
+1. **More consistent default RSS behavior** - The default RSS cap now applies whenever `--resource-guard` is enabled and no explicit RSS limit is configured, even if other limits (e.g. `CIRCT_MAX_WALL_MS`) are set.
+2. **Predictable opt-out** - `--no-resource-guard` now disables all limits, including those set via `CIRCT_MAX_*` environment variables or `--max-*-mb` flags.
+3. **Verbose mode** - Added `--resource-guard-verbose` / `CIRCT_RESOURCE_GUARD_VERBOSE=1` to print the effective guard limits (RSS/malloc/vmem/wall/interval) on startup to help debug unexpected unbounded runs.
+4. **New unit test** - Added a gtest ensuring verbose mode reports the effective interval/limits.
+
+### Verification (February 5, 2026)
+
+- `./build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=ResourceGuardTest.*`
+
 ## Iteration 348 - February 5, 2026
 
 ### Summary
