@@ -1263,6 +1263,197 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
         alloca->moveBefore(&entryBlock, entryBlock.begin());
     }
 
+    // If a pointer-typed block argument selects between multiple allocas, MLIR
+    // mem2reg cannot promote the underlying slots because the pointer escapes
+    // through the CFG. For common LEC patterns, the different allocas are
+    // "pointer-only" (only used to feed that block argument), so the identity
+    // of the chosen alloca is unobservable. In those cases, rewrite the block
+    // argument to use a single canonical alloca and drop the CFG operand.
+    for (Block &block : region) {
+      for (int argIndex = static_cast<int>(block.getNumArguments()) - 1;
+           argIndex >= 0; --argIndex) {
+        BlockArgument arg = block.getArgument(argIndex);
+        if (!isa<LLVM::LLVMPointerType>(arg.getType()))
+          continue;
+
+        // Collect all incoming operands for this block argument.
+        SmallVector<Value, 4> incoming;
+        llvm::SmallPtrSet<Value, 8> incomingSet;
+        for (Block *pred : block.getPredecessors()) {
+          auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+          if (!branch)
+            continue;
+          for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+               succIndex < e; ++succIndex) {
+            if (branch->getSuccessor(succIndex) != &block)
+              continue;
+            auto succOperands = branch.getSuccessorOperands(succIndex);
+            if (static_cast<unsigned>(argIndex) >= succOperands.size())
+              continue;
+            unsigned operandIndex = succOperands.getOperandIndex(argIndex);
+            Value operand = branch->getOperand(operandIndex);
+            if (incomingSet.insert(operand).second)
+              incoming.push_back(operand);
+          }
+        }
+        if (incoming.size() <= 1)
+          continue;
+
+        // We only collapse when all incoming pointers originate from allocas
+        // that are otherwise "pointer-only", i.e. they are not used for memory
+        // accesses outside of feeding this specific block argument.
+        auto feedsOnlyThisArg = [&](Value root) -> bool {
+          SmallVector<Value, 8> worklist;
+          llvm::SmallPtrSet<Value, 16> visited;
+          worklist.push_back(root);
+          visited.insert(root);
+          while (!worklist.empty()) {
+            Value current = worklist.pop_back_val();
+            for (OpOperand &use : current.getUses()) {
+              Operation *user = use.getOwner();
+              if (isa<LLVM::LoadOp, LLVM::StoreOp>(user))
+                return false;
+              if (auto bitcast = dyn_cast<LLVM::BitcastOp>(user)) {
+                if (bitcast.getArg() != current)
+                  return false;
+                Value next = bitcast.getResult();
+                if (visited.insert(next).second)
+                  worklist.push_back(next);
+                continue;
+              }
+              if (auto addr = dyn_cast<LLVM::AddrSpaceCastOp>(user)) {
+                if (addr.getArg() != current)
+                  return false;
+                Value next = addr.getResult();
+                if (visited.insert(next).second)
+                  worklist.push_back(next);
+                continue;
+              }
+              if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+                // Follow the select result; a merged pointer is still fine as
+                // long as it is only used to feed this argument.
+                Value next = select.getResult();
+                if (visited.insert(next).second)
+                  worklist.push_back(next);
+                continue;
+              }
+              if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+                bool ok = false;
+                for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+                     succIndex < e; ++succIndex) {
+                  auto succOperands = branch.getSuccessorOperands(succIndex);
+                  for (unsigned index = 0, sz = succOperands.size(); index < sz;
+                       ++index) {
+                    Value operand = succOperands[index];
+                    if (!operand || operand != current)
+                      continue;
+                    if (branch->getSuccessor(succIndex) != &block ||
+                        static_cast<int>(index) != argIndex)
+                      return false;
+                    ok = true;
+                  }
+                }
+                if (!ok)
+                  return false;
+                continue;
+              }
+              return false;
+            }
+          }
+          return true;
+        };
+
+        SmallVector<Value, 4> bases;
+        bases.reserve(incoming.size());
+        bool allPointerOnly = true;
+        for (Value in : incoming) {
+          if (!isa<LLVM::LLVMPointerType>(in.getType())) {
+            allPointerOnly = false;
+            break;
+          }
+          Value stripped = stripPointerCasts(in);
+          auto alloca = stripped.getDefiningOp<LLVM::AllocaOp>();
+          if (!alloca) {
+            allPointerOnly = false;
+            break;
+          }
+          if (!feedsOnlyThisArg(alloca.getResult())) {
+            allPointerOnly = false;
+            break;
+          }
+          bases.push_back(alloca.getResult());
+        }
+        if (!allPointerOnly || bases.empty())
+          continue;
+
+        Value canonical = bases.front();
+        if (canonical.getType() != arg.getType())
+          continue;
+
+        // Ensure all predecessor edges provide an eraseable operand for this
+        // argument. If not, skip collapsing to avoid producing invalid CFG
+        // operand lists.
+        bool canEraseAllEdges = true;
+        SmallPtrSet<Block *, 8> seenPreds;
+        for (Block *pred : block.getPredecessors()) {
+          if (!seenPreds.insert(pred).second)
+            continue;
+          Operation *terminator = pred->getTerminator();
+          if (auto br = dyn_cast<cf::BranchOp>(terminator)) {
+            if (br.getDest() == &block &&
+                static_cast<unsigned>(argIndex) >= br.getDestOperands().size())
+              canEraseAllEdges = false;
+            continue;
+          }
+          if (auto br = dyn_cast<cf::CondBranchOp>(terminator)) {
+            if (br.getTrueDest() == &block &&
+                static_cast<unsigned>(argIndex) >=
+                    br.getTrueDestOperands().size())
+              canEraseAllEdges = false;
+            if (br.getFalseDest() == &block &&
+                static_cast<unsigned>(argIndex) >=
+                    br.getFalseDestOperands().size())
+              canEraseAllEdges = false;
+            continue;
+          }
+          canEraseAllEdges = false;
+        }
+        if (!canEraseAllEdges)
+          continue;
+
+        arg.replaceAllUsesWith(canonical);
+        seenPreds.clear();
+        for (Block *pred : block.getPredecessors()) {
+          if (!seenPreds.insert(pred).second)
+            continue;
+          Operation *terminator = pred->getTerminator();
+          if (auto br = dyn_cast<cf::BranchOp>(terminator)) {
+            auto operands = llvm::to_vector(br.getDestOperands());
+            operands.erase(operands.begin() + argIndex);
+            br.getDestOperandsMutable().assign(operands);
+            continue;
+          }
+          if (auto br = dyn_cast<cf::CondBranchOp>(terminator)) {
+            if (br.getTrueDest() == &block) {
+              auto operands = llvm::to_vector(br.getTrueDestOperands());
+              operands.erase(operands.begin() + argIndex);
+              br.getTrueDestOperandsMutable().assign(operands);
+            }
+            if (br.getFalseDest() == &block) {
+              auto operands = llvm::to_vector(br.getFalseDestOperands());
+              operands.erase(operands.begin() + argIndex);
+              br.getFalseDestOperandsMutable().assign(operands);
+            }
+            continue;
+          }
+          return combOp.emitError(
+              "unsupported predecessor for pointer block argument collapse in "
+              "LEC");
+        }
+        block.eraseArgument(argIndex);
+      }
+    }
+
     for (Block &block : region) {
       for (unsigned argIndex = 0; argIndex < block.getNumArguments();
            ++argIndex) {
@@ -1308,13 +1499,14 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
             auto succOperands = branch.getSuccessorOperands(succIndex);
             if (argIndex >= succOperands.size())
               continue;
-            if (succOperands.isOperandProduced(argIndex))
-              continue;
             unsigned operandIndex = succOperands.getOperandIndex(argIndex);
-            Value ptrValue = branch->getOperand(operandIndex);
-            Value loaded =
-                LLVM::LoadOp::create(builder, branch.getLoc(), loadType,
-                                     ptrValue);
+            Value operandValue = branch->getOperand(operandIndex);
+            if (operandValue.getType() == loadType)
+              continue;
+            if (!isa<LLVM::LLVMPointerType>(operandValue.getType()))
+              continue;
+            Value loaded = LLVM::LoadOp::create(builder, branch.getLoc(),
+                                                loadType, operandValue);
             branch->setOperand(operandIndex, loaded);
           }
         }
@@ -1327,8 +1519,12 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
       allocators.push_back(allocator);
     });
     if (!allocators.empty()) {
-      DataLayout dataLayout = DataLayout::closest(combOp);
-      DominanceInfo dominance(combOp);
+      // Use dominance/data layout from the surrounding module op. The
+      // combinational body may contain control flow and nested regions; using
+      // the parent op here avoids known cases where dominance for the isolated
+      // op fails to promote otherwise-promotable slots.
+      DataLayout dataLayout = DataLayout::closest(module);
+      DominanceInfo dominance(module);
       (void)tryToPromoteMemorySlots(allocators, builder, dataLayout, dominance);
     }
   }

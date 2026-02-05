@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 342 - February 4, 2026
+
+### Summary
+
+Iteration 342: Prevented catastrophic memory blow-ups in `circt-lec`/`circt-bmc` LLHD lowering pipelines by switching intermediate canonicalization passes to bottom-up traversal. This makes large OpenTitan-derived inputs complete without hitting the resource guard in common cases.
+
+### Accomplishments
+
+1. **Bottom-up canonicalizer helper** - Added `createBottomUpCanonicalizerPass()` to force `top-down=false` canonicalization where needed for stability.
+2. **BMC/LEC pipeline hardening** - Switched LLHD post-processing canonicalizers in `circt-bmc` and `circt-lec` to bottom-up traversal.
+3. **Regression coverage** - Added tool tests that assert the LLHD pipeline canonicalizer reports `top-down=false` when using `--verbose-pass-executions`.
+
+### Verification (February 4, 2026)
+
+- `ninja -C build circt-bmc circt-lec` (**pass**)
+- `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-canonicalizer-bottom-up.mlir` (**pass**)
+- `build/bin/llvm-lit -sv test/Tools/circt-bmc/bmc-canonicalizer-bottom-up.mlir` (**pass**)
+- `CIRCT_MAX_RSS_MB=8000 CIRCT_MAX_VMEM_MB=12000 build/bin/circt-lec --emit-mlir --assume-known-inputs --verbose-pass-executions -c1=aes_sbox_canright_lec_wrapper -c2=aes_sbox_lut_lec_wrapper /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir /tmp/opentitan-lec-canright-undefzero/aes_sbox_canright/aes_sbox_lec.mlir -o /dev/null` (**pass; no resource-guard abort**)
+
+### Files Changed
+
+- `include/circt/Support/Passes.h`
+- `lib/Support/Passes.cpp`
+- `tools/circt-lec/circt-lec.cpp`
+- `tools/circt-bmc/circt-bmc.cpp`
+- `test/Tools/circt-lec/lec-canonicalizer-bottom-up.mlir`
+- `test/Tools/circt-bmc/bmc-canonicalizer-bottom-up.mlir`
+
+---
+
 ## Iteration 341 - February 4, 2026
 
 ### Summary

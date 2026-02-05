@@ -59,6 +59,11 @@ public:
 /// Create a simple canonicalizer pass.
 std::unique_ptr<Pass> createSimpleCanonicalizerPass();
 
+/// Create a canonicalizer pass configured to use bottom-up traversal. This is
+/// intended as a safer default for large IR to avoid pathological behavior that
+/// can occur with top-down traversal in some pipelines.
+std::unique_ptr<Pass> createBottomUpCanonicalizerPass();
+
 } // namespace circt
 
 #endif // CIRCT_SUPPORT_PASSES_H
