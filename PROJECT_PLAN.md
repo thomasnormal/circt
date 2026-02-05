@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 4, 2026 (Iteration 341 - Runner Script Memory Limits)
+## Current Status - February 4, 2026 (Iteration 342 - Canonicalizer Blowup Mitigation)
 
 ### Session Summary - Key Milestones
 
@@ -24,6 +24,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
 | **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
+| **LLHD Canonicalizer Blowup Mitigation** | ✅ **FIXED** | Switched `circt-lec`/`circt-bmc` LLHD pipeline canonicalizers to bottom-up traversal to avoid runaway IR growth/memory spikes |
 | **Verilator BMC Script Fix** | ✅ FIXED | `BMC_RUN_SMTLIB=1` now uses `circt-bmc --run-smtlib --z3-path=...` (no JIT z3 link) |
 | **BMC SMT-LIB Robustness** | ✅ **FIXED** | `--emit-smtlib`/`--run-smtlib` no longer produce empty output for propertyless cases; `lower-clocked-assert-like` now lowers LTL-typed clocked asserts |
 | **SPI AVIP randomize scoping** | ✅ FIXED | `array[i].randomize() with {this.member}` now resolves `this` to element receiver |

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <thread>
 
@@ -28,6 +29,12 @@ using namespace circt;
 namespace cl = llvm::cl;
 
 static cl::OptionCategory resourceGuardCategory("Resource Guard Options");
+
+static cl::opt<bool> optResourceGuard(
+    "resource-guard",
+    cl::desc("Enable default resource guard limits unless explicitly "
+             "overridden (disable with --no-resource-guard)"),
+    cl::init(true), cl::cat(resourceGuardCategory));
 
 static cl::opt<unsigned> optMaxRSSMB(
     "max-rss-mb",
@@ -57,6 +64,28 @@ static std::optional<uint64_t> parseEnvMegabytes(llvm::StringRef envName) {
   if (!textOpt)
     return std::nullopt;
   return circt::parseMegabytes(*textOpt);
+}
+
+static std::optional<uint64_t> getSystemMemoryMegabytes() {
+#if defined(__linux__)
+  FILE *f = ::fopen("/proc/meminfo", "r");
+  if (!f)
+    return std::nullopt;
+  char key[64];
+  unsigned long valueKB = 0;
+  char unit[32];
+  while (::fscanf(f, "%63s %lu %31s", key, &valueKB, unit) == 3) {
+    if (std::strcmp(key, "MemTotal:") == 0) {
+      ::fclose(f);
+      // meminfo reports kB.
+      return static_cast<uint64_t>(valueKB / 1024ul);
+    }
+  }
+  ::fclose(f);
+  return std::nullopt;
+#else
+  return std::nullopt;
+#endif
 }
 
 std::optional<uint64_t> circt::parseMegabytes(llvm::StringRef text) {
@@ -168,6 +197,10 @@ static void watchdogThreadMain() {
 void circt::installResourceGuard() {
   GuardState &state = getGuardState();
 
+  auto envMaxRSSMB = parseEnvMegabytes("CIRCT_MAX_RSS_MB");
+  auto envMaxMallocMB = parseEnvMegabytes("CIRCT_MAX_MALLOC_MB");
+  auto envMaxVMemMB = parseEnvMegabytes("CIRCT_MAX_VMEM_MB");
+
   auto readMB = [](unsigned optValue, unsigned occurrences,
                    llvm::StringRef env) -> uint64_t {
     if (occurrences > 0)
@@ -185,15 +218,35 @@ void circt::installResourceGuard() {
   const uint64_t maxVmemMB = readMB(optMaxVMemMB, optMaxVMemMB.getNumOccurrences(),
                                    "CIRCT_MAX_VMEM_MB");
 
-  if (maxVmemMB)
-    setAddressSpaceLimitBytes(megabytesToBytes(maxVmemMB));
+  uint64_t effectiveMaxRSSMB = maxRSSMB;
+  uint64_t effectiveMaxMallocMB = maxMallocMB;
+  uint64_t effectiveMaxVMemMB = maxVmemMB;
 
-  if (!maxRSSMB && !maxMallocMB)
+  // If no explicit limits were provided, apply conservative defaults when the
+  // guard is enabled. The goal is to prevent tools from consuming tens of GB of
+  // RAM and effectively hanging a machine due to swapping/OOM thrashing.
+  if (optResourceGuard && optMaxRSSMB.getNumOccurrences() == 0 &&
+      optMaxMallocMB.getNumOccurrences() == 0 &&
+      optMaxVMemMB.getNumOccurrences() == 0 && !envMaxRSSMB && !envMaxMallocMB &&
+      !envMaxVMemMB) {
+    // Default to 80% of system memory, but cap at 20GB.
+    if (auto memTotalMB = getSystemMemoryMegabytes()) {
+      uint64_t byPercent = (*memTotalMB * 80ull) / 100ull;
+      effectiveMaxRSSMB = std::min<uint64_t>(20000ull, byPercent);
+    } else {
+      effectiveMaxRSSMB = 20000ull;
+    }
+  }
+
+  if (effectiveMaxVMemMB)
+    setAddressSpaceLimitBytes(megabytesToBytes(effectiveMaxVMemMB));
+
+  if (!effectiveMaxRSSMB && !effectiveMaxMallocMB)
     return;
 
-  state.maxRSSBytes.store(megabytesToBytes(maxRSSMB),
+  state.maxRSSBytes.store(megabytesToBytes(effectiveMaxRSSMB),
                           std::memory_order_relaxed);
-  state.maxMallocBytes.store(megabytesToBytes(maxMallocMB),
+  state.maxMallocBytes.store(megabytesToBytes(effectiveMaxMallocMB),
                              std::memory_order_relaxed);
   state.intervalMs.store(optGuardIntervalMs, std::memory_order_relaxed);
 

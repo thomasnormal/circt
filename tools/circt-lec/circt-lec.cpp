@@ -574,22 +574,22 @@ static LogicalResult executeLEC(MLIRContext &context) {
     auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
     llhdPostPM.addPass(llhd::createLowerProcessesPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
     llhdPostPM.addPass(llhd::createUnrollLoopsPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
     llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
     llhdPostPM.addPass(createMapArithToCombPass(true));
     llhdPostPM.addPass(llhd::createCombineDrivesPass());
     llhdPostPM.addPass(llhd::createSig2Reg());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(mlir::createCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
     if (llhdOptions.detectMemories) {
       llhdPostPM.addPass(seq::createRegOfVecToMem());
       llhdPostPM.addPass(mlir::createCSEPass());
-      llhdPostPM.addPass(mlir::createCanonicalizerPass());
+      llhdPostPM.addPass(createBottomUpCanonicalizerPass());
     }
   }
   pm.addPass(createLowerLECLLVM());

@@ -19,3 +19,9 @@ std::unique_ptr<Pass> circt::createSimpleCanonicalizerPass() {
       mlir::GreedySimplifyRegionLevel::Disabled);
   return mlir::createCanonicalizerPass(config);
 }
+
+std::unique_ptr<Pass> circt::createBottomUpCanonicalizerPass() {
+  mlir::GreedyRewriteConfig config;
+  config.setUseTopDownTraversal(false);
+  return mlir::createCanonicalizerPass(config);
+}
