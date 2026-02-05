@@ -1134,6 +1134,202 @@ static Value buildUnknownIndexedRuntimeArray(OpBuilder &builder, Location loc,
 static Value adjustIntegerWidth(OpBuilder &builder, Value value,
                                 uint32_t targetWidth, Location loc);
 
+static Value buildAllUnknownFourStateElement(OpBuilder &builder, Location loc,
+                                             hw::StructType structTy) {
+  if (!isFourStateStructType(structTy))
+    return Value();
+  Type valueTy = structTy.getElements()[0].type;
+  Type unknownTy = structTy.getElements()[1].type;
+  Value zero = hw::ConstantOp::create(builder, loc, cast<IntegerType>(valueTy), 0);
+  Value allOnes =
+      hw::ConstantOp::create(builder, loc, cast<IntegerType>(unknownTy), -1);
+  return createFourStateStruct(builder, loc, zero, allOnes);
+}
+
+static Value muxFourStateStruct(OpBuilder &builder, Location loc, Value cond,
+                                Value trueVal, Value falseVal) {
+  if (!isFourStateStructType(trueVal.getType()) ||
+      trueVal.getType() != falseVal.getType())
+    return Value();
+  Value tValue = extractFourStateValue(builder, loc, trueVal);
+  Value tUnknown = extractFourStateUnknown(builder, loc, trueVal);
+  Value fValue = extractFourStateValue(builder, loc, falseVal);
+  Value fUnknown = extractFourStateUnknown(builder, loc, falseVal);
+  Value outValue =
+      comb::MuxOp::create(builder, loc, cond, tValue, fValue);
+  Value outUnknown =
+      comb::MuxOp::create(builder, loc, cond, tUnknown, fUnknown);
+  return createFourStateStruct(builder, loc, outValue, outUnknown);
+}
+
+static Value buildUnknownIndexedRuntimeArraySlice(
+    OpBuilder &builder, Location loc, hw::ArrayType arrType,
+    hw::ArrayType sliceType, Value array, Value idxValue, Value idxUnknown) {
+  auto elemStructTy = dyn_cast<hw::StructType>(arrType.getElementType());
+  if (!elemStructTy || !isFourStateStructType(elemStructTy))
+    return Value();
+  if (sliceType.getElementType() != arrType.getElementType())
+    return Value();
+
+  const unsigned numElems = arrType.getNumElements();
+  const unsigned sliceLen = sliceType.getNumElements();
+  if (sliceLen == 0 || sliceLen > numElems)
+    return Value();
+
+  constexpr unsigned kMaxUnknownSliceElements = 16;
+  constexpr unsigned kMaxUnknownSliceLen = 4;
+  if (numElems > kMaxUnknownSliceElements || sliceLen > kMaxUnknownSliceLen)
+    return Value();
+
+  const unsigned idxWidth = llvm::Log2_64_Ceil(numElems);
+  if (idxValue.getType().getIntOrFloatBitWidth() != idxWidth ||
+      idxUnknown.getType().getIntOrFloatBitWidth() != idxWidth)
+    return Value();
+
+  const unsigned elemWidth =
+      cast<IntegerType>(elemStructTy.getElements()[0].type).getWidth();
+  constexpr unsigned kMaxUnknownSliceElemWidth = 64;
+  if (elemWidth > kMaxUnknownSliceElemWidth)
+    return Value();
+
+  const int64_t maxBase =
+      static_cast<int64_t>(numElems) - static_cast<int64_t>(sliceLen);
+  if (maxBase < 0)
+    return Value();
+
+  auto i1Ty = builder.getI1Type();
+  Value one = hw::ConstantOp::create(builder, loc, i1Ty, 1);
+
+  // Compute a mask of possible indices given the known bits of idxValue.
+  Value mask = hw::ConstantOp::create(builder, loc,
+                                      APInt::getAllOnes(numElems));
+  for (unsigned bit = 0; bit < idxWidth; ++bit) {
+    APInt maskOne = APInt::getZero(numElems);
+    for (unsigned idx = 0; idx < numElems; ++idx) {
+      if ((idx >> bit) & 1)
+        maskOne.setBit(idx);
+    }
+    APInt maskZero = ~maskOne;
+    maskZero = maskZero & APInt::getAllOnes(numElems);
+
+    Value idxValBit =
+        comb::ExtractOp::create(builder, loc, idxValue, bit, 1);
+    Value idxUnkBit =
+        comb::ExtractOp::create(builder, loc, idxUnknown, bit, 1);
+    Value knownBit = comb::XorOp::create(builder, loc, idxUnkBit, one, false);
+
+    Value maskOneConst = hw::ConstantOp::create(builder, loc, maskOne);
+    Value maskZeroConst = hw::ConstantOp::create(builder, loc, maskZero);
+    Value selectedMask =
+        comb::MuxOp::create(builder, loc, idxValBit, maskOneConst, maskZeroConst,
+                            false);
+    Value filtered = comb::AndOp::create(builder, loc, mask, selectedMask, false);
+    mask = comb::MuxOp::create(builder, loc, knownBit, filtered, mask, false);
+  }
+
+  auto getMaskBit = [&](unsigned idx) -> Value {
+    return comb::ExtractOp::create(builder, loc, mask, idx, 1);
+  };
+
+  // Detect whether any out-of-bounds base index is possible.
+  Value allOnesIdx = hw::ConstantOp::create(builder, loc, idxValue.getType(), -1);
+  Value knownMask =
+      comb::XorOp::create(builder, loc, idxUnknown, allOnesIdx, false);
+  Value minAmount =
+      comb::AndOp::create(builder, loc, idxValue, knownMask, false);
+  Value maxAmount =
+      comb::OrOp::create(builder, loc, minAmount, idxUnknown, false);
+  Value maxBaseConst =
+      hw::ConstantOp::create(builder, loc, idxValue.getType(), maxBase);
+  Value oobPossible = comb::ICmpOp::create(
+      builder, loc, comb::ICmpPredicate::ugt, maxAmount, maxBaseConst, false);
+
+  // Collect element values once so we don't duplicate array_gets per bit.
+  SmallVector<Value, 16> elems;
+  elems.reserve(numElems);
+  for (unsigned idx = 0; idx < numElems; ++idx) {
+    Value idxConst = hw::ConstantOp::create(builder, loc, idxValue.getType(),
+                                            static_cast<int64_t>(idx));
+    elems.push_back(
+        hw::ArrayGetOp::create(builder, loc, arrType.getElementType(), array,
+                               idxConst));
+  }
+
+  SmallVector<Value, 4> resultElems;
+  resultElems.reserve(sliceLen);
+
+  for (unsigned offset = 0; offset < sliceLen; ++offset) {
+    SmallVector<Value, 8> valueBits;
+    SmallVector<Value, 8> unknownBits;
+    valueBits.reserve(elemWidth);
+    unknownBits.reserve(elemWidth);
+
+    for (unsigned bit = 0; bit < elemWidth; ++bit) {
+      Value maybeOne = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+      Value maybeZero = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+
+      for (unsigned base = 0; base <= static_cast<unsigned>(maxBase); ++base) {
+        Value elem = elems[base + offset];
+        Value elemVal = extractFourStateValue(builder, loc, elem);
+        Value elemUnk = extractFourStateUnknown(builder, loc, elem);
+
+        Value valBit = comb::ExtractOp::create(builder, loc, elemVal, bit, 1);
+        Value unkBit = comb::ExtractOp::create(builder, loc, elemUnk, bit, 1);
+        Value known = comb::XorOp::create(builder, loc, unkBit, one, false);
+        Value notValBit = comb::XorOp::create(builder, loc, valBit, one, false);
+
+        Value knownOne =
+            comb::AndOp::create(builder, loc, valBit, known, false);
+        Value knownZero =
+            comb::AndOp::create(builder, loc, notValBit, known, false);
+        Value maybeOneElem =
+            comb::OrOp::create(builder, loc, knownOne, unkBit, false);
+        Value maybeZeroElem =
+            comb::OrOp::create(builder, loc, knownZero, unkBit, false);
+
+        Value gate = getMaskBit(base);
+        maybeOneElem =
+            comb::AndOp::create(builder, loc, maybeOneElem, gate, false);
+        maybeZeroElem =
+            comb::AndOp::create(builder, loc, maybeZeroElem, gate, false);
+        maybeOne =
+            comb::OrOp::create(builder, loc, maybeOne, maybeOneElem, false);
+        maybeZero =
+            comb::OrOp::create(builder, loc, maybeZero, maybeZeroElem, false);
+      }
+
+      Value notMaybeZero =
+          comb::XorOp::create(builder, loc, maybeZero, one, false);
+      Value valueBit =
+          comb::AndOp::create(builder, loc, maybeOne, notMaybeZero, false);
+      Value unknownBit =
+          comb::AndOp::create(builder, loc, maybeOne, maybeZero, false);
+      valueBits.push_back(valueBit);
+      unknownBits.push_back(unknownBit);
+    }
+
+    Value value = valueBits.back();
+    Value unknown = unknownBits.back();
+    for (int bit = static_cast<int>(elemWidth) - 2; bit >= 0; --bit) {
+      value = comb::ConcatOp::create(builder, loc,
+                                     ValueRange{value, valueBits[bit]});
+      unknown = comb::ConcatOp::create(builder, loc,
+                                       ValueRange{unknown, unknownBits[bit]});
+    }
+
+    Value zeroVal =
+        hw::ConstantOp::create(builder, loc, value.getType(), 0);
+    Value allOnesUnk =
+        hw::ConstantOp::create(builder, loc, unknown.getType(), -1);
+    value = comb::MuxOp::create(builder, loc, oobPossible, zeroVal, value);
+    unknown =
+        comb::MuxOp::create(builder, loc, oobPossible, allOnesUnk, unknown);
+    resultElems.push_back(createFourStateStruct(builder, loc, value, unknown));
+  }
+
+  return hw::ArrayCreateOp::create(builder, loc, sliceType, resultElems);
+}
+
 enum class UnknownShiftKind { Shl, LShr, AShr };
 
 static Value buildUnknownShiftConsensus(OpBuilder &builder, Location loc,
@@ -7273,11 +7469,85 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
           rewriter.replaceOp(op, fallback);
         }
         return success();
-      } else {
-        rewriter.replaceOpWithNewOp<hw::ArraySliceOp>(op, resultType,
-                                                      adaptor.getInput(), idx);
       }
 
+      // Array slices: if the index is unknown/out-of-bounds, model the result
+      // as all-unknown rather than indexing deterministically.
+      auto sliceType = dyn_cast<hw::ArrayType>(resultType);
+      if (!sliceType)
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "expected array slice result type");
+
+      auto elemStructTy = dyn_cast<hw::StructType>(sliceType.getElementType());
+      if (!elemStructTy || !isFourStateStructType(elemStructTy)) {
+        rewriter.replaceOpWithNewOp<hw::ArraySliceOp>(op, resultType,
+                                                     adaptor.getInput(), idx);
+        return success();
+      }
+
+      Value fallbackSlice = hw::ArraySliceOp::create(rewriter, loc, sliceType,
+                                                     adaptor.getInput(), idx);
+
+      const unsigned sliceLen = sliceType.getNumElements();
+      Value allUnknownElem =
+          buildAllUnknownFourStateElement(rewriter, loc, elemStructTy);
+      if (!allUnknownElem)
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "failed to build all-unknown elem");
+
+      // Compute out-of-bounds for known indices: idx > (N - sliceLen).
+      Value outOfBoundsCond =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      if (sliceLen > arrType.getNumElements()) {
+        outOfBoundsCond =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      } else {
+        int64_t maxBase = static_cast<int64_t>(arrType.getNumElements() - sliceLen);
+        Value maxBaseConst =
+            hw::ConstantOp::create(rewriter, loc, idx.getType(), maxBase);
+        outOfBoundsCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ugt, idx, maxBaseConst);
+      }
+
+      Value unknownSlice;
+      if (hasUnknownIndex) {
+        unknownSlice = buildUnknownIndexedRuntimeArraySlice(
+            rewriter, loc, arrType, sliceType, adaptor.getInput(), idx, idxUnknown);
+      }
+
+      unsigned sliceIdxWidth = llvm::Log2_64_Ceil(sliceLen);
+      if (sliceIdxWidth == 0)
+        sliceIdxWidth = 1;
+      Type sliceIdxTy = rewriter.getIntegerType(sliceIdxWidth);
+
+      SmallVector<Value, 4> elems;
+      elems.reserve(sliceLen);
+      for (unsigned i = 0; i < sliceLen; ++i) {
+        Value idxConst = hw::ConstantOp::create(rewriter, loc, sliceIdxTy, i);
+        Value fallbackElem =
+            hw::ArrayGetOp::create(rewriter, loc, fallbackSlice, idxConst);
+
+        Value selectedElem = fallbackElem;
+        if (hasUnknownIndex) {
+          Value unknownElem = allUnknownElem;
+          if (unknownSlice)
+            unknownElem =
+                hw::ArrayGetOp::create(rewriter, loc, unknownSlice, idxConst);
+          if (Value muxed = muxFourStateStruct(rewriter, loc, idxUnknownCond,
+                                               unknownElem, fallbackElem))
+            selectedElem = muxed;
+        }
+
+        Value finalElem = muxFourStateStruct(rewriter, loc, outOfBoundsCond,
+                                             allUnknownElem, selectedElem);
+        if (!finalElem)
+          return rewriter.notifyMatchFailure(op.getLoc(),
+                                             "failed to mux slice elements");
+        elems.push_back(finalElem);
+      }
+
+      rewriter.replaceOp(
+          op, hw::ArrayCreateOp::create(rewriter, loc, sliceType, elems));
       return success();
     }
 
