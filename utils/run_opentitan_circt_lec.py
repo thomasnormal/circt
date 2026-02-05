@@ -48,6 +48,12 @@ def parse_lec_result(text: str) -> str | None:
         return None
     return match.group(1)
 
+def parse_lec_diag(text: str) -> str | None:
+    match = re.search(r"LEC_DIAG=([A-Z0-9_]+)", text)
+    if not match:
+        return None
+    return match.group(1)
+
 
 def run_and_log(
     cmd: list[str], log_path: Path, out_path: Path | None = None
@@ -137,6 +143,8 @@ def main() -> int:
     circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "0") == "1"
+    lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "1") == "1"
+    lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     z3_bin = os.environ.get("Z3_BIN", "")
@@ -155,6 +163,10 @@ def main() -> int:
 
     if lec_x_optimistic and "--x-optimistic" not in circt_lec_args:
         circt_lec_args.append("--x-optimistic")
+    if lec_diagnose_xprop and "--diagnose-xprop" not in circt_lec_args:
+        # Safe to pass even for non-solver modes; it is only acted on under
+        # --run-smtlib.
+        circt_lec_args.append("--diagnose-xprop")
 
     def write_valid_op_wrapper(out_path: Path, wrapper_name: str, inner_name: str) -> None:
         out_path.write_text(
@@ -301,15 +313,32 @@ def main() -> int:
                 )
                 if not lec_smoke_only:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
-                    result = parse_lec_result(lec_log_text + "\n" + lec_stdout)
+                    combined = lec_log_text + "\n" + lec_stdout
+                    result = parse_lec_result(combined)
+                    diag = parse_lec_diag(combined)
                     if result in ("NEQ", "UNKNOWN"):
+                        if diag == "XPROP_ONLY" and lec_accept_xprop_only:
+                            print(
+                                f"{impl:24} XPROP_ONLY (accepted)",
+                                flush=True,
+                            )
+                            continue
                         raise subprocess.CalledProcessError(
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
                 print(f"{impl:24} OK", flush=True)
             except subprocess.CalledProcessError:
                 failures += 1
-                print(f"{impl:24} FAIL (logs in {impl_dir})", flush=True)
+                extra = ""
+                try:
+                    lec_log_text = (impl_dir / "circt-lec.log").read_text()
+                    lec_out_text = (impl_dir / "circt-lec.out").read_text()
+                    diag = parse_lec_diag(lec_log_text + "\n" + lec_out_text)
+                    if diag:
+                        extra = f" ({diag})"
+                except Exception:
+                    pass
+                print(f"{impl:24} FAIL{extra} (logs in {impl_dir})", flush=True)
 
     finally:
         if not keep_workdir:

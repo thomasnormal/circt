@@ -1,0 +1,17 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/bin %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-opt
+// RUN: chmod +x %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\nfound=0\nfor arg in \"$@\"; do if [ \"$arg\" = \"--diagnose-xprop\" ]; then found=1; fi; done\n[ $found -eq 1 ] || exit 1\necho \"c1 != c2\"\necho \"LEC_RESULT=NEQ\"\necho \"LEC_DIAG=XPROP_ONLY\"\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-lec
+// RUN: : > %t/bin/z3
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_SMOKE_ONLY=0 LEC_RUN_SMTLIB=1 LEC_DIAGNOSE_XPROP=1 LEC_ACCEPT_XPROP_ONLY=1 %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+
+// CHECK: Running LEC on 1 AES S-Box implementation(s)...
+// CHECK: aes_sbox_canright XPROP_ONLY (accepted)
+// CHECK: LEC completed successfully.
