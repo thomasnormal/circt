@@ -14268,6 +14268,693 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    //===------------------------------------------------------------------===//
+    // String method interceptors
+    //===------------------------------------------------------------------===//
+
+    // Helper lambda to read a MooreString from a struct pointer in interpreter
+    // memory. Returns the string content as a std::string.
+    // This is defined once and reused by all string interceptors below.
+    auto readStringFromPtr = [&](Value operand) -> std::string {
+      InterpretedValue ptrArg = getValue(procId, operand);
+      if (ptrArg.isX())
+        return "";
+
+      uint64_t structAddr = ptrArg.getUInt64();
+      uint64_t structOffset = 0;
+      auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
+      if (!block || !block->initialized || structOffset + 16 > block->data.size())
+        return "";
+
+      // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
+      uint64_t strPtr = 0;
+      int64_t strLen = 0;
+      for (int i = 0; i < 8; ++i) {
+        strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
+        strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+      }
+
+      if (strPtr == 0 || strLen <= 0)
+        return "";
+
+      // Look up in dynamicStrings registry first
+      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+          dynIt->second.second > 0) {
+        return std::string(dynIt->second.first,
+                           std::min(static_cast<size_t>(strLen),
+                                    static_cast<size_t>(dynIt->second.second)));
+      }
+
+      // Try global memory lookup (for string literals)
+      for (auto &[globalName, globalAddr] : globalAddresses) {
+        auto blockIt = globalMemoryBlocks.find(globalName);
+        if (blockIt != globalMemoryBlocks.end()) {
+          MemoryBlock &gBlock = blockIt->second;
+          if (strPtr >= globalAddr && strPtr < globalAddr + gBlock.size) {
+            uint64_t off = strPtr - globalAddr;
+            size_t avail = std::min(static_cast<size_t>(strLen),
+                                    gBlock.data.size() - static_cast<size_t>(off));
+            if (avail > 0 && gBlock.initialized)
+              return std::string(reinterpret_cast<const char *>(
+                                     gBlock.data.data() + off),
+                                 avail);
+          }
+        }
+      }
+
+      // Try addressToGlobal reverse lookup
+      auto globalIt = addressToGlobal.find(strPtr);
+      if (globalIt != addressToGlobal.end()) {
+        auto blockIt = globalMemoryBlocks.find(globalIt->second);
+        if (blockIt != globalMemoryBlocks.end()) {
+          const MemoryBlock &gBlock = blockIt->second;
+          size_t avail = std::min(static_cast<size_t>(strLen),
+                                  gBlock.data.size());
+          if (avail > 0 && gBlock.initialized)
+            return std::string(reinterpret_cast<const char *>(
+                                   gBlock.data.data()),
+                               avail);
+        }
+      }
+
+      // Try finding the data in alloca/malloc blocks directly
+      uint64_t strDataOffset = 0;
+      auto *strDataBlock = findMemoryBlockByAddress(strPtr, procId, &strDataOffset);
+      if (strDataBlock && strDataBlock->initialized &&
+          strDataOffset + strLen <= strDataBlock->data.size()) {
+        return std::string(
+            reinterpret_cast<const char *>(strDataBlock->data.data() + strDataOffset),
+            strLen);
+      }
+
+      return "";
+    };
+
+    // Helper to store a string result and return as packed 128-bit struct
+    auto storeStringResult = [&](const std::string &str) {
+      interpreterStrings.push_back(str);
+      const std::string &stored = interpreterStrings.back();
+      int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+      int64_t lenVal = static_cast<int64_t>(stored.size());
+      dynamicStrings[ptrVal] = {stored.data(), lenVal};
+      APInt packedResult(128, 0);
+      packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+      packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+      return InterpretedValue(packedResult);
+    };
+
+    // ---- __moore_string_toupper ----
+    // Signature: (str_ptr: ptr) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_toupper") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        for (auto &c : str)
+          c = std::toupper(static_cast<unsigned char>(c));
+        setValue(procId, callOp.getResult(), storeStringResult(str));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_toupper() = \""
+                                << str << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_tolower ----
+    // Signature: (str_ptr: ptr) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_tolower") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        for (auto &c : str)
+          c = std::tolower(static_cast<unsigned char>(c));
+        setValue(procId, callOp.getResult(), storeStringResult(str));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_tolower() = \""
+                                << str << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_getc ----
+    // Signature: (str_ptr: ptr, index: i32) -> i8
+    if (calleeName == "__moore_string_getc") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t index = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int8_t result = 0;
+        if (index >= 0 && index < static_cast<int32_t>(str.size()))
+          result = static_cast<int8_t>(str[index]);
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(result))));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_getc(\"" << str
+                                << "\", " << index << ") = " << static_cast<int>(result)
+                                << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_putc ----
+    // Signature: (str_ptr: ptr, index: i32, ch: i8) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_putc") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t index = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int8_t ch = static_cast<int8_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        // IEEE 1800-2017: putc is a no-op for out of bounds
+        if (index >= 0 && index < static_cast<int32_t>(str.size()))
+          str[index] = static_cast<char>(ch);
+        setValue(procId, callOp.getResult(), storeStringResult(str));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_putc() = \""
+                                << str << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_substr ----
+    // Signature: (str_ptr: ptr, start: i32, len: i32) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_substr") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t start = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t len = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        std::string result;
+        if (start >= 0 && start < static_cast<int32_t>(str.size()) && len > 0) {
+          size_t actualLen = std::min(static_cast<size_t>(len),
+                                      str.size() - static_cast<size_t>(start));
+          result = str.substr(start, actualLen);
+        }
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_substr(\"" << str
+                                << "\", " << start << ", " << len << ") = \""
+                                << result << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_compare ----
+    // Signature: (lhs_ptr: ptr, rhs_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_compare") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string lhs = readStringFromPtr(callOp.getOperand(0));
+        std::string rhs = readStringFromPtr(callOp.getOperand(1));
+        int32_t result = 0;
+        if (lhs < rhs) result = -1;
+        else if (lhs > rhs) result = 1;
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_compare(\"" << lhs
+                                << "\", \"" << rhs << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_icompare ----
+    // Signature: (lhs_ptr: ptr, rhs_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_icompare") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string lhs = readStringFromPtr(callOp.getOperand(0));
+        std::string rhs = readStringFromPtr(callOp.getOperand(1));
+        // Case-insensitive comparison
+        std::string lhsLower = lhs, rhsLower = rhs;
+        for (auto &c : lhsLower) c = std::tolower(static_cast<unsigned char>(c));
+        for (auto &c : rhsLower) c = std::tolower(static_cast<unsigned char>(c));
+        int32_t result = 0;
+        if (lhsLower < rhsLower) result = -1;
+        else if (lhsLower > rhsLower) result = 1;
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_icompare(\"" << lhs
+                                << "\", \"" << rhs << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_replicate ----
+    // Signature: (str_ptr: ptr, count: i32) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_replicate") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t count = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        std::string result;
+        if (count > 0 && !str.empty()) {
+          result.reserve(str.size() * count);
+          for (int32_t i = 0; i < count; ++i)
+            result += str;
+        }
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_replicate(\"" << str
+                                << "\", " << count << ") = \"" << result << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_to_int ----
+    // Signature: (str_ptr: ptr) -> i64
+    if (calleeName == "__moore_string_to_int") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int64_t result = 0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = std::strtoll(str.c_str(), &endp, 10); }
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_to_int(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_atoi ----
+    // Signature: (str_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_atoi") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t result = 0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = static_cast<int32_t>(std::strtol(str.c_str(), &endp, 10)); }
+        }
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atoi(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_atohex ----
+    // Signature: (str_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_atohex") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t result = 0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = static_cast<int32_t>(std::strtoul(str.c_str(), &endp, 16)); }
+        }
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atohex(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_atooct ----
+    // Signature: (str_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_atooct") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t result = 0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = static_cast<int32_t>(std::strtoul(str.c_str(), &endp, 8)); }
+        }
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atooct(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_atobin ----
+    // Signature: (str_ptr: ptr) -> i32
+    if (calleeName == "__moore_string_atobin") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        int32_t result = 0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = static_cast<int32_t>(std::strtoul(str.c_str(), &endp, 2)); }
+        }
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, static_cast<uint64_t>(static_cast<uint32_t>(result)), false)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atobin(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_atoreal ----
+    // Signature: (str_ptr: ptr) -> f64
+    if (calleeName == "__moore_string_atoreal") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        std::string str = readStringFromPtr(callOp.getOperand(0));
+        double result = 0.0;
+        if (!str.empty()) {
+          { char *endp = nullptr; result = std::strtod(str.c_str(), &endp); }
+        }
+        // Store as 64-bit IEEE 754 double
+        uint64_t bits;
+        std::memcpy(&bits, &result, sizeof(bits));
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, bits)));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_atoreal(\"" << str
+                                << "\") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_hextoa ----
+    // Signature: (value: i64) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_hextoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        uint64_t value = arg.isX() ? 0 : arg.getUInt64();
+        char buffer[32];
+        int len = std::snprintf(buffer, sizeof(buffer), "%lx",
+                                static_cast<unsigned long>(value));
+        std::string result(buffer, len > 0 ? len : 0);
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_hextoa("
+                                << value << ") = \"" << result << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_octtoa ----
+    // Signature: (value: i64) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_octtoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        uint64_t value = arg.isX() ? 0 : arg.getUInt64();
+        char buffer[32];
+        int len = std::snprintf(buffer, sizeof(buffer), "%lo",
+                                static_cast<unsigned long>(value));
+        std::string result(buffer, len > 0 ? len : 0);
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_octtoa("
+                                << value << ") = \"" << result << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_bintoa ----
+    // Signature: (value: i64) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_bintoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        uint64_t value = arg.isX() ? 0 : arg.getUInt64();
+        std::string result;
+        if (value == 0) {
+          result = "0";
+        } else {
+          // Find highest set bit
+          int highBit = 63;
+          while (highBit > 0 && !((value >> highBit) & 1))
+            --highBit;
+          for (int i = highBit; i >= 0; --i)
+            result += ((value >> i) & 1) ? '1' : '0';
+        }
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_bintoa("
+                                << value << ") = \"" << result << "\"\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_string_realtoa ----
+    // Signature: (value: f64) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_realtoa") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        InterpretedValue arg = getValue(procId, callOp.getOperand(0));
+        double value = 0.0;
+        if (!arg.isX()) {
+          uint64_t bits = arg.getUInt64();
+          std::memcpy(&value, &bits, sizeof(value));
+        }
+        char buffer[64];
+        int len = std::snprintf(buffer, sizeof(buffer), "%g", value);
+        std::string result(buffer, len > 0 ? len : 0);
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_realtoa("
+                                << value << ") = \"" << result << "\"\n");
+      }
+      return success();
+    }
+
+    //===------------------------------------------------------------------===//
+    // Queue method interceptors
+    //===------------------------------------------------------------------===//
+
+    // ---- __moore_queue_delete_index ----
+    // Signature: (queue_ptr, index: i32, element_size: i64) -> void
+    if (calleeName == "__moore_queue_delete_index") {
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t index = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        if (queueAddr != 0 && elemSize > 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+
+            // Bounds check
+            if (index >= 0 && index < queueLen && dataPtr != 0) {
+              if (queueLen == 1) {
+                // Last element - set data to 0 and len to 0
+                for (int i = 0; i < 8; ++i)
+                  queueBlock->data[queueOffset + i] = 0;
+                for (int i = 0; i < 8; ++i)
+                  queueBlock->data[queueOffset + 8 + i] = 0;
+              } else {
+                // Allocate new storage
+                int64_t newLen = queueLen - 1;
+                uint64_t newDataAddr = globalNextAddress;
+                globalNextAddress += newLen * elemSize;
+                MemoryBlock newBlock(newLen * elemSize, 64);
+                newBlock.initialized = true;
+
+                auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
+                if (oldBlock && oldBlock->initialized) {
+                  // Copy elements before deleted index
+                  if (index > 0)
+                    std::memcpy(newBlock.data.data(), oldBlock->data.data(),
+                                index * elemSize);
+                  // Copy elements after deleted index
+                  if (index < queueLen - 1)
+                    std::memcpy(newBlock.data.data() + index * elemSize,
+                                oldBlock->data.data() + (index + 1) * elemSize,
+                                (queueLen - index - 1) * elemSize);
+                }
+
+                mallocBlocks[newDataAddr] = std::move(newBlock);
+
+                // Update queue struct
+                for (int i = 0; i < 8; ++i)
+                  queueBlock->data[queueOffset + i] =
+                      static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+                for (int i = 0; i < 8; ++i)
+                  queueBlock->data[queueOffset + 8 + i] =
+                      static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              }
+              checkMemoryEventWaiters();
+            }
+
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_delete_index("
+                                    << "0x" << llvm::format_hex(queueAddr, 16)
+                                    << ", " << index << ", " << elemSize << ")\n");
+          }
+        }
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_insert ----
+    // Signature: (queue_ptr, index: i32, element_ptr, element_size: i64) -> void
+    if (calleeName == "__moore_queue_insert") {
+      if (callOp.getNumOperands() >= 4) {
+        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t index = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t elemAddr = getValue(procId, callOp.getOperand(2)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+
+        if (queueAddr != 0 && elemSize > 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+
+            // Clamp index
+            if (index < 0) index = 0;
+            if (index > queueLen) index = static_cast<int32_t>(queueLen);
+
+            // Allocate new storage
+            int64_t newLen = queueLen + 1;
+            uint64_t newDataAddr = globalNextAddress;
+            globalNextAddress += newLen * elemSize;
+            MemoryBlock newBlock(newLen * elemSize, 64);
+            newBlock.initialized = true;
+
+            // Copy elements before insertion point
+            if (index > 0 && dataPtr != 0) {
+              auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (oldBlock && oldBlock->initialized) {
+                size_t copySize = std::min(static_cast<size_t>(index * elemSize),
+                                           oldBlock->data.size());
+                std::memcpy(newBlock.data.data(), oldBlock->data.data(), copySize);
+              }
+            }
+
+            // Copy new element at insertion index
+            uint64_t elemOffset = 0;
+            auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
+            if (elemBlock && elemBlock->initialized) {
+              size_t avail = (elemOffset < elemBlock->data.size())
+                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t copySize = std::min(static_cast<size_t>(elemSize), avail);
+              if (copySize > 0)
+                std::memcpy(newBlock.data.data() + index * elemSize,
+                            elemBlock->data.data() + elemOffset, copySize);
+            }
+
+            // Copy elements after insertion point
+            if (index < queueLen && dataPtr != 0) {
+              auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
+              if (oldBlock && oldBlock->initialized) {
+                size_t srcOffset = index * elemSize;
+                size_t dstOffset = (index + 1) * elemSize;
+                size_t copySize = (queueLen - index) * elemSize;
+                if (srcOffset + copySize <= oldBlock->data.size() &&
+                    dstOffset + copySize <= newBlock.data.size())
+                  std::memcpy(newBlock.data.data() + dstOffset,
+                              oldBlock->data.data() + srcOffset, copySize);
+              }
+            }
+
+            mallocBlocks[newDataAddr] = std::move(newBlock);
+
+            // Update queue struct
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[queueOffset + i] =
+                  static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+            for (int i = 0; i < 8; ++i)
+              queueBlock->data[queueOffset + 8 + i] =
+                  static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+
+            checkMemoryEventWaiters();
+
+            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_insert("
+                                    << "0x" << llvm::format_hex(queueAddr, 16)
+                                    << ", " << index << ", elemSize=" << elemSize
+                                    << ", newLen=" << newLen << ")\n");
+          }
+        }
+      }
+      return success();
+    }
+
+    //===------------------------------------------------------------------===//
+    // Associative array method interceptors
+    //===------------------------------------------------------------------===//
+
+    // ---- __moore_assoc_delete ----
+    // Signature: (array: ptr) -> void
+    if (calleeName == "__moore_assoc_delete") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr != 0 &&
+            (validAssocArrayAddresses.contains(arrayAddr) || isValidNativeAddr)) {
+          void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+          __moore_assoc_delete(arrayPtr);
+        }
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_delete(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_assoc_delete_key ----
+    // Signature: (array: ptr, key: ptr) -> void
+    if (calleeName == "__moore_assoc_delete_key") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr != 0 &&
+            (validAssocArrayAddresses.contains(arrayAddr) || isValidNativeAddr)) {
+          void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+          // Read key from interpreter memory
+          uint64_t keyOffset = 0;
+          auto *keyBlock = findMemoryBlockByAddress(keyAddr, procId, &keyOffset);
+          uint8_t keyBuffer[16] = {0};
+          void *keyPtr = keyBuffer;
+          MooreString keyString = {nullptr, 0};
+          std::string keyStorage;
+
+          if (keyBlock && keyBlock->initialized) {
+            size_t maxCopy = std::min<size_t>(16, keyBlock->data.size() - keyOffset);
+            std::memcpy(keyBuffer, keyBlock->data.data() + keyOffset, maxCopy);
+
+            auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+            if (header->type == AssocArrayType_StringKey) {
+              uint64_t strPtrVal = 0;
+              int64_t strLen = 0;
+              for (int i = 0; i < 8; ++i) {
+                strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
+                strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
+              }
+              if (tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+                keyString.data = keyStorage.data();
+                keyString.len = keyStorage.size();
+                keyPtr = &keyString;
+              }
+            }
+          }
+
+          __moore_assoc_delete_key(arrayPtr, keyPtr);
+        }
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_delete_key(0x"
+                                << llvm::format_hex(arrayAddr, 16) << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_display ----
+    // Signature: (message_ptr: ptr) -> void
+    if (calleeName == "__moore_display") {
+      if (callOp.getNumOperands() >= 1) {
+        std::string message = readStringFromPtr(callOp.getOperand(0));
+        if (!message.empty()) {
+          std::fwrite(message.data(), 1, message.size(), stdout);
+        }
+        std::fputc('\n', stdout);
+        std::fflush(stdout);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_display(\"" << message
+                                << "\")\n");
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {

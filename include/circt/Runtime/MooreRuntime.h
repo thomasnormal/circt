@@ -359,6 +359,78 @@ MooreString __moore_packed_string_to_string(int64_t value);
 /// @return The parsed integer value, or 0 if parsing fails
 int64_t __moore_string_to_int(MooreString *str);
 
+/// Set a character at a specific index, returning a new string.
+/// @param str Pointer to the source string
+/// @param index Zero-based index of the character to replace
+/// @param ch The new character value
+/// @return A new string with the character at index replaced
+MooreString __moore_string_putc(MooreString *str, int32_t index, int8_t ch);
+
+/// Compare two strings lexicographically (case-sensitive).
+/// Implements SystemVerilog str.compare(s) method.
+/// @param lhs Pointer to the left string
+/// @param rhs Pointer to the right string
+/// @return < 0 if lhs < rhs, 0 if equal, > 0 if lhs > rhs
+int32_t __moore_string_compare(MooreString *lhs, MooreString *rhs);
+
+/// Compare two strings lexicographically (case-insensitive).
+/// Implements SystemVerilog str.icompare(s) method.
+/// @param lhs Pointer to the left string
+/// @param rhs Pointer to the right string
+/// @return < 0 if lhs < rhs, 0 if equal, > 0 if lhs > rhs
+int32_t __moore_string_icompare(MooreString *lhs, MooreString *rhs);
+
+/// Replicate a string N times.
+/// @param str Pointer to the source string
+/// @param count Number of times to replicate
+/// @return A new string with the replication
+MooreString __moore_string_replicate(MooreString *str, int32_t count);
+
+/// Parse a decimal integer from a string.
+/// @param str Pointer to the string to parse
+/// @return The parsed integer value, or 0 if parsing fails
+int32_t __moore_string_atoi(MooreString *str);
+
+/// Parse a hexadecimal integer from a string.
+/// @param str Pointer to the string to parse
+/// @return The parsed integer value, or 0 if parsing fails
+int32_t __moore_string_atohex(MooreString *str);
+
+/// Parse an octal integer from a string.
+/// @param str Pointer to the string to parse
+/// @return The parsed integer value, or 0 if parsing fails
+int32_t __moore_string_atooct(MooreString *str);
+
+/// Parse a binary integer from a string.
+/// @param str Pointer to the string to parse
+/// @return The parsed integer value, or 0 if parsing fails
+int32_t __moore_string_atobin(MooreString *str);
+
+/// Parse a real number from a string.
+/// @param str Pointer to the string to parse
+/// @return The parsed real value, or 0.0 if parsing fails
+double __moore_string_atoreal(MooreString *str);
+
+/// Convert an integer to hexadecimal string representation.
+/// @param value The integer value to convert
+/// @return A new string containing the hex representation
+MooreString __moore_string_hextoa(int64_t value);
+
+/// Convert an integer to octal string representation.
+/// @param value The integer value to convert
+/// @return A new string containing the octal representation
+MooreString __moore_string_octtoa(int64_t value);
+
+/// Convert an integer to binary string representation.
+/// @param value The integer value to convert
+/// @return A new string containing the binary representation
+MooreString __moore_string_bintoa(int64_t value);
+
+/// Convert a real number to string representation.
+/// @param value The real value to convert
+/// @return A new string containing the real representation
+MooreString __moore_string_realtoa(double value);
+
 //===----------------------------------------------------------------------===//
 // Streaming Concatenation Operations
 //===----------------------------------------------------------------------===//
