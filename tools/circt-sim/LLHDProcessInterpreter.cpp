@@ -14939,6 +14939,732 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_dyn_array_new ----
+    // Signature: (size: i32) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_dyn_array_new") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        int32_t size = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        MooreQueue result = __moore_dyn_array_new(size);
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_dyn_array_new("
+                                << size << ") = {0x"
+                                << llvm::format_hex(ptrVal, 16) << ", "
+                                << lenVal << "}\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_dyn_array_new_copy ----
+    // Signature: (size: i32, init: ptr) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_dyn_array_new_copy") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        int32_t size = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        uint64_t initAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+        MooreQueue result = __moore_dyn_array_new(size);
+        if (result.data && initAddr != 0 && size > 0) {
+          uint64_t initOffset = 0;
+          auto *initBlock =
+              findMemoryBlockByAddress(initAddr, procId, &initOffset);
+          if (initBlock && initBlock->initialized) {
+            size_t avail = initBlock->data.size() - initOffset;
+            size_t copySize = std::min<size_t>(size, avail);
+            std::memcpy(result.data, initBlock->data.data() + initOffset,
+                        copySize);
+          } else if (initAddr >= 0x10000000000ULL) {
+            std::memcpy(result.data,
+                        reinterpret_cast<void *>(initAddr), size);
+          }
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_dyn_array_new_copy(" << size
+                   << ", 0x" << llvm::format_hex(initAddr, 16) << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_is_rand_enabled ----
+    // Signature: (classPtr: ptr, propertyName: ptr) -> i32
+    if (calleeName == "__moore_is_rand_enabled") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        // Default: all random variables are enabled (return 1).
+        // The runtime tracks rand_mode state keyed by (classPtr, propertyName).
+        // Since we can't easily bridge interpreter memory for the C-string
+        // property name, we stub to the default enabled state.
+        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_is_rand_enabled() = 1\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_rand_mode_get ----
+    // Signature: (classPtr: ptr, propertyName: ptr) -> i32
+    if (calleeName == "__moore_rand_mode_get") {
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_rand_mode_get() = 1\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_rand_mode_set ----
+    // Signature: (classPtr: ptr, propertyName: ptr, mode: i32) -> i32
+    if (calleeName == "__moore_rand_mode_set") {
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_rand_mode_set() = 1\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_randc_next ----
+    // Signature: (fieldPtr: ptr, bitWidth: i64) -> i64
+    if (calleeName == "__moore_randc_next") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        int64_t bitWidth = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t maxVal = (bitWidth >= 64) ? UINT64_MAX
+                                            : ((1ULL << bitWidth) - 1);
+        uint64_t result = static_cast<uint64_t>(std::rand()) & maxVal;
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(result, 64));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_randc_next(bw="
+                                << bitWidth << ") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_pop_back_ptr ----
+    // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
+    if (calleeName == "__moore_queue_pop_back_ptr") {
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t resultAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        if (queueAddr != 0 && elemSize > 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(
+                              queueBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+
+            if (queueLen > 0 && dataPtr != 0) {
+              // Read last element from data array
+              void *realDataPtr = reinterpret_cast<void *>(dataPtr);
+              void *lastElem = static_cast<char *>(realDataPtr) +
+                               (queueLen - 1) * elemSize;
+
+              // Write to result_ptr in interpreter memory
+              uint64_t resultOffset = 0;
+              auto *resultBlock = findMemoryBlockByAddress(
+                  resultAddr, procId, &resultOffset);
+              if (resultBlock) {
+                size_t avail =
+                    resultBlock->data.size() - resultOffset;
+                size_t copySize =
+                    std::min<size_t>(elemSize, avail);
+                std::memcpy(
+                    resultBlock->data.data() + resultOffset,
+                    lastElem, copySize);
+                resultBlock->initialized = true;
+              }
+
+              // Decrement length
+              int64_t newLen = queueLen - 1;
+              for (int i = 0; i < 8; ++i)
+                queueBlock->data[queueOffset + 8 + i] =
+                    static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_queue_pop_back_ptr(0x"
+                   << llvm::format_hex(queueAddr, 16) << ")\n");
+        checkMemoryEventWaiters();
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_pop_front_ptr ----
+    // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
+    if (calleeName == "__moore_queue_pop_front_ptr") {
+      if (callOp.getNumOperands() >= 3) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t resultAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        if (queueAddr != 0 && elemSize > 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(
+                              queueBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+
+            if (queueLen > 0 && dataPtr != 0) {
+              void *realDataPtr = reinterpret_cast<void *>(dataPtr);
+
+              // Write first element to result_ptr
+              uint64_t resultOffset = 0;
+              auto *resultBlock = findMemoryBlockByAddress(
+                  resultAddr, procId, &resultOffset);
+              if (resultBlock) {
+                size_t avail =
+                    resultBlock->data.size() - resultOffset;
+                size_t copySize =
+                    std::min<size_t>(elemSize, avail);
+                std::memcpy(
+                    resultBlock->data.data() + resultOffset,
+                    realDataPtr, copySize);
+                resultBlock->initialized = true;
+              }
+
+              // Shift remaining elements
+              if (queueLen > 1) {
+                std::memmove(realDataPtr,
+                             static_cast<char *>(realDataPtr) +
+                                 elemSize,
+                             (queueLen - 1) * elemSize);
+              }
+
+              // Decrement length
+              int64_t newLen = queueLen - 1;
+              for (int i = 0; i < 8; ++i)
+                queueBlock->data[queueOffset + 8 + i] =
+                    static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+            }
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_queue_pop_front_ptr(0x"
+                   << llvm::format_hex(queueAddr, 16) << ")\n");
+        checkMemoryEventWaiters();
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_concat ----
+    // Signature: (queues: ptr, count: i64, elem_size: i64)
+    //            -> struct<(ptr, i64)>
+    if (calleeName == "__moore_queue_concat") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        uint64_t queuesAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t count = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+
+        // Compute total length
+        int64_t totalLen = 0;
+        std::vector<std::pair<void *, int64_t>> srcs;
+        if (queuesAddr != 0 && count > 0 && elemSize > 0) {
+          uint64_t qOff = 0;
+          auto *qBlock =
+              findMemoryBlockByAddress(queuesAddr, procId, &qOff);
+          if (qBlock && qBlock->initialized) {
+            for (int64_t i = 0; i < count; ++i) {
+              size_t base = qOff + i * 16;
+              if (base + 16 > qBlock->data.size())
+                break;
+              uint64_t dp = 0;
+              int64_t ln = 0;
+              for (int b = 0; b < 8; ++b)
+                dp |= static_cast<uint64_t>(qBlock->data[base + b])
+                      << (b * 8);
+              for (int b = 0; b < 8; ++b)
+                ln |= static_cast<int64_t>(
+                           qBlock->data[base + 8 + b])
+                      << (b * 8);
+              srcs.push_back({reinterpret_cast<void *>(dp), ln});
+              totalLen += ln;
+            }
+          }
+        }
+
+        MooreQueue result = __moore_dyn_array_new(
+            static_cast<int32_t>(totalLen * elemSize));
+        if (result.data) {
+          int64_t offset = 0;
+          for (auto &[srcPtr, srcLen] : srcs) {
+            if (srcPtr && srcLen > 0) {
+              std::memcpy(static_cast<char *>(result.data) +
+                              offset * elemSize,
+                          srcPtr, srcLen * elemSize);
+              offset += srcLen;
+            }
+          }
+          result.len = totalLen;
+        }
+
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_queue_concat(count="
+                   << count << ", totalLen=" << totalLen << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_assoc_last ----
+    // Signature: (array: ptr, key_out: ptr) -> i1
+    if (calleeName == "__moore_assoc_last") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyOutAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 ||
+            (!validAssocArrayAddresses.contains(arrayAddr) &&
+             !isValidNativeAddr)) {
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(0ULL, 1));
+          return success();
+        }
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+        uint64_t keyOutOffset = 0;
+        auto *keyOutBlock =
+            findMemoryBlockByAddress(keyOutAddr, procId, &keyOutOffset);
+
+        auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+        bool isStringKey = (header->type == AssocArrayType_StringKey);
+
+        bool result = false;
+        if (isStringKey) {
+          MooreString keyOut = {nullptr, 0};
+          result = __moore_assoc_last(arrayPtr, &keyOut);
+          if (result && keyOutBlock &&
+              keyOutOffset + 16 <= keyOutBlock->data.size()) {
+            uint64_t pv = reinterpret_cast<uint64_t>(keyOut.data);
+            int64_t lv = keyOut.len;
+            for (int i = 0; i < 8; ++i) {
+              keyOutBlock->data[keyOutOffset + i] =
+                  static_cast<uint8_t>((pv >> (i * 8)) & 0xFF);
+              keyOutBlock->data[keyOutOffset + 8 + i] =
+                  static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
+            }
+            keyOutBlock->initialized = true;
+          }
+        } else {
+          uint8_t keyBuffer[8] = {0};
+          result = __moore_assoc_last(arrayPtr, keyBuffer);
+          if (result && keyOutBlock) {
+            size_t avail =
+                keyOutBlock->data.size() - keyOutOffset;
+            size_t copySize = std::min<size_t>(8, avail);
+            std::memcpy(keyOutBlock->data.data() + keyOutOffset,
+                        keyBuffer, copySize);
+            keyOutBlock->initialized = true;
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(result ? 1ULL : 0ULL, 1));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_assoc_last(0x"
+                   << llvm::format_hex(arrayAddr, 16) << ") = "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_assoc_prev ----
+    // Signature: (array: ptr, key_ref: ptr) -> i1
+    if (calleeName == "__moore_assoc_prev") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t keyRefAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+        bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
+        if (arrayAddr == 0 ||
+            (!validAssocArrayAddresses.contains(arrayAddr) &&
+             !isValidNativeAddr)) {
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(0ULL, 1));
+          return success();
+        }
+
+        void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
+        uint64_t keyRefOffset = 0;
+        auto *keyRefBlock =
+            findMemoryBlockByAddress(keyRefAddr, procId, &keyRefOffset);
+
+        auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+        bool isStringKey = (header->type == AssocArrayType_StringKey);
+
+        bool result = false;
+        if (isStringKey) {
+          MooreString keyRef = {nullptr, 0};
+          if (keyRefBlock && keyRefBlock->initialized &&
+              keyRefOffset + 16 <= keyRefBlock->data.size()) {
+            uint64_t spv = 0;
+            int64_t sl = 0;
+            for (int i = 0; i < 8; ++i) {
+              spv |= static_cast<uint64_t>(
+                         keyRefBlock->data[keyRefOffset + i])
+                     << (i * 8);
+              sl |= static_cast<int64_t>(
+                        keyRefBlock->data[keyRefOffset + 8 + i])
+                    << (i * 8);
+            }
+            keyRef.data = reinterpret_cast<char *>(spv);
+            keyRef.len = sl;
+          }
+
+          result = __moore_assoc_prev(arrayPtr, &keyRef);
+
+          if (result && keyRefBlock &&
+              keyRefOffset + 16 <= keyRefBlock->data.size()) {
+            uint64_t pv = reinterpret_cast<uint64_t>(keyRef.data);
+            int64_t lv = keyRef.len;
+            for (int i = 0; i < 8; ++i) {
+              keyRefBlock->data[keyRefOffset + i] =
+                  static_cast<uint8_t>((pv >> (i * 8)) & 0xFF);
+              keyRefBlock->data[keyRefOffset + 8 + i] =
+                  static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
+            }
+          }
+        } else {
+          uint8_t keyBuffer[8] = {0};
+          if (keyRefBlock && keyRefBlock->initialized) {
+            size_t avail =
+                keyRefBlock->data.size() - keyRefOffset;
+            size_t readSize = std::min<size_t>(8, avail);
+            std::memcpy(keyBuffer,
+                        keyRefBlock->data.data() + keyRefOffset,
+                        readSize);
+          }
+
+          result = __moore_assoc_prev(arrayPtr, keyBuffer);
+
+          if (result && keyRefBlock) {
+            size_t avail =
+                keyRefBlock->data.size() - keyRefOffset;
+            size_t copySize = std::min<size_t>(8, avail);
+            std::memcpy(keyRefBlock->data.data() + keyRefOffset,
+                        keyBuffer, copySize);
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(result ? 1ULL : 0ULL, 1));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_assoc_prev(0x"
+                   << llvm::format_hex(arrayAddr, 16) << ") = "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_stream_concat_bits ----
+    // Signature: (queue: ptr, elementBitWidth: i32, isRightToLeft: i1) -> i64
+    if (calleeName == "__moore_stream_concat_bits") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t elemBitWidth = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        bool isRightToLeft = getValue(procId, callOp.getOperand(2)).getUInt64() != 0;
+
+        int64_t result = 0;
+        if (queueAddr != 0) {
+          // Try to read MooreQueue struct from interpreter memory
+          uint64_t queueOffset = 0;
+          auto *qBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (qBlock && qBlock->initialized &&
+              queueOffset + 16 <= qBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             qBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              queueLen |= static_cast<int64_t>(
+                              qBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+            if (dataPtr != 0) {
+              MooreQueue q;
+              q.data = reinterpret_cast<void *>(dataPtr);
+              q.len = queueLen;
+              result = __moore_stream_concat_bits(
+                  &q, elemBitWidth, isRightToLeft);
+            }
+          } else if (queueAddr >= 0x10000000000ULL) {
+            result = __moore_stream_concat_bits(
+                reinterpret_cast<MooreQueue *>(queueAddr),
+                elemBitWidth, isRightToLeft);
+          }
+        }
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_stream_concat_bits(bw="
+                   << elemBitWidth << ") = " << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_stream_concat_strings ----
+    // Signature: (queue: ptr, isRightToLeft: i1) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_stream_concat_strings") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        bool isRtl = getValue(procId, callOp.getOperand(1)).getUInt64() != 0;
+
+        MooreString result = {nullptr, 0};
+        if (queueAddr != 0) {
+          uint64_t qOff = 0;
+          auto *qBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &qOff);
+          if (qBlock && qBlock->initialized &&
+              qOff + 16 <= qBlock->data.size()) {
+            uint64_t dp = 0;
+            int64_t ln = 0;
+            for (int i = 0; i < 8; ++i)
+              dp |= static_cast<uint64_t>(qBlock->data[qOff + i])
+                    << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              ln |= static_cast<int64_t>(
+                        qBlock->data[qOff + 8 + i])
+                    << (i * 8);
+            if (dp != 0) {
+              MooreQueue q;
+              q.data = reinterpret_cast<void *>(dp);
+              q.len = ln;
+              result = __moore_stream_concat_strings(&q, isRtl);
+            }
+          } else if (queueAddr >= 0x10000000000ULL) {
+            result = __moore_stream_concat_strings(
+                reinterpret_cast<MooreQueue *>(queueAddr), isRtl);
+          }
+        }
+
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        if (result.data)
+          dynamicStrings[ptrVal] = {result.data, result.len};
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_stream_concat_strings()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_cross_create ----
+    // Signature: (cg: ptr, name: ptr, cp_indices: ptr, num: i32) -> i32
+    if (calleeName == "__moore_cross_create") {
+      if (callOp.getNumResults() >= 1) {
+        // Stub: return a dummy cross index
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_cross_create() = 0 (stub)\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_cross_sample ----
+    // Signature: (cg: ptr, cp_values: ptr, num_values: i32) -> void
+    if (calleeName == "__moore_cross_sample") {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_cross_sample() (stub)\n");
+      return success();
+    }
+
+    // ---- __moore_cross_add_named_bin ----
+    // Signature: (cg: ptr, cross_index: i32, name: ptr, ...) -> i32
+    if (calleeName == "__moore_cross_add_named_bin") {
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_cross_add_named_bin() = 0\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_slice ----
+    // Signature: (queue: ptr, start: i64, end: i64, elem_size: i64)
+    //            -> struct<(ptr, i64)>
+    if (calleeName == "__moore_queue_slice") {
+      if (callOp.getNumOperands() >= 4 && callOp.getNumResults() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t start = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t end = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+
+        MooreQueue result = {nullptr, 0};
+        if (queueAddr != 0 && elemSize > 0 && end >= start) {
+          uint64_t qOff = 0;
+          auto *qBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &qOff);
+          if (qBlock && qBlock->initialized &&
+              qOff + 16 <= qBlock->data.size()) {
+            uint64_t dp = 0;
+            int64_t ln = 0;
+            for (int i = 0; i < 8; ++i)
+              dp |= static_cast<uint64_t>(qBlock->data[qOff + i])
+                    << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              ln |= static_cast<int64_t>(
+                        qBlock->data[qOff + 8 + i])
+                    << (i * 8);
+            int64_t sliceLen = std::min(end, ln) - start;
+            if (sliceLen > 0 && dp != 0) {
+              result = __moore_dyn_array_new(
+                  static_cast<int32_t>(sliceLen * elemSize));
+              if (result.data) {
+                std::memcpy(result.data,
+                            static_cast<char *>(
+                                reinterpret_cast<void *>(dp)) +
+                                start * elemSize,
+                            sliceLen * elemSize);
+                result.len = sliceLen;
+              }
+            }
+          }
+        }
+
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_queue_slice()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_sort ----
+    // Signature: (queue: ptr) -> void
+    if (calleeName == "__moore_queue_sort") {
+      // Stub - sorting would require knowing element size and comparator
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_queue_sort() (stub)\n");
+      return success();
+    }
+
+    // ---- __moore_queue_unique ----
+    // Signature: (queue: ptr) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_queue_unique") {
+      if (callOp.getNumResults() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        MooreQueue result = {nullptr, 0};
+        if (queueAddr >= 0x10000000000ULL) {
+          result = __moore_queue_unique(
+              reinterpret_cast<MooreQueue *>(queueAddr));
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_queue_unique()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_max ----
+    // Signature: (array: ptr, elemSize: i64, isSigned: i32)
+    //            -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_max") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t isSigned = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        MooreQueue result = {nullptr, 0};
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_max(
+              reinterpret_cast<MooreQueue *>(arrayAddr),
+              elemSize, isSigned);
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_max()\n");
+      }
+      return success();
+    }
+
     // ---- __moore_display ----
     // Signature: (message_ptr: ptr) -> void
     if (calleeName == "__moore_display") {
