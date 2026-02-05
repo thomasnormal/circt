@@ -2755,7 +2755,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         finish(InterpretedValue::makeX(elementWidth));
         break;
       }
-      unsigned bitOffset = (numElements - 1 - index) * elementWidth;
+      // Array element 0 is at LSB (offset 0), matching CIRCT hw dialect convention.
+      unsigned bitOffset = index * elementWidth;
       APInt result = arrayVal.getAPInt().extractBits(elementWidth, bitOffset);
       finish(InterpretedValue(result));
       break;
@@ -2824,8 +2825,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         break;
       }
 
-      unsigned offset =
-          (inputElements - (lowIdx + resultElements)) * elementWidth;
+      // Array element 0 is at LSB (offset 0), matching CIRCT hw dialect convention.
+      unsigned offset = lowIdx * elementWidth;
       unsigned sliceWidth = resultElements * elementWidth;
       APInt slice = arrayVal.getAPInt().extractBits(sliceWidth, offset);
       finish(InterpretedValue(slice));
@@ -5441,8 +5442,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       return success();
     }
 
-    // Extract element at position (numElements - 1 - idx) * elementWidth
-    unsigned offset = (numElements - 1 - idx) * elementWidth;
+    // Array element 0 is at LSB (offset 0), matching CIRCT hw dialect convention.
+    unsigned offset = idx * elementWidth;
     APInt element = arrayVal.getAPInt().extractBits(elementWidth, offset);
     setValue(procId, arrayGetOp.getResult(), InterpretedValue(element));
     return success();
@@ -5475,8 +5476,8 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       return success();
     }
 
-    // Extract slice starting at (inputElements - (lowIdx + resultElements))
-    unsigned offset = (inputElements - (lowIdx + resultElements)) * elementWidth;
+    // Array element 0 is at LSB (offset 0), matching CIRCT hw dialect convention.
+    unsigned offset = lowIdx * elementWidth;
     unsigned sliceWidth = resultElements * elementWidth;
     APInt slice = arrayVal.getAPInt().extractBits(sliceWidth, offset);
     setValue(procId, arraySliceOp.getResult(), InterpretedValue(slice));
@@ -12712,12 +12713,39 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
         bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
         if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
-          // This is not a properly initialized associative array.
-          // Return null rather than crashing.
-          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref - uninitialized array at 0x"
-                                  << llvm::format_hex(arrayAddr, 16) << ", returning null\n");
-          return success();
+          // Auto-create the associative array on first access (SystemVerilog semantics).
+          int32_t keySize = 8; // default: 8-byte integer key
+          if (auto allocaOp = callOp.getOperand(1).getDefiningOp<LLVM::AllocaOp>()) {
+            Type elemType = allocaOp.getElemType();
+            if (isa<LLVM::LLVMStructType>(elemType)) {
+              keySize = 0; // string-keyed
+            } else {
+              unsigned bits = getTypeWidth(elemType);
+              keySize = std::max(1u, (bits + 7) / 8);
+            }
+          }
+          void *newArray = __moore_assoc_create(keySize, valueSize);
+          uint64_t newAddr = reinterpret_cast<uint64_t>(newArray);
+          validAssocArrayAddresses.insert(newAddr);
+          arrayAddr = newAddr;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref - auto-created array at 0x"
+                                  << llvm::format_hex(newAddr, 16) << "\n");
+          // Store the new array pointer back to the source memory location.
+          if (auto loadOp = callOp.getOperand(0).getDefiningOp<LLVM::LoadOp>()) {
+            InterpretedValue srcAddr = getValue(procId, loadOp.getAddr());
+            if (!srcAddr.isX()) {
+              uint64_t storeAddr = srcAddr.getUInt64();
+              uint64_t blockOffset = 0;
+              MemoryBlock *block = findMemoryBlockByAddress(storeAddr, procId, &blockOffset);
+              if (block && block->initialized && blockOffset + 8 <= block->data.size()) {
+                std::memcpy(block->data.data() + blockOffset, &newAddr, 8);
+              } else {
+                auto nmIt = nativeMemoryBlocks.find(storeAddr);
+                if (nmIt != nativeMemoryBlocks.end())
+                  std::memcpy(reinterpret_cast<void *>(storeAddr), &newAddr, 8);
+              }
+            }
+          }
         }
 
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
