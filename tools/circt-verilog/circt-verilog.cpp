@@ -707,6 +707,14 @@ int main(int argc, char **argv) {
   // Parse pass names in main to ensure static initialization completed.
   cl::ParseCommandLineOptions(argc, argv,
                               "Verilog and SystemVerilog frontend\n");
+
+  // Set a default wall-clock timeout for circt-verilog. Compilation of even
+  // very large SystemVerilog designs should complete well within 10 minutes;
+  // anything longer almost certainly indicates an infinite loop or combinational
+  // explosion. RSS limits are handled by installResourceGuard()'s smart
+  // defaults (40% of system RAM, capped at 12 GB). Using overwrite=0 lets
+  // explicit user settings (env vars or CLI flags) take precedence.
+  ::setenv("CIRCT_MAX_WALL_MS", "600000", /*overwrite=*/0); // 10 min timeout
   circt::installResourceGuard();
 
   // Register the dialects.
