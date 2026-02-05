@@ -45,6 +45,28 @@ TEST(ResourceGuardTest, WarnsWhenAllLimitsDisabledExplicitly) {
   ::unsetenv("CIRCT_MAX_WALL_MS");
 }
 
+TEST(ResourceGuardTest, PrintsEffectiveLimitsWhenVerbose) {
+  ::setenv("CIRCT_RESOURCE_GUARD_VERBOSE", "1", 1);
+  ::setenv("CIRCT_MAX_RSS_MB", "0", 1);
+  ::setenv("CIRCT_MAX_MALLOC_MB", "0", 1);
+  ::setenv("CIRCT_MAX_VMEM_MB", "0", 1);
+  ::setenv("CIRCT_MAX_WALL_MS", "0", 1);
+  ::setenv("CIRCT_RESOURCE_GUARD_INTERVAL_MS", "123", 1);
+
+  testing::internal::CaptureStderr();
+  installResourceGuard();
+  std::string stderrText = testing::internal::GetCapturedStderr();
+  EXPECT_NE(stderrText.find("note: resource guard: enabled"), std::string::npos);
+  EXPECT_NE(stderrText.find("interval-ms=123"), std::string::npos);
+
+  ::unsetenv("CIRCT_RESOURCE_GUARD_VERBOSE");
+  ::unsetenv("CIRCT_MAX_RSS_MB");
+  ::unsetenv("CIRCT_MAX_MALLOC_MB");
+  ::unsetenv("CIRCT_MAX_VMEM_MB");
+  ::unsetenv("CIRCT_MAX_WALL_MS");
+  ::unsetenv("CIRCT_RESOURCE_GUARD_INTERVAL_MS");
+}
+
 TEST(ResourceGuardTest, ReportsPhaseOnAbort) {
   EXPECT_EXIT(
       {

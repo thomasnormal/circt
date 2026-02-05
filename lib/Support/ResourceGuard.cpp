@@ -72,11 +72,33 @@ static cl::opt<unsigned> optGuardIntervalMs(
              "(env: CIRCT_RESOURCE_GUARD_INTERVAL_MS)"),
     cl::init(250), cl::cat(resourceGuardCategory));
 
+static cl::opt<bool> optResourceGuardVerbose(
+    "resource-guard-verbose",
+    cl::desc("Print the effective resource guard limits on startup (env: "
+             "CIRCT_RESOURCE_GUARD_VERBOSE)"),
+    cl::init(false), cl::cat(resourceGuardCategory));
+
 static std::optional<uint64_t> parseEnvMegabytes(llvm::StringRef envName) {
   auto textOpt = llvm::sys::Process::GetEnv(envName);
   if (!textOpt)
     return std::nullopt;
   return circt::parseMegabytes(*textOpt);
+}
+
+static std::optional<bool> parseEnvBool(llvm::StringRef envName) {
+  auto textOpt = llvm::sys::Process::GetEnv(envName);
+  if (!textOpt)
+    return std::nullopt;
+  llvm::StringRef text = llvm::StringRef(*textOpt).trim();
+  if (text.empty())
+    return std::nullopt;
+  if (text.equals_insensitive("1") || text.equals_insensitive("true") ||
+      text.equals_insensitive("yes") || text.equals_insensitive("on"))
+    return true;
+  if (text.equals_insensitive("0") || text.equals_insensitive("false") ||
+      text.equals_insensitive("no") || text.equals_insensitive("off"))
+    return false;
+  return std::nullopt;
 }
 
 static std::optional<uint64_t> parseEnvMilliseconds(llvm::StringRef envName) {
@@ -385,6 +407,14 @@ void circt::installResourceGuard() {
   auto envMaxWallMs = parseEnvMilliseconds("CIRCT_MAX_WALL_MS");
   auto envIntervalMs =
       parseEnvMilliseconds("CIRCT_RESOURCE_GUARD_INTERVAL_MS");
+  auto envVerbose = parseEnvBool("CIRCT_RESOURCE_GUARD_VERBOSE");
+
+  const bool verbose = optResourceGuardVerbose || (envVerbose && *envVerbose);
+  if (!optResourceGuard) {
+    if (verbose)
+      llvm::errs() << "note: resource guard: disabled (--no-resource-guard).\n";
+    return;
+  }
 
   auto readMB = [](unsigned optValue, unsigned occurrences,
                    llvm::StringRef env) -> uint64_t {
@@ -411,13 +441,13 @@ void circt::installResourceGuard() {
   uint64_t effectiveMaxVMemMB = maxVmemMB;
   uint64_t effectiveMaxWallMs = maxWallMs;
 
-  // If no explicit limits were provided, apply conservative defaults when the
-  // guard is enabled. The goal is to prevent tools from consuming tens of GB of
-  // RAM and effectively hanging a machine due to swapping/OOM thrashing.
-  if (optResourceGuard && optMaxRSSMB.getNumOccurrences() == 0 &&
-      optMaxMallocMB.getNumOccurrences() == 0 &&
-      optMaxVMemMB.getNumOccurrences() == 0 && !envMaxRSSMB && !envMaxMallocMB &&
-      !envMaxVMemMB && optMaxWallMs.getNumOccurrences() == 0 && !envMaxWallMs) {
+  // Apply conservative defaults when the guard is enabled and a specific limit
+  // is not explicitly configured. The goal is to prevent tools from consuming
+  // tens of GB of RAM and effectively hanging a machine due to swapping/OOM
+  // thrashing.
+  const bool rssSpecified =
+      (optMaxRSSMB.getNumOccurrences() > 0) || envMaxRSSMB.has_value();
+  if (optResourceGuard && !rssSpecified) {
     // Default to a conservative fraction of system memory, but cap at 12GB.
     // This is intentionally sized to prevent runaway memory growth on typical
     // developer workstations while remaining easy to override for large
@@ -438,6 +468,21 @@ void circt::installResourceGuard() {
 
   if (effectiveMaxVMemMB)
     setAddressSpaceLimitBytes(megabytesToBytes(effectiveMaxVMemMB));
+
+  if (verbose) {
+    llvm::errs() << "note: resource guard: ";
+    llvm::errs() << "enabled";
+    llvm::errs() << ", max-rss-mb=" << effectiveMaxRSSMB
+                 << ", max-malloc-mb=" << effectiveMaxMallocMB
+                 << ", max-vmem-mb=" << effectiveMaxVMemMB
+                 << ", max-wall-ms=" << effectiveMaxWallMs
+                 << ", interval-ms=";
+    unsigned effectiveIntervalMs = optGuardIntervalMs;
+    if (optGuardIntervalMs.getNumOccurrences() == 0 && envIntervalMs)
+      effectiveIntervalMs = static_cast<unsigned>(std::min<uint64_t>(
+          *envIntervalMs, std::numeric_limits<unsigned>::max()));
+    llvm::errs() << effectiveIntervalMs << ".\n";
+  }
 
   // If resource guard is enabled, but all explicit limits are disabled, warn to
   // avoid accidentally running tools without safeguards due to e.g. a script
