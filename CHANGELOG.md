@@ -4,7 +4,7 @@
 
 ### Summary
 
-Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's canonicalize pass to `createBottomUpSimpleCanonicalizerPass()` (region simplification disabled, max 200k rewrites). This unXFAILs 2 tests, bringing circt-sim to **107 pass, 1 xfail**. Agent investigation of OpenTitan AES S-Box Canright LEC revealed a **real computational bug** in CIRCT's lowering of GF(2^8) arithmetic. AVIP simulations stall after UVM factory registration - BFM processes halt after ~282 steps with no transaction activity.
+Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's canonicalize pass to `createBottomUpSimpleCanonicalizerPass()` (region simplification disabled, max 200k rewrites). This unXFAILs 2 tests, bringing circt-sim to **107 pass, 1 xfail**. Fixed root cause of AVIP simulation stalls: `CreateVTablesPass` was skipping vtable generation for any class with inherited pure virtual methods (`allHaveImpl` check), causing `uvm_phase_hopper` and similar UVM classes to have empty vtables. Changed to `noneHaveImpl` so partially-implemented classes still get vtables. Added vtable-miss diagnostic warnings to the interpreter. Agent investigation of OpenTitan AES S-Box Canright LEC revealed a **real computational bug** in CIRCT's lowering of GF(2^8) arithmetic.
 
 ### Accomplishments
 
@@ -13,6 +13,8 @@ Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's can
 3. **Un-XFAIL `apint-width-normalization.mlir`** - APInt width normalization test passes all 9 arithmetic operations.
 4. **OpenTitan AES S-Box LEC investigation** - Discovered real NEQ in `aes_sbox_canright`: input 0x63 produces output 0x63 (should be 0xFB). The Canright GF(2^8) inversion treats data_i as all-zeros, indicating a lowering bug in the XOR/AND trees from the GF arithmetic package.
 5. **AVIP simulation deep investigation** - Identified that APB/UART AVIPs register ~1600 signals and 7-9 processes but only advance 1 delta cycle per time step. BFM processes halt after ~282 steps. UVM phases never progress beyond factory registration.
+6. **CreateVTables partial-implementation fix** - Root cause: `CreateVTablesPass::emitVTablePerClass()` used `!allHaveImpl(methodMap)` which skipped vtable generation for any class inheriting a pure virtual method. Changed to `noneHaveImpl(methodMap)` so classes with at least some implementations get vtables. Also fixed `emitVTablePerDependencyClass` to skip pure-virtual method entries instead of crashing on `.value()`.
+7. **Vtable-miss diagnostic warnings** - Added `llvm::errs()` warnings in `LLHDProcessInterpreter` when `func.call_indirect` encounters X function pointers or addresses not in the vtable map. Previously these were silent no-ops returning X values.
 
 ### Verification (February 5, 2026)
 
@@ -29,7 +31,7 @@ Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's can
 ### Known Issues
 
 - **OpenTitan AES S-Box Canright**: Real NEQ in GF(2^8) arithmetic lowering through `circt-verilog`/MooreToCore
-- **AVIP simulation stall**: UVM testbenches register but never advance past factory init; BFM processes halt early
+- **AVIP simulation stall**: Root cause fixed (empty vtables). Recompilation with fix in progress to verify UVM phases now advance
 - **Masked S-Box LLHD**: `llhd.sig.array_get` not supported in circt-lec
 
 ### Files Changed
@@ -37,6 +39,9 @@ Iteration 345: Fixed GreedyPatternRewriteDriver OOM by switching circt-sim's can
 - `tools/circt-sim/circt-sim.cpp` - Switch to `createBottomUpSimpleCanonicalizerPass()`
 - `test/Tools/circt-sim/apint-width-normalization.mlir` - Remove XFAIL marker
 - `test/Tools/circt-sim/dag-false-cycle-detection.mlir` - Remove XFAIL marker
+- `lib/Dialect/Moore/Transforms/CreateVTables.cpp` - Fix partial vtable generation
+- `tools/circt-sim/LLHDProcessInterpreter.cpp` - Add vtable-miss warnings
+- `test/Dialect/Moore/vtable-partial-impl.mlir` - Unit test for partial vtable fix
 
 ---
 
