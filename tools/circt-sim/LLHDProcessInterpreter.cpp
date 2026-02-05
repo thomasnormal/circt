@@ -5238,21 +5238,28 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     Value calleeValue = callIndirectOp.getCallee();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
 
+    // Throttle vtable dispatch warnings to prevent flooding stderr during
+    // UVM initialization. Both X function pointers and unmapped addresses
+    // share a single counter.
+    auto emitVtableWarning = [&](StringRef reason) {
+      static unsigned vtableWarnCount = 0;
+      if (vtableWarnCount < 3) {
+        ++vtableWarnCount;
+        llvm::errs() << "[circt-sim] WARNING: virtual method call "
+                     << "(func.call_indirect) failed: " << reason
+                     << ". Callee operand: ";
+        calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+        llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
+      } else if (vtableWarnCount == 3) {
+        ++vtableWarnCount;
+        llvm::errs() << "[circt-sim] (suppressing further vtable warnings)\n";
+      }
+    };
+
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
-      static unsigned xCallCount = 0;
-      if (xCallCount < 3) {
-        ++xCallCount;
-        llvm::errs() << "[circt-sim] WARNING: virtual method call "
-                     << "(func.call_indirect) failed: function pointer is X "
-                     << "(uninitialized). Callee operand: ";
-        calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
-        llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
-      } else if (xCallCount == 3) {
-        ++xCallCount;
-        llvm::errs() << "[circt-sim] (suppressing further X vtable warnings)\n";
-      }
+      emitVtableWarning("function pointer is X (uninitialized)");
       for (Value result : callIndirectOp.getResults()) {
         setValue(procId, result,
                  InterpretedValue::makeX(getTypeWidth(result.getType())));
@@ -5267,13 +5274,9 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: address 0x"
                               << llvm::format_hex(funcAddr, 16)
                               << " not in vtable map\n");
-      llvm::errs() << "[circt-sim] WARNING: virtual method call (func.call_indirect) "
-                   << "failed: address "
-                   << llvm::format_hex(funcAddr, 16)
-                   << " not found in vtable map. "
-                   << "Callee operand: ";
-      calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
-      llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
+      std::string reason = "address " +
+          llvm::utohexstr(funcAddr) + " not found in vtable map";
+      emitVtableWarning(reason);
       for (Value result : callIndirectOp.getResults()) {
         setValue(procId, result,
                  InterpretedValue::makeX(getTypeWidth(result.getType())));
