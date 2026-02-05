@@ -43,9 +43,11 @@ static cl::opt<bool> optResourceGuard(
 static cl::opt<unsigned> optMaxRSSMB(
     "max-rss-mb",
     cl::desc("Abort if resident set size (RSS) exceeds this many megabytes "
-             "(0 = disabled; if left unspecified and --resource-guard is "
-             "enabled, a conservative default is applied; env: "
-             "CIRCT_MAX_RSS_MB)"),
+             "(0 = use default when --resource-guard is enabled; if left "
+             "unspecified and --resource-guard is enabled, a conservative "
+             "default is applied; if all limits are disabled while "
+             "--resource-guard is enabled, a default RSS limit is still "
+             "applied; env: CIRCT_MAX_RSS_MB)"),
     cl::init(0), cl::cat(resourceGuardCategory));
 
 static cl::opt<unsigned> optMaxMallocMB(
@@ -402,8 +404,6 @@ void circt::installResourceGuard() {
   GuardState &state = getGuardState();
 
   auto envMaxRSSMB = parseEnvMegabytes("CIRCT_MAX_RSS_MB");
-  auto envMaxMallocMB = parseEnvMegabytes("CIRCT_MAX_MALLOC_MB");
-  auto envMaxVMemMB = parseEnvMegabytes("CIRCT_MAX_VMEM_MB");
   auto envMaxWallMs = parseEnvMilliseconds("CIRCT_MAX_WALL_MS");
   auto envIntervalMs =
       parseEnvMilliseconds("CIRCT_RESOURCE_GUARD_INTERVAL_MS");
@@ -441,13 +441,7 @@ void circt::installResourceGuard() {
   uint64_t effectiveMaxVMemMB = maxVmemMB;
   uint64_t effectiveMaxWallMs = maxWallMs;
 
-  // Apply conservative defaults when the guard is enabled and a specific limit
-  // is not explicitly configured. The goal is to prevent tools from consuming
-  // tens of GB of RAM and effectively hanging a machine due to swapping/OOM
-  // thrashing.
-  const bool rssSpecified =
-      (optMaxRSSMB.getNumOccurrences() > 0) || envMaxRSSMB.has_value();
-  if (optResourceGuard && !rssSpecified) {
+  auto applyDefaultMaxRSS = [&]() {
     // Default to a conservative fraction of system memory, but cap at 12GB.
     // This is intentionally sized to prevent runaway memory growth on typical
     // developer workstations while remaining easy to override for large
@@ -464,6 +458,37 @@ void circt::installResourceGuard() {
     } else {
       effectiveMaxRSSMB = 8192ull;
     }
+  };
+
+  // Apply conservative defaults when the guard is enabled and a specific RSS
+  // limit is not explicitly configured. The goal is to prevent tools from
+  // consuming tens of GB of RAM and effectively hanging a machine due to
+  // swapping/OOM thrashing.
+  const bool rssSpecified =
+      (optMaxRSSMB.getNumOccurrences() > 0) || envMaxRSSMB.has_value();
+  if (optResourceGuard && (!rssSpecified || maxRSSMB == 0)) {
+    applyDefaultMaxRSS();
+    if (rssSpecified && maxRSSMB == 0) {
+      llvm::errs()
+          << (verbose ? "note" : "warning")
+          << ": resource guard: RSS limit disabled (0) while --resource-guard is "
+             "enabled; applying default RSS limit. Use --no-resource-guard to "
+             "run unbounded.\n";
+    }
+  }
+
+  // If the resource guard is enabled but all explicit limits are disabled,
+  // fall back to the default RSS limit rather than running unbounded. Users
+  // can disable the guard entirely via --no-resource-guard.
+  const bool anyEffectiveLimit =
+      effectiveMaxRSSMB || effectiveMaxMallocMB || effectiveMaxVMemMB ||
+      effectiveMaxWallMs;
+  if (optResourceGuard && !anyEffectiveLimit) {
+    applyDefaultMaxRSS();
+    llvm::errs()
+        << (verbose ? "note" : "warning")
+        << ": resource guard enabled but all limits are disabled; applying "
+           "default RSS limit. Use --no-resource-guard to run unbounded.\n";
   }
 
   if (effectiveMaxVMemMB)
@@ -482,26 +507,6 @@ void circt::installResourceGuard() {
       effectiveIntervalMs = static_cast<unsigned>(std::min<uint64_t>(
           *envIntervalMs, std::numeric_limits<unsigned>::max()));
     llvm::errs() << effectiveIntervalMs << ".\n";
-  }
-
-  // If resource guard is enabled, but all explicit limits are disabled, warn to
-  // avoid accidentally running tools without safeguards due to e.g. a script
-  // passing `--max-rss-mb=0` or an environment variable such as
-  // `CIRCT_MAX_RSS_MB=0`.
-  if (optResourceGuard && !effectiveMaxRSSMB && !effectiveMaxMallocMB &&
-      !effectiveMaxVMemMB && !effectiveMaxWallMs) {
-    const bool anyLimitMentioned =
-        (optMaxRSSMB.getNumOccurrences() > 0) ||
-        (optMaxMallocMB.getNumOccurrences() > 0) ||
-        (optMaxVMemMB.getNumOccurrences() > 0) ||
-        (optMaxWallMs.getNumOccurrences() > 0) || envMaxRSSMB ||
-        envMaxMallocMB || envMaxVMemMB || envMaxWallMs;
-    if (anyLimitMentioned) {
-      llvm::errs()
-          << "warning: resource guard enabled but all limits are disabled; "
-             "tool execution is unbounded. Use --no-resource-guard to silence, "
-             "or set a limit such as --max-rss-mb / CIRCT_MAX_RSS_MB.\n";
-    }
   }
 
   if (!effectiveMaxRSSMB && !effectiveMaxMallocMB && !effectiveMaxWallMs)
