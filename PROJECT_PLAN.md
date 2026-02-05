@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 348 - Memory Guardrails & AVIP Testing)
+## Current Status - February 5, 2026 (Iteration 349 - VTable Inheritance Fix)
 
 ### Session Summary - Key Milestones
 
@@ -93,6 +93,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **OpenTitan Coverage** | ✅ **42/42** | **41 PASS + 1 wall-clock timeout** (expanded from 31 to 42 tests) |
 | **AVIP Simulation** | ✅ **7/8** | APB, UART, I2S, AHB, SPI, AXI4, I3C pass. JTAG blocked (slang) |
 | **CreateVTables Partial-Impl Fix** | ✅ **FIXED** | `noneHaveImpl` replaces `allHaveImpl` so classes with partial virtual implementations get vtables (commit `c7f661a8d`) |
+| **VTable Inherited Method Entries** | ✅ **FIXED** | `ClassNewOpConversion` now populates `circt.vtable_entries` for placeholder vtable globals by walking class hierarchy (commit `f9d3bd302`). 230 of 995 UART AVIP vtable globals were affected. |
 | **Vtable-Miss Diagnostics** | ✅ **ADDED** | `llvm::errs()` warnings for func.call_indirect X callee and unresolved vtable addresses |
 | **Urandom Parse Fix** | ✅ FIXED | `seed` keyword in MooreOps.td prevents greedy parse. SPI AVIP unblocked. |
 | **uvm_config_db Signal Propagation** | ✅ FIXED | Signal mapping through call chains + memory-backed ref drive/probe |
