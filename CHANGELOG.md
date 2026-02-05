@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 358 - February 5, 2026
+
+### Summary
+
+Iteration 358: Fixed two critical bugs preventing UVM simulation from completing - a reversed array indexing formula in `hw.array_get`/`hw.array_slice` that caused infinite loops, and missing auto-creation of associative arrays on first access. With both fixes, UVM simulation now completes through `reset_severity_counts`, report server initialization, and `run_test()`. Also committed 372 codex-generated test/source files and cleaned up ~780 temporary artifacts.
+
+### Accomplishments
+
+1. **hw.array_get/slice indexing fix** - The interpreter was using `(N-1-idx)*elementWidth` instead of `idx*elementWidth` for bit offset calculation. In CIRCT's hw dialect, array element 0 is at LSB, so index 0 should map to bit offset 0. Fixed in 4 locations: `interpretOperation` and `evaluateContinuousValueImpl` for both `hw.array_get` and `hw.array_slice` (commit `289ad7b26`).
+2. **Associative array auto-create** - MooreToCore zero-initializes class instances, leaving assoc array pointer fields null. The interpreter now auto-creates arrays via `__moore_assoc_create()` when `__moore_assoc_get_ref` encounters a null pointer, determining key size from the alloca type and storing the new pointer back via SSA chain tracing (commit `289ad7b26`).
+3. **New test** - `test/Tools/circt-sim/array-get-index-order.sv` tests LSB-first indexing and enum-style iteration (like UVM severity loop).
+4. **Codex files committed** - 372 legitimate source/test files from the codex tool committed in `6ba6aece6`.
+5. **Cleanup** - Removed ~780 root-level temporary artifacts (.log, .mlir, .sv, .txt, .md).
+
+### Verification (February 5, 2026)
+
+- circt-sim: 119 total (118 pass + 1 xfail)
+- BMC/LEC: 344 total (187 pass + 141 unsupported + 16 xfail)
+- UVM simulation: reaches `run_test()` with `UVM_FATAL [INVTST]` (expected - factory registration next)
+
 ## Iteration 357 - February 5, 2026
 
 ### Summary

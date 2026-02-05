@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 349 - VTable Inheritance Fix)
+## Current Status - February 5, 2026 (Iteration 358 - Array Indexing & Assoc Array Fix)
 
 ### Session Summary - Key Milestones
 
@@ -95,6 +95,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **CreateVTables Partial-Impl Fix** | ✅ **FIXED** | `noneHaveImpl` replaces `allHaveImpl` so classes with partial virtual implementations get vtables (commit `c7f661a8d`) |
 | **VTable Inherited Method Entries** | ✅ **FIXED** | `ClassNewOpConversion` now populates `circt.vtable_entries` for placeholder vtable globals by walking class hierarchy (commit `f9d3bd302`). 230 of 995 UART AVIP vtable globals were affected. |
 | **Vtable-Miss Diagnostics** | ✅ **ADDED** | `llvm::errs()` warnings for func.call_indirect X callee and unresolved vtable addresses |
+| **hw.array_get/slice Indexing** | ✅ **FIXED** | Reversed bit offset formula fixed in 4 locations (commit `289ad7b26`). Was causing infinite loops in UVM severity enum iteration. |
+| **Assoc Array Auto-Create** | ✅ **FIXED** | Null assoc array pointers now auto-create on first access, matching SystemVerilog semantics (commit `289ad7b26`). |
+| **UVM Simulation Milestone** | ✅ **REACHED** | Minimal UVM test completes through `reset_severity_counts`, report server init, and `run_test()`. Next: factory registration. |
 | **Urandom Parse Fix** | ✅ FIXED | `seed` keyword in MooreOps.td prevents greedy parse. SPI AVIP unblocked. |
 | **uvm_config_db Signal Propagation** | ✅ FIXED | Signal mapping through call chains + memory-backed ref drive/probe |
 | **AVIP Compile** | ✅ **8/9** | AXI4, I3C now compile (vendor filelists). AXI4Lite partial (1 bind error). |
@@ -193,6 +196,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-05, Iteration 358 - Array Indexing & Assoc Array Fix)
+- **hw.array_get/slice indexing bug FIXED**: The interpreter was using a reversed bit offset formula `(N-1-idx)*width` instead of `idx*width`. In CIRCT's hw dialect, array element 0 is at LSB, so index 0 should map to bit offset 0. The old formula mapped index 0 to the MSB element, causing infinite loops in UVM's `reset_severity_counts()` (severity enum iteration). Fixed in 4 places: `interpretOperation` and `evaluateContinuousValueImpl` for both `hw.array_get` and `hw.array_slice`. (commit `289ad7b26`)
+- **Associative array auto-create FIXED**: SystemVerilog auto-creates associative arrays on first access, but MooreToCore zero-initializes class instances, leaving assoc array pointer fields null. The interpreter now auto-creates arrays via `__moore_assoc_create()` when `__moore_assoc_get_ref` encounters a null pointer, and stores the new pointer back to the source memory location via SSA chain tracing. (commit `289ad7b26`)
+- **UVM simulation milestone**: With both fixes, a minimal UVM test (`import uvm_pkg; class my_test extends uvm_test; ... run_test("my_test")`) now completes successfully through `reset_severity_counts`, report server init, and `run_test()`. Output shows `UVM_INFO`, `UVM_RELNOTES`, report server header, and `UVM_FATAL [INVTST]` (expected - test not found in factory due to remaining vtable X entries for factory registration).
+- **Test regression clean**: circt-sim 119 total (118 pass + 1 xfail), BMC/LEC 344 total (187 pass + 16 xfail), 0 unexpected failures.
+- **New test**: `test/Tools/circt-sim/array-get-index-order.sv` - tests LSB-first indexing and enum-style iteration.
+- **Committed codex-generated files**: 372 files (tests, headers, library sources) from the codex tool committed in `6ba6aece6`.
+- **Temporary files cleaned**: ~780 root-level temp artifacts (.log, .mlir, .sv, .txt, .md) removed.
+- **Next blocker**: UVM factory registration (`UVM_FATAL [INVTST] Requested test not found`) - vtable dispatch for factory registration methods still returns X (uninitialized function pointers). Need to investigate why `my_test` type_id isn't registered with the factory.
 
 ### New Findings (2026-02-05, Iteration 348 - Memory Guardrails & AVIP Testing)
 - **circt-verilog wall-clock timeout**: Added 10-minute default timeout via `CIRCT_MAX_WALL_MS=600000` (overwrite=0). Smart RSS defaults already cap at 12GB for >16GB systems. Prevents circt-verilog from consuming unbounded memory/time.
@@ -310,31 +323,31 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Current Workstreams (Iteration 345)
+### Current Workstreams (Iteration 358)
 
-**Verified (Feb 5, 2026)**: circt-lec 102, circt-bmc 82 (13 xfail), circt-sim 107 (1 xfail). AVIP compile 9/9 (all pass). AVIP simulation stall root-caused to empty vtable.
+**Verified (Feb 5, 2026)**: circt-sim 119 (118 pass + 1 xfail), circt-bmc+lec 344 (187 pass + 16 xfail), AVIP compile 9/9. UVM sim reaches `run_test()` successfully. Array indexing and assoc array auto-create fixed.
 
-**Track A - AVIP Simulation** [TOP PRIORITY]:
-1. **Fix `uvm_phase_hopper` empty vtable** - ROOT CAUSE FOUND: The hopper's `__vtable__` has zero entries (all-null). When `run_test()` dispatches vtable[34] (the phase-run method), the null function pointer causes a silent no-op. No UVM phases execute. The hopper methods are dropped during ImportVerilog/MooreToCore compilation.
-2. **Add vtable-miss warning** - `func.call_indirect` in LLHDProcessInterpreter silently returns success for unresolved vtable addresses. Add visible warning for debugging.
-3. **Recompile all AVIPs** - Older MLIR artifacts may lack latest fixes.
-4. **Fix AXI4Lite compile** - Package import errors (`Axi4LiteSlaveReadPkg`)
-5. **Fix JTAG compile** - slang coverage/virtual errors
+**Track A - UVM Simulation & Factory Registration** [TOP PRIORITY]:
+1. **Fix UVM factory `[INVTST]` error** - `run_test("my_test")` fails because `my_test` is not registered with the factory. Vtable dispatch warnings show X (uninitialized) function pointers for factory registration methods. Investigate: are `uvm_component_registry` specialization vtables populated correctly? Is the static initializer (`global_ctors`) chain running the factory `register()` calls?
+2. **Recompile all AVIPs** with latest fixes (array indexing + assoc array + vtable) and re-test simulation.
+3. **UVM phase execution** - Once factory registration works, verify UVM phases (build/connect/run) execute properly.
+4. **AVIP simulation depth** - Run AVIPs with longer simulation time to test transaction activity.
 
-**Track B - Formal Verification**:
-1. ~~**Root-cause GreedyPatternRewriteDriver OOM**~~ ✅ FIXED - Switched to `createBottomUpSimpleCanonicalizerPass()` (200k rewrite cap). 2 tests un-XFAIL'd.
-2. **OpenTitan AES S-Box full X-prop** - Still NEQ without --assume-known-inputs. Real GF(2^8) arithmetic lowering bug in Canright path.
-3. **Expand OpenTitan LEC coverage** beyond current 42 IPs
+**Track B - Formal Verification** (handled by codex tool):
+1. **OpenTitan AES S-Box full X-prop** - Still NEQ without --assume-known-inputs.
+2. **Expand OpenTitan LEC coverage** beyond current 42 IPs.
 
-**Track C - External Test Suites**:
-1. **Continue regression testing** after every change
-2. **Add new sv-tests** as features are implemented
+**Track C - External Test Suites & Regression**:
+1. **sv-tests regression** - Run after every change to catch regressions.
+2. **AVIP compilation regression** - Verify all 9 AVIPs still compile.
+3. **Verilator/yosys test suites** - Maintain green status.
 
-**Track D - circt-sim Runtime**:
-1. **coverpoint `iff` lowering** - Not yet implemented, needed for UVM coverage
-2. **`dist` constraint `$` upper bounds** - Still rejected by slang (workaround in runner)
-3. **Inline `randomize() with` outer-scope access** - Rejected by slang (workaround)
-4. **Simulation performance** - AVIP sims are slow (SPI: 163ns in 60s wall-clock)
+**Track D - circt-sim Runtime Features**:
+1. **coverpoint `iff` lowering** - Not yet implemented, needed for UVM coverage.
+2. **`dist` constraint `$` upper bounds** - Still rejected by slang (workaround in runner).
+3. **Inline `randomize() with` outer-scope access** - Rejected by slang (workaround).
+4. **Simulation performance** - AVIP sims are slow (SPI: 163ns in 60s wall-clock).
+5. **`$readmemh` support** - Needed for some OpenTitan testbenches.
 
 ### Previous Blocker: UVM Factory Registration - ✅ FIXED
 
