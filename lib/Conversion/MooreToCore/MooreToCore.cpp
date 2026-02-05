@@ -8004,13 +8004,24 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
     }
 
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
-      // Handle 4-state index - extract just the value part
       Value idx = adaptor.getLowBit();
-      if (isFourStateStructType(idx.getType()))
+      Value idxUnknown;
+      Value idxUnknownCond;
+      if (isFourStateStructType(idx.getType())) {
+        idxUnknown = extractFourStateUnknown(rewriter, loc, idx);
+        Value zero =
+            hw::ConstantOp::create(rewriter, loc, idxUnknown.getType(), 0);
+        idxUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, idxUnknown, zero);
         idx = extractFourStateValue(rewriter, loc, idx);
-      idx = adjustIntegerWidth(rewriter, idx,
-                               llvm::Log2_64_Ceil(arrType.getNumElements()),
-                               loc);
+      }
+
+      unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
+      if (idxWidth == 0)
+        idxWidth = 1;
+      idx = adjustIntegerWidth(rewriter, idx, idxWidth, loc);
+      if (idxUnknown)
+        idxUnknown = adjustIntegerWidth(rewriter, idxUnknown, idxWidth, loc);
 
       auto resultRefType = dyn_cast<llhd::RefType>(resultType);
       if (!resultRefType)
@@ -8020,12 +8031,131 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       bool isSingleElementExtract =
           arrType.getElementType() == resultNestedType;
 
-      if (isSingleElementExtract)
-        rewriter.replaceOpWithNewOp<llhd::SigArrayGetOp>(op, adaptor.getInput(),
-                                                         idx);
-      else
-        rewriter.replaceOpWithNewOp<llhd::SigArraySliceOp>(
-            op, resultType, adaptor.getInput(), idx);
+      // Fast path: no 4-state index, or non-4-state element types.
+      auto elemStructTy = dyn_cast<hw::StructType>(arrType.getElementType());
+      const bool hasUnknownIndex = static_cast<bool>(idxUnknownCond);
+      const bool hasFourStateElements =
+          elemStructTy && isFourStateStructType(elemStructTy);
+      if (!hasUnknownIndex || !hasFourStateElements) {
+        if (isSingleElementExtract)
+          rewriter.replaceOpWithNewOp<llhd::SigArrayGetOp>(
+              op, adaptor.getInput(), idx);
+        else
+          rewriter.replaceOpWithNewOp<llhd::SigArraySliceOp>(
+              op, resultType, adaptor.getInput(), idx);
+        return success();
+      }
+
+      // Conservatively avoid deterministically aliasing an element/slice when
+      // the index is unknown or could be out-of-bounds. For small cases we
+      // compute a bounded per-bit consensus, otherwise we return all-unknown.
+      Value oobCond =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+      if (isSingleElementExtract) {
+        Value maxIdxConst = hw::ConstantOp::create(
+            rewriter, loc, idx.getType(),
+            static_cast<int64_t>(arrType.getNumElements() - 1));
+        oobCond = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ugt,
+                                       idx, maxIdxConst);
+      } else {
+        auto sliceType = dyn_cast<hw::ArrayType>(resultNestedType);
+        if (!sliceType)
+          return rewriter.notifyMatchFailure(
+              loc, "expected array slice result type");
+        const unsigned sliceLen = sliceType.getNumElements();
+        if (sliceLen > arrType.getNumElements()) {
+          oobCond =
+              hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        } else {
+          int64_t maxBase =
+              static_cast<int64_t>(arrType.getNumElements() - sliceLen);
+          Value maxBaseConst =
+              hw::ConstantOp::create(rewriter, loc, idx.getType(), maxBase);
+          oobCond = comb::ICmpOp::create(rewriter, loc,
+                                         comb::ICmpPredicate::ugt, idx,
+                                         maxBaseConst);
+        }
+      }
+
+      Value invalidCond =
+          comb::OrOp::create(rewriter, loc, oobCond, idxUnknownCond);
+
+      auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{resultType},
+                                    invalidCond, /*withElseRegion=*/true);
+      {
+        rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+        Value allUnknownElem =
+            buildAllUnknownFourStateElement(rewriter, loc, elemStructTy);
+        if (!allUnknownElem)
+          return rewriter.notifyMatchFailure(
+              loc, "failed to build all-unknown 4-state element");
+
+        Value initValue;
+        if (isSingleElementExtract) {
+          Value baseArray =
+              llhd::ProbeOp::create(rewriter, loc, adaptor.getInput());
+          Value consensus = buildUnknownIndexedRuntimeArray(
+              rewriter, loc, arrType, baseArray, idx, idxUnknown);
+          if (!consensus)
+            consensus = allUnknownElem;
+          Value selected = muxFourStateStruct(rewriter, loc, idxUnknownCond,
+                                              consensus, allUnknownElem);
+          initValue = muxFourStateStruct(rewriter, loc, oobCond, allUnknownElem,
+                                         selected);
+        } else {
+          auto sliceType = cast<hw::ArrayType>(resultNestedType);
+          Value baseArray =
+              llhd::ProbeOp::create(rewriter, loc, adaptor.getInput());
+
+          Value unknownSlice = buildUnknownIndexedRuntimeArraySlice(
+              rewriter, loc, arrType, sliceType, baseArray, idx, idxUnknown);
+
+          SmallVector<Value, 4> elems;
+          elems.reserve(sliceType.getNumElements());
+
+          unsigned sliceIdxWidth =
+              llvm::Log2_64_Ceil(sliceType.getNumElements());
+          if (sliceIdxWidth == 0)
+            sliceIdxWidth = 1;
+          Type sliceIdxTy = rewriter.getIntegerType(sliceIdxWidth);
+
+          for (unsigned i = 0; i < sliceType.getNumElements(); ++i) {
+            Value idxConst =
+                hw::ConstantOp::create(rewriter, loc, sliceIdxTy, i);
+            Value unknownElem = allUnknownElem;
+            if (unknownSlice)
+              unknownElem = hw::ArrayGetOp::create(rewriter, loc, unknownSlice,
+                                                   idxConst);
+            Value selected = muxFourStateStruct(rewriter, loc, idxUnknownCond,
+                                                unknownElem, allUnknownElem);
+            Value finalElem = muxFourStateStruct(rewriter, loc, oobCond,
+                                                 allUnknownElem, selected);
+            if (!finalElem)
+              return rewriter.notifyMatchFailure(
+                  loc, "failed to mux 4-state slice elements");
+            elems.push_back(finalElem);
+          }
+          initValue = hw::ArrayCreateOp::create(rewriter, loc, sliceType, elems);
+        }
+
+        Value tmpRef = llhd::SignalOp::create(rewriter, loc, resultType,
+                                              StringAttr{}, initValue);
+        scf::YieldOp::create(rewriter, loc, tmpRef);
+      }
+      {
+        rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+        Value actualRef;
+        if (isSingleElementExtract)
+          actualRef = llhd::SigArrayGetOp::create(
+              rewriter, loc, adaptor.getInput(), idx);
+        else
+          actualRef = llhd::SigArraySliceOp::create(
+              rewriter, loc, resultType, adaptor.getInput(), idx);
+        scf::YieldOp::create(rewriter, loc, actualRef);
+      }
+
+      rewriter.replaceOp(op, ifOp.getResults());
 
       return success();
     }
