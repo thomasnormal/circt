@@ -175,6 +175,23 @@ while IFS= read -r -d '' sv; do
       ;;
   esac
 
+  # sv-tests uses `:should_fail_because:` both for tests that should fail to
+  # *compile* (parsing/compilation negative tests) and for tests that should
+  # *fail at runtime* (simulation negative tests, e.g. an assertion violation).
+  #
+  # For formal BMC, the latter category should be treated as PASS when a
+  # counterexample exists (SAT for asserts). This avoids incorrectly reporting
+  # such tests as XFAIL.
+  expect_compile_fail=0
+  expect_bmc_violation=0
+  if [[ "$should_fail" == "1" ]]; then
+    if [[ "$type" =~ [Ss]imulation ]]; then
+      expect_bmc_violation=1
+    else
+      expect_compile_fail=1
+    fi
+  fi
+
   files_line="$(read_meta files "$sv")"
   incdirs_line="$(read_meta incdirs "$sv")"
   defines_line="$(read_meta defines "$sv")"
@@ -244,11 +261,14 @@ while IFS= read -r -d '' sv; do
   cmd+=("${files[@]}")
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-    result="ERROR"
-    if [[ "$should_fail" == "1" ]]; then
-      result="XFAIL"
-      xfail=$((xfail + 1))
+    # Treat expected compile failures as PASS for negative compilation/parsing
+    # tests. Simulation-negative tests are expected to compile and are handled
+    # via SAT/UNSAT classification below.
+    if [[ "$expect_compile_fail" == "1" ]]; then
+      result="PASS"
+      pass=$((pass + 1))
     else
+      result="ERROR"
       error=$((error + 1))
     fi
     printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
@@ -256,9 +276,9 @@ while IFS= read -r -d '' sv; do
   fi
 
   if [[ "$run_bmc" == "0" ]]; then
-    if [[ "$should_fail" == "1" ]]; then
-      result="XPASS"
-      xpass=$((xpass + 1))
+    if [[ "$expect_compile_fail" == "1" ]]; then
+      result="FAIL"
+      fail=$((fail + 1))
     else
       result="PASS"
       pass=$((pass + 1))
@@ -345,6 +365,16 @@ while IFS= read -r -d '' sv; do
       else
         result="ERROR"
       fi
+    elif [[ "$expect_bmc_violation" == "1" ]]; then
+      # Simulation-negative tests are expected to have an assertion violation
+      # within the bound (SAT).
+      if grep -q "BMC_RESULT=SAT" <<<"$out"; then
+        result="PASS"
+      elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+        result="FAIL"
+      else
+        result="ERROR"
+      fi
     elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
       result="PASS"
     elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
@@ -369,7 +399,13 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
-  if [[ "$should_fail" == "1" ]]; then
+  if [[ "$expect_bmc_violation" == "1" ]]; then
+    case "$result" in
+      PASS) pass=$((pass + 1)) ;;
+      FAIL) fail=$((fail + 1)) ;;
+      *) error=$((error + 1)) ;;
+    esac
+  elif [[ "$should_fail" == "1" ]]; then
     if [[ "$result" == "PASS" ]]; then
       result="XPASS"
       xpass=$((xpass + 1))
