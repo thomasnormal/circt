@@ -5260,6 +5260,110 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
+
+      // Detailed tracing for first few vtable failures
+      static unsigned vtableTraceCount = 0;
+      if (vtableTraceCount < 3) {
+        ++vtableTraceCount;
+        // Trace back through the callee operand
+        // First check if callee comes from an unrealized_conversion_cast
+        Value traceValue = calleeValue;
+        if (auto castOp = traceValue.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (!castOp.getInputs().empty())
+            traceValue = castOp.getInputs()[0];
+        }
+
+        if (auto loadOp = traceValue.getDefiningOp<LLVM::LoadOp>()) {
+          InterpretedValue loadAddr = getValue(procId, loadOp.getAddr());
+          llvm::errs() << "[circt-sim] VTABLE TRACE #" << vtableTraceCount << ":\n";
+
+          // Print the current block to understand which branch was taken
+          auto &state = processStates[procId];
+          if (state.currentBlock) {
+            llvm::errs() << "  Current block: ";
+            state.currentBlock->printAsOperand(llvm::errs());
+            llvm::errs() << "\n";
+          }
+
+          llvm::errs() << "  Callee comes from llvm.load at addr: ";
+          if (loadAddr.isX()) {
+            llvm::errs() << "X (address is unknown)\n";
+            // Trace back further - why is the address X?
+            Value addrValue = loadOp.getAddr();
+            if (auto gepOp = addrValue.getDefiningOp<LLVM::GEPOp>()) {
+              InterpretedValue baseVal = getValue(procId, gepOp.getBase());
+              llvm::errs() << "  Address comes from GEP with base: ";
+              if (baseVal.isX())
+                llvm::errs() << "X\n";
+              else
+                llvm::errs() << "0x" << llvm::format_hex(baseVal.getUInt64(), 16) << "\n";
+
+              // If the base is also X, trace further
+              if (baseVal.isX()) {
+                Value baseValue = gepOp.getBase();
+                if (auto baseLoadOp = baseValue.getDefiningOp<LLVM::LoadOp>()) {
+                  InterpretedValue baseLoadAddr = getValue(procId, baseLoadOp.getAddr());
+                  llvm::errs() << "  GEP base comes from llvm.load at addr: ";
+                  if (baseLoadAddr.isX())
+                    llvm::errs() << "X\n";
+                  else
+                    llvm::errs() << "0x" << llvm::format_hex(baseLoadAddr.getUInt64(), 16) << "\n";
+                }
+              }
+            }
+          } else {
+            uint64_t addr = loadAddr.getUInt64();
+            llvm::errs() << "0x" << llvm::format_hex(addr, 16) << "\n";
+
+            // Check if this address is in global memory
+            bool foundInGlobal = false;
+            for (auto &entry : globalAddresses) {
+              StringRef globalName = entry.first();
+              uint64_t globalBaseAddr = entry.second;
+              auto blockIt = globalMemoryBlocks.find(globalName);
+              if (blockIt != globalMemoryBlocks.end()) {
+                uint64_t globalSize = blockIt->second.size;
+                if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
+                  llvm::errs() << "  Address is in global '" << globalName
+                               << "' at offset " << (addr - globalBaseAddr) << "\n";
+                  llvm::errs() << "  Block initialized: " << blockIt->second.initialized
+                               << " size: " << blockIt->second.size << "\n";
+                  // Dump the bytes at this offset
+                  uint64_t offset = addr - globalBaseAddr;
+                  llvm::errs() << "  Bytes at offset " << offset << ": ";
+                  for (unsigned i = 0; i < 8 && (offset + i) < blockIt->second.data.size(); ++i)
+                    llvm::errs() << llvm::format_hex_no_prefix(blockIt->second.data[offset + i], 2) << " ";
+                  llvm::errs() << "\n";
+                  foundInGlobal = true;
+                  break;
+                }
+              }
+            }
+            if (!foundInGlobal) {
+              llvm::errs() << "  Address NOT found in any global memory block!\n";
+              // Check malloc blocks
+              bool foundInMalloc = false;
+              for (auto &entry : mallocBlocks) {
+                uint64_t mallocBaseAddr = entry.first;
+                uint64_t mallocSize = entry.second.size;
+                if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
+                  llvm::errs() << "  Found in malloc block at 0x"
+                               << llvm::format_hex(mallocBaseAddr, 16)
+                               << " offset " << (addr - mallocBaseAddr) << "\n";
+                  foundInMalloc = true;
+                  break;
+                }
+              }
+              if (!foundInMalloc)
+                llvm::errs() << "  Also NOT found in malloc blocks!\n";
+            }
+          }
+        } else {
+          llvm::errs() << "[circt-sim] VTABLE TRACE #" << vtableTraceCount
+                       << ": Callee not from llvm.load\n";
+        }
+      }
+
       emitVtableWarning("function pointer is X (uninitialized)");
       for (Value result : callIndirectOp.getResults()) {
         setValue(procId, result,
@@ -14023,6 +14127,57 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
   while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
     tempProcId = nextTempProcId++;
   processStates[tempProcId] = std::move(tempState);
+
+  // Pre-initialize UVM core state before global constructors run.
+  // UVM's get_core_state() checks if m_uvm_core_state queue is empty, and if
+  // so returns 0. uvm_init() only creates the coreservice if get_core_state()
+  // returns non-zero. By pre-initializing the queue with state 1
+  // (UVM_CORE_INITIALIZING), we ensure the coreservice gets created during
+  // the first global constructor that calls uvm_init().
+  {
+    constexpr StringLiteral uvmCoreStateName = "uvm_pkg::m_uvm_core_state";
+    auto blockIt = globalMemoryBlocks.find(uvmCoreStateName);
+    if (blockIt != globalMemoryBlocks.end()) {
+      MemoryBlock &stateBlock = blockIt->second;
+
+      // The global is a struct<(ptr, i64)> where:
+      // - ptr (offset 0-7): pointer to queue data (array of i32)
+      // - i64 (offset 8-15): queue size
+      // We need to allocate memory for an i32 value of 1, then set up the
+      // struct.
+
+      // Allocate a 4-byte block for the i32 core state value (1 =
+      // UVM_CORE_INITIALIZING)
+      uint64_t stateValueAddr = nextMallocAddress;
+      nextMallocAddress += 8; // Align to 8 bytes
+
+      MemoryBlock valueBlock(4, 32);
+      // Store value 1 (UVM_CORE_INITIALIZING) as little-endian i32
+      valueBlock.data[0] = 1;
+      valueBlock.data[1] = 0;
+      valueBlock.data[2] = 0;
+      valueBlock.data[3] = 0;
+      valueBlock.initialized = true;
+      mallocBlocks[stateValueAddr] = std::move(valueBlock);
+
+      // Update the m_uvm_core_state struct:
+      // - ptr (offset 0-7): address of the state value
+      // - i64 (offset 8-15): 1 (queue has one element)
+      if (stateBlock.data.size() >= 16) {
+        for (unsigned i = 0; i < 8; ++i)
+          stateBlock.data[i] = (stateValueAddr >> (i * 8)) & 0xFF;
+        stateBlock.data[8] = 1; // size = 1
+        for (unsigned i = 9; i < 16; ++i)
+          stateBlock.data[i] = 0;
+        stateBlock.initialized = true;
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Pre-initialized UVM core state to 1 "
+                    "(UVM_CORE_INITIALIZING) at addr 0x"
+                 << llvm::format_hex(stateValueAddr, 16) << "\n");
+    }
+  }
 
   // Execute each constructor in priority order
   for (auto &[priority, ctorName] : ctorEntries) {
