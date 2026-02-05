@@ -43,6 +43,70 @@ struct CombReplicateOpConversion : OpConversionPattern<ReplicateOp> {
   }
 };
 
+/// Lower a comb::TruthTableOp operation to an SMT-LIB-compatible boolean
+/// expression tree.
+struct TruthTableOpConversion : OpConversionPattern<TruthTableOp> {
+  using OpConversionPattern<TruthTableOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(TruthTableOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto tableAttr = op.getLookupTable();
+    SmallVector<bool> table;
+    table.reserve(tableAttr.size());
+    for (Attribute entry : tableAttr) {
+      auto boolAttr = dyn_cast<BoolAttr>(entry);
+      if (!boolAttr)
+        return rewriter.notifyMatchFailure(op, "expected BoolAttr lookup table");
+      table.push_back(boolAttr.getValue());
+    }
+
+    auto allTrue = llvm::all_of(table, [](bool v) { return v; });
+    auto allFalse = llvm::all_of(table, [](bool v) { return !v; });
+
+    auto resultType =
+        dyn_cast_or_null<smt::BitVectorType>(typeConverter->convertType(
+            op.getType()));
+    if (!resultType || resultType.getWidth() != 1)
+      return rewriter.notifyMatchFailure(op, "expected smt.bv<1> result type");
+
+    if (allTrue || allFalse) {
+      rewriter.replaceOpWithNewOp<smt::BVConstantOp>(
+          op, APInt(1, allTrue ? 1 : 0));
+      return success();
+    }
+
+    Value falseVal = smt::BVConstantOp::create(rewriter, loc, APInt(1, 0));
+    Value trueVal = smt::BVConstantOp::create(rewriter, loc, APInt(1, 1));
+
+    auto inputs = adaptor.getInputs();
+    if (inputs.empty()) {
+      rewriter.replaceOp(op, table.front() ? trueVal : falseVal);
+      return success();
+    }
+
+    auto domainType = smt::BitVectorType::get(getContext(), inputs.size());
+    auto arrayType = smt::ArrayType::get(getContext(), domainType, resultType);
+    Value array =
+        smt::ArrayBroadcastOp::create(rewriter, loc, arrayType, falseVal);
+    for (auto [idx, value] : llvm::enumerate(table)) {
+      if (!value)
+        continue;
+      Value idxVal =
+          smt::BVConstantOp::create(rewriter, loc, APInt(inputs.size(), idx));
+      array = smt::ArrayStoreOp::create(rewriter, loc, array, idxVal, trueVal);
+    }
+
+    Value index = inputs.front();
+    for (Value bit : inputs.drop_front())
+      index = smt::ConcatOp::create(rewriter, loc, index, bit);
+
+    rewriter.replaceOpWithNewOp<smt::ArraySelectOp>(op, array, index);
+    return success();
+  }
+};
+
 /// Lower a comb::ICmpOp operation to a smt::BVCmpOp, smt::EqOp or
 /// smt::DistinctOp
 struct IcmpOpConversion : OpConversionPattern<ICmpOp> {
@@ -333,6 +397,7 @@ void circt::populateCombToSMTConversionPatterns(TypeConverter &converter,
                                                 RewritePatternSet &patterns) {
   patterns.add<CombReplicateOpConversion, IcmpOpConversion, ExtractOpConversion,
                SubOpConversion, MuxOpConversion, ParityOpConversion,
+               TruthTableOpConversion,
                OneToOneOpConversion<ShlOp, smt::BVShlOp>,
                OneToOneOpConversion<ShrUOp, smt::BVLShrOp>,
                OneToOneOpConversion<ShrSOp, smt::BVAShrOp>,
@@ -349,8 +414,8 @@ void circt::populateCombToSMTConversionPatterns(TypeConverter &converter,
                // LLVM intrinsics used by MooreToCore for bit manipulation
                LLVMCtPopOpConversion>(converter, patterns.getContext());
 
-  // TODO: there are two unsupported operations in the comb dialect: 'parity'
-  // and 'truth_table'.
+  // NOTE: SMT lowering is 2-state; comb.truth_table's xprop-oriented semantics
+  // are approximated by a 2-state lookup table.
 }
 
 void ConvertCombToSMTPass::runOnOperation() {

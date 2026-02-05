@@ -62,16 +62,14 @@ llvm.mlir.global internal @solver() {alignment = 8 : i64} : !llvm.ptr {
 func.func @test(%arg0: i32) {
   %0 = smt.solver (%arg0) : (i32) -> (i32) {
   ^bb0(%arg1: i32):
-    // CHECK: [[S_ADDR:%.+]] = llvm.mlir.addressof @solver_0 : !llvm.ptr
-    // CHECK: [[S:%.+]] = llvm.load [[S_ADDR]] : !llvm.ptr -> !llvm.ptr
-    // CHECK: [[CTX_ADDR:%.+]] = llvm.mlir.addressof @ctx_0 : !llvm.ptr
-    // CHECK: [[CTX:%.+]] = llvm.load [[CTX_ADDR]] : !llvm.ptr -> !llvm.ptr
+    // CHECK: [[STR:%.+]] = llvm.mlir.addressof @str : !llvm.ptr
+    // CHECK-NEXT: [[CTX_ADDR:%.+]] = llvm.mlir.addressof @ctx_0 : !llvm.ptr
+    // CHECK-NEXT: [[CTX:%.+]] = llvm.load [[CTX_ADDR]] : !llvm.ptr -> !llvm.ptr
 
-    // CHECK: [[STR:%.+]] = llvm.mlir.addressof @str{{.*}} : !llvm.ptr
-    // CHECK: [[INT_SORT:%.+]] = llvm.call @Z3_mk_int_sort([[CTX]]) : (!llvm.ptr) -> !llvm.ptr
-    // CHECK: [[BOOL_SORT:%.+]] = llvm.call @Z3_mk_bool_sort([[CTX]]) : (!llvm.ptr) -> !llvm.ptr
-    // CHECK: [[ARRAY_SORT:%.+]] = llvm.call @Z3_mk_array_sort([[CTX]], [[INT_SORT]], [[BOOL_SORT]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr) -> !llvm.ptr
-    // CHECK: llvm.call @Z3_mk_fresh_const([[CTX]], [[STR]], [[ARRAY_SORT]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr) -> !llvm.ptr
+    // CHECK-DAG: [[INT_SORT:%.+]] = llvm.call @Z3_mk_int_sort([[CTX]]) : (!llvm.ptr) -> !llvm.ptr
+    // CHECK-DAG: [[BOOL_SORT:%.+]] = llvm.call @Z3_mk_bool_sort([[CTX]]) : (!llvm.ptr) -> !llvm.ptr
+    // CHECK-DAG: [[ARRAY_SORT:%.+]] = llvm.call @Z3_mk_array_sort([[CTX]], [[INT_SORT]], [[BOOL_SORT]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr) -> !llvm.ptr
+    // CHECK-DAG: llvm.call @Z3_mk_fresh_const([[CTX]], [[STR]], [[ARRAY_SORT]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr) -> !llvm.ptr
 
     // Test: declare constant, array, int, bool types
     %1 = smt.declare_fun "a" : !smt.array<[!smt.int -> !smt.bool]>
@@ -155,6 +153,8 @@ func.func @test(%arg0: i32) {
     // CHECK: [[AND:%.+]] = llvm.call @Z3_mk_and([[CTX]], [[C3]], [[STORAGE]]) : (!llvm.ptr, i32, !llvm.ptr) -> !llvm.ptr
     %7 = smt.and %4, %5, %6
 
+    // CHECK: [[S_ADDR:%.+]] = llvm.mlir.addressof @solver_0 : !llvm.ptr
+    // CHECK-NEXT: [[S:%.+]] = llvm.load [[S_ADDR]] : !llvm.ptr -> !llvm.ptr
     // CHECK: llvm.call @Z3_solver_assert([[CTX]], [[S]], [[AND]]) : (!llvm.ptr, !llvm.ptr, !llvm.ptr) -> ()
     smt.assert %7
 

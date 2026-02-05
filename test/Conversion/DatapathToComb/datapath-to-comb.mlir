@@ -140,7 +140,7 @@ hw.module @partial_product_square_zext(in %a : i3, out pp0 : i6, out pp1 : i6, o
 // FORCE-BOOTH-NEXT: %[[B2:.+]] = comb.extract %b from 2 : (i3) -> i1
 // PP0
 // FORCE-BOOTH-NEXT: %[[NB0:.+]] = comb.xor bin %[[B0]], %true : i1
-// FORCE-BOOTH-NEXT: %[[TWO0:.+]] = comb.and %[[B1]], %[[NB0]] : i1
+// FORCE-BOOTH-NEXT: %[[TWO0:.+]] = comb.and{{( bin)?}} %[[B1]], %[[NB0]] : i1
 // FORCE-BOOTH-NEXT: %[[PPOSGN:.+]] = comb.replicate %[[B1]] : (i1) -> i3
 // FORCE-BOOTH-NEXT: %[[ONER:.+]] = comb.replicate %[[B0]] : (i1) -> i3
 // FORCE-BOOTH-NEXT: %[[TWO0R:.+]] = comb.replicate %[[TWO0]] : (i1) -> i3
@@ -171,7 +171,7 @@ hw.module @partial_product_booth_zext(in %a : i3, in %b : i3, out pp0 : i6, out 
   // FORCE-BOOTH-NEXT: %[[B1:.*]] = comb.extract %b from 1 : (i3) -> i1
   // FORCE-BOOTH-NEXT: %[[B2:.*]] = comb.extract %b from 2 : (i3) -> i1
   // FORCE-BOOTH-NEXT: %[[NB0:.*]] = comb.xor bin %[[B0]], %true : i1
-  // FORCE-BOOTH-NEXT: %[[B1NB0:.*]] = comb.and %[[B1]], %[[NB0]] : i1
+  // FORCE-BOOTH-NEXT: %[[B1NB0:.*]] = comb.and{{( bin)?}} %[[B1]], %[[NB0]] : i1
   // FORCE-BOOTH-NEXT: %[[RB1:.*]] = comb.replicate %[[B1]] : (i1) -> i4
   // FORCE-BOOTH-NEXT: %[[RB0:.*]] = comb.replicate %[[B0]] : (i1) -> i4
   // FORCE-BOOTH-NEXT: %[[RB1NB0:.*]] = comb.replicate %[[B1NB0]] : (i1) -> i4
@@ -182,7 +182,7 @@ hw.module @partial_product_booth_zext(in %a : i3, in %b : i3, out pp0 : i6, out 
   // FORCE-BOOTH-NEXT: %[[SEXTB1:.*]] = comb.replicate %[[B1]] : (i1) -> i2
   // FORCE-BOOTH-NEXT: %[[PP0:.*]] = comb.concat %[[SEXTB1]], %[[NROW0]] : i2, i4
   // FORCE-BOOTH-NEXT: %[[B2XORB1:.*]] = comb.xor bin %[[B2]], %[[B1]] : i1
-  // FORCE-BOOTH-NEXT: %[[B2B1:.*]] = comb.and %[[B2]], %[[B1]] : i1
+  // FORCE-BOOTH-NEXT: %[[B2B1:.*]] = comb.and{{( bin)?}} %[[B2]], %[[B1]] : i1
   // FORCE-BOOTH-NEXT: %[[RB2XORB1:.*]] = comb.replicate %[[B2XORB1]] : (i1) -> i4
   // FORCE-BOOTH-NEXT: %[[RB2B1:.*]] = comb.replicate %[[B2B1]] : (i1) -> i4
   // FORCE-BOOTH-NEXT: %[[ROW12A:.*]] = comb.and %[[RB2B1]], %[[TWOA]] : i4

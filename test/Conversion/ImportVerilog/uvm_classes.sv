@@ -201,12 +201,11 @@ endclass
 // CHECK:   %pool_handle = moore.variable : <class<@this_type_pool{{(_[0-9]+)?}}>>
 // CHECK:   moore.procedure initial {
 // CHECK:     %[[HANDLE:.*]] = moore.read %pool_handle
-// CHECK:     %[[METHOD:.*]] = moore.vtable.load_method %[[HANDLE]] : @get_global_pool
-// CHECK:     %[[RESULT:.*]] = func.call_indirect %[[METHOD]]
-// The key fix: conversion from this_type_pool_N to this_type_pool is allowed
-// because they are both specializations of the same generic class.
-// CHECK:     moore.conversion %[[RESULT]] : !moore.class<@this_type_pool_{{[0-9]+}}> -> !moore.class<@this_type_pool>
-// CHECK:     moore.blocking_assign %pool_handle
+// CHECK:     %[[METHOD:.*]] = moore.vtable.load_method %[[HANDLE]] : @get_global_pool of <@this_type_pool[[SRC_SUFFIX:(_[0-9]+)?]]> -> (!moore.class<@this_type_pool[[SRC_SUFFIX]]>) -> !moore.class<@this_type_pool[[RET_SUFFIX:(_[0-9]+)?]]>
+// CHECK:     %[[RESULT:.*]] = func.call_indirect %[[METHOD]](%[[HANDLE]]) : (!moore.class<@this_type_pool[[SRC_SUFFIX]]>) -> !moore.class<@this_type_pool[[RET_SUFFIX]]>
+// The key fix: conversion between this_type_pool specializations is allowed.
+// CHECK:     %[[CONV:.*]] = moore.conversion %[[RESULT]] : !moore.class<@this_type_pool[[RET_SUFFIX]]> -> !moore.class<@this_type_pool[[SRC_SUFFIX]]>
+// CHECK:     moore.blocking_assign %pool_handle, %[[CONV]]
 // CHECK:   }
 // CHECK: }
 module ThisTypePatternTest;
