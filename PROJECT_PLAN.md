@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 359 - Recursive Call Arg Corruption Fix)
+## Current Status - February 5, 2026 (Iteration 369 - UVM Core State Pre-Init & Workstream Planning)
 
 ### Session Summary - Key Milestones
 
@@ -199,6 +199,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-05, Iteration 369 - UVM Core State & Workstream Planning)
+- **UVM core state pre-initialization** (commit `5f45c43c0`): Pre-seeds `m_uvm_core_state` queue with `UVM_CORE_INITIALIZING` before `global_ctors` run, ensuring `uvm_init()` creates the coreservice singleton during factory registration.
+- **Vtable dispatch tracing**: Added detailed tracing for first 3 vtable-miss failures, tracing through `unrealized_conversion_cast` -> `llvm.load` -> `llvm.getelementptr` to identify root cause (uninitialized object, missing vtable entry, or stale MLIR).
+- **GreedyPatternRewriteDriver OOM FIXED** (commit `fc340ffd1`): Switched `circt-sim` to `createBottomUpSimpleCanonicalizerPass()` (200k rewrite cap). Two XFAILs now pass.
+- **CreateVTables fix VERIFIED** (commits `c7f661a8d`, `f9d3bd302`): APB AVIP sim completes with UVM messages when using post-fix MLIR.
+- **Runtime feature research completed**: `$readmemh` is parsed but erased (no-op); coverpoint `iff` is captured in IR but stubbed at runtime; `dist $` is a slang parse issue.
+- **AVIP simulation stall ROOT CAUSE**: Empty `uvm_phase_hopper::__vtable__` in pre-fix MLIR. Post-fix MLIR has all 46 entries populated. AVIPs need recompilation with latest circt-verilog.
+- **$readmemh implementation IN PROGRESS**: Highest-priority runtime feature for OpenTitan testbench support.
+- **Test counts**: circt-sim 107+1xfail, ImportVerilog 228/229 (1 timeout), MooreToCore 115/116 (1 xfail).
+
 ### New Findings (2026-02-05, Iteration 358 - Array Indexing & Assoc Array Fix)
 - **hw.array_get/slice indexing bug FIXED**: The interpreter was using a reversed bit offset formula `(N-1-idx)*width` instead of `idx*width`. In CIRCT's hw dialect, array element 0 is at LSB, so index 0 should map to bit offset 0. The old formula mapped index 0 to the MSB element, causing infinite loops in UVM's `reset_severity_counts()` (severity enum iteration). Fixed in 4 places: `interpretOperation` and `evaluateContinuousValueImpl` for both `hw.array_get` and `hw.array_slice`. (commit `289ad7b26`)
 - **Associative array auto-create FIXED**: SystemVerilog auto-creates associative arrays on first access, but MooreToCore zero-initializes class instances, leaving assoc array pointer fields null. The interpreter now auto-creates arrays via `__moore_assoc_create()` when `__moore_assoc_get_ref` encounters a null pointer, and stores the new pointer back to the source memory location via SSA chain tracing. (commit `289ad7b26`)
@@ -325,31 +335,33 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Current Workstreams (Iteration 358)
+### Current Workstreams (Iteration 369)
 
-**Verified (Feb 5, 2026)**: circt-sim 119 (118 pass + 1 xfail), circt-bmc+lec 344 (187 pass + 16 xfail), AVIP compile 9/9. UVM sim reaches `run_test()` successfully. Array indexing and assoc array auto-create fixed.
+**Verified (Feb 5, 2026)**: circt-sim 107 pass + 1 xfail. AVIP compile 9/9. UVM core state pre-init added. Vtable dispatch tracing added. $readmemh implementation in progress.
 
-**Track A - UVM Simulation & Factory Registration** [TOP PRIORITY]:
-1. **Fix UVM factory `[INVTST]` error** - `run_test("my_test")` fails because `my_test` is not registered with the factory. Vtable dispatch warnings show X (uninitialized) function pointers for factory registration methods. Investigate: are `uvm_component_registry` specialization vtables populated correctly? Is the static initializer (`global_ctors`) chain running the factory `register()` calls?
-2. **Recompile all AVIPs** with latest fixes (array indexing + assoc array + vtable) and re-test simulation.
-3. **UVM phase execution** - Once factory registration works, verify UVM phases (build/connect/run) execute properly.
-4. **AVIP simulation depth** - Run AVIPs with longer simulation time to test transaction activity.
+**Track A - UVM Simulation & Phase Execution** [TOP PRIORITY]:
+1. **UVM core state pre-initialization** - ✅ DONE (commit `5f45c43c0`). Pre-seeds `m_uvm_core_state` queue so `uvm_init()` creates the coreservice.
+2. **Remaining vtable-miss warnings (~32)** - INVESTIGATING. Likely parameterized UVM template specializations (`uvm_component_registry#(T)`) and abstract classes. Vtable tracing diagnostics added to identify root causes.
+3. **Recompile all AVIPs** with latest fixes and re-test. Requires >24GB RAM; schedule on a large-memory machine.
+4. **UVM phase execution** - Verify build/connect/run phases complete. Phase hopper vtable now populated in post-fix MLIR.
+5. **AVIP simulation depth** - Run with longer timeouts to verify transaction activity beyond UVM init.
 
-**Track B - Formal Verification** (handled by codex tool):
-1. **OpenTitan AES S-Box full X-prop** - Still NEQ without --assume-known-inputs.
-2. **Expand OpenTitan LEC coverage** beyond current 42 IPs.
+**Track B - Formal Verification** (handled by codex agent - DO NOT WORK ON):
+1. OpenTitan AES S-Box, BMC, LEC - all handled by codex.
 
-**Track C - External Test Suites & Regression**:
-1. **sv-tests regression** - Run after every change to catch regressions.
-2. **AVIP compilation regression** - Verify all 9 AVIPs still compile.
-3. **Verilator/yosys test suites** - Maintain green status.
+**Track C - sv-tests & Regression** (non-BMC/LEC):
+1. **sv-tests parse rate** - Currently ~82.1%. Improve by fixing ImportVerilog gaps.
+2. **ImportVerilog lit tests** - 228/229 pass (1 timeout: four-state-constants.sv).
+3. **MooreToCore lit tests** - 115/116 pass (1 xfail).
+4. **circt-sim lit tests** - 107 pass + 1 xfail. Zero failures.
+5. **AVIP compilation regression** - Verify all 9 AVIPs still compile after changes.
 
 **Track D - circt-sim Runtime Features**:
-1. **coverpoint `iff` lowering** - Not yet implemented, needed for UVM coverage.
-2. **`dist` constraint `$` upper bounds** - Still rejected by slang (workaround in runner).
-3. **Inline `randomize() with` outer-scope access** - Rejected by slang (workaround).
-4. **Simulation performance** - AVIP sims are slow (SPI: 163ns in 60s wall-clock).
-5. **`$readmemh` support** - Needed for some OpenTitan testbenches.
+1. **`$readmemh`/`$readmemb` support** - IN PROGRESS. ImportVerilog done, MooreToCore stubs need real lowering, runtime handler needed. Priority: HIGH (blocks OpenTitan ROM/RAM tests).
+2. **coverpoint `iff` lowering** - IR capture done, runtime sampling stubbed. Priority: MEDIUM.
+3. **`dist` constraint `$` upper bounds** - Slang limitation, workaround in runner. Priority: LOW.
+4. **Inline `randomize() with` outer-scope access** - Slang limitation, workaround in runner. Priority: LOW.
+5. **Simulation performance** - AVIP sims slow (SPI: 163ns in 60s). Priority: MEDIUM (after correctness).
 
 ### Previous Blocker: UVM Factory Registration (typedef specialization) - ✅ FIXED
 
