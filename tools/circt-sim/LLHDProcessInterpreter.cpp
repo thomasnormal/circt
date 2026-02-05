@@ -14029,6 +14029,245 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_dyn_cast_check ----
+    if (calleeName == "__moore_dyn_cast_check") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        int32_t srcId = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        int32_t targetId = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t inheritanceDepth = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        bool result = __moore_dyn_cast_check(srcId, targetId, inheritanceDepth);
+        // Return type is i1 (bool) in the runtime, but MLIR may widen to i32
+        unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(resultWidth, result ? 1 : 0)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_dyn_cast_check(src=" << srcId
+                   << ", target=" << targetId
+                   << ", depth=" << inheritanceDepth << ") = " << result
+                   << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_urandom ----
+    if (calleeName == "__moore_urandom") {
+      uint32_t result = __moore_urandom();
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, result)));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_urandom() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_urandom_range ----
+    if (calleeName == "__moore_urandom_range") {
+      uint32_t maxVal = static_cast<uint32_t>(
+          getValue(procId, callOp.getOperand(0)).getUInt64());
+      uint32_t minVal = static_cast<uint32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      uint32_t result = __moore_urandom_range(maxVal, minVal);
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, result)));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_urandom_range(" << maxVal << ", "
+                 << minVal << ") = " << result << "\n");
+      return success();
+    }
+
+    // ---- __moore_random ----
+    if (calleeName == "__moore_random") {
+      int32_t result = __moore_random();
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_random() = " << result
+                               << "\n");
+      return success();
+    }
+
+    // ---- __moore_urandom_seeded ----
+    if (calleeName == "__moore_urandom_seeded") {
+      int32_t seed = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(0)).getUInt64());
+      uint32_t result = __moore_urandom_seeded(seed);
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, result)));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_urandom_seeded(" << seed
+                 << ") = " << result << "\n");
+      return success();
+    }
+
+    // ---- __moore_random_seeded ----
+    if (calleeName == "__moore_random_seeded") {
+      int32_t seed = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(0)).getUInt64());
+      int32_t result = __moore_random_seeded(seed);
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_random_seeded(" << seed
+                 << ") = " << result << "\n");
+      return success();
+    }
+
+    // ---- __moore_randomize_basic ----
+    if (calleeName == "__moore_randomize_basic") {
+      // Stub: return 1 (success). Full constrained randomization would need
+      // to write random values to the object's rand fields.
+      setValue(procId, callOp.getResult(),
+               InterpretedValue(APInt(32, 1)));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_randomize_basic() = 1 (stub)\n");
+      return success();
+    }
+
+    // ---- Helper lambda: extract Moore string from struct pointer ----
+    // (used by fopen, fwrite, fclose)
+    auto extractMooreStringFromPtr = [&](Value operand) -> std::string {
+      InterpretedValue ptrArg = getValue(procId, operand);
+      if (ptrArg.isX())
+        return "";
+
+      uint64_t structAddr = ptrArg.getUInt64();
+      uint64_t structOffset = 0;
+      auto *block =
+          findMemoryBlockByAddress(structAddr, procId, &structOffset);
+      if (!block || !block->initialized ||
+          structOffset + 16 > block->data.size())
+        return "";
+
+      // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
+      uint64_t strPtr = 0;
+      int64_t strLen = 0;
+      for (int i = 0; i < 8; ++i) {
+        strPtr |=
+            static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
+        strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i])
+                  << (i * 8);
+      }
+
+      if (strPtr == 0 || strLen <= 0)
+        return "";
+
+      // Look up in dynamicStrings registry first
+      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+          dynIt->second.second > 0) {
+        return std::string(
+            dynIt->second.first,
+            std::min(static_cast<size_t>(strLen),
+                     static_cast<size_t>(dynIt->second.second)));
+      }
+
+      // Try global memory lookup (for string literals)
+      for (auto &[globalName, globalAddr] : globalAddresses) {
+        auto blockIt = globalMemoryBlocks.find(globalName);
+        if (blockIt != globalMemoryBlocks.end()) {
+          MemoryBlock &gBlock = blockIt->second;
+          if (strPtr >= globalAddr &&
+              strPtr < globalAddr + gBlock.size) {
+            uint64_t off = strPtr - globalAddr;
+            size_t avail = std::min(
+                static_cast<size_t>(strLen),
+                gBlock.data.size() - static_cast<size_t>(off));
+            if (avail > 0 && gBlock.initialized)
+              return std::string(
+                  reinterpret_cast<const char *>(gBlock.data.data() + off),
+                  avail);
+          }
+        }
+      }
+
+      // Try addressToGlobal reverse lookup
+      auto globalIt = addressToGlobal.find(strPtr);
+      if (globalIt != addressToGlobal.end()) {
+        auto blockIt = globalMemoryBlocks.find(globalIt->second);
+        if (blockIt != globalMemoryBlocks.end()) {
+          const MemoryBlock &gBlock = blockIt->second;
+          size_t avail = std::min(static_cast<size_t>(strLen),
+                                  gBlock.data.size());
+          if (avail > 0 && gBlock.initialized)
+            return std::string(
+                reinterpret_cast<const char *>(gBlock.data.data()), avail);
+        }
+      }
+
+      // Try memory block direct lookup for heap-allocated strings
+      uint64_t strOffset = 0;
+      auto *strBlock =
+          findMemoryBlockByAddress(strPtr, procId, &strOffset);
+      if (strBlock && strBlock->initialized &&
+          strOffset + strLen <= strBlock->data.size()) {
+        return std::string(
+            reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+            strLen);
+      }
+
+      return "";
+    };
+
+    // ---- __moore_fopen ----
+    if (calleeName == "__moore_fopen") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string filename =
+            extractMooreStringFromPtr(callOp.getOperand(0));
+        std::string mode =
+            extractMooreStringFromPtr(callOp.getOperand(1));
+        int32_t fd = 0;
+        if (!filename.empty()) {
+          if (mode.empty())
+            mode = "r";
+          // Build MooreString structs for the runtime call
+          MooreString fnStr = {const_cast<char *>(filename.c_str()),
+                               static_cast<int64_t>(filename.size())};
+          MooreString modeStr = {const_cast<char *>(mode.c_str()),
+                                 static_cast<int64_t>(mode.size())};
+          fd = __moore_fopen(&fnStr, &modeStr);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(fd))));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_fopen(\"" << filename << "\", \""
+                   << mode << "\") = " << fd << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_fwrite ----
+    if (calleeName == "__moore_fwrite") {
+      if (callOp.getNumOperands() >= 2) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        std::string message =
+            extractMooreStringFromPtr(callOp.getOperand(1));
+        if (fd != 0 && !message.empty()) {
+          MooreString msgStr = {const_cast<char *>(message.c_str()),
+                                static_cast<int64_t>(message.size())};
+          __moore_fwrite(fd, &msgStr);
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_fwrite(fd=" << fd << ", \""
+                   << message << "\")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_fclose ----
+    if (calleeName == "__moore_fclose") {
+      if (callOp.getNumOperands() >= 1) {
+        int32_t fd = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        if (fd != 0)
+          __moore_fclose(fd);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_fclose(fd=" << fd << ")\n");
+      }
+      return success();
+    }
+
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' is external (no body)\n");
     for (Value result : callOp.getResults()) {
