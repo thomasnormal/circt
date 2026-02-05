@@ -1,0 +1,15 @@
+// RUN: circt-verilog --ir-hw %s | \
+// RUN:   circt-bmc -b 1 --module=sva_xprop_nested_aggregate_sat - | FileCheck %s
+// REQUIRES: slang
+// REQUIRES: bmc-jit
+// REQUIRES: z3
+
+module sva_xprop_nested_aggregate_sat(input logic clk, input logic [1:0] in);
+  typedef struct packed { logic [1:0] a; logic b; } pair_t;
+  pair_t arr [0:0];
+  assign arr[0] = '{a: in, b: 1'b0};
+  // Nested aggregate access should preserve X.
+  assert property (@(posedge clk) (arr[0].a == 2'b00));
+endmodule
+
+// CHECK: BMC_RESULT=SAT

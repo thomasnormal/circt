@@ -1,0 +1,8 @@
+// RUN: env CIRCT_VERILOG=%S/Inputs/avip-mini-axi4lite/print_args.sh \
+// RUN:   OUT=%t.log %S/../../utils/run_avip_circt_verilog.sh \
+// RUN:   %S/Inputs/avip-mini-axi4lite %S/Inputs/avip-mini-axi4lite/sim/WeirdCompile.f
+// RUN: FileCheck %s < %t.log
+
+// CHECK: -I
+// CHECK: avip-mini-axi4lite/src/axi4LiteMasterVIP/src/axi4LiteMasterWriteVIP/src/masterWriteEnv
+// CHECK: avip-mini-axi4lite/src/axi4LiteMasterVIP/src/axi4LiteMasterWriteVIP/src/masterWriteEnv/DummyWriteEnvPkg.sv

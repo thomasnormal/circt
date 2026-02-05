@@ -1,0 +1,2 @@
+# Format: test_name<TAB>mode<TAB>reason
+16.12--property	compile-only	No stimulus for BMC

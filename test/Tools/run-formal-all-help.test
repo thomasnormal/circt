@@ -1,0 +1,5 @@
+// RUN: %S/../../utils/run_formal_all.sh --help | FileCheck %s
+
+// CHECK: run_formal_all.sh [options]
+// CHECK: --update-baselines
+// CHECK: --fail-on-diff

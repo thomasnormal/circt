@@ -1,0 +1,2 @@
+package DummyWriteEnvPkg;
+endpackage

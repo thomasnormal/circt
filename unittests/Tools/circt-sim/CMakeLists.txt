@@ -1,0 +1,48 @@
+set(CIRCT_SIM_TEST_LIBS
+  CIRCTArc
+  CIRCTArcToLLVM
+  CIRCTArcTransforms
+  CIRCTCombToArith
+  CIRCTConvertToArcs
+  CIRCTEmit
+  CIRCTHW
+  CIRCTHWTransforms
+  CIRCTLLHD
+  CIRCTMoore
+  CIRCTOM
+  CIRCTSeq
+  CIRCTSeqTransforms
+  CIRCTSim
+  CIRCTSimTransforms
+  CIRCTSV
+  CIRCTSupport
+  CIRCTTransforms
+  CIRCTVerif
+  MLIRArithDialect
+  MLIRControlFlowDialect
+  MLIRDLTIDialect
+  MLIRFuncDialect
+  MLIRFuncInlinerExtension
+  MLIRIndexDialect
+  MLIRLLVMDialect
+  MLIRLLVMIRTransforms
+  MLIRParser
+  MLIRSCFDialect
+  MLIRTransforms
+)
+
+add_circt_unittest(CIRCTSimToolTests
+  LLHDProcessInterpreterTest.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreter.cpp
+)
+
+target_include_directories(CIRCTSimToolTests
+  PRIVATE
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim
+)
+
+target_link_libraries(CIRCTSimToolTests
+  PRIVATE
+  ${CIRCT_SIM_TEST_LIBS}
+  MooreRuntime
+)

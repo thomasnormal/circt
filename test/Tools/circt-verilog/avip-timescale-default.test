@@ -1,0 +1,3 @@
+// RUN: env CIRCT_VERILOG=%S/Inputs/fake-circt-verilog.sh OUT=%t/log.txt \
+// RUN:   %S/../../../utils/run_avip_circt_verilog.sh %S/Inputs/avip-mini | FileCheck %s
+// CHECK: 0
