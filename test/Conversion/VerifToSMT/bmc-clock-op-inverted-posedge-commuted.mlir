@@ -5,7 +5,7 @@
 // CHECK-LABEL: func.func @bmc_clock_op_inverted_posedge_commuted() -> i1
 // CHECK: scf.for
 // CHECK: [[NEWLOW:%.+]] = smt.bv.not {{%.+}} : !smt.bv<1>
-// CHECK: [[NEGBV:%.+]] = smt.bv.and {{%.+}}, [[NEWLOW]] : !smt.bv<1>
+// CHECK: [[NEGBV:%.+]] = smt.bv.and [[NEWLOW]], {{%.+}} : !smt.bv<1>
 // CHECK: [[NEG:%.+]] = smt.eq [[NEGBV]], {{%.+}} : !smt.bv<1>
 // CHECK: smt.ite [[NEG]], {{%.+}}, {{%.+}} : !smt.bv<1>
 func.func @bmc_clock_op_inverted_posedge_commuted() -> i1 {

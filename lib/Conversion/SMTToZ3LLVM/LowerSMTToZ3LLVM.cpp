@@ -39,6 +39,45 @@ using namespace mlir;
 using namespace circt;
 using namespace smt;
 
+namespace circt {
+struct SMTModelPrintTracker {
+  struct DeclInfo {
+    std::string prefix;
+    unsigned ordinal = 0;
+    Value value;
+  };
+
+  void record(Block *block, StringRef prefix, Value value) {
+    if (!block || prefix.empty())
+      return;
+    auto &nextOrdinal = nextOrdinalByBlock[block];
+    unsigned ordinal = nextOrdinal[prefix]++;
+    declsByBlock[block].push_back({prefix.str(), ordinal, value});
+  }
+
+  ArrayRef<DeclInfo> getDecls(Block *block) const {
+    auto it = declsByBlock.find(block);
+    if (it == declsByBlock.end())
+      return {};
+    return it->second;
+  }
+
+private:
+  DenseMap<Block *, SmallVector<DeclInfo>> declsByBlock;
+  DenseMap<Block *, llvm::StringMap<unsigned>> nextOrdinalByBlock;
+};
+} // namespace circt
+
+static Block *getEnclosingFunctionEntryBlock(Operation *op) {
+  if (!op)
+    return nullptr;
+  if (auto funcOp = op->getParentOfType<func::FuncOp>())
+    return &funcOp.getBody().front();
+  if (auto llvmFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>())
+    return &llvmFuncOp.getBody().front();
+  return nullptr;
+}
+
 //===----------------------------------------------------------------------===//
 // SMTGlobalHandler implementation
 //===----------------------------------------------------------------------===//
@@ -98,24 +137,40 @@ class SMTLoweringPattern : public OpConversionPattern<OpTy> {
 public:
   SMTLoweringPattern(const TypeConverter &typeConverter, MLIRContext *context,
                      SMTGlobalsHandler &globals,
-                     const LowerSMTToZ3LLVMOptions &options)
+                     const LowerSMTToZ3LLVMOptions &options,
+                     SMTModelPrintTracker *modelPrintTracker = nullptr)
       : OpConversionPattern<OpTy>(typeConverter, context), globals(globals),
-        options(options) {}
+        options(options), modelPrintTracker(modelPrintTracker) {}
 
 private:
   Value buildGlobalPtrToGlobal(OpBuilder &builder, Location loc,
                                LLVM::GlobalOp global,
                                DenseMap<Block *, Value> &cache) const {
     Block *block = builder.getBlock();
-    if (auto iter = cache.find(block); iter != cache.end())
-      return iter->getSecond();
+    if (auto iter = cache.find(block); iter != cache.end()) {
+      Value cached = iter->getSecond();
+      if (auto *defOp = cached.getDefiningOp()) {
+        // The cached value is only valid if it dominates the current insertion
+        // point. This is important because many lowering sites insert at the
+        // start of a block multiple times (e.g. nested `scf.if` branches),
+        // which may place new ops before a previously-cached load.
+        if (defOp->getBlock() == block) {
+          Operation *insertBefore = nullptr;
+          if (builder.getInsertionPoint() != block->end())
+            insertBefore = &*builder.getInsertionPoint();
+          if (!insertBefore || defOp->isBeforeInBlock(insertBefore))
+            return cached;
+        }
+      }
+    }
 
-    OpBuilder::InsertionGuard g(builder);
-    builder.setInsertionPointToStart(block);
+    OpBuilder::InsertionGuard guard(builder);
     Value globalAddr = LLVM::AddressOfOp::create(builder, loc, global);
-    return cache[block] = LLVM::LoadOp::create(
-               builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
-               globalAddr);
+    Value loaded = LLVM::LoadOp::create(
+        builder, loc, LLVM::LLVMPointerType::get(builder.getContext()),
+        globalAddr);
+    cache[block] = loaded;
+    return loaded;
   }
 
 protected:
@@ -239,6 +294,7 @@ protected:
 
   SMTGlobalsHandler &globals;
   const LowerSMTToZ3LLVMOptions &options;
+  SMTModelPrintTracker *modelPrintTracker;
 };
 
 //===----------------------------------------------------------------------===//
@@ -276,6 +332,20 @@ struct DeclareFunOpLowering : public SMTLoweringPattern<DeclareFunOp> {
       Value sort = buildSort(rewriter, loc, op.getType());
       Value constDecl =
           buildPtrAPICall(rewriter, loc, "Z3_mk_fresh_const", {prefix, sort});
+
+      // Track the created constant for printing model values. Only record
+      // top-level declarations directly in the outlined solver function.
+      if (modelPrintTracker && options.printModelInputs &&
+          adaptor.getNamePrefix()) {
+        StringRef name = *adaptor.getNamePrefix();
+        if (!name.empty()) {
+          Operation *parent = op->getParentOp();
+          if (isa<func::FuncOp>(parent) || isa<LLVM::LLVMFuncOp>(parent))
+            modelPrintTracker->record(getEnclosingFunctionEntryBlock(op), name,
+                                      constDecl);
+        }
+      }
+
       rewriter.replaceOp(op, constDecl);
       return success();
     }
@@ -801,27 +871,18 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
         LLVM::LLVMVoidType::get(rewriter.getContext()), {ptrTy}, true);
     struct ModelDeclInfo {
       std::string prefix;
+      unsigned ordinal = 0;
       Value value;
     };
     SmallVector<ModelDeclInfo> modelDecls;
     llvm::StringMap<unsigned> nameCounts;
     if (options.printModelInputs) {
-      if (auto solverOp = op->getParentOfType<SolverOp>()) {
-        auto &solverBlock = solverOp.getBodyRegion().front();
-        for (auto decl : solverBlock.getOps<DeclareFunOp>()) {
-          if (!decl.getNamePrefix())
-            continue;
-          if (isa<smt::SMTFuncType>(decl.getType()))
-            continue;
-          StringRef name = *decl.getNamePrefix();
-          if (name.empty())
-            continue;
-          if (auto remapped = rewriter.getRemappedValue(decl.getResult())) {
-            modelDecls.push_back({name.str(), remapped});
-            nameCounts[name] += 1;
+      if (modelPrintTracker)
+        if (Block *scope = getEnclosingFunctionEntryBlock(op))
+          for (const auto &decl : modelPrintTracker->getDecls(scope)) {
+            modelDecls.push_back({decl.prefix, decl.ordinal, decl.value});
+            nameCounts[llvm::StringRef(decl.prefix)] += 1;
           }
-        }
-      }
     }
 
     auto getHeaderString = [](const std::string &title) {
@@ -903,7 +964,7 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
       Value one =
           LLVM::ConstantOp::create(rewriter, loc, rewriter.getI32Type(), 1);
       for (const auto &entry : modelDecls) {
-        Value slot = LLVM::AllocaOp::create(rewriter, loc, ptrTy, one);
+        Value slot = LLVM::AllocaOp::create(rewriter, loc, ptrTy, ptrTy, one);
         auto ctx = buildContextPtr(rewriter, loc);
         Value ok = buildCall(rewriter, loc, "Z3_model_eval", modelEvalType,
                              {ctx, model, entry.value, modelCompletion, slot})
@@ -920,8 +981,9 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
         if (uniqueName) {
           nameStr = buildString(rewriter, loc, entry.prefix);
         } else {
-          nameStr =
-              buildPtrAPICall(rewriter, loc, "Z3_ast_to_string", {entry.value});
+          std::string indexedName = entry.prefix + "[" +
+                                    std::to_string(entry.ordinal) + "]";
+          nameStr = buildString(rewriter, loc, indexedName);
         }
         buildCall(rewriter, loc, "circt_smt_print_model_value", valueType,
                   {nameStr, valueStr});
@@ -1384,7 +1446,8 @@ void circt::populateSMTToZ3LLVMTypeConverter(TypeConverter &converter) {
 
 void circt::populateSMTToZ3LLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
-    SMTGlobalsHandler &globals, const LowerSMTToZ3LLVMOptions &options) {
+    SMTGlobalsHandler &globals, const LowerSMTToZ3LLVMOptions &options,
+    SMTModelPrintTracker *modelPrintTracker) {
 #define ADD_VARIADIC_PATTERN(OP, APINAME, MIN_NUM_ARGS)                        \
   patterns.add<VariadicSMTPattern<OP>>(/*NOLINT(bugprone-macro-parentheses)*/  \
                                        converter, patterns.getContext(),       \
@@ -1573,8 +1636,10 @@ void circt::populateSMTToZ3LLVMConversionPatterns(
 
   // Other lowering patterns. Refer to their implementation directly for more
   // information.
-  patterns.add<BVConstantOpLowering, DeclareFunOpLowering, AssertOpLowering,
-               ResetOpLowering, PushOpLowering, PopOpLowering, CheckOpLowering,
+  patterns.add<DeclareFunOpLowering, CheckOpLowering>(
+      converter, patterns.getContext(), globals, options, modelPrintTracker);
+  patterns.add<BVConstantOpLowering, AssertOpLowering, ResetOpLowering,
+               PushOpLowering, PopOpLowering,
                SolverOpLowering, ApplyFuncOpLowering, YieldOpLowering,
                RepeatOpLowering, ExtractOpLowering, BoolConstantOpLowering,
                IntConstantOpLowering, ArrayBroadcastOpLowering, BVCmpOpLowering,
@@ -1651,7 +1716,9 @@ void LowerSMTToZ3LLVMPass::runOnOperation() {
   // lowering patterns.
   OpBuilder builder(&getContext());
   auto globals = SMTGlobalsHandler::create(builder, getOperation());
-  populateSMTToZ3LLVMConversionPatterns(patterns, converter, globals, options);
+  SMTModelPrintTracker modelPrintTracker;
+  populateSMTToZ3LLVMConversionPatterns(patterns, converter, globals, options,
+                                        &modelPrintTracker);
 
   // Do a full conversion. This assumes that all other dialects have been
   // lowered before this pass already.

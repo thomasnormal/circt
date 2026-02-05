@@ -34,11 +34,24 @@ namespace circt {
 /// Parse a string containing an unsigned integer number of megabytes.
 std::optional<uint64_t> parseMegabytes(llvm::StringRef text);
 
+/// Set a best-effort label for the current "phase" of execution. If the
+/// resource guard triggers, it will include this label in its diagnostic to
+/// help narrow down where memory was consumed.
+///
+/// This is intended for coarse-grained tool-level phases (e.g. parsing,
+/// pass pipeline, SMT export, solver run), not per-operation tracing.
+void setResourceGuardPhase(llvm::StringRef phase);
+
 /// Return the command line category used for resource guard options.
 llvm::cl::OptionCategory &getResourceGuardCategory();
 
 /// Install the resource guard based on command line options and environment
 /// variables. This should be called after command line parsing.
+///
+/// In addition to RSS/malloc/VMem limits, the guard optionally supports a
+/// wall-clock limit that aborts the process if it runs longer than the
+/// configured duration. This is intended as a last-resort safeguard against
+/// hangs.
 void installResourceGuard();
 
 } // namespace circt

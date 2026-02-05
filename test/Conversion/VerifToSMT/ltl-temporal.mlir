@@ -1,4 +1,4 @@
-// RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts | FileCheck %s
+// RUN: circt-opt %s --convert-verif-to-smt=approx-temporal=true --reconcile-unrealized-casts | FileCheck %s
 
 // Test conversion of LTL boolean operators to SMT
 

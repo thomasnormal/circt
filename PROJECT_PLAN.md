@@ -7,14 +7,18 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 343 - Build Stability)
+## Current Status - February 5, 2026 (Iteration 344 - circt-sim Safeguards)
 
 ### Session Summary - Key Milestones
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | **Runner Script Memory Limits** | ✅ **IMPLEMENTED** | `ulimit -v` + `timeout --signal=KILL` wrappers in all utils/run_* scripts (commit `1afdc6df8`) |
-| **Tool Resource Guard Defaults** | ✅ **IMPLEMENTED** | Resource guard enabled by default with conservative RSS limit when no explicit limits are set (opt-out `--no-resource-guard`, override with `--max-*-mb` / `CIRCT_MAX_*`). Tools label major phases and current pass so guard aborts include a "phase" hint. circt-opt installs it after CLI parsing. |
+| **Tool Resource Guard Defaults** | ✅ **IMPLEMENTED** | Resource guard enabled by default with conservative RSS limit when no explicit limits are set (opt-out `--no-resource-guard`, override with `--max-*-mb` / `CIRCT_MAX_*`). Tools label major phases, and `circt-opt`/`circt-bmc`/`circt-lec` also label the current pass, so guard aborts include a "phase" hint. circt-opt installs it after CLI parsing. |
+| **Tool Wall-Clock Guard** | ✅ **IMPLEMENTED** | Optional wall-clock abort via `--max-wall-ms` / `CIRCT_MAX_WALL_MS` for catching hangs even when RSS remains bounded. |
+| **LEC/BMC Canonicalizer Hardening** | ✅ **IMPLEMENTED** | Canonicalizers in `circt-lec`/`circt-bmc` use bottom-up traversal + disabled region simplify + a rewrite cap to avoid OpenTitan-scale memory spikes. |
+| **SMT-LIB :named Empty Fix** | ✅ **IMPLEMENTED** | VerifToSMT no longer attaches empty assertion labels as `smtlib.name`, avoiding invalid `:named )` and z3 parse errors on large LEC problems. |
+| **SMT DCE for LEC/BMC** | ✅ **IMPLEMENTED** | Prune unused `smt.declare_fun` and dead SMT expressions inside `smt.solver` (conservatively preserves SMT statement ops even when nested under control flow) to reduce memory/SMT-LIB size on large LEC/BMC problems. |
 | **Wait Condition Spurious Trigger Fix** | ✅ **FIXED** | Fixed wait conditions triggering spuriously (commit `b8517345f`) |
 | **Wait Condition Extract Tracing Fix** | ✅ **FIXED** | Fixed `wait(q.size()!=0)` not waking up - added `comb::ExtractOp` and `LLVM::ExtractValueOp` to tracing |
 | **AVIP llhd.drv in Called Functions** | ✅ **FIXED** | `findMemoryBlockByAddress()` in interpretProbe/interpretDrive (commit `3d35211f3`) |
@@ -24,7 +28,8 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Yosys BMC Regression Fix** | ✅ FIXED | BMC_ASSUME_KNOWN_INPUTS override + rg portability (commit `fc02d2ddc`) |
 | **Yosys 100% Clean** | ✅ **14/14 BMC, 14/14 LEC** | Regression script verified (commit `fc02d2ddc`) |
 | **Slang bind-scope Wildcard Segfault Fix** | ✅ FIXED | Inactive union member access in PortConnection::getExpression; guarded with `!connectedSymbol &&` |
-| **Lit Tests All Green** | ✅ **540 total** | 385 pass (99+107+98+74+7), 21 xfail, 141 unsup, **0 fail** |
+| **Lit Tests All Green** | ✅ **449 total** | 289 pass (102+82+105), 19 xfail, 141 unsup, **0 fail** |
+| **circt-sim Tighter Defaults** | ✅ **IMPLEMENTED** | 4GB RSS, 8GB VMEM, 5-min wall-clock per circt-sim process; prevents parallel tests from consuming >40% system memory |
 | **LLHD Canonicalizer Blowup Mitigation** | ✅ **FIXED** | Switched `circt-lec`/`circt-bmc` LLHD pipeline canonicalizers to bottom-up traversal to avoid runaway IR growth/memory spikes |
 | **circt-opt InitLLVM Crash Fix** | ✅ **FIXED** | Fixed double InitLLVM crash in MlirOptMain by using simple overload (commit `ec44c07b3`) |
 | **ArrayGetOp Size Guard** | ✅ **FIXED** | Large arrays (>32 elements) no longer explode canonicalizer via `ArrayGetOp` (commit `4b8cdc33d`) |

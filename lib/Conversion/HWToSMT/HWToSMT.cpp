@@ -126,6 +126,20 @@ struct OutputOpConversion : OpConversionPattern<OutputOp> {
   bool assertModuleOutputs;
 };
 
+/// Lower a hw::WireOp by dropping the naming edge. In SMT we do not model
+/// external forces/observability of SSA edges, so the identity semantics of
+/// hw.wire is sufficient.
+struct WireOpConversion : OpConversionPattern<WireOp> {
+  using OpConversionPattern<WireOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(WireOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOp(op, adaptor.getInput());
+    return success();
+  }
+};
+
 /// Lower a hw::InstanceOp operation to func::CallOp.
 struct InstanceOpConversion : OpConversionPattern<InstanceOp> {
   using OpConversionPattern<InstanceOp>::OpConversionPattern;
@@ -488,7 +502,7 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
 void circt::populateHWToSMTConversionPatterns(TypeConverter &converter,
                                               RewritePatternSet &patterns,
                                               bool forSMTLIBExport) {
-  patterns.add<HWConstantOpConversion, InstanceOpConversion,
+  patterns.add<HWConstantOpConversion, WireOpConversion, InstanceOpConversion,
                ReplaceWithInput<seq::ToClockOp>,
                ReplaceWithInput<seq::FromClockOp>, ArrayCreateOpConversion,
                ArrayGetOpConversion, ArrayInjectOpConversion,

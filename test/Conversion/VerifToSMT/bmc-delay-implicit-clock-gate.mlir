@@ -2,11 +2,11 @@
 
 // CHECK-LABEL: func.func @top
 // CHECK: scf.for
-// CHECK:   func.call @bmc_circuit
 // CHECK:   func.call @bmc_loop
 // CHECK:   %[[NOT:.*]] = smt.bv.not
 // CHECK:   %[[EDGE_AND:.*]] = smt.bv.and
 // CHECK:   %[[POSEDGE:.*]] = smt.eq %[[EDGE_AND]]
+// CHECK:   func.call @bmc_circuit
 // CHECK:   smt.ite %[[POSEDGE]], {{%.+}}, {{%.+}} : !smt.bv<1>
 
 hw.module @top(in %clk: i1, in %sig: i1) attributes {num_regs = 0 : i32, initial_values = []} {

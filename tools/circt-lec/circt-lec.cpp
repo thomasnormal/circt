@@ -42,6 +42,7 @@
 #include "circt/Dialect/Verif/VerifDialect.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/ResourceGuard.h"
+#include "circt/Support/SMTModel.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "circt/Tools/circt-lec/Passes.h"
@@ -59,6 +60,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
@@ -96,6 +98,18 @@ namespace cl = llvm::cl;
 
 using namespace mlir;
 using namespace circt;
+
+namespace {
+struct ResourceGuardPassInstrumentation final : public PassInstrumentation {
+  void runBeforePass(Pass *pass, Operation *op) override {
+    StringRef arg = pass->getArgument();
+    StringRef label = arg.empty() ? pass->getName() : arg;
+    StringRef opName = op ? op->getName().getStringRef() : StringRef("<null>");
+    std::string combined = (label + "[" + opName + "]").str();
+    circt::setResourceGuardPhase(combined);
+  }
+};
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Command-line options declaration
@@ -478,6 +492,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   auto ts = tm.getRootScope();
   bool wantSolverOutput = printSolverOutput || printCounterexample;
 
+  circt::setResourceGuardPhase("parse+merge");
   auto parsedModule = parseAndMergeModules(context, ts);
   if (failed(parsedModule))
     return failure();
@@ -523,6 +538,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
   if (failed(applyPassManagerCLOptions(pm)))
     return failure();
 
+  pm.addInstrumentation(std::make_unique<ResourceGuardPassInstrumentation>());
+
   if (verbosePassExecutions)
     pm.addInstrumentation(
         std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
@@ -567,32 +584,28 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     // Hoist assertions before LLHD process lowering removes them.
     pm.addPass(createStripLLHDProcesses());
+
+    auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
+    // Keep the LLHD pre-processing minimal here. The LEC pipeline ultimately
+    // strips LLHD storage/IO via `strip-llhd-interface-signals`, which has
+    // dedicated logic for resolving multi-driver semantics with strict/approx
+    // behavior. We only run the loop/control-flow simplifications needed to
+    // keep combinational regions concrete (avoid `llhd_comb` abstraction).
+    llhdPostPM.addPass(llhd::createUnrollLoopsPass());
+    llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
+
+    // Strip LLHD interface storage late, after loop unrolling and control-flow
+    // removal, to avoid abstracting combinational regions that the LLHD-to-core
+    // pipeline can lower precisely.
     StripLLHDInterfaceSignalsOptions stripLLHDOpts;
     stripLLHDOpts.strict = strictLLHDEnabled;
     pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
 
-    auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
-    llhdPostPM.addPass(llhd::createLowerProcessesPass());
-    llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
-    llhdPostPM.addPass(llhd::createUnrollLoopsPass());
-    llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
-    llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
-    llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
-    llhdPostPM.addPass(createMapArithToCombPass(true));
-    llhdPostPM.addPass(llhd::createCombineDrivesPass());
-    llhdPostPM.addPass(llhd::createSig2Reg());
-    llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
-    if (llhdOptions.detectMemories) {
-      llhdPostPM.addPass(seq::createRegOfVecToMem());
-      llhdPostPM.addPass(mlir::createCSEPass());
-      llhdPostPM.addPass(createBottomUpCanonicalizerPass());
-    }
+    // Clean up any remaining LLVM temporaries/struct patterns introduced by
+    // LLHD stripping so the rest of the LEC pipeline can proceed without LLVM
+    // dialect operations.
+    pm.addPass(createLowerLECLLVM());
   }
-  pm.addPass(createLowerLECLLVM());
   if (dumpUnknownSources)
     pm.addPass(createDumpLECUnknowns());
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
@@ -617,23 +630,29 @@ static LogicalResult executeLEC(MLIRContext &context) {
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
   convertVerifToSMTOptions.xOptimisticOutputs = xOptimisticOutputs;
+  convertVerifToSMTOptions.forSMTLIBExport =
+      (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
-  pm.addPass(createSimpleCanonicalizerPass());
+  pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  pm.addPass(createSMTDeadCodeEliminationPass());
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
       outputFormat != OutputRunSMTLIB) {
     LowerSMTToZ3LLVMOptions options;
     options.debug = wantSolverOutput;
+    options.printModelInputs = wantSolverOutput;
     pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
-    pm.addPass(createSimpleCanonicalizerPass());
+    pm.addPass(createBottomUpSimpleCanonicalizerPass());
     pm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
   }
 
+  circt::setResourceGuardPhase("pass pipeline");
   if (failed(pm.run(module.get())))
     return failure();
 
   if (outputFormat == OutputMLIR) {
+    circt::setResourceGuardPhase("print mlir");
     auto timer = ts.nest("Print MLIR output");
     OpPrintingFlags printingFlags;
     module->print(outputFile.value()->os(), printingFlags);
@@ -642,6 +661,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   }
 
   if (outputFormat == OutputSMTLIB) {
+    circt::setResourceGuardPhase("export smtlib");
     auto timer = ts.nest("Print SMT-LIB output");
     if (failed(smt::exportSMTLIB(module.get(), outputFile.value()->os())))
       return failure();
@@ -650,6 +670,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   }
 
   if (outputFormat == OutputRunSMTLIB) {
+    circt::setResourceGuardPhase("run z3");
     auto timer = ts.nest("Run SMT-LIB via z3");
     std::optional<std::string> z3Program;
     if (!z3PathOpt.empty()) {
@@ -969,6 +990,17 @@ static LogicalResult executeLEC(MLIRContext &context) {
       return handleErr(expectedEngine.takeError());
 
     engine = std::move(*expectedEngine);
+
+    engine->registerSymbols([](llvm::orc::MangleAndInterner interner) {
+      llvm::orc::SymbolMap symbolMap;
+      symbolMap[interner("circt_smt_print_model_header")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_header),
+          llvm::JITSymbolFlags::Exported};
+      symbolMap[interner("circt_smt_print_model_value")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_value),
+          llvm::JITSymbolFlags::Exported};
+      return symbolMap;
+    });
   }
 
   auto timer = ts.nest("JIT Execution");

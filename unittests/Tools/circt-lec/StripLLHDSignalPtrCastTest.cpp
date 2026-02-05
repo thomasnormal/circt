@@ -11,6 +11,47 @@
 
 using namespace mlir;
 
+TEST(StripLLHDSignalPtrCastTest, AliasesPortNamedSignalsWithoutDrives) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @port_named_signal(in %data_i : i8, out out : i8) {
+      %c0 = hw.constant 0 : i8
+      %sig = llhd.sig name "data_i" %c0 : i8
+      %val = llhd.prb %sig : i8
+      hw.output %val : i8
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  pm.addPass(circt::createStripLLHDInterfaceSignals());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLHD = false;
+  module->walk([&](Operation *op) {
+    if (auto *dialect = op->getDialect())
+      if (dialect->getNamespace() == "llhd")
+        hasLLHD = true;
+  });
+  EXPECT_FALSE(hasLLHD);
+
+  bool checkedOutput = false;
+  module->walk([&](circt::hw::HWModuleOp hwModule) {
+    if (hwModule.getSymName() != "port_named_signal")
+      return;
+    auto outputOp =
+        cast<circt::hw::OutputOp>(hwModule.getBodyBlock()->getTerminator());
+    Value input = hwModule.getArgumentForInput(0);
+    EXPECT_EQ(outputOp.getOperand(0), input);
+    checkedOutput = true;
+  });
+  EXPECT_TRUE(checkedOutput);
+}
+
 TEST(StripLLHDSignalPtrCastTest, HandlesPtrCastLoadStore) {
   MLIRContext context;
   context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
@@ -93,6 +134,54 @@ TEST(StripLLHDSignalPtrCastTest, HandlesAllocaPhiRefMerge) {
 
   PassManager pm(&context);
   pm.addPass(circt::createStripLLHDInterfaceSignals());
+  ASSERT_TRUE(succeeded(pm.run(*module)));
+
+  bool hasLLHD = false;
+  bool hasCombInput = false;
+  module->walk([&](Operation *op) {
+    if (op->getDialect()) {
+      if (op->getDialect()->getNamespace() == "llhd")
+        hasLLHD = true;
+    }
+  });
+  EXPECT_FALSE(hasLLHD);
+  module->walk([&](circt::hw::HWModuleOp hwModule) {
+    for (auto nameAttr : hwModule.getModuleType().getInputNames()) {
+      if (cast<StringAttr>(nameAttr).getValue() == "llhd_comb")
+        hasCombInput = true;
+    }
+  });
+  EXPECT_FALSE(hasCombInput);
+}
+
+TEST(StripLLHDSignalPtrCastTest, CollapsesPointerPhiStoreLoad) {
+  MLIRContext context;
+  context.loadDialect<circt::hw::HWDialect, circt::llhd::LLHDDialect,
+                      LLVM::LLVMDialect, mlir::cf::ControlFlowDialect>();
+
+  const char *ir = R"mlir(
+    hw.module @ptr_phi_store_load(in %cond : i1, in %a : i8, in %b : i8, out out : i8) {
+      %one = llvm.mlir.constant(1 : i64) : i64
+      %comb = llhd.combinational -> i8 {
+        %p1 = llvm.alloca %one x i8 : (i64) -> !llvm.ptr
+        %p2 = llvm.alloca %one x i8 : (i64) -> !llvm.ptr
+        cf.cond_br %cond, ^bb1(%a, %p1 : i8, !llvm.ptr), ^bb1(%b, %p2 : i8, !llvm.ptr)
+      ^bb1(%val: i8, %ptr: !llvm.ptr):
+        llvm.store %val, %ptr : i8, !llvm.ptr
+        %loaded = llvm.load %ptr : !llvm.ptr -> i8
+        llhd.yield %loaded : i8
+      }
+      hw.output %comb : i8
+    }
+  )mlir";
+
+  OwningOpRef<ModuleOp> module = parseSourceString<ModuleOp>(ir, &context);
+  ASSERT_TRUE(module);
+
+  PassManager pm(&context);
+  circt::StripLLHDInterfaceSignalsOptions options;
+  options.strict = true;
+  pm.addPass(circt::createStripLLHDInterfaceSignals(options));
   ASSERT_TRUE(succeeded(pm.run(*module)));
 
   bool hasLLHD = false;

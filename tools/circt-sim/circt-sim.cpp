@@ -1554,6 +1554,14 @@ int main(int argc, char **argv) {
       "CIRCT Event-Driven Simulation Tool\n\n"
       "This tool simulates hardware designs using CIRCT's event-driven\n"
       "simulation infrastructure with IEEE 1800 scheduling semantics.\n");
+  // circt-sim-specific: apply tighter resource limits than the generic 12 GB
+  // defaults.  Multiple circt-sim instances may be launched in parallel (e.g.
+  // by lit), so each instance must stay well below the system total.  Using
+  // setenv with overwrite=0 means explicit user settings (env vars or CLI
+  // flags) always take precedence.
+  ::setenv("CIRCT_MAX_RSS_MB", "4096", /*overwrite=*/0);   // 4 GB RSS
+  ::setenv("CIRCT_MAX_VMEM_MB", "8192", /*overwrite=*/0);  // 8 GB virtual
+  ::setenv("CIRCT_MAX_WALL_MS", "300000", /*overwrite=*/0); // 5 min timeout
   circt::installResourceGuard();
 
   // Set up MLIR context with required dialects

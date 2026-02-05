@@ -4,7 +4,7 @@
 // CHECK: return
 
 func.func @test_bmc_no_clock_regs() -> (i1) {
-  %bmc = verif.bmc bound 2 num_regs 1 initial_values [unit]
+  %bmc = verif.bmc bound 2 num_regs 0 initial_values []
   init {
     verif.yield
   }
@@ -12,10 +12,10 @@ func.func @test_bmc_no_clock_regs() -> (i1) {
     verif.yield
   }
   circuit {
-  ^bb0(%state0: i1):
+  ^bb0(%input0: i1):
     %true = hw.constant true
     verif.assert %true : i1
-    verif.yield %state0 : i1
+    verif.yield %input0 : i1
   }
   func.return %bmc : i1
 }

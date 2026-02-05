@@ -9,6 +9,11 @@
 #include "circt/Support/ResourceGuard.h"
 #include "gtest/gtest.h"
 
+#include <chrono>
+#include <cstdlib>
+#include <thread>
+#include <vector>
+
 using namespace circt;
 
 TEST(ResourceGuardTest, ParseMegabytes) {
@@ -20,3 +25,42 @@ TEST(ResourceGuardTest, ParseMegabytes) {
   EXPECT_FALSE(parseMegabytes("-1"));
 }
 
+TEST(ResourceGuardTest, ReportsPhaseOnAbort) {
+  EXPECT_EXIT(
+      {
+        // Keep the limit low enough to reliably trigger in the child process.
+        ::setenv("CIRCT_MAX_RSS_MB", "16", 1);
+        ::unsetenv("CIRCT_MAX_WALL_MS");
+        setResourceGuardPhase("unit-test");
+        installResourceGuard();
+
+        // Force RSS growth beyond the limit and give the watchdog time to
+        // sample.
+        std::vector<char> buffer(64 * 1024 * 1024, 0);
+        for (size_t i = 0; i < buffer.size(); i += 4096)
+          buffer[i] = 1;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::exit(0);
+      },
+      ::testing::ExitedWithCode(1), "phase: unit-test");
+}
+
+TEST(ResourceGuardTest, ReportsWallTimeOnAbort) {
+  EXPECT_EXIT(
+      {
+        ::unsetenv("CIRCT_MAX_RSS_MB");
+        ::unsetenv("CIRCT_MAX_MALLOC_MB");
+        ::unsetenv("CIRCT_MAX_VMEM_MB");
+
+        // Use a short wall-clock limit and a fast polling interval to keep the
+        // test reliable and quick.
+        ::setenv("CIRCT_MAX_WALL_MS", "50", 1);
+        ::setenv("CIRCT_RESOURCE_GUARD_INTERVAL_MS", "1", 1);
+        setResourceGuardPhase("unit-test-wall");
+        installResourceGuard();
+
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::exit(0);
+      },
+      ::testing::ExitedWithCode(1), "wall time.*phase: unit-test-wall");
+}

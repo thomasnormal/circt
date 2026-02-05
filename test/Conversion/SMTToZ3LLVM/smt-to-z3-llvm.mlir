@@ -1,5 +1,6 @@
 // RUN: circt-opt %s --lower-smt-to-z3-llvm | FileCheck %s
 // RUN: circt-opt %s --lower-smt-to-z3-llvm=debug=true | FileCheck %s --check-prefix=CHECK-DEBUG
+// RUN: circt-opt %s --lower-smt-to-z3-llvm=print-model-inputs=true | FileCheck %s --check-prefix=CHECK-MODEL
 
 // CHECK-LABEL: llvm.mlir.global internal @ctx_0()
 // CHECK-NEXT:   llvm.mlir.zero : !llvm.ptr
@@ -460,6 +461,29 @@ func.func @test_logic() {
     %c0_bv4 = smt.bv.constant #smt.bv<0> : !smt.bv<4>
     smt.set_logic "HORN"
     smt.check sat {} unknown {} unsat {}
+    smt.yield
+  }
+  func.return
+}
+
+// CHECK-MODEL-DAG: llvm.mlir.global {{(internal|private)}} constant @str{{.*}}("clk[0]{{\\00}}")
+// CHECK-MODEL-DAG: llvm.mlir.global {{(internal|private)}} constant @str{{.*}}("clk[1]{{\\00}}")
+func.func @test_model_names() {
+  smt.solver () : () -> () {
+    %clk0 = smt.declare_fun "clk" : !smt.bv<1>
+    %clk1 = smt.declare_fun "clk" : !smt.bv<1>
+    %c0 = smt.bv.constant #smt.bv<0> : !smt.bv<1>
+    %eq0 = smt.eq %clk0, %c0 : !smt.bv<1>
+    %eq1 = smt.eq %clk1, %c0 : !smt.bv<1>
+    smt.assert %eq0
+    smt.assert %eq1
+    smt.check sat {
+      smt.yield
+    } unknown {
+      smt.yield
+    } unsat {
+      smt.yield
+    }
     smt.yield
   }
   func.return

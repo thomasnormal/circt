@@ -57,6 +57,7 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
@@ -88,6 +89,18 @@ namespace cl = llvm::cl;
 
 using namespace mlir;
 using namespace circt;
+
+namespace {
+struct ResourceGuardPassInstrumentation final : public PassInstrumentation {
+  void runBeforePass(Pass *pass, Operation *op) override {
+    StringRef arg = pass->getArgument();
+    StringRef label = arg.empty() ? pass->getName() : arg;
+    StringRef opName = op ? op->getName().getStringRef() : StringRef("<null>");
+    std::string combined = (label + "[" + opName + "]").str();
+    circt::setResourceGuardPhase(combined);
+  }
+};
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Command-line options declaration
@@ -386,6 +399,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   auto ts = tm.getRootScope();
   bool wantSolverOutput = printSolverOutput || printCounterexample;
 
+  circt::setResourceGuardPhase("parse");
   OwningOpRef<ModuleOp> module;
   {
     auto parserTimer = ts.nest("Parse MLIR input");
@@ -410,6 +424,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.enableTiming(ts);
   if (failed(applyPassManagerCLOptions(pm)))
     return failure();
+
+  pm.addInstrumentation(std::make_unique<ResourceGuardPassInstrumentation>());
 
   if (verbosePassExecutions)
     pm.addInstrumentation(
@@ -449,32 +465,32 @@ static LogicalResult executeBMC(MLIRContext &context) {
     auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
     llhdPostPM.addPass(llhd::createLowerProcessesPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     llhdPostPM.addPass(llhd::createUnrollLoopsPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     llhdPostPM.addPass(createMapArithToCombPass(true));
     llhdPostPM.addPass(llhd::createCombineDrivesPass());
     llhdPostPM.addPass(llhd::createSig2Reg());
     llhdPostPM.addPass(mlir::createCSEPass());
-    llhdPostPM.addPass(createBottomUpCanonicalizerPass());
+    llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     if (llhdOptions.detectMemories) {
       llhdPostPM.addPass(seq::createRegOfVecToMem());
       llhdPostPM.addPass(mlir::createCSEPass());
-      llhdPostPM.addPass(createBottomUpCanonicalizerPass());
+      llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     }
   }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.addPass(mlir::createCSEPass());
-  pm.addPass(createBottomUpCanonicalizerPass());
+  pm.addPass(createBottomUpSimpleCanonicalizerPass());
   pm.addPass(hw::createFlattenModules());
   pm.addPass(mlir::createCSEPass());
-  pm.addPass(createBottomUpCanonicalizerPass());
+  pm.addPass(createBottomUpSimpleCanonicalizerPass());
   ExternalizeRegistersOptions externalizeOptions;
   externalizeOptions.allowMultiClock = allowMultiClock;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
@@ -495,7 +511,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
   convertVerifToSMTOptions.forSMTLIBExport =
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
-  pm.addPass(createSimpleCanonicalizerPass());
+  pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  pm.addPass(createSMTDeadCodeEliminationPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
   if (pruneUnreachableSymbols) {
@@ -511,14 +528,16 @@ static LogicalResult executeBMC(MLIRContext &context) {
     options.printModelInputs = printSolverOutput || printCounterexample;
     pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
-    pm.addPass(createSimpleCanonicalizerPass());
+    pm.addPass(createBottomUpSimpleCanonicalizerPass());
     pm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
   }
 
+  circt::setResourceGuardPhase("pass pipeline");
   if (failed(pm.run(module.get())))
     return failure();
 
   if (outputFormat == OutputMLIR) {
+    circt::setResourceGuardPhase("print mlir");
     auto timer = ts.nest("Print MLIR output");
     OpPrintingFlags printingFlags;
     module->print(outputFile.value()->os(), printingFlags);
@@ -527,6 +546,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
 
   if (outputFormat == OutputSMTLIB) {
+    circt::setResourceGuardPhase("export smtlib");
     auto timer = ts.nest("Print SMT-LIB output");
     if (!hasSMTSolver(*module)) {
       // If no solver is present, there is nothing meaningful to export. Emit a
@@ -545,6 +565,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
 
   if (outputFormat == OutputRunSMTLIB) {
+    circt::setResourceGuardPhase("run z3");
     auto timer = ts.nest("Run SMT-LIB via z3");
     if (!hasSMTSolver(*module)) {
       llvm::outs()
@@ -816,6 +837,12 @@ static LogicalResult executeBMC(MLIRContext &context) {
       llvm::orc::SymbolMap symbolMap;
       symbolMap[interner("circt_bmc_report_result")] = {
           llvm::orc::ExecutorAddr::fromPtr(&circt_bmc_report_result),
+          llvm::JITSymbolFlags::Exported};
+      symbolMap[interner("circt_smt_print_model_header")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_header),
+          llvm::JITSymbolFlags::Exported};
+      symbolMap[interner("circt_smt_print_model_value")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_value),
           llvm::JITSymbolFlags::Exported};
       return symbolMap;
     });

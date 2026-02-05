@@ -10,7 +10,6 @@
 // CHECK: smt.eq {{%.+}}, {{%.+}}
 // CHECK: smt.or
 // CHECK: smt.and
-// CHECK: ltl.clock {{%.+}}, negedge
 func.func @delay_multiclock_clocked_edge() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk0", "clk1", "sig"]

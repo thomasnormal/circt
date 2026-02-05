@@ -27,7 +27,7 @@ class Namespace;
 void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
-    bool forSMTLIBExport,
+    bool forSMTLIBExport, bool approxTemporalOps,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps);
 

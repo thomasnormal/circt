@@ -24,6 +24,7 @@ add_circt_library(CIRCTSupport
   PrettyPrinterHelpers.cpp
   ProjectConfig.cpp
   ResourceGuard.cpp
+  SMTDeadCodeElimination.cpp
   SymCache.cpp
   SMTModel.cpp
   TestReporting.cpp
