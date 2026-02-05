@@ -30,6 +30,7 @@ Z3_BIN="${Z3_BIN:-}"
 OUT="${OUT:-$PWD/yosys-sva-lec-results.txt}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 LEC_ASSUME_KNOWN_INPUTS="${LEC_ASSUME_KNOWN_INPUTS:-0}"
+LEC_ACCEPT_XPROP_ONLY="${LEC_ACCEPT_XPROP_ONLY:-0}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -145,6 +146,9 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   fi
   if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
     lec_args+=("--assume-known-inputs")
+  fi
+  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+    lec_args+=("--accept-xprop-only")
   fi
   if [[ -n "$CIRCT_LEC_ARGS" ]]; then
     read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"
