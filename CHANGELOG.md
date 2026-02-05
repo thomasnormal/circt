@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 362 - February 5, 2026
+
+### Summary
+
+Iteration 362: Improved MooreToCore lowering for 4-state shift operations with unknown shift amounts. For small widths, CIRCT now computes a symbolic per-bit “consensus” across all feasible shift amounts (given the known shift bits) instead of pessimizing to all-unknown whenever any shift-amount bit is X/Z.
+
+### Accomplishments
+
+1. **Unknown shift consensus** - `moore.shl`/`moore.shr`/`moore.ashr` with 4-state shift amounts now use a bounded consensus encoding (width ≤ 16) that preserves known bits when the shift amount is partially unknown.
+2. **Regression test update** - Updated `test/Conversion/MooreToCore/shift-amount-xprop.mlir` to check for the new consensus structure.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Conversion/MooreToCore/shift-amount-xprop.mlir`
+
 ## Iteration 361 - February 5, 2026
 
 ### Summary

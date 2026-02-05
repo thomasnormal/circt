@@ -3,6 +3,8 @@
 // CHECK-LABEL: func.func @ShlAmountXProp
 // CHECK: hw.struct_extract %arg1["unknown"]
 // CHECK: [[COND:%.*]] = comb.icmp ne {{.*}}
+// CHECK: comb.replicate
+// CHECK: comb.icmp eq
 // CHECK: comb.shl
 // CHECK: comb.mux [[COND]], {{.*}}, {{.*}} : i8
 // CHECK: comb.mux [[COND]], {{.*}}, {{.*}} : i8
@@ -14,6 +16,8 @@ func.func @ShlAmountXProp(%val: !moore.l8, %amt: !moore.l4) -> !moore.l8 {
 // CHECK-LABEL: func.func @ShrAmountXProp
 // CHECK: hw.struct_extract %arg1["unknown"]
 // CHECK: [[COND:%.*]] = comb.icmp ne {{.*}}
+// CHECK: comb.replicate
+// CHECK: comb.icmp eq
 // CHECK: comb.shru
 // CHECK: comb.mux [[COND]], {{.*}}, {{.*}} : i8
 // CHECK: comb.mux [[COND]], {{.*}}, {{.*}} : i8
@@ -25,6 +29,8 @@ func.func @ShrAmountXProp(%val: !moore.l8, %amt: !moore.l4) -> !moore.l8 {
 // CHECK-LABEL: func.func @AShrAmountXProp
 // CHECK: hw.struct_extract %arg1["unknown"]
 // CHECK: [[COND:%.*]] = comb.icmp ne {{.*}}
+// CHECK: comb.replicate
+// CHECK: comb.icmp eq
 // CHECK: comb.shrs
 // CHECK: comb.shru
 // CHECK: comb.mux [[COND]], {{.*}}, {{.*}} : i8
