@@ -1464,11 +1464,111 @@ OpFoldResult SubOp::fold(FoldAdaptor adaptor) {
 // MulOp
 //===----------------------------------------------------------------------===//
 
+static FVInt mulFourStateApprox(const FVInt &lhs, const FVInt &rhs) {
+  unsigned width = lhs.getBitWidth();
+  assert(width == rhs.getBitWidth());
+
+  // If both values are fully known, compute the exact product.
+  if (!lhs.hasUnknown() && !rhs.hasUnknown())
+    return FVInt(lhs.getRawValue() * rhs.getRawValue());
+
+  // Keep compile-time folding bounded. For wider values, fall back to the
+  // conservative four-state arithmetic semantics.
+  if (width > 16)
+    return FVInt::getAllX(width);
+
+  auto replicateBit = [&](bool bit) {
+    return bit ? APInt::getAllOnes(width) : APInt::getZero(width);
+  };
+
+  const APInt &lhsVal = lhs.getRawValue();
+  const APInt &lhsUnk = lhs.getRawUnknown();
+  const APInt &rhsVal = rhs.getRawValue();
+  const APInt &rhsUnk = rhs.getRawUnknown();
+
+  auto addFourState = [&](APInt aVal, APInt aUnk, APInt bVal,
+                          APInt bUnk) -> std::pair<APInt, APInt> {
+    APInt outVal = APInt::getZero(width);
+    APInt outUnk = APInt::getZero(width);
+
+    bool carry0 = true;  // carry can be 0
+    bool carry1 = false; // carry can be 1
+    for (unsigned bit = 0; bit < width; ++bit) {
+      bool aV = aVal[bit];
+      bool aU = aUnk[bit];
+      bool bV = bVal[bit];
+      bool bU = bUnk[bit];
+
+      bool aNotV = !aV;
+      bool bNotV = !bV;
+      bool a1 = aU || aV;
+      bool a0 = aU || aNotV;
+      bool b1 = bU || bV;
+      bool b0 = bU || bNotV;
+
+      bool sum1 = (a0 && b0 && carry1) || (a0 && b1 && carry0) ||
+                  (a1 && b0 && carry0) || (a1 && b1 && carry1);
+      bool sum0 = (a0 && b0 && carry0) || (a0 && b1 && carry1) ||
+                  (a1 && b0 && carry1) || (a1 && b1 && carry0);
+
+      bool resV = sum1 && !sum0;
+      bool resU = sum1 && sum0;
+      outVal.setBitVal(bit, resV);
+      outUnk.setBitVal(bit, resU);
+
+      bool carry1Next = (a1 && b1) || (a1 && carry1) || (b1 && carry1);
+      bool carry0Next = (a0 && b0) || (a0 && carry0) || (b0 && carry0);
+      carry1 = carry1Next;
+      carry0 = carry0Next;
+    }
+
+    // Normalize unknown bits to X.
+    outVal &= ~outUnk;
+    return {outVal, outUnk};
+  };
+
+  APInt lhsMaybe1 = lhsVal | lhsUnk;
+  APInt lhsMaybe0 = ~lhsVal | lhsUnk;
+
+  APInt sumVal = APInt::getZero(width);
+  APInt sumUnk = APInt::getZero(width);
+  for (unsigned bit = 0; bit < width; ++bit) {
+    bool rhsV = rhsVal[bit];
+    bool rhsU = rhsUnk[bit];
+
+    bool rhsDefOne = rhsV && !rhsU;
+    bool rhsMaybe1 = rhsV || rhsU;
+    bool rhsMaybe0 = !rhsV || rhsU;
+
+    APInt rhsDefOneRep = replicateBit(rhsDefOne);
+    APInt rhsMaybe1Rep = replicateBit(rhsMaybe1);
+    APInt rhsMaybe0Rep = replicateBit(rhsMaybe0);
+
+    APInt termVal = lhsVal & rhsDefOneRep;
+    APInt termMaybe1 = lhsMaybe1 & rhsMaybe1Rep;
+    APInt termMaybe0 = lhsMaybe0 | rhsMaybe0Rep;
+    APInt termUnk = termMaybe1 & termMaybe0;
+
+    if (bit != 0) {
+      termVal <<= bit;
+      termUnk <<= bit;
+    }
+
+    auto [newSumVal, newSumUnk] =
+        addFourState(sumVal, sumUnk, termVal, termUnk);
+    sumVal = newSumVal;
+    sumUnk = newSumUnk;
+  }
+
+  return FVInt(std::move(sumVal), std::move(sumUnk));
+}
+
 OpFoldResult MulOp::fold(FoldAdaptor adaptor) {
   auto lhs = dyn_cast_or_null<FVIntegerAttr>(adaptor.getLhs());
   auto rhs = dyn_cast_or_null<FVIntegerAttr>(adaptor.getRhs());
   if (lhs && rhs)
-    return FVIntegerAttr::get(getContext(), lhs.getValue() * rhs.getValue());
+    return FVIntegerAttr::get(getContext(),
+                              mulFourStateApprox(lhs.getValue(), rhs.getValue()));
   return {};
 }
 

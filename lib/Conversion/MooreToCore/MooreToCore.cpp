@@ -8100,6 +8100,140 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
           }
         }
       }
+
+      // For small 4-state multiplies, compute a more precise unknown mask than
+      // "any X/Z => all-unknown result". This uses a shift-and-add expansion
+      // where each partial term is masked by the corresponding rhs bit's
+      // value/unknown, and the sum uses the existing per-bit add/sub logic.
+      //
+      // Note that this remains correlation-losing (4-state bits are modeled
+      // independently), but is still substantially more precise than the
+      // all-unknown fallback and helps avoid spurious LEC mismatches.
+      unsigned width = cast<IntegerType>(lhsVal.getType()).getWidth();
+      if (width <= 16) {
+        Value zeroVal =
+            hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
+        Value zeroUnk =
+            hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), -1);
+        Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+
+        Value lhsMaybe1 = comb::OrOp::create(rewriter, loc, lhsVal, lhsUnk, false);
+        Value lhsNotVal = comb::XorOp::create(rewriter, loc, lhsVal, allOnes, false);
+        Value lhsMaybe0 = comb::OrOp::create(rewriter, loc, lhsNotVal, lhsUnk, false);
+
+        Value sumVal = zeroVal;
+        Value sumUnk = zeroUnk;
+        for (unsigned bit = 0; bit < width; ++bit) {
+          Value rhsValBit = comb::ExtractOp::create(rewriter, loc, rhsVal, bit, 1);
+          Value rhsUnkBit = comb::ExtractOp::create(rewriter, loc, rhsUnk, bit, 1);
+          Value rhsKnown = comb::XorOp::create(rewriter, loc, rhsUnkBit, one, false);
+          Value rhsDefOne = comb::AndOp::create(rewriter, loc, rhsValBit, rhsKnown, false);
+
+          Value rhsNotVal = comb::XorOp::create(rewriter, loc, rhsValBit, one, false);
+          Value rhsMaybe1 = comb::OrOp::create(rewriter, loc, rhsValBit, rhsUnkBit, false);
+          Value rhsMaybe0 = comb::OrOp::create(rewriter, loc, rhsNotVal, rhsUnkBit, false);
+
+          Value rhsDefOneRep = comb::ReplicateOp::create(rewriter, loc, rhsDefOne, width);
+          Value rhsMaybe1Rep = comb::ReplicateOp::create(rewriter, loc, rhsMaybe1, width);
+          Value rhsMaybe0Rep = comb::ReplicateOp::create(rewriter, loc, rhsMaybe0, width);
+
+          Value termVal =
+              comb::AndOp::create(rewriter, loc, lhsVal, rhsDefOneRep, false);
+          Value termMaybe1 =
+              comb::AndOp::create(rewriter, loc, lhsMaybe1, rhsMaybe1Rep, false);
+          Value termMaybe0 =
+              comb::OrOp::create(rewriter, loc, lhsMaybe0, rhsMaybe0Rep, false);
+          Value termUnk =
+              comb::AndOp::create(rewriter, loc, termMaybe1, termMaybe0, false);
+
+          if (bit != 0) {
+            Value shiftVal = hw::ConstantOp::create(
+                rewriter, loc, lhsVal.getType(), static_cast<int64_t>(bit));
+            termVal = comb::ShlOp::create(rewriter, loc, termVal, shiftVal);
+            termUnk = comb::ShlOp::create(rewriter, loc, termUnk, shiftVal);
+          }
+
+          Value partialSum = buildFourStateAddSub(rewriter, loc, sumVal, sumUnk,
+                                                  termVal, termUnk,
+                                                  /*isSub=*/false);
+          sumVal = extractFourStateValue(rewriter, loc, partialSum);
+          sumUnk = extractFourStateUnknown(rewriter, loc, partialSum);
+        }
+
+        Value masked = maskFourStateValue(rewriter, loc, sumVal, sumUnk);
+        rewriter.replaceOp(op,
+                           createFourStateStruct(rewriter, loc, masked, sumUnk));
+        return success();
+      }
+    }
+
+    if constexpr (std::is_same_v<SourceOp, DivUOp> ||
+                  std::is_same_v<SourceOp, ModUOp>) {
+      // For unsigned div/mod by a known power-of-two constant, use shifting /
+      // masking to propagate per-bit unknowns rather than conservatively
+      // marking the entire result unknown.
+      APInt rhsConstVal;
+      APInt rhsConstUnk;
+      if (getFourStateConstant(adaptor.getRhs(), rhsConstVal, rhsConstUnk) &&
+          rhsConstUnk.isZero()) {
+        unsigned width = rhsConstVal.getBitWidth();
+        if (rhsConstVal.isZero()) {
+          Value zeroVal =
+              hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
+          Value allUnk =
+              hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), -1);
+          rewriter.replaceOp(op,
+                             createFourStateStruct(rewriter, loc, zeroVal,
+                                                   allUnk));
+          return success();
+        }
+        if (rhsConstVal.isOne()) {
+          if constexpr (std::is_same_v<SourceOp, DivUOp>) {
+            rewriter.replaceOp(op, adaptor.getLhs());
+            return success();
+          } else {
+            Value zeroVal =
+                hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
+            Value zeroUnk =
+                hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+            rewriter.replaceOp(op,
+                               createFourStateStruct(rewriter, loc, zeroVal,
+                                                     zeroUnk));
+            return success();
+          }
+        }
+
+        if (rhsConstVal.isPowerOf2()) {
+          unsigned shift = rhsConstVal.logBase2();
+          Value shiftVal = hw::ConstantOp::create(
+              rewriter, loc, lhsVal.getType(), static_cast<int64_t>(shift));
+          if constexpr (std::is_same_v<SourceOp, DivUOp>) {
+            Value qVal =
+                comb::ShrUOp::create(rewriter, loc, lhsVal, shiftVal, false);
+            Value qUnk =
+                comb::ShrUOp::create(rewriter, loc, lhsUnk, shiftVal, false);
+            Value masked = maskFourStateValue(rewriter, loc, qVal, qUnk);
+            rewriter.replaceOp(
+                op, createFourStateStruct(rewriter, loc, masked, qUnk));
+            return success();
+          } else {
+            APInt maskConst = APInt::getLowBitsSet(width, shift);
+            Value maskVal = hw::ConstantOp::create(
+                rewriter, loc, lhsVal.getType(),
+                rewriter.getIntegerAttr(lhsVal.getType(), maskConst));
+            Value rVal =
+                comb::AndOp::create(rewriter, loc, lhsVal, maskVal, false);
+            Value rUnk =
+                comb::AndOp::create(rewriter, loc, lhsUnk, maskVal, false);
+            Value masked = maskFourStateValue(rewriter, loc, rVal, rUnk);
+            rewriter.replaceOp(
+                op, createFourStateStruct(rewriter, loc, masked, rUnk));
+            return success();
+          }
+        }
+      }
     }
 
     // Conservative fallback for other ops.
