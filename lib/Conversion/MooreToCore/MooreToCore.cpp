@@ -225,6 +225,12 @@ struct ClassTypeCache {
     // This maps virtual method names to their index in the vtable array.
     DenseMap<StringRef, unsigned> methodToVtableIndex;
 
+    // Method name to implementation symbol mapping for this class.
+    // Caches the most-derived implementation for each virtual method,
+    // so ClassNewOpConversion can populate vtable entries even after
+    // ClassDeclOps have been erased during conversion.
+    DenseMap<StringRef, FlatSymbolRefAttr> methodToImpl;
+
     // Name of the global vtable symbol for this class (e.g., "@MyClass::vtable")
     std::string vtableGlobalName;
     /// Record/overwrite the field path to a single property for a class.
@@ -1683,7 +1689,7 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
   unsigned vtableIdx = 0;
   auto &block = op.getBody().front();
 
-  // If this class has a base, inherit its method indices
+  // If this class has a base, inherit its method indices and implementations
   if (auto baseAttr = op.getBaseAttr()) {
     auto baseClassStruct = cache.getStructInfo(baseAttr);
     if (baseClassStruct) {
@@ -1692,6 +1698,9 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
         if (kv.second >= vtableIdx)
           vtableIdx = kv.second + 1;
       }
+      // Inherit method implementations from base class
+      for (const auto &kv : baseClassStruct->methodToImpl)
+        structBody.methodToImpl[kv.first] = kv.second;
     }
   }
 
@@ -1703,6 +1712,11 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
       if (structBody.methodToVtableIndex.find(methodName) ==
           structBody.methodToVtableIndex.end()) {
         structBody.methodToVtableIndex[methodName] = vtableIdx++;
+      }
+      // Cache the implementation (derived overrides base)
+      if (auto implAttr = methodDecl.getImpl()) {
+        structBody.methodToImpl[methodName] = FlatSymbolRefAttr::get(
+            op.getContext(), implAttr->getRootReference());
       }
     }
   }
@@ -3890,37 +3904,15 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
           rewriter, loc, vtableArrayTy, /*isConstant=*/false,
           LLVM::Linkage::Internal, vtableGlobalName, zeroAttr);
 
-      // Resolve vtable entries by walking the class hierarchy.
-      // Collect the most-derived implementation for each virtual method
-      // by traversing from base to derived (derived overrides base).
-      DenseMap<StringRef, FlatSymbolRefAttr> methodTargets;
-      std::function<void(SymbolRefAttr)> collectTargets =
-          [&](SymbolRefAttr classSym) {
-            auto *classOp = mod.lookupSymbol(classSym);
-            auto classDeclOp = dyn_cast_or_null<ClassDeclOp>(classOp);
-            if (!classDeclOp)
-              return;
-            // Process base class first so derived overrides it
-            if (auto baseAttr = classDeclOp.getBaseAttr())
-              collectTargets(baseAttr);
-            // Collect method implementations from this class
-            for (auto &child : classDeclOp.getBody().front()) {
-              if (auto methodDecl = dyn_cast<ClassMethodDeclOp>(child)) {
-                if (auto implAttr = methodDecl.getImpl()) {
-                  methodTargets[methodDecl.getSymName()] =
-                      FlatSymbolRefAttr::get(
-                          ctx, implAttr->getRootReference());
-                }
-              }
-            }
-          };
-      collectTargets(sym);
-
-      // Build circt.vtable_entries from the resolved targets
+      // Build circt.vtable_entries from cached method implementations.
+      // The implementations are cached in resolveClassStructBody() which runs
+      // before ClassDeclOps are erased, so we don't need to walk the
+      // class hierarchy here (which would fail if ClassDeclOps are already
+      // erased during conversion).
       SmallVector<Attribute> vtableEntries;
       for (const auto &kv : structInfo->methodToVtableIndex) {
-        auto it = methodTargets.find(kv.first);
-        if (it != methodTargets.end()) {
+        auto it = structInfo->methodToImpl.find(kv.first);
+        if (it != structInfo->methodToImpl.end()) {
           SmallVector<Attribute> entry;
           entry.push_back(rewriter.getI64IntegerAttr(kv.second));
           entry.push_back(it->second);
@@ -13240,7 +13232,89 @@ struct FReadBIOpConversion : public OpConversionPattern<FReadBIOp> {
   }
 };
 
-/// Conversion for moore.builtin.readmemb -> erase (no-op)
+/// Helper to lower readmemb/readmemh ops to runtime calls.
+/// Emits: llvm.call @__moore_readmem{b,h}(filename_ptr, mem_ptr, elem_width,
+///                                         num_elems)
+/// where filename_ptr is a pointer to the {ptr, i64} string struct,
+/// mem_ptr is the memory array ref cast to !llvm.ptr, elem_width is the
+/// logical element bit-width (i32), and num_elems is the array size (i32).
+static LogicalResult lowerReadMemOp(Operation *op, Value adaptedFilename,
+                                    Value adaptedMem, StringRef runtimeName,
+                                    ConversionPatternRewriter &rewriter,
+                                    const TypeConverter *typeConverter) {
+  auto loc = op->getLoc();
+  auto *ctx = rewriter.getContext();
+  ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto i32Ty = IntegerType::get(ctx, 32);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  auto voidTy = LLVM::LLVMVoidType::get(ctx);
+  // String struct type: {ptr, i64} - matches MooreToCore string layout.
+  auto stringTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+  // Get array info from the original Moore type.
+  // The mem operand is RefType wrapping an UnpackedArrayType.
+  Value origMem;
+  if (auto readB = dyn_cast<ReadMemBBIOp>(op))
+    origMem = readB.getMem();
+  else
+    origMem = cast<ReadMemHBIOp>(op).getMem();
+
+  auto refType = cast<moore::RefType>(origMem.getType());
+  auto arrayType = dyn_cast<moore::UnpackedArrayType>(refType.getNestedType());
+  if (!arrayType)
+    return rewriter.notifyMatchFailure(loc, "readmem mem is not a fixed-size "
+                                            "unpacked array");
+
+  unsigned numElems = arrayType.getSize();
+  // The element type in Moore is a packed type (e.g., l32).
+  // Its bit width is the logical width of the data in the file.
+  auto elemBitSizeOpt = arrayType.getElementType().getBitSize();
+  if (!elemBitSizeOpt)
+    return rewriter.notifyMatchFailure(loc, "readmem element type has no "
+                                            "known bit size");
+  unsigned elemBitWidth = *elemBitSizeOpt;
+
+  // Declare the runtime function: void(ptr, ptr, i32, i32)
+  auto fnTy =
+      LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, i32Ty, i32Ty});
+  auto fn = getOrCreateRuntimeFunc(mod, rewriter, runtimeName, fnTy);
+
+  // Allocate stack space for filename string struct and store it.
+  auto one =
+      LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
+  auto filenameAlloca =
+      LLVM::AllocaOp::create(rewriter, loc, ptrTy, stringTy, one);
+  LLVM::StoreOp::create(rewriter, loc, adaptedFilename, filenameAlloca);
+
+  // Cast the mem ref to !llvm.ptr so it can be passed to llvm.call.
+  Value memPtr;
+  if (isa<LLVM::LLVMPointerType>(adaptedMem.getType())) {
+    memPtr = adaptedMem;
+  } else {
+    memPtr = UnrealizedConversionCastOp::create(rewriter, loc, ptrTy,
+                                                adaptedMem)
+                 .getResult(0);
+  }
+
+  // Create constants for element width and number of elements.
+  auto elemWidthConst = LLVM::ConstantOp::create(
+      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemBitWidth));
+  auto numElemsConst = LLVM::ConstantOp::create(
+      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numElems));
+
+  // Call the runtime function.
+  SmallVector<Value> args = {filenameAlloca, memPtr, elemWidthConst,
+                             numElemsConst};
+  LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                        args);
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
+/// Conversion for moore.builtin.readmemb -> __moore_readmemb runtime call
 /// $readmemb loads memory from binary file
 struct ReadMemBBIOpConversion : public OpConversionPattern<ReadMemBBIOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -13248,12 +13322,12 @@ struct ReadMemBBIOpConversion : public OpConversionPattern<ReadMemBBIOp> {
   LogicalResult
   matchAndRewrite(ReadMemBBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
-    return success();
+    return lowerReadMemOp(op, adaptor.getFilename(), adaptor.getMem(),
+                          "__moore_readmemb", rewriter, typeConverter);
   }
 };
 
-/// Conversion for moore.builtin.readmemh -> erase (no-op)
+/// Conversion for moore.builtin.readmemh -> __moore_readmemh runtime call
 /// $readmemh loads memory from hex file
 struct ReadMemHBIOpConversion : public OpConversionPattern<ReadMemHBIOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -13261,8 +13335,8 @@ struct ReadMemHBIOpConversion : public OpConversionPattern<ReadMemHBIOp> {
   LogicalResult
   matchAndRewrite(ReadMemHBIOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
-    return success();
+    return lowerReadMemOp(op, adaptor.getFilename(), adaptor.getMem(),
+                          "__moore_readmemh", rewriter, typeConverter);
   }
 };
 
