@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 369 - February 5, 2026
+
+### Summary
+
+Iteration 369: Comprehensive status assessment and workstream planning. Pre-initialized UVM `m_uvm_core_state` queue before global constructors to unblock `uvm_init()` core service creation. Added vtable dispatch tracing diagnostics for debugging remaining vtable-miss failures in AVIP simulations. Updated project plan with current limitations, workstream status, and next priorities.
+
+### Accomplishments
+
+1. **UVM core state pre-initialization** - `executeGlobalConstructors()` now pre-seeds the `m_uvm_core_state` queue with value 1 (`UVM_CORE_INITIALIZING`) before running `global_ctors`. This ensures `get_core_state()` returns non-zero so `uvm_init()` properly creates the coreservice singleton during factory registration.
+2. **Vtable dispatch tracing** - Added detailed diagnostic output for the first 3 vtable-miss failures, tracing through `unrealized_conversion_cast`, `llvm.load`, and `llvm.getelementptr` to identify whether the failure is due to uninitialized object pointers, missing vtable entries, or stale MLIR artifacts.
+3. **Project plan update** - Updated all four workstream tracks with current status and next tasks. Identified remaining limitations for UVM parity.
+
+### Current Test Status
+
+| Suite | Pass | XFail | Unsupported | Fail |
+|-------|------|-------|-------------|------|
+| circt-sim lit | 107 | 1 | 0 | 0 |
+| circt-bmc lit | 82 | 13 | 122 | 0 |
+| circt-lec lit | 102 | 3 | 19 | 0 |
+| sv-tests BMC | 23 | 3 | - | 0 |
+| sv-tests LEC | 23 | 0 | - | 0 |
+| verilator BMC | 17 | 0 | - | 0 |
+
+### Remaining Limitations
+
+- **UVM phase execution stall**: `uvm_phase_hopper` vtable populated in post-fix MLIR but older artifacts lack entries; AVIP MLIR must be regenerated
+- **Vtable-miss warnings**: ~32 remaining in APB AVIP sim, mostly from parameterized UVM template specializations
+- **AVIP MLIR regeneration**: Requires >24GB RAM and >10min; cannot recompile in-session
+- **$readmemh**: Not yet implemented in circt-sim runtime
+- **coverpoint iff**: Not yet lowered in ImportVerilog
+
 ## Iteration 368 - February 5, 2026
 
 ### Summary
