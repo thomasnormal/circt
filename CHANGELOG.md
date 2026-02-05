@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 365 - February 5, 2026
+
+### Summary
+
+Iteration 365: Fixed MooreToCore lowering for `moore.dyn_extract_ref` on `llhd.ref<hw.array<...>>` with 4-state indices. Previously, unknown index bits were dropped, and CIRCT could deterministically alias a single element/slice. CIRCT now conservatively returns an all-unknown (or bounded-consensus) temporary signal when the index is unknown or could be out-of-bounds.
+
+### Accomplishments
+
+1. **Array ref X-prop** - `moore.dyn_extract_ref` on array signals now treats unknown/out-of-bounds indices as producing unknown element/slice references rather than deterministic aliases.
+2. **Regression test** - Added `test/Conversion/MooreToCore/dyn-extract-ref-array-xprop.mlir`.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Conversion/MooreToCore/dyn-extract-ref-array-xprop.mlir`
+
 ## Iteration 364 - February 5, 2026
 
 ### Summary
