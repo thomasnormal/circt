@@ -134,6 +134,39 @@ void ProbeHoister::hoistProbes() {
     return ProbeOp{};
   };
 
+  // Determine a conservative insertion point for a hoisted probe. In addition
+  // to placing probes after the signal definition, ensure the probe is not
+  // moved before any ancestor drives to the same signal. This avoids sampling
+  // a signal's initial value when a later drive in an ancestor region assigns
+  // the actual value (common for port-to-signal wiring in formal pipelines).
+  auto findHoistInsertAfter = [&](Value signal) -> Operation * {
+    Operation *insertAfter = signal.getDefiningOp();
+
+    Operation *lastDrive = nullptr;
+    Operation *regionParent = region.getParentOp();
+    for (auto *user : signal.getUsers()) {
+      auto driveOp = dyn_cast<DriveOp>(user);
+      if (!driveOp)
+        continue;
+      if (!driveOp->getParentRegion()->isProperAncestor(&region))
+        continue;
+      // If the drive is in a region with SSA dominance requirements, the
+      // hoisted probe must still dominate its original uses inside `region`.
+      // Conservatively ignore drives that are not in the same block as the
+      // region parent op and ordered before it.
+      if (mayHaveSSADominance(*driveOp->getParentRegion())) {
+        if (!regionParent || driveOp->getBlock() != regionParent->getBlock())
+          continue;
+        if (!driveOp->isBeforeInBlock(regionParent))
+          continue;
+      }
+      if (!lastDrive || lastDrive->isBeforeInBlock(driveOp))
+        lastDrive = driveOp;
+    }
+
+    return lastDrive ? lastDrive : insertAfter;
+  };
+
   for (auto &block : region) {
     // We can only hoist probes in blocks where all predecessors have wait
     // terminators. But we must NOT hoist probes from these blocks if the
@@ -190,17 +223,27 @@ void ProbeHoister::hoistProbes() {
         probeOp.erase();
       } else {
         LLVM_DEBUG(llvm::dbgs() << "- Hoisting " << probeOp << "\n");
+        Operation *insertAfter = findHoistInsertAfter(probeOp.getSignal());
+
         if (auto existingOp = findExistingProbe(probeOp.getSignal())) {
-          probeOp.replaceAllUsesWith(existingOp.getResult());
-          probeOp.erase();
-          hoistedOp = existingOp;
-        } else {
-          if (auto *defOp = probeOp.getSignal().getDefiningOp())
-            probeOp->moveAfter(defOp);
-          else
-            probeOp->moveBefore(region.getParentOp());
-          hoistedOp = probeOp;
+          bool canReuse = !insertAfter;
+          if (insertAfter &&
+              existingOp->getBlock() == insertAfter->getBlock() &&
+              insertAfter->isBeforeInBlock(existingOp))
+            canReuse = true;
+          if (canReuse) {
+            probeOp.replaceAllUsesWith(existingOp.getResult());
+            probeOp.erase();
+            hoistedOp = existingOp;
+            continue;
+          }
         }
+
+        if (insertAfter)
+          probeOp->moveAfter(insertAfter);
+        else
+          probeOp->moveBefore(region.getParentOp());
+        hoistedOp = probeOp;
       }
     }
   }
@@ -386,19 +429,32 @@ void DriveHoister::collectDriveSets() {
       continue;
     suspendOps.push_back(terminator);
 
-    bool beyondSideEffect = false;
+    // Track which slots have been probed between the current position and the
+    // terminator. A drive cannot be hoisted past any later probe of the same
+    // slot, but probes of other slots are fine.
+    //
+    // A separate "global barrier" is used for side-effecting operations that
+    // are not LLHD probes/drives. These operations may have unknown effects or
+    // depend on ordering, so we conservatively block hoisting any drive across
+    // them.
+    SmallPtrSet<Value, 8> probedSlots;
+    bool hasGlobalBarrier = false;
     laterDrives.clear();
 
     for (auto &op : llvm::make_early_inc_range(
              llvm::reverse(block.without_terminator()))) {
       auto driveOp = dyn_cast<DriveOp>(op);
 
-      // We can only hoist drives that have no side-effecting ops between
-      // themselves and the terminator of the block. If we see a side-effecting
-      // op, give up on this block.
+      // Record slot accesses after the current position. Drives can be hoisted
+      // past accesses to other slots, but not past later accesses to the same
+      // slot.
       if (!driveOp) {
+        if (auto probeOp = dyn_cast<ProbeOp>(op)) {
+          probedSlots.insert(probeOp.getSignal());
+          continue;
+        }
         if (!isMemoryEffectFree(&op))
-          beyondSideEffect = true;
+          hasGlobalBarrier = true;
         continue;
       }
 
@@ -410,12 +466,18 @@ void DriveHoister::collectDriveSets() {
         continue;
       }
 
-      // If this drive is beyond a side-effecting op, mark the slot as
+      // If this drive is beyond a global barrier, or if there is a later access
+      // to the same slot (e.g. a probe of the slot), mark the slot as
       // unhoistable.
-      if (beyondSideEffect) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "- Aborting slot (drive across side-effect): " << driveOp
-                   << "\n");
+      if (hasGlobalBarrier || probedSlots.contains(driveOp.getSignal())) {
+        LLVM_DEBUG({
+          llvm::dbgs() << "- Aborting slot (drive across ";
+          if (hasGlobalBarrier)
+            llvm::dbgs() << "side-effect";
+          else
+            llvm::dbgs() << "slot access";
+          llvm::dbgs() << "): " << driveOp << "\n";
+        });
         unhoistableSlots.insert(driveOp.getSignal());
         continue;
       }
