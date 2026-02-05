@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 348 - February 5, 2026
+
+### Summary
+
+Iteration 348: Fixed a mismatch between `circt-bmc` JIT mode (`--shared-libs=libz3`) and SMT-LIB mode (`--run-smtlib`) for **cover** checks. JIT mode was reporting UNSAT for trivially-satisfiable cover problems because the non-SMTLIB BMC lowering used an inverted result convention for cover-only problems. This is now corrected so both execution modes agree (SAT when a cover witness exists, UNSAT when none exists).
+
+### Accomplishments
+
+1. **BMC cover parity (JIT vs SMT-LIB)** - `ConvertVerifToSMT` now inverts cover-hit results in the JIT-style lowering so the tool prints SAT/UNSAT consistently across execution modes.
+2. **sv-tests BMC harness hardening** - The sv-tests BMC runner now treats cover-only tests as PASS-on-SAT, and the expectation list marks sequence-only tests without clock stimulus as compile-only to keep the suite meaningful and stable.
+3. **Regression test** - Added a `circt-bmc --emit-mlir` FileCheck test ensuring cover-hit is inverted before yielding the solver result.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build check-circt-tools-circt-bmc`
+- `utils/run_formal_all.sh --out-dir /tmp/formal-results-20260205-2 --bmc-run-smtlib --z3-bin ~/z3-install/bin/z3 --fail-on-diff`
+
+## Iteration 347 - February 5, 2026
+
+### Summary
+
+Iteration 347: Fixed three runtime interpreter bugs blocking UVM testbench initialization. Old circt-verilog compilations generated a `@self()` stub returning null, causing UVM's "run_test() invoked from a non process context" error - fixed by intercepting the call to return a valid process handle. Unified vtable dispatch warning throttling so both X-pointer and unmapped-address warnings share a single 3+suppress counter. Fixed `llhd.drv`/`llhd.prb` failures on struct fields extracted from `!llhd.ref` function arguments backed by `llvm.alloca` (the `uvm_resource_debug::init_access_record` pattern) by propagating pointer addresses through ptr-to-ref casts and adding address-based memory block lookups as fallbacks in the struct extract probe/drive handlers.
+
+### Accomplishments
+
+1. **process::self() stub interception** - Old AVIP compilations generated a `@self()` stub that always returned null. The interpreter now intercepts `call @self()` to return the actual process handle, fixing UVM's "non process context" error.
+2. **Unified vtable warning throttling** - Refactored X-pointer and unmapped-address vtable warnings to share a single counter with 3 + suppression limit.
+3. **Memory-backed !llhd.ref struct extract fix** - Fixed `llhd.drv`/`llhd.prb` on struct fields extracted from `!llhd.ref` function arguments. Root cause: `unrealized_conversion_cast` from `!llvm.ptr` to `!llhd.ref` was not propagating the pointer address value, so when the ref was passed as a function argument, the address was lost. Fix: (a) propagate address through ptr-to-ref casts, (b) add `findMemoryBlockByAddress` fallback in both probe and drive struct extract handlers.
+4. **New unit test** - `struct-ref-func-arg-drive.mlir` tests the end-to-end pattern of allocating a local struct, casting to `!llhd.ref`, passing to a function that drives fields, and probing the results.
+
+### Verification (February 5, 2026)
+
+| Suite | Result | Status |
+|-------|--------|--------|
+| circt-sim lit | 115 pass, 1 xfail, 0 fail (116 total) | +1 new test |
+| circt-bmc lit | 82 pass, 13 xfail, 122 unsup | Baseline |
+| circt-lec lit | 102 pass, 3 xfail, 19 unsup | Baseline |
+| sv-tests BMC | 23 pass, 3 xfail | Baseline |
+| sv-tests LEC | 23 pass | Baseline |
+
+## Iteration 346 - February 5, 2026
+
+### Summary
+
+Iteration 346: Fixed an LLHD HoistSignals miscompile affecting formal pipelines. Probes hoisted out of procedural regions are now inserted after any ancestor drives to the same signal, preventing accidental sampling of a signal's initial value when a later drive assigns the real value (common for port-to-signal wiring). This fixes OpenTitan AES S-Box Canright LEC under `--assume-known-inputs`, which previously treated `data_i` as zero and produced a spurious counterexample.
+
+### Accomplishments
+
+1. **LLHD HoistSignals probe ordering fix** - Hoisted probes no longer move ahead of ancestor `llhd.drv` operations to the same signal.
+2. **Drive hoisting robustness** - `llhd-hoist-signals` drive hoisting no longer refuses to hoist a drive just because there is an unrelated probe after it.
+3. **Resource guard UX** - Added a warning when `--resource-guard` is enabled but all limits are explicitly disabled (e.g. `--max-rss-mb=0` / `CIRCT_MAX_RSS_MB=0`), to avoid accidental unbounded runs.
+4. **Resource guard RSS robustness** - RSS sampling now falls back to `getrusage()` (max RSS) when `/proc/self/statm` is unavailable or malformed, making the guard more reliable in restricted/proc-less environments.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build check-circt-dialect-llhd-transforms`
+- `ninja -C build CIRCTLECToolTests` and `./build/tools/circt/unittests/Tools/circt-lec/CIRCTLECToolTests`
+- `ninja -C build CIRCTSupportTests` and `./build/tools/circt/unittests/Support/CIRCTSupportTests --gtest_filter=ResourceGuardTest.*`
+- OpenTitan AES S-Box Canright (assume-known): `circt-lec --mlir-disable-threading --assume-known-inputs -c1=aes_sbox_lut_lec_wrapper -c2=aes_sbox_canright_lec_wrapper <mlir> <mlir>` reports `c1 == c2`.
+
 ## Iteration 345 - February 5, 2026
 
 ### Summary

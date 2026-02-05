@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 345 - OOM Fix & AVIP Root Cause)
+## Current Status - February 5, 2026 (Iteration 348 - Memory Guardrails & AVIP Testing)
 
 ### Session Summary - Key Milestones
 
@@ -34,8 +34,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **circt-opt InitLLVM Crash Fix** | ✅ **FIXED** | Fixed double InitLLVM crash in MlirOptMain by using simple overload (commit `ec44c07b3`) |
 | **ArrayGetOp Size Guard** | ✅ **FIXED** | Large arrays (>32 elements) no longer explode canonicalizer via `ArrayGetOp` (commit `4b8cdc33d`) |
 | **LLHD Pointer Collapse** | ✅ **ADDED** | StripLLHDInterfaceSignals handles pointer-typed block arguments selecting between allocas (commit `9b7744ba2`) |
+| **LLHD HoistSignals Probe Ordering** | ✅ **FIXED** | Hoisted probes are now placed after any ancestor drives to the same signal to avoid sampling initial values; fixes OpenTitan AES S-Box Canright under `--assume-known-inputs`. |
 | **Verilator BMC Script Fix** | ✅ FIXED | `BMC_RUN_SMTLIB=1` now uses `circt-bmc --run-smtlib --z3-path=...` (no JIT z3 link) |
 | **BMC SMT-LIB Robustness** | ✅ **FIXED** | `--emit-smtlib`/`--run-smtlib` no longer produce empty output for propertyless cases; `lower-clocked-assert-like` now lowers LTL-typed clocked asserts |
+| **BMC Cover Parity (JIT vs SMT-LIB)** | ✅ **FIXED** | Cover-only BMC problems now report SAT in JIT mode when a witness exists, matching `--run-smtlib`. |
 | **SPI AVIP randomize scoping** | ✅ FIXED | `array[i].randomize() with {this.member}` now resolves `this` to element receiver |
 | **Fork Shared Memory** | ✅ FIXED | Parent process chain for shared memory (commit `c76d665ef`) |
 | **AVIP Compilation** | ✅ **9/9** | apb,uart,i2s,ahb,i3c,spi,axi4 pass; jtag + axi4Lite pass with `--compat=all -Wno-range-oob` |
@@ -190,6 +192,13 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-05, Iteration 348 - Memory Guardrails & AVIP Testing)
+- **circt-verilog wall-clock timeout**: Added 10-minute default timeout via `CIRCT_MAX_WALL_MS=600000` (overwrite=0). Smart RSS defaults already cap at 12GB for >16GB systems. Prevents circt-verilog from consuming unbounded memory/time.
+- **Memory-backed !llhd.ref struct extract fix VERIFIED**: Unit test passes (a=42 b=99). All 116 circt-sim lit tests pass. All 457 total tests (BMC+LEC+circt-sim) pass with 0 unexpected failures.
+- **AVIP simulation status**: UART/APB reach `[circt-sim] Starting simulation` with 1575 LLHD signals registered. AHB core (35MB MLIR) parsing takes >3 min but stays within memory limits (280MB). Vtable warnings properly throttled.
+- **Regression results**: BMC 82 pass + 13 xfail + 122 unsupported. LEC 102 pass + 3 xfail + 19 unsupported. circt-sim 115 pass + 1 xfail.
+- **Commit**: `866be45d8` - Memory-backed !llhd.ref in struct extract probe/drive.
 
 ### New Findings (2026-02-05, Iteration 345)
 - **GreedyPatternRewriteDriver OOM FIXED**: Switched `circt-sim` canonicalize pass from `createCanonicalizerPass()` to `createBottomUpSimpleCanonicalizerPass()` (disables region simplification + 200k rewrite cap). Two previously-XFAIL tests now pass: `dag-false-cycle-detection.mlir` and `apint-width-normalization.mlir`. circt-sim: 107 pass, 1 xfail, 0 fail.
