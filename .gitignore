@@ -13,6 +13,15 @@ compile_commands.json
 __pycache__
 lit.site.cfg.py
 
+# Local scratch / simulator artifacts
+.tmp/
+xcelium.d/
+xrun.history
+xrun.log
+xrun.key
+*.swp
+*.vcd
+
 # Pip artifacts
 /lib/Bindings/Python/build
 *.egg-info
