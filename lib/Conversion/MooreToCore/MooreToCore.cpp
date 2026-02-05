@@ -1272,6 +1272,115 @@ static Value buildUnknownShiftConsensus(OpBuilder &builder, Location loc,
   return createFourStateStruct(builder, loc, value, unknown);
 }
 
+static Value buildUnknownDynExtractConsensus(OpBuilder &builder, Location loc,
+                                            Value inputValue, Value inputUnknown,
+                                            Value amountValue, Value amountUnknown,
+                                            unsigned resultWidth) {
+  const unsigned inputWidth = cast<IntegerType>(inputValue.getType()).getWidth();
+  constexpr unsigned kMaxUnknownDynExtractWidth = 16;
+  if (inputWidth > kMaxUnknownDynExtractWidth)
+    return Value();
+
+  if (resultWidth == 0 || resultWidth > inputWidth)
+    return Value();
+
+  const int64_t maxIdx = static_cast<int64_t>(inputWidth) -
+                         static_cast<int64_t>(resultWidth);
+  if (maxIdx < 0)
+    return Value();
+
+  Type resultValueType = builder.getIntegerType(resultWidth);
+  Value allOnesIn = hw::ConstantOp::create(builder, loc, inputValue.getType(), -1);
+
+  // Normalize amount widths to the input width for comb shift ops.
+  amountValue = adjustIntegerWidth(builder, amountValue, inputWidth, loc);
+  amountUnknown = adjustIntegerWidth(builder, amountUnknown, inputWidth, loc);
+
+  Value knownMask =
+      comb::XorOp::create(builder, loc, amountUnknown, allOnesIn, false);
+  Value maskedAmount =
+      comb::AndOp::create(builder, loc, amountValue, knownMask, false);
+
+  // If any out-of-bounds index is feasible, the result becomes fully unknown
+  // (SV bit-select semantics are undefined for OOB, and CIRCT models this as X).
+  Value minAmount =
+      comb::AndOp::create(builder, loc, amountValue, knownMask, false);
+  Value maxAmount =
+      comb::OrOp::create(builder, loc, minAmount, amountUnknown, false);
+  Value maxIdxConst = hw::ConstantOp::create(builder, loc, amountValue.getType(),
+                                             maxIdx);
+  Value oobPossible = comb::ICmpOp::create(
+      builder, loc, comb::ICmpPredicate::ugt, maxAmount, maxIdxConst, false);
+
+  Value maybeOneMask =
+      hw::ConstantOp::create(builder, loc, cast<IntegerType>(resultValueType), 0);
+  Value maybeZeroMask =
+      hw::ConstantOp::create(builder, loc, cast<IntegerType>(resultValueType), 0);
+  Value allOnesOut =
+      hw::ConstantOp::create(builder, loc, cast<IntegerType>(resultValueType), -1);
+
+  auto candidateMaybeZeroMask = [&](Value val, Value unk) -> Value {
+    Value notVal = comb::XorOp::create(builder, loc, val, allOnesOut, false);
+    return comb::OrOp::create(builder, loc, notVal, unk, false);
+  };
+
+  // Enumerate all in-range indices 0..maxIdx.
+  for (unsigned idx = 0; idx <= static_cast<unsigned>(maxIdx); ++idx) {
+    Value idxConst = hw::ConstantOp::create(builder, loc, amountValue.getType(),
+                                            static_cast<int64_t>(idx));
+    Value maskedIdx =
+        comb::AndOp::create(builder, loc, idxConst, knownMask, false);
+    Value possible = comb::ICmpOp::create(
+        builder, loc, comb::ICmpPredicate::eq, maskedAmount, maskedIdx, false);
+    Value gate =
+        comb::ReplicateOp::create(builder, loc, resultValueType, possible);
+
+    Value shiftedVal =
+        comb::ShrUOp::create(builder, loc, inputValue, idxConst, false);
+    Value shiftedUnk =
+        comb::ShrUOp::create(builder, loc, inputUnknown, idxConst, false);
+    Value candVal =
+        comb::ExtractOp::create(builder, loc, resultValueType, shiftedVal, 0);
+    Value candUnk =
+        comb::ExtractOp::create(builder, loc, resultValueType, shiftedUnk, 0);
+
+    Value candMaybeOne =
+        comb::OrOp::create(builder, loc, candVal, candUnk, false);
+    Value candMaybeZero = candidateMaybeZeroMask(candVal, candUnk);
+    candMaybeOne = comb::AndOp::create(builder, loc, candMaybeOne, gate, false);
+    candMaybeZero =
+        comb::AndOp::create(builder, loc, candMaybeZero, gate, false);
+
+    maybeOneMask =
+        comb::OrOp::create(builder, loc, maybeOneMask, candMaybeOne, false);
+    maybeZeroMask =
+        comb::OrOp::create(builder, loc, maybeZeroMask, candMaybeZero, false);
+  }
+
+  // Include an explicit out-of-bounds candidate (all-unknown) if any OOB shift
+  // is feasible.
+  Value oobGate =
+      comb::ReplicateOp::create(builder, loc, resultValueType, oobPossible);
+  maybeOneMask =
+      comb::OrOp::create(builder, loc, maybeOneMask,
+                         comb::AndOp::create(builder, loc, allOnesOut, oobGate,
+                                             false),
+                         false);
+  maybeZeroMask =
+      comb::OrOp::create(builder, loc, maybeZeroMask,
+                         comb::AndOp::create(builder, loc, allOnesOut, oobGate,
+                                             false),
+                         false);
+
+  Value unknown = comb::AndOp::create(builder, loc, maybeOneMask, maybeZeroMask,
+                                      false);
+  Value notMaybeZero =
+      comb::XorOp::create(builder, loc, maybeZeroMask, allOnesOut, false);
+  Value value =
+      comb::AndOp::create(builder, loc, maybeOneMask, notMaybeZero, false);
+  return createFourStateStruct(builder, loc, value, unknown);
+}
+
 /// Convert a Moore type to its packed representation (plain integers for
 /// 4-state types). This is used for packed unions where all members share
 /// the same bit storage and we cannot expand 4-state types.
@@ -7223,20 +7332,21 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
 
       // Handle 4-state index - extract just the value part, track unknowns
       Value amount = adaptor.getLowBit();
+      Value amountUnknown;
       Value amountUnknownCond;
       if (isFourStateStructType(amount.getType())) {
-        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
-        Value zero =
-            hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
-        amountUnknownCond = comb::ICmpOp::create(
-            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
+        amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
         amount = extractFourStateValue(rewriter, loc, amount);
       }
-      if (!amountUnknownCond) {
-        amountUnknownCond =
-            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
-      }
+      if (!amountUnknown)
+        amountUnknown = hw::ConstantOp::create(rewriter, loc, amount.getType(), 0);
       amount = adjustIntegerWidth(rewriter, amount, intType.getWidth(), loc);
+      amountUnknown =
+          adjustIntegerWidth(rewriter, amountUnknown, intType.getWidth(), loc);
+      Value zero =
+          hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
+      amountUnknownCond = comb::ICmpOp::create(
+          rewriter, loc, comb::ICmpPredicate::ne, amountUnknown, zero);
 
       // Shift both value and unknown components by the same amount
       Value shiftedValue = comb::ShrUOp::create(rewriter, loc, inputValue, amount);
@@ -7268,23 +7378,33 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
           outOfBoundsCond = comb::ICmpOp::create(
               rewriter, loc, comb::ICmpPredicate::ugt, amount, maxIdxConst);
         }
-        Value cond = outOfBoundsCond;
-        if (amountUnknownCond)
-          cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
-                                    amountUnknownCond);
 
         Value zero = hw::ConstantOp::create(rewriter, loc, resultValueType, 0);
         Value allOnes =
             hw::ConstantOp::create(rewriter, loc, resultValueType, -1);
-        Value finalValue = comb::MuxOp::create(rewriter, loc, cond, zero,
-                                               extractedValue);
-        Value finalUnknown = comb::MuxOp::create(rewriter, loc, cond, allOnes,
-                                                 extractedUnknown);
+        Value fallbackValue = comb::MuxOp::create(rewriter, loc, outOfBoundsCond,
+                                                  zero, extractedValue);
+        Value fallbackUnknown = comb::MuxOp::create(rewriter, loc, outOfBoundsCond,
+                                                    allOnes, extractedUnknown);
+        Value fallback = createFourStateStruct(rewriter, loc, fallbackValue,
+                                               fallbackUnknown);
 
-        // Create the result 4-state struct
-        auto result =
-            createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
-        rewriter.replaceOp(op, result);
+        if (Value consensus = buildUnknownDynExtractConsensus(
+                rewriter, loc, inputValue, inputUnknown, amount, amountUnknown,
+                static_cast<unsigned>(resultWidth))) {
+          Value result = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                             consensus, fallback);
+          rewriter.replaceOp(op, result);
+        } else {
+          Value cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
+                                          amountUnknownCond);
+          Value finalValue = comb::MuxOp::create(rewriter, loc, cond, zero,
+                                                 extractedValue);
+          Value finalUnknown = comb::MuxOp::create(rewriter, loc, cond, allOnes,
+                                                   extractedUnknown);
+          rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, finalValue,
+                                                       finalUnknown));
+        }
       } else {
         // Result is 2-state - just extract the value bits
         rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, resultType, shiftedValue, 0);

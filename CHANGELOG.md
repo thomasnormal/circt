@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 363 - February 5, 2026
+
+### Summary
+
+Iteration 363: Improved MooreToCore lowering for `moore.dyn_extract` on 4-state vectors with unknown indices. For small widths, CIRCT now computes a symbolic per-bit “consensus” across all feasible extract positions (given the known index bits) instead of forcing the result to all-unknown whenever the index has X/Z.
+
+### Accomplishments
+
+1. **Unknown dyn_extract consensus** - For small packed vectors (width ≤ 16), `moore.dyn_extract` now uses a bounded consensus encoding when the extract index is partially unknown.
+2. **Regression test update** - Updated `test/Conversion/MooreToCore/dyn-extract-xprop.mlir` to check for the new consensus structure.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Conversion/MooreToCore`
+
 ## Iteration 362 - February 5, 2026
 
 ### Summary
