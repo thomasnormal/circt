@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 350 - February 5, 2026
+
+### Summary
+
+Iteration 350: Improved `circt-lec --run-smtlib --print-solver-output` counterexample readability for 4-state ports by decoding packed SMT bit-vectors into `{value, unknown}` pairs and an `x/z` bitstring view.
+
+### Accomplishments
+
+1. **4-state counterexample decoding** - When input/output types are 4-state `hw.struct<value, unknown>`, the solver model is now printed as `value=.. unknown=..` plus a compact `N'b...` string with `x/z` markers and the original packed bitvector.
+2. **Regression test** - Added a `fake-z3` lit test to lock in the new formatting.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build check-circt-tools-circt-lec`
+
 ## Iteration 349 - February 5, 2026
 
 ### Summary
