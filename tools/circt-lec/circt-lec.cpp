@@ -43,6 +43,7 @@
 #include "circt/Support/Passes.h"
 #include "circt/Support/ResourceGuard.h"
 #include "circt/Support/SMTModel.h"
+#include "circt/Support/FourStateUtils.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "circt/Tools/circt-lec/Passes.h"
@@ -72,6 +73,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
@@ -410,6 +412,74 @@ static std::string formatBitVectorValue(const llvm::APInt &value,
   return (Twine(width) + "'d" + StringRef(decStr)).str();
 }
 
+static std::optional<std::pair<unsigned, llvm::APInt>>
+tryParseFormattedBitVector(StringRef value) {
+  StringRef work = value.trim();
+  size_t sep = work.find('\'');
+  if (sep == StringRef::npos)
+    return std::nullopt;
+  StringRef widthStr = work.take_front(sep);
+  work = work.drop_front(sep + 1);
+  if (widthStr.empty())
+    return std::nullopt;
+  unsigned width = 0;
+  if (widthStr.getAsInteger(10, width))
+    return std::nullopt;
+  if (width == 0)
+    return std::nullopt;
+  if (work.consume_front("h")) {
+    if (work.empty() ||
+        work.find_first_not_of("0123456789abcdefABCDEF") != StringRef::npos)
+      return std::nullopt;
+    llvm::APInt ap(width, work, 16);
+    return std::make_pair(width, ap);
+  }
+  if (work.consume_front("d")) {
+    if (work.empty() || work.find_first_not_of("0123456789") != StringRef::npos)
+      return std::nullopt;
+    llvm::APInt ap(width, work, 10);
+    return std::make_pair(width, ap);
+  }
+  return std::nullopt;
+}
+
+static std::string formatFourStateModelValue(const llvm::APInt &packed,
+                                             unsigned valueWidth) {
+  APInt unknown = packed.trunc(valueWidth);
+  APInt value = packed.lshr(valueWidth).trunc(valueWidth);
+
+  std::string valueStr = formatBitVectorValue(value, valueWidth);
+  std::string unknownStr = formatBitVectorValue(unknown, valueWidth);
+  std::string packedStr = formatBitVectorValue(packed, packed.getBitWidth());
+
+  std::string bitString;
+  bitString.reserve(valueWidth);
+  for (int i = static_cast<int>(valueWidth) - 1; i >= 0; --i) {
+    if (unknown[i])
+      bitString.push_back(value[i] ? 'z' : 'x');
+    else
+      bitString.push_back(value[i] ? '1' : '0');
+  }
+
+  return (Twine("value=") + valueStr + " unknown=" + unknownStr + " (" +
+          Twine(valueWidth) + "'b" + bitString + ", packed=" + packedStr + ")")
+      .str();
+}
+
+static std::string formatModelValueForType(Type originalTy,
+                                           StringRef modelValue) {
+  auto parsed = tryParseFormattedBitVector(modelValue);
+  if (!parsed)
+    return modelValue.str();
+  auto [width, ap] = *parsed;
+
+  auto fourStateWidth = circt::getFourStateValueWidth(originalTy);
+  if (!fourStateWidth || width != (*fourStateWidth * 2))
+    return modelValue.str();
+
+  return formatFourStateModelValue(ap, *fourStateWidth);
+}
+
 static std::optional<std::string> tryFormatBitVector(StringRef value) {
   StringRef work = value.trim();
   if (work.consume_front("#b")) {
@@ -501,17 +571,27 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
   SmallVector<std::string> lecInputNames;
   SmallVector<std::string> lecOutputNames;
+  SmallVector<Type> lecInputTypes;
+  SmallVector<Type> lecOutputTypes;
   if (outputFormat == OutputRunSMTLIB && wantSolverOutput) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
-      for (auto name : moduleA.getInputNames())
+      auto inputTypes = moduleA.getInputTypes();
+      for (auto [idx, name] : llvm::enumerate(moduleA.getInputNames())) {
         if (auto strAttr = dyn_cast<StringAttr>(name))
           if (!strAttr.getValue().empty())
             lecInputNames.push_back(strAttr.getValue().str());
-      for (auto name : moduleA.getOutputNames())
+        lecInputTypes.push_back(idx < inputTypes.size() ? inputTypes[idx]
+                                                        : Type{});
+      }
+      auto outputTypes = moduleA.getOutputTypes();
+      for (auto [idx, name] : llvm::enumerate(moduleA.getOutputNames())) {
         if (auto strAttr = dyn_cast<StringAttr>(name))
           if (!strAttr.getValue().empty())
             lecOutputNames.push_back(strAttr.getValue().str());
+        lecOutputTypes.push_back(idx < outputTypes.size() ? outputTypes[idx]
+                                                          : Type{});
+      }
     }
   }
 
@@ -879,7 +959,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
       };
 
       bool printed = false;
-      for (const auto &name : lecInputNames) {
+      for (const auto [idx, name] : llvm::enumerate(lecInputNames)) {
         auto value = findValue(name);
         if (!value)
           continue;
@@ -887,7 +967,12 @@ static LogicalResult executeLEC(MLIRContext &context) {
           llvm::errs() << "counterexample inputs:\n";
           printed = true;
         }
-        llvm::errs() << "  " << name << " = " << *value << "\n";
+        Type ty = idx < lecInputTypes.size() ? lecInputTypes[idx] : Type{};
+        if (ty)
+          llvm::errs() << "  " << name << " = "
+                       << formatModelValueForType(ty, *value) << "\n";
+        else
+          llvm::errs() << "  " << name << " = " << *value << "\n";
       }
       if (!lecOutputNames.empty()) {
         bool printedOutputs = false;
@@ -904,10 +989,17 @@ static LogicalResult executeLEC(MLIRContext &context) {
           }
           StringRef label = lecOutputNames[i].empty()
                                 ? StringRef("out") : StringRef(lecOutputNames[i]);
+          Type ty = i < lecOutputTypes.size() ? lecOutputTypes[i] : Type{};
           if (c1Value)
-            llvm::errs() << "  " << label << " (c1) = " << *c1Value << "\n";
+            llvm::errs() << "  " << label << " (c1) = "
+                         << (ty ? formatModelValueForType(ty, *c1Value)
+                                : c1Value->str())
+                         << "\n";
           if (c2Value)
-            llvm::errs() << "  " << label << " (c2) = " << *c2Value << "\n";
+            llvm::errs() << "  " << label << " (c2) = "
+                         << (ty ? formatModelValueForType(ty, *c2Value)
+                                : c2Value->str())
+                         << "\n";
         }
       }
     };
