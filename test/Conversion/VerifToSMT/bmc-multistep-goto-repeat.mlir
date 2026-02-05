@@ -8,12 +8,12 @@
 
 // CHECK-LABEL: func.func @test_goto_repeat_2
 // Single delay buffer constant initialized to false (used multiple times)
-// CHECK:         smt.constant false
+// CHECK:         {{(arith|smt)\.constant}} false
 // CHECK:         scf.for
-// Circuit takes 4 args (a, buf1, buf2, buf3)
-// Returns: orig outputs + delay buffers + non-final check
-// CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bool, !smt.bool, !smt.bool, !smt.bool, !smt.bool, !smt.bool) -> (!smt.bv<1>, !smt.bool, !smt.bool, !smt.bool, !smt.bool, !smt.bool, !smt.bool, !smt.bool)
+// NFA-based multi-step tracking adds a tick input as the 2nd argument.
+// CHECK:           %[[TICK:.+]] = smt.ite %true, %c-1_bv1, %c0_bv1 : !smt.bv<1>
+// CHECK:           func.call @bmc_circuit(%arg1, %[[TICK]],
+// CHECK-SAME:        -> ({{.*}}, !smt.bool)
 func.func @test_goto_repeat_2() -> i1 {
   %bmc = verif.bmc bound 4 num_regs 0 initial_values []
   init {
@@ -35,12 +35,12 @@ func.func @test_goto_repeat_2() -> i1 {
 
 // CHECK-LABEL: func.func @test_nonconsecutive_repeat_range
 // Single delay buffer constant initialized to false (used multiple times)
-// CHECK:         smt.constant false
+// CHECK:         {{(arith|smt)\.constant}} false
 // CHECK:         scf.for
-// Circuit takes 3 args (a, buf1, buf2)
-// Returns: orig outputs + delay buffers + non-final check
-// CHECK:           func.call @bmc_circuit
-// CHECK-SAME:        : (!smt.bv<1>, !smt.bool, !smt.bool, !smt.bool) -> (!smt.bv<1>, !smt.bool, !smt.bool, !smt.bool, !smt.bool)
+// NFA-based multi-step tracking adds a tick input as the 2nd argument.
+// CHECK:           %[[TICK0:.+]] = smt.ite %true, %c-1_bv1, %c0_bv1 : !smt.bv<1>
+// CHECK:           func.call @bmc_circuit_0(%arg1, %[[TICK0]],
+// CHECK-SAME:        -> ({{.*}}, !smt.bool)
 func.func @test_nonconsecutive_repeat_range() -> i1 {
   %bmc = verif.bmc bound 3 num_regs 0 initial_values []
   init {

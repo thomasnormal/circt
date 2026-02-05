@@ -308,7 +308,10 @@ struct LTLImplicationOpConversion : OpConversionPattern<ltl::ImplicationOp> {
 /// contributes p to an OR over all time steps. The BMC loop handles
 /// the accumulation; here we just convert the inner property.
 struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
-  using OpConversionPattern<ltl::EventuallyOp>::OpConversionPattern;
+  LTLEventuallyOpConversion(const TypeConverter &typeConverter,
+                            MLIRContext *context, bool approxTemporalOps)
+      : OpConversionPattern<ltl::EventuallyOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::EventuallyOp op, OpAdaptor adaptor,
@@ -318,6 +321,13 @@ struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
     if (op->hasAttr(kWeakEventuallyAttr)) {
       rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
       return success();
+    }
+    if (!approxTemporalOps) {
+      op.emitError("ltl.eventually must be lowered by the BMC/LTLToCore "
+                   "infrastructure; refusing UNSOUND approximation (rerun "
+                   "with --convert-verif-to-smt=approx-temporal=true to "
+                   "approximate as its input)");
+      return failure();
     }
     // For BMC: eventually(p) means p should hold at some point.
     // At each time step, we check if p holds. The BMC loop accumulates
@@ -332,6 +342,9 @@ struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
     rewriter.replaceOp(op, input);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.until to SMT boolean.
@@ -340,13 +353,23 @@ struct LTLEventuallyOpConversion : OpConversionPattern<ltl::EventuallyOp> {
 /// Since X requires next-state which BMC handles, we encode:
 /// weak until semantics: q || p (either q holds or p holds at this step)
 struct LTLUntilOpConversion : OpConversionPattern<ltl::UntilOp> {
-  using OpConversionPattern<ltl::UntilOp>::OpConversionPattern;
+  LTLUntilOpConversion(const TypeConverter &typeConverter, MLIRContext *context,
+                       bool approxTemporalOps)
+      : OpConversionPattern<ltl::UntilOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::UntilOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(op);
+    if (!approxTemporalOps) {
+      op.emitError("ltl.until must be lowered by the BMC/LTLToCore "
+                   "infrastructure; refusing UNSOUND approximation (rerun "
+                   "with --convert-verif-to-smt=approx-temporal=true to "
+                   "approximate as `q || p`)");
+      return failure();
+    }
     Value p = materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
                                  op.getLoc());
     Value q = materializeSMTBool(adaptor.getCondition(), *typeConverter,
@@ -358,6 +381,9 @@ struct LTLUntilOpConversion : OpConversionPattern<ltl::UntilOp> {
     rewriter.replaceOpWithNewOp<smt::OrOp>(op, q, p);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.boolean_constant to smt.constant
@@ -400,8 +426,11 @@ struct LTLClockOpConversion : OpConversionPattern<ltl::ClockOp> {
 ///
 /// NOTE:
 /// For generic SMT lowering (outside the BMC pipeline), delay(seq, N>0) is
-/// approximated as true. This keeps the conversion total but is UNSOUND for
-/// temporal reasoning.
+/// UNSOUND unless modeled with explicit multi-step tracking. By default we
+/// therefore refuse to lower nonzero delays outside of the BMC infrastructure,
+/// so temporal gaps fail loudly instead of silently producing incorrect
+/// results. Use `--convert-verif-to-smt=approx-temporal=true` to opt into the
+/// legacy approximation behavior (treat as `true`).
 ///
 /// The BMC pipeline handles delay semantics separately:
 /// - Delay/past buffers for standalone temporal ops.
@@ -413,7 +442,10 @@ struct LTLClockOpConversion : OpConversionPattern<ltl::ClockOp> {
 ///
 /// See BMC_MULTISTEP_DESIGN.md for the buffered BMC architecture.
 struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
-  using OpConversionPattern<ltl::DelayOp>::OpConversionPattern;
+  LTLDelayOpConversion(const TypeConverter &typeConverter, MLIRContext *context,
+                       bool approxTemporalOps)
+      : OpConversionPattern<ltl::DelayOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::DelayOp op, OpAdaptor adaptor,
@@ -432,11 +464,22 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
         return failure();
       rewriter.replaceOp(op, input);
     } else {
-      // Fallback (non-BMC or unhandled BMC cases): approximate as true.
+      if (!approxTemporalOps) {
+        op.emitError("ltl.delay with delay > 0 must be lowered by the BMC "
+                     "multi-step infrastructure; refusing UNSOUND "
+                     "approximation (rerun with "
+                     "--convert-verif-to-smt=approx-temporal=true to "
+                     "approximate as `true`)");
+        return failure();
+      }
+      // UNSOUND fallback (opt-in): approximate as true.
       rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
     }
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.past to SMT boolean.
@@ -449,7 +492,10 @@ struct LTLDelayOpConversion : OpConversionPattern<ltl::DelayOp> {
 /// approximation that the past value was unknown/false). The proper handling
 /// is done in the BMC infrastructure.
 struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
-  using OpConversionPattern<ltl::PastOp>::OpConversionPattern;
+  LTLPastOpConversion(const TypeConverter &typeConverter, MLIRContext *context,
+                      bool approxTemporalOps)
+      : OpConversionPattern<ltl::PastOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::PastOp op, OpAdaptor adaptor,
@@ -467,6 +513,14 @@ struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
         return failure();
       rewriter.replaceOp(op, input);
     } else {
+      if (!approxTemporalOps) {
+        op.emitError("ltl.past with delay > 0 must be lowered by the BMC "
+                     "multi-step infrastructure; refusing UNSOUND "
+                     "approximation (rerun with "
+                     "--convert-verif-to-smt=approx-temporal=true to "
+                     "approximate as `false`)");
+        return failure();
+      }
       // For past with delay > 0 outside of BMC, return false (conservative).
       // This handles edge cases where ltl.past appears outside BMC context.
       // The proper handling with buffer tracking is done in VerifBoundedModelCheckingOpConversion.
@@ -474,6 +528,9 @@ struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
     }
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.concat to SMT boolean.
@@ -481,7 +538,10 @@ struct LTLPastOpConversion : OpConversionPattern<ltl::PastOp> {
 /// semantics are handled by sequence NFAs and delay buffers; this pattern
 /// is a fallback for cases that reach generic SMT lowering.
 struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
-  using OpConversionPattern<ltl::ConcatOp>::OpConversionPattern;
+  LTLConcatOpConversion(const TypeConverter &typeConverter, MLIRContext *context,
+                        bool approxTemporalOps)
+      : OpConversionPattern<ltl::ConcatOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::ConcatOp op, OpAdaptor adaptor,
@@ -508,11 +568,23 @@ struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
       return success();
     }
 
+    if (!approxTemporalOps) {
+      op.emitError("ltl.concat with multiple inputs must be lowered by the "
+                   "BMC/LTLToCore infrastructure; refusing UNSOUND "
+                   "approximation (rerun with "
+                   "--convert-verif-to-smt=approx-temporal=true to "
+                   "approximate as `and`)");
+      return failure();
+    }
+
     // For BMC: concatenation of sequences at a single step is AND
     // (all parts of the sequence must hold in their respective positions)
     rewriter.replaceOpWithNewOp<smt::AndOp>(op, smtOperands);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.repeat to SMT boolean.
@@ -520,7 +592,10 @@ struct LTLConcatOpConversion : OpConversionPattern<ltl::ConcatOp> {
 /// In BMC, multi-step semantics are handled by sequence NFAs; this pattern
 /// is a fallback for generic SMT lowering.
 struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
-  using OpConversionPattern<ltl::RepeatOp>::OpConversionPattern;
+  LTLRepeatOpConversion(const TypeConverter &typeConverter, MLIRContext *context,
+                        bool approxTemporalOps)
+      : OpConversionPattern<ltl::RepeatOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::RepeatOp op, OpAdaptor adaptor,
@@ -533,6 +608,13 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
       // Zero repetitions: empty sequence, trivially true
       rewriter.replaceOpWithNewOp<smt::BoolConstantOp>(op, true);
       return success();
+    }
+
+    if (!approxTemporalOps) {
+      op.emitError("ltl.repeat must be lowered by the BMC/LTLToCore "
+                   "infrastructure; refusing UNSOUND approximation (rerun "
+                   "with --convert-verif-to-smt=approx-temporal=true)");
+      return failure();
     }
 
     // For base >= 1: the sequence must match at least once
@@ -550,6 +632,9 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
     rewriter.replaceOp(op, input);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.goto_repeat to SMT boolean.
@@ -560,7 +645,10 @@ struct LTLRepeatOpConversion : OpConversionPattern<ltl::RepeatOp> {
 /// The full temporal semantics (non-consecutive with final match) requires
 /// multi-step tracking which is handled by the BMC loop or LTLToCore pass.
 struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
-  using OpConversionPattern<ltl::GoToRepeatOp>::OpConversionPattern;
+  LTLGoToRepeatOpConversion(const TypeConverter &typeConverter,
+                            MLIRContext *context, bool approxTemporalOps)
+      : OpConversionPattern<ltl::GoToRepeatOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::GoToRepeatOp op, OpAdaptor adaptor,
@@ -575,6 +663,13 @@ struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
       return success();
     }
 
+    if (!approxTemporalOps) {
+      op.emitError("ltl.goto_repeat must be lowered by the BMC/LTLToCore "
+                   "infrastructure; refusing UNSOUND approximation (rerun "
+                   "with --convert-verif-to-smt=approx-temporal=true)");
+      return failure();
+    }
+
     // For base >= 1: at a single step, the sequence must hold
     Value input =
         materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
@@ -585,6 +680,9 @@ struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
     rewriter.replaceOp(op, input);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 /// Convert ltl.non_consecutive_repeat to SMT boolean.
@@ -594,7 +692,11 @@ struct LTLGoToRepeatOpConversion : OpConversionPattern<ltl::GoToRepeatOp> {
 /// - non_consecutive_repeat(seq, N, M) with N>0 means seq must hold at this step
 struct LTLNonConsecutiveRepeatOpConversion
     : OpConversionPattern<ltl::NonConsecutiveRepeatOp> {
-  using OpConversionPattern<ltl::NonConsecutiveRepeatOp>::OpConversionPattern;
+  LTLNonConsecutiveRepeatOpConversion(const TypeConverter &typeConverter,
+                                      MLIRContext *context,
+                                      bool approxTemporalOps)
+      : OpConversionPattern<ltl::NonConsecutiveRepeatOp>(typeConverter, context),
+        approxTemporalOps(approxTemporalOps) {}
 
   LogicalResult
   matchAndRewrite(ltl::NonConsecutiveRepeatOp op, OpAdaptor adaptor,
@@ -609,6 +711,14 @@ struct LTLNonConsecutiveRepeatOpConversion
       return success();
     }
 
+    if (!approxTemporalOps) {
+      op.emitError("ltl.non_consecutive_repeat must be lowered by the "
+                   "BMC/LTLToCore infrastructure; refusing UNSOUND "
+                   "approximation (rerun with "
+                   "--convert-verif-to-smt=approx-temporal=true)");
+      return failure();
+    }
+
     // For base >= 1: at a single step, the sequence must hold
     Value input =
         materializeSMTBool(adaptor.getInput(), *typeConverter, rewriter,
@@ -619,6 +729,9 @@ struct LTLNonConsecutiveRepeatOpConversion
     rewriter.replaceOp(op, input);
     return success();
   }
+
+private:
+  bool approxTemporalOps;
 };
 
 //===----------------------------------------------------------------------===//
@@ -651,7 +764,7 @@ struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
     }
     Value notCond = smt::NotOp::create(rewriter, op.getLoc(), cond);
     auto assertOp = rewriter.replaceOpWithNewOp<smt::AssertOp>(op, notCond);
-    if (auto label = op.getLabelAttr())
+    if (auto label = op.getLabelAttr(); label && !label.getValue().empty())
       assertOp->setAttr("smtlib.name", label);
     return success();
   }
@@ -681,7 +794,7 @@ struct VerifAssumeOpConversion : OpConversionPattern<verif::AssumeOp> {
                                op.getLoc());
     }
     auto assertOp = rewriter.replaceOpWithNewOp<smt::AssertOp>(op, cond);
-    if (auto label = op.getLabelAttr())
+    if (auto label = op.getLabelAttr(); label && !label.getValue().empty())
       assertOp->setAttr("smtlib.name", label);
     return success();
   }
@@ -1349,7 +1462,12 @@ static void collectSequenceOpsForBMC(Value seq,
   if (!visited.insert(seq).second)
     return;
   Operation *def = seq.getDefiningOp();
-  if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+  if (!def || !isa_and_nonnull<ltl::LTLDialect>(def->getDialect()))
+    return;
+  // Past ops are lowered via dedicated past-buffer slots, not NFAs. Avoid
+  // tracking them here to prevent double-erasure when the past ops are already
+  // scheduled for deletion during past-buffer setup.
+  if (isa<ltl::PastOp>(def))
     return;
   ops.insert(def);
   for (Value operand : def->getOperands())
@@ -1392,6 +1510,11 @@ static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
       shiftedAntecedent->setAttr("bmc.clock_edge", edgeAttr);
     implOp.setOperand(0, shiftedAntecedent.getResult());
     implOp.setOperand(1, delayOp.getInput());
+
+    // The original delay is now bypassed. Erase it if it became dead so it
+    // does not survive into the later LTL->SMT lowering phase.
+    if (delayOp.use_empty())
+      rewriter.eraseOp(delayOp);
   }
 }
 
@@ -1999,6 +2122,60 @@ struct VerifBoundedModelCheckingOpConversion
       return false;
     };
 
+    // The BMC multi-step infrastructure can only lower sequences that are fully
+    // defined by LTL IR. In particular, ltl.sequence-typed block arguments are
+    // not representable and will cause NFA construction to fail (and may emit
+    // diagnostics without signaling pass failure). Detect this early so the
+    // tool exits with a failure code.
+    auto containsSequenceBlockArgument = [&](Value root) -> bool {
+      SmallVector<Operation *> worklist;
+      DenseSet<Operation *> visited;
+
+      if (!root)
+        return false;
+      if (isa<ltl::SequenceType>(root.getType()) && isa<BlockArgument>(root))
+        return true;
+
+      if (Operation *def = root.getDefiningOp())
+        worklist.push_back(def);
+
+      while (!worklist.empty()) {
+        Operation *cur = worklist.pop_back_val();
+        if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
+          continue;
+        if (!visited.insert(cur).second)
+          continue;
+        for (Value operand : cur->getOperands()) {
+          if (!isa<ltl::PropertyType, ltl::SequenceType>(operand.getType()))
+            continue;
+          if (isa<ltl::SequenceType>(operand.getType()) &&
+              isa<BlockArgument>(operand))
+            return true;
+          if (Operation *def = operand.getDefiningOp())
+            worklist.push_back(def);
+        }
+      }
+      return false;
+    };
+
+    bool foundSequenceBlockArg = false;
+    circuitBlock.walk([&](verif::AssertOp assertOp) {
+      foundSequenceBlockArg |=
+          containsSequenceBlockArgument(assertOp.getProperty());
+    });
+    circuitBlock.walk([&](verif::AssumeOp assumeOp) {
+      foundSequenceBlockArg |=
+          containsSequenceBlockArgument(assumeOp.getProperty());
+    });
+    circuitBlock.walk([&](verif::CoverOp coverOp) {
+      foundSequenceBlockArg |=
+          containsSequenceBlockArgument(coverOp.getProperty());
+    });
+    if (foundSequenceBlockArg) {
+      op.emitError("unsupported sequence lowering for block argument");
+      return failure();
+    }
+
     bool derivedClockConflict = false;
     auto reportDerivedClockConflict = [&](Operation *context,
                                           StringRef message) {
@@ -2041,7 +2218,7 @@ struct VerifBoundedModelCheckingOpConversion
           worklist.push_back(def);
         while (!worklist.empty()) {
           Operation *cur = worklist.pop_back_val();
-          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+          if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
             continue;
           if (!visited.insert(cur).second)
             continue;
@@ -2063,12 +2240,12 @@ struct VerifBoundedModelCheckingOpConversion
 
       auto cloneLTLSubtree = [&](Value root, Operation *insertBefore) -> Value {
         Operation *def = root.getDefiningOp();
-        if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+        if (!def || !isa_and_nonnull<ltl::LTLDialect>(def->getDialect()))
           return root;
         DenseSet<Operation *> visited;
         SmallVector<Operation *> postorder;
         std::function<void(Operation *)> dfs = [&](Operation *cur) {
-          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+          if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
             return;
           if (!visited.insert(cur).second)
             return;
@@ -2101,6 +2278,35 @@ struct VerifBoundedModelCheckingOpConversion
     };
 
     cloneSharedLTLSubtrees();
+
+    // Cloning LTL subtrees can leave the original LTL ops dead. Since the
+    // second conversion phase marks many multi-step LTL ops illegal (and strict
+    // lowering may refuse approximations), proactively erase any now-dead LTL
+    // ops to avoid spurious legalization failures.
+    auto eraseDeadLTLOps = [&]() {
+      SmallVector<Operation *> ordered;
+      circuitBlock.walk([&](Operation *cur) {
+        if (isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
+          ordered.push_back(cur);
+      });
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (int64_t i = static_cast<int64_t>(ordered.size()) - 1; i >= 0;
+             --i) {
+          Operation *cur = ordered[static_cast<size_t>(i)];
+          if (!cur)
+            continue;
+          if (!cur->use_empty())
+            continue;
+          rewriter.eraseOp(cur);
+          ordered[static_cast<size_t>(i)] = nullptr;
+          changed = true;
+        }
+      }
+    };
+    eraseDeadLTLOps();
+
     rewriteImplicationDelaysForBMC(circuitBlock, rewriter);
 
     struct ClockInfo {
@@ -2142,7 +2348,9 @@ struct VerifBoundedModelCheckingOpConversion
         [&](const ClockInfo &info) -> std::optional<ltl::ClockEdge> {
       if (!hasClockContext(info))
         return std::nullopt;
-      return info.edge.value_or(ltl::ClockEdge::Pos);
+      // Treat an unspecified edge as "unknown" here. Defaults (posedge) are
+      // applied later, once all clock information has been merged.
+      return info.edge;
     };
 
     auto clockInfoConflict = [&](const ClockInfo &a, const ClockInfo &b) {
@@ -2180,7 +2388,7 @@ struct VerifBoundedModelCheckingOpConversion
       DenseMap<Operation *, ClockInfo> seenInfo;
       while (!worklist.empty()) {
         auto [cur, curInfo] = worklist.pop_back_val();
-        if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+        if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
           continue;
         auto it = seenInfo.find(cur);
         if (it != seenInfo.end()) {
@@ -2266,8 +2474,43 @@ struct VerifBoundedModelCheckingOpConversion
 
     DenseSet<Value> sequenceRootSet;
     DenseMap<Value, ClockInfo> sequenceRootClocks;
+    // Only sequences that use multi-step operators require the NFA-based BMC
+    // infrastructure. Purely single-step sequences are correctly lowered by the
+    // generic LTL-to-SMT conversion after delay/past buffers have been set up,
+    // and routing them through the NFA path would introduce unnecessary state
+    // (extra tick/state arguments and iter_args) and potential blow-ups.
+    auto sequenceNeedsNFA = [&](Value seq) -> bool {
+      if (!seq || !isa<ltl::SequenceType>(seq.getType()))
+        return false;
+      Operation *def = seq.getDefiningOp();
+      if (!def || !isa_and_nonnull<ltl::LTLDialect>(def->getDialect()))
+        return false;
+
+      SmallVector<Operation *> worklist;
+      DenseSet<Operation *> visited;
+      worklist.push_back(def);
+      while (!worklist.empty()) {
+        Operation *cur = worklist.pop_back_val();
+        if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
+          continue;
+        if (!visited.insert(cur).second)
+          continue;
+        if (isa<ltl::ConcatOp, ltl::RepeatOp, ltl::GoToRepeatOp,
+                ltl::NonConsecutiveRepeatOp>(cur))
+          return true;
+        for (Value operand : cur->getOperands()) {
+          if (!isa<ltl::SequenceType>(operand.getType()))
+            continue;
+          if (Operation *opDef = operand.getDefiningOp())
+            worklist.push_back(opDef);
+        }
+      }
+      return false;
+    };
     auto addSequenceRoot = [&](Value seq, const ClockInfo &info) {
       if (!seq || !isa<ltl::SequenceType>(seq.getType()))
+        return;
+      if (!sequenceNeedsNFA(seq))
         return;
       auto &slot = sequenceRootClocks[seq];
       if (!slot.seen) {
@@ -2342,7 +2585,7 @@ struct VerifBoundedModelCheckingOpConversion
           continue;
         }
         Operation *def = cur.getDefiningOp();
-        if (!def || !isa<ltl::LTLDialect>(def->getDialect()))
+        if (!def || !isa_and_nonnull<ltl::LTLDialect>(def->getDialect()))
           continue;
         if (auto clockOp = dyn_cast<ltl::ClockOp>(def)) {
           ClockInfo clockInfo;
@@ -2505,26 +2748,22 @@ struct VerifBoundedModelCheckingOpConversion
       collectSequenceOpsForBMC(seqRoot, nfaSequenceOps, visitedSequenceOps);
 
     struct NonFinalCheckInfo {
+      explicit NonFinalCheckInfo(Location loc) : loc(loc) {}
+
+      Location loc;
       StringAttr clockName;
       std::optional<ltl::ClockEdge> edge;
     };
 
     // Collect non-final properties so BMC can detect any violating property.
     SmallVector<Operation *> nonFinalOps;
-    SmallVector<Value> checkProps;
     SmallVector<NonFinalCheckInfo> nonFinalCheckInfos;
     if (isCoverCheck) {
       circuitBlock.walk([&](verif::CoverOp coverOp) {
         if (coverOp->hasAttr("bmc.final"))
           return;
         nonFinalOps.push_back(coverOp);
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(coverOp);
-        checkProps.push_back(
-            gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
-                                   /*isCover=*/true, rewriter,
-                                   coverOp.getLoc()));
-        NonFinalCheckInfo info;
+        NonFinalCheckInfo info(coverOp.getLoc());
         info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
@@ -2536,13 +2775,7 @@ struct VerifBoundedModelCheckingOpConversion
         if (assertOp->hasAttr("bmc.final"))
           return;
         nonFinalOps.push_back(assertOp);
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(assertOp);
-        checkProps.push_back(
-            gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
-                                   /*isCover=*/false, rewriter,
-                                   assertOp.getLoc()));
-        NonFinalCheckInfo info;
+        NonFinalCheckInfo info(assertOp.getLoc());
         info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
@@ -2550,17 +2783,15 @@ struct VerifBoundedModelCheckingOpConversion
         nonFinalCheckInfos.push_back(info);
       });
     }
+    // Materialize non-final check values after NFA/delay rewriting to ensure
+    // the yielded check expressions reflect any sequence-root rewrites.
     SmallVector<Value> nonFinalCheckValues;
-    if (!nonFinalOps.empty()) {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(circuitBlock.getTerminator());
-      nonFinalCheckValues.append(checkProps.begin(), checkProps.end());
-      for (auto *opToErase : nonFinalOps)
-        rewriter.eraseOp(opToErase);
-    }
+    SmallVector<Value> nonFinalCheckProps;
 
     // Hoist any final-only checks into circuit outputs so we can check them
     // only at the final step.
+    // Materialize final check values after NFA/delay rewriting for the same
+    // reason as non-final checks.
     SmallVector<Value> finalCheckValues;
     SmallVector<Value> finalCheckProps;
     SmallVector<bool> finalCheckIsCover;
@@ -2570,15 +2801,8 @@ struct VerifBoundedModelCheckingOpConversion
       if (!curOp->hasAttr("bmc.final"))
         return;
       if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(assertOp);
-        finalCheckValues.push_back(
-            gatePropertyWithEnable(assertOp.getProperty(), assertOp.getEnable(),
-                                   /*isCover=*/false, rewriter,
-                                   assertOp.getLoc()));
-        finalCheckProps.push_back(assertOp.getProperty());
         finalCheckIsCover.push_back(false);
-        NonFinalCheckInfo info;
+        NonFinalCheckInfo info(assertOp.getLoc());
         info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
@@ -2588,15 +2812,8 @@ struct VerifBoundedModelCheckingOpConversion
         return;
       }
       if (auto assumeOp = dyn_cast<verif::AssumeOp>(curOp)) {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(assumeOp);
-        finalCheckValues.push_back(
-            gatePropertyWithEnable(assumeOp.getProperty(), assumeOp.getEnable(),
-                                   /*isCover=*/false, rewriter,
-                                   assumeOp.getLoc()));
-        finalCheckProps.push_back(assumeOp.getProperty());
         finalCheckIsCover.push_back(false);
-        NonFinalCheckInfo info;
+        NonFinalCheckInfo info(assumeOp.getLoc());
         info.clockName = assumeOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = assumeOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
@@ -2606,15 +2823,8 @@ struct VerifBoundedModelCheckingOpConversion
         return;
       }
       if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
-        OpBuilder::InsertionGuard guard(rewriter);
-        rewriter.setInsertionPoint(coverOp);
-        finalCheckValues.push_back(
-            gatePropertyWithEnable(coverOp.getProperty(), coverOp.getEnable(),
-                                   /*isCover=*/true, rewriter,
-                                   coverOp.getLoc()));
-        finalCheckProps.push_back(coverOp.getProperty());
         finalCheckIsCover.push_back(true);
-        NonFinalCheckInfo info;
+        NonFinalCheckInfo info(coverOp.getLoc());
         info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
@@ -2626,10 +2836,8 @@ struct VerifBoundedModelCheckingOpConversion
     });
     // Erase the bmc.final ops using the rewriter to properly notify the
     // conversion framework
-    for (auto *opToErase : opsToErase)
-      rewriter.eraseOp(opToErase);
-    size_t numNonFinalChecks = nonFinalCheckValues.size();
-    size_t numFinalChecks = finalCheckValues.size();
+    size_t numNonFinalChecks = nonFinalOps.size();
+    size_t numFinalChecks = opsToErase.size();
     uint64_t boundValue = op.getBound();
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
@@ -2730,7 +2938,12 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<Value> delayRootOverrides;
     // First pass: collect all delay ops with meaningful temporal ranges.
     circuitBlock.walk([&](ltl::DelayOp delayOp) {
-      if (delayOp.use_empty())
+      // Delay ops can become temporarily unused while we erase the original
+      // verif.assert/assume/cover ops and only later append the check values to
+      // the circuit yield. Still collect any delay reachable from a property,
+      // even if it currently has no SSA uses.
+      if (delayOp.use_empty() &&
+          ltlClockInfo.find(delayOp.getOperation()) == ltlClockInfo.end())
         return;
       bool isSequenceRoot = sequenceRootSet.contains(delayOp.getResult());
       if (nfaSequenceOps.contains(delayOp.getOperation()) && !isSequenceRoot)
@@ -2791,9 +3004,13 @@ struct VerifBoundedModelCheckingOpConversion
     // =========================================================================
     SmallVector<PastInfo> pastInfos;
     size_t totalPastSlots = 0;
+    SmallVector<Value> pastRootOverrides;
 
     circuitBlock.walk([&](ltl::PastOp pastOp) {
-      if (pastOp.use_empty())
+      // Past ops may become temporarily unused for the same reason as delay ops
+      // above (assert/assume/cover erased before check values are yielded).
+      if (pastOp.use_empty() &&
+          ltlClockInfo.find(pastOp.getOperation()) == ltlClockInfo.end())
         return;
       uint64_t delay = pastOp.getDelay();
       if (delay == 0)
@@ -2813,7 +3030,13 @@ struct VerifBoundedModelCheckingOpConversion
       }
       pastInfos.push_back(info);
       totalPastSlots += delay;
+      if (sequenceRootSet.contains(pastOp.getResult()))
+        pastRootOverrides.push_back(pastOp.getResult());
     });
+    for (Value root : pastRootOverrides) {
+      sequenceRootSet.erase(root);
+      sequenceRootClocks.erase(root);
+    }
 
     // Second pass: modify the circuit block to add delay buffer infrastructure
     // We need to do this BEFORE region type conversion.
@@ -2849,12 +3072,16 @@ struct VerifBoundedModelCheckingOpConversion
         Value inputSig = info.inputSignal;
         Value delayedValue;
         auto toSequenceValue = [&](Value val) -> Value {
+          if (!val)
+            return Value{};
           if (isa<ltl::SequenceType>(val.getType()))
             return val;
-          if (auto intTy = dyn_cast<IntegerType>(val.getType())) {
-            if (intTy.getWidth() == 1)
-              return val;
-            return Value{};
+          if (auto intTy = dyn_cast<IntegerType>(val.getType());
+              intTy && intTy.getWidth() == 1) {
+            // Wrap an i1 "matches now" value as a sequence value.
+            auto zeroAttr = rewriter.getI64IntegerAttr(0);
+            return ltl::DelayOp::create(rewriter, loc, val, zeroAttr, zeroAttr)
+                .getResult();
           }
           return Value{};
         };
@@ -2880,12 +3107,21 @@ struct VerifBoundedModelCheckingOpConversion
             continue;
           }
           for (auto arg : bufferArgs) {
+            Value argSeq = toSequenceValue(arg);
+            if (!argSeq) {
+              info.op.emitError(
+                  "failed to build sequence value for bounded delay input");
+              delaySetupFailed = true;
+              continue;
+            }
             delayedValue =
                 ltl::OrOp::create(rewriter, loc,
-                                  ValueRange{delayedValue, arg})
+                                  ValueRange{delayedValue, argSeq})
                     .getResult();
           }
         } else {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPoint(info.op);
           delayedValue = toSequenceValue(bufferArgs[0]);
           if (!delayedValue) {
             info.op.emitError(
@@ -2906,11 +3142,20 @@ struct VerifBoundedModelCheckingOpConversion
             OpBuilder::InsertionGuard guard(rewriter);
             rewriter.setInsertionPoint(info.op);
             for (uint64_t i = 1; i <= info.length; ++i) {
+              Value argSeq = toSequenceValue(bufferArgs[i]);
+              if (!argSeq) {
+                info.op.emitError(
+                    "failed to build sequence value for bounded delay input");
+                delaySetupFailed = true;
+                break;
+              }
               delayedValue =
                   ltl::OrOp::create(rewriter, loc,
-                                    ValueRange{delayedValue, bufferArgs[i]})
+                                    ValueRange{delayedValue, argSeq})
                       .getResult();
             }
+            if (delaySetupFailed)
+              continue;
           }
         }
         info.op.replaceAllUsesWith(delayedValue);
@@ -2971,9 +3216,17 @@ struct VerifBoundedModelCheckingOpConversion
         }
 
         // Replace all uses of the past op with the past value.
-        // past(signal, N) returns the value from N cycles ago, which is buffer[0]
-        // after N cycles of shifting.
-        Value pastValue = bufferArgs[0];
+        // ltl.past returns an ltl.sequence, so wrap the i1 buffer value as an
+        // instantaneous sequence.
+        Value pastValue;
+        {
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPoint(info.op);
+          auto zeroAttr = rewriter.getI64IntegerAttr(0);
+          pastValue = ltl::DelayOp::create(rewriter, loc, bufferArgs[0],
+                                           zeroAttr, zeroAttr)
+                          .getResult();
+        }
         info.op.replaceAllUsesWith(pastValue);
         pastOpsToErase.push_back(info.op);
 
@@ -3020,7 +3273,7 @@ struct VerifBoundedModelCheckingOpConversion
           worklist.push_back(def);
         while (!worklist.empty()) {
           Operation *cur = worklist.pop_back_val();
-          if (!cur || !isa<ltl::LTLDialect>(cur->getDialect()))
+          if (!cur || !isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
             continue;
           if (!visited.insert(cur).second)
             continue;
@@ -3060,7 +3313,8 @@ struct VerifBoundedModelCheckingOpConversion
         if (!seqRoot || !isa<ltl::SequenceType>(seqRoot.getType()))
           continue;
         Operation *rootDef = seqRoot.getDefiningOp();
-        if (!rootDef || !isa<ltl::LTLDialect>(rootDef->getDialect()))
+        if (!rootDef ||
+            !isa_and_nonnull<ltl::LTLDialect>(rootDef->getDialect()))
           continue;
 
         ClockInfo baseInfo;
@@ -3194,6 +3448,38 @@ struct VerifBoundedModelCheckingOpConversion
         info.clockValue = maybeInfo->clockValue;
         nfaInfos.push_back(info);
       }
+
+      // NFA lowering replaces all uses of the sequence roots with a new
+      // instantaneous "match now" sequence. This typically leaves the original
+      // sequence DAG (concat/repeat/delay/goto/etc.) dead. Erase any now-dead
+      // LTL sequence ops so the later generic LTL->SMT lowering does not see
+      // multi-step operators that were already handled by the NFA path.
+      if (!nfaSequenceOps.empty()) {
+        SmallVector<Operation *> ordered;
+        ordered.reserve(nfaSequenceOps.size());
+        circuitBlock.walk([&](Operation *op) {
+          if (nfaSequenceOps.contains(op))
+            ordered.push_back(op);
+        });
+
+        bool changed = true;
+        while (changed) {
+          changed = false;
+          for (int64_t i = static_cast<int64_t>(ordered.size()) - 1; i >= 0;
+               --i) {
+            Operation *op = ordered[static_cast<size_t>(i)];
+            if (!op)
+              continue;
+            if (!isa_and_nonnull<ltl::LTLDialect>(op->getDialect()))
+              continue;
+            if (!op->use_empty())
+              continue;
+            rewriter.eraseOp(op);
+            ordered[static_cast<size_t>(i)] = nullptr;
+            changed = true;
+          }
+        }
+      }
     }
 
     if (!nfaStateOutputs.empty()) {
@@ -3202,6 +3488,55 @@ struct VerifBoundedModelCheckingOpConversion
                                           yieldOp.getOperands().end());
       newYieldOperands.append(nfaStateOutputs.begin(), nfaStateOutputs.end());
       yieldOp->setOperands(newYieldOperands);
+    }
+
+    // Materialize check expressions late, after any delay-buffer and sequence
+    // NFA rewriting has updated the property/sequence DAGs used by the original
+    // verif operations.
+    if (!nonFinalOps.empty() && nonFinalCheckValues.empty()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(circuitBlock.getTerminator());
+      nonFinalCheckValues.reserve(nonFinalOps.size());
+      nonFinalCheckProps.reserve(nonFinalOps.size());
+      for (Operation *opToCheck : nonFinalOps) {
+        if (isCoverCheck) {
+          auto coverOp = cast<verif::CoverOp>(opToCheck);
+          nonFinalCheckProps.push_back(coverOp.getProperty());
+          nonFinalCheckValues.push_back(gatePropertyWithEnable(
+              coverOp.getProperty(), coverOp.getEnable(), /*isCover=*/true,
+              rewriter, coverOp.getLoc()));
+        } else {
+          auto assertOp = cast<verif::AssertOp>(opToCheck);
+          nonFinalCheckProps.push_back(assertOp.getProperty());
+          nonFinalCheckValues.push_back(gatePropertyWithEnable(
+              assertOp.getProperty(), assertOp.getEnable(), /*isCover=*/false,
+              rewriter, assertOp.getLoc()));
+        }
+      }
+    }
+    if (!opsToErase.empty() && finalCheckValues.empty()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(circuitBlock.getTerminator());
+      finalCheckValues.reserve(opsToErase.size());
+      finalCheckProps.reserve(opsToErase.size());
+      for (Operation *opToCheck : opsToErase) {
+        if (auto assertOp = dyn_cast<verif::AssertOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              assertOp.getProperty(), assertOp.getEnable(), /*isCover=*/false,
+              rewriter, assertOp.getLoc()));
+          finalCheckProps.push_back(assertOp.getProperty());
+        } else if (auto assumeOp = dyn_cast<verif::AssumeOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              assumeOp.getProperty(), assumeOp.getEnable(), /*isCover=*/false,
+              rewriter, assumeOp.getLoc()));
+          finalCheckProps.push_back(assumeOp.getProperty());
+        } else if (auto coverOp = dyn_cast<verif::CoverOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              coverOp.getProperty(), coverOp.getEnable(), /*isCover=*/true,
+              rewriter, coverOp.getLoc()));
+          finalCheckProps.push_back(coverOp.getProperty());
+        }
+      }
     }
 
     // Append non-final and final check outputs after delay/past buffers so
@@ -3217,6 +3552,14 @@ struct VerifBoundedModelCheckingOpConversion
                               finalCheckValues.end());
       yieldOp->setOperands(newYieldOperands);
     }
+
+    // Now that the check values are routed through the circuit yield and any
+    // multi-step sequence rewriting has had a chance to update their uses, we
+    // can erase the original verification ops from the circuit.
+    for (auto *opToErase : nonFinalOps)
+      rewriter.eraseOp(opToErase);
+    for (auto *opToErase : opsToErase)
+      rewriter.eraseOp(opToErase);
 
     // Extend name list with delay/past buffer slots appended to the circuit
     // arguments. These slots are appended after the original inputs.
@@ -3835,7 +4178,7 @@ struct VerifBoundedModelCheckingOpConversion
         Operation *cur = worklist.pop_back_val();
         if (!visited.insert(cur).second)
           continue;
-        if (!isa<ltl::LTLDialect>(cur->getDialect()))
+        if (!isa_and_nonnull<ltl::LTLDialect>(cur->getDialect()))
           continue;
         if (auto clockOp = dyn_cast<ltl::ClockOp>(cur)) {
           result.sawClock = true;
@@ -3863,11 +4206,14 @@ struct VerifBoundedModelCheckingOpConversion
     };
 
     bool unmappedClockError = false;
-    auto reportUnmappedClock = [&](Operation *op, StringRef detail) {
+    auto reportUnmappedClock = [&](Location loc, StringRef detail) {
       if (unmappedClockError)
         return;
-      op->emitError(detail);
+      emitError(loc) << detail;
       unmappedClockError = true;
+    };
+    auto reportUnmappedClockForOp = [&](Operation *op, StringRef detail) {
+      reportUnmappedClock(op->getLoc(), detail);
     };
 
     auto resolveClockPos = [&](Operation *op, StringAttr clockName,
@@ -3876,28 +4222,29 @@ struct VerifBoundedModelCheckingOpConversion
         return std::nullopt;
       if (clockName && !clockName.getValue().empty()) {
         if (clockIndexes.empty()) {
-          reportUnmappedClock(op,
-                              "clock name does not match any BMC clock input");
+          reportUnmappedClockForOp(
+              op, "clock name does not match any BMC clock input");
           return std::nullopt;
         }
         auto it = clockNameToPos.find(clockName.getValue());
         if (it != clockNameToPos.end())
           return it->second;
-        reportUnmappedClock(op, "clock name does not match any BMC clock input");
+        reportUnmappedClockForOp(op,
+                                 "clock name does not match any BMC clock input");
         return std::nullopt;
       }
       if (clockValue) {
         if (clockIndexes.empty()) {
-          reportUnmappedClock(op,
-                              "clocked property uses a clock that is not a BMC "
-                              "clock input");
+          reportUnmappedClockForOp(
+              op, "clocked property uses a clock that is not a BMC "
+                  "clock input");
           return std::nullopt;
         }
         if (auto info = resolveClockPosInfo(clockValue))
           return info->pos;
-        reportUnmappedClock(op,
-                            "clocked property uses a clock that is not a BMC "
-                            "clock input");
+        reportUnmappedClockForOp(
+            op, "clocked property uses a clock that is not a BMC "
+                "clock input");
         return std::nullopt;
       }
       return std::nullopt;
@@ -3906,7 +4253,7 @@ struct VerifBoundedModelCheckingOpConversion
     auto resolveCheckClockPos =
         [&](SmallVectorImpl<std::optional<unsigned>> &out,
             MutableArrayRef<NonFinalCheckInfo> infos,
-            ArrayRef<Value> props, ArrayRef<Operation *> ops) {
+            ArrayRef<Value> props) {
           out.reserve(infos.size());
           for (size_t idx = 0; idx < infos.size(); ++idx) {
             auto &info = infos[idx];
@@ -3919,8 +4266,15 @@ struct VerifBoundedModelCheckingOpConversion
               pos = inferred.pos;
             if (info.clockName && !info.clockName.getValue().empty()) {
               auto it = clockNameToPos.find(info.clockName.getValue());
-              if (it != clockNameToPos.end())
+              if (it != clockNameToPos.end()) {
+                if (inferred.pos && *inferred.pos != it->second) {
+                  reportUnmappedClock(
+                      info.loc,
+                      "clocked property uses conflicting clock information; "
+                      "ensure each property uses a single clock/edge");
+                }
                 pos = it->second;
+              }
             } else if (!risingClocksOnly && clockIndexes.size() == 1) {
               pos = 0;
             }
@@ -3929,11 +4283,8 @@ struct VerifBoundedModelCheckingOpConversion
                   (info.clockName && !info.clockName.getValue().empty()) ||
                   inferred.sawClock;
               if (explicitClock) {
-                Operation *reportOp =
-                    idx < ops.size() ? ops[idx] : op.getOperation();
-                reportUnmappedClock(
-                    reportOp, "clocked property uses a clock that is not a BMC clock "
-                        "input");
+                reportUnmappedClock(info.loc, "clocked property uses a clock that is "
+                                             "not a BMC clock input");
               }
             }
             out.push_back(pos);
@@ -3941,11 +4292,10 @@ struct VerifBoundedModelCheckingOpConversion
         };
 
     SmallVector<std::optional<unsigned>> nonFinalCheckClockPos;
-    resolveCheckClockPos(nonFinalCheckClockPos, nonFinalCheckInfos, checkProps,
-                         nonFinalOps);
+    resolveCheckClockPos(nonFinalCheckClockPos, nonFinalCheckInfos,
+                         nonFinalCheckProps);
     SmallVector<std::optional<unsigned>> finalCheckClockPos;
-    resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps,
-                         opsToErase);
+    resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps);
 
     if (!risingClocksOnly) {
       for (auto &info : delayInfos) {
@@ -3964,68 +4314,6 @@ struct VerifBoundedModelCheckingOpConversion
 
     if (unmappedClockError)
       return failure();
-
-    if (risingClocksOnly) {
-      auto hasUnsupportedEdge =
-          [](std::optional<ltl::ClockEdge> edge) -> bool {
-        return edge && *edge != ltl::ClockEdge::Pos;
-      };
-      for (const auto &info : nonFinalCheckInfos) {
-        if (hasUnsupportedEdge(info.edge)) {
-          op.emitError("rising-clocks-only does not support negedge/edge "
-                       "properties; rerun without --rising-clocks-only");
-          return failure();
-        }
-      }
-      for (size_t idx = 0; idx < finalCheckInfos.size(); ++idx) {
-        auto edge = finalCheckInfos[idx].edge;
-        if (!edge && idx < finalCheckProps.size()) {
-          auto inferred = inferClockFromProperty(finalCheckProps[idx]);
-          if (inferred.edge)
-            edge = inferred.edge;
-        }
-        if (hasUnsupportedEdge(edge)) {
-          op.emitError("rising-clocks-only does not support negedge/edge "
-                       "properties; rerun without --rising-clocks-only");
-          return failure();
-        }
-      }
-      bool unsupportedAssume = false;
-      circuitBlock.walk([&](verif::AssumeOp assumeOp) {
-        if (unsupportedAssume || assumeOp->hasAttr("bmc.final"))
-          return;
-        std::optional<ltl::ClockEdge> edge;
-        if (auto edgeAttr = assumeOp->getAttrOfType<ltl::ClockEdgeAttr>(
-                "bmc.clock_edge"))
-          edge = edgeAttr.getValue();
-        if (!edge) {
-          auto inferred = inferClockFromProperty(assumeOp.getProperty());
-          if (inferred.edge)
-            edge = inferred.edge;
-        }
-        if (hasUnsupportedEdge(edge)) {
-          op.emitError("rising-clocks-only does not support negedge/edge "
-                       "properties; rerun without --rising-clocks-only");
-          unsupportedAssume = true;
-        }
-      });
-      if (unsupportedAssume)
-        return failure();
-      for (const auto &info : delayInfos) {
-        if (hasUnsupportedEdge(info.edge)) {
-          op.emitError("rising-clocks-only does not support negedge/edge "
-                       "delay buffers; rerun without --rising-clocks-only");
-          return failure();
-        }
-      }
-      for (const auto &info : pastInfos) {
-        if (hasUnsupportedEdge(info.edge)) {
-          op.emitError("rising-clocks-only does not support negedge/edge "
-                       "past buffers; rerun without --rising-clocks-only");
-          return failure();
-        }
-      }
-    }
 
     SmallVector<unsigned> regClockToLoopIndex;
     SmallVector<bool> regClockInverts;
@@ -5500,26 +5788,29 @@ struct ConvertVerifToSMTPass
 } // namespace
 
 static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
-                                               RewritePatternSet &patterns) {
+                                               RewritePatternSet &patterns,
+                                               bool approxTemporalOps) {
   patterns.add<LTLAndOpConversion, LTLOrOpConversion, LTLIntersectOpConversion,
                LTLNotOpConversion, LTLImplicationOpConversion,
-               LTLEventuallyOpConversion, LTLUntilOpConversion,
-               LTLBooleanConstantOpConversion, LTLClockOpConversion,
-               LTLDelayOpConversion,
-               LTLPastOpConversion, LTLConcatOpConversion,
-               LTLRepeatOpConversion, LTLGoToRepeatOpConversion,
-               LTLNonConsecutiveRepeatOpConversion>(converter,
-                                                    patterns.getContext());
+               LTLBooleanConstantOpConversion, LTLClockOpConversion>(
+      converter, patterns.getContext());
+  patterns.add<LTLEventuallyOpConversion, LTLUntilOpConversion, LTLPastOpConversion,
+               LTLConcatOpConversion, LTLRepeatOpConversion,
+               LTLGoToRepeatOpConversion, LTLNonConsecutiveRepeatOpConversion>(
+      converter, patterns.getContext(), approxTemporalOps);
+  patterns.add<LTLDelayOpConversion>(converter, patterns.getContext(),
+                                     approxTemporalOps);
 }
 
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
     bool forSMTLIBExport,
+    bool approxTemporalOps,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
   // Add LTL operation conversion patterns
-  populateLTLToSMTConversionPatterns(converter, patterns);
+  populateLTLToSMTConversionPatterns(converter, patterns, approxTemporalOps);
 
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
@@ -5718,6 +6009,34 @@ void ConvertVerifToSMTPass::runOnOperation() {
                                           std::move(patterns))))
     return signalPassFailure();
 
+  // The first phase (notably BMC lowering) may rewrite sequence roots and leave
+  // behind now-dead LTL ops (e.g. original sequence DAGs after NFA lowering).
+  // Since the second phase marks many temporal ops illegal (and strict lowering
+  // may refuse approximations), erase dead LTL ops before attempting to
+  // legalize the remainder.
+  {
+    SmallVector<Operation *> ordered;
+    getOperation()->walk([&](Operation *op) {
+      if (isa_and_nonnull<ltl::LTLDialect>(op->getDialect()))
+        ordered.push_back(op);
+    });
+
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (int64_t i = static_cast<int64_t>(ordered.size()) - 1; i >= 0; --i) {
+        Operation *op = ordered[static_cast<size_t>(i)];
+        if (!op)
+          continue;
+        if (!op->use_empty())
+          continue;
+        op->erase();
+        ordered[static_cast<size_t>(i)] = nullptr;
+        changed = true;
+      }
+    }
+  }
+
   // Second phase: lower remaining LTL operations to SMT.
   ConversionTarget ltlTarget(getContext());
   ltlTarget.addLegalDialect<smt::SMTDialect, arith::ArithDialect,
@@ -5732,7 +6051,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
                          ltl::NonConsecutiveRepeatOp, ltl::PastOp>();
 
   RewritePatternSet ltlPatterns(&getContext());
-  populateLTLToSMTConversionPatterns(converter, ltlPatterns);
+  populateLTLToSMTConversionPatterns(converter, ltlPatterns, approxTemporalOps);
   if (failed(mlir::applyPartialConversion(getOperation(), ltlTarget,
                                           std::move(ltlPatterns))))
     return signalPassFailure();

@@ -1690,7 +1690,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     if (pathIt == refPaths.end())
       return sigOp.emitError("missing ref path for LLHD signal");
     const RefPath &path = pathIt->second;
-  for (auto *user : ref.getUsers()) {
+    for (auto *user : ref.getUsers()) {
       if (auto probe = dyn_cast<llhd::ProbeOp>(user)) {
         probes.push_back(probe);
         probePaths.try_emplace(probe, path);
@@ -1869,7 +1869,6 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
   }
 
-
   OpBuilder builder(sigOp);
   auto getStructFieldType =
       [&](hw::StructType structType, StringAttr field) -> Type {
@@ -1939,6 +1938,54 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
     return value;
   };
+
+  // If the signal has a name matching a module input port and it is only ever
+  // read (no drives), treat it as an alias for that port. This makes the
+  // stripping robust against earlier LLHD transforms that drop the explicit
+  // `llhd.drv %sig, %port after 0` and leave the signal stuck at its init.
+  if (drives.empty() && !isLocalSignal && forwardedArgs.empty()) {
+    if (auto nameAttr = sigOp.getNameAttr()) {
+      auto parentModule = sigOp->getParentOfType<hw::HWModuleOp>();
+      if (parentModule) {
+        Value portValue;
+        auto inputNames = parentModule.getModuleType().getInputNames();
+        for (auto [index, inputNameAttr] : llvm::enumerate(inputNames)) {
+          auto inputName = cast<StringAttr>(inputNameAttr).getValue();
+          if (inputName != nameAttr.getValue())
+            continue;
+          portValue = parentModule.getArgumentForInput(index);
+          break;
+        }
+        if (portValue &&
+            portValue.getType() == sigOp.getType().getNestedType()) {
+          for (auto probe : probes) {
+            OpBuilder probeBuilder(probe);
+            Value replacement =
+                materializePath(probeBuilder, portValue,
+                                probePaths.lookup(probe), probe.getLoc());
+            if (!replacement)
+              return probe.emitError("unsupported LLHD probe path in LEC");
+            if (replacement.getType() != probe.getResult().getType())
+              return probe.emitError("signal probe type mismatch in LEC");
+            probe.getResult().replaceAllUsesWith(replacement);
+            probe.erase();
+          }
+          for (Operation *refOp : llvm::reverse(derivedRefs)) {
+            if (refOp->use_empty())
+              refOp->erase();
+          }
+          if (sigOp.use_empty()) {
+            Value init = sigOp.getInit();
+            sigOp.erase();
+            if (auto *def = init.getDefiningOp())
+              if (def->use_empty())
+                def->erase();
+          }
+          return success();
+        }
+      }
+    }
+  }
   auto updatePath = [&](auto &&self, OpBuilder &pathBuilder, Value baseValue,
                         ArrayRef<RefStep> path, Value updateValue,
                         Location loc) -> Value {

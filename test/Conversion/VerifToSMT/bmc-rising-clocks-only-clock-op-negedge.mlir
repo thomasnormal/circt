@@ -6,9 +6,9 @@
 
 // CHECK-LABEL: func.func @bmc_rising_clocks_only_clock_op_negedge() -> i1
 // CHECK:   scf.for
+// CHECK:     func.call @bmc_loop
 // CHECK:     func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bool)
-// CHECK:     func.call @bmc_loop
 func.func @bmc_rising_clocks_only_clock_op_negedge() -> i1 {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk"]

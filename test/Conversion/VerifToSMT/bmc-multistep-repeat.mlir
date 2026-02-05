@@ -10,10 +10,8 @@
 // Single delay buffer constant initialized to 0 (used multiple times)
 // CHECK: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
-// Circuit takes 4 args (a, buf0, buf1, buf2)
-// Returns: orig outputs + delay buffers + non-final check
 // CHECK: func.call @bmc_circuit
-// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_repeat_3() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {
@@ -38,10 +36,8 @@ func.func @test_repeat_3() -> i1 {
 // Single delay buffer constant initialized to 0 (used multiple times)
 // CHECK: smt.bv.constant #smt.bv<0> : !smt.bv<1>
 // CHECK: scf.for
-// Circuit takes 5 args (a, buf0, buf1, buf2, buf3)
-// Returns: orig outputs + delay buffers + non-final check
 // CHECK: func.call @bmc_circuit
-// CHECK-SAME: : (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bv<1>, !smt.bool)
+// CHECK-SAME: -> ({{.*}}!smt.bool)
 func.func @test_repeat_range() -> i1 {
   %bmc = verif.bmc bound 5 num_regs 0 initial_values []
   init {

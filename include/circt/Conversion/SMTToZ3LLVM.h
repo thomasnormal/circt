@@ -65,6 +65,10 @@ struct SMTGlobalsHandler {
   DenseMap<StringAttr, mlir::LLVM::GlobalOp> stringCache;
 };
 
+/// Opaque helper type used internally by the SMT-to-Z3 lowering to track
+/// declarations that should be printed as model inputs when requested.
+struct SMTModelPrintTracker;
+
 /// Populate the given type converter with the SMT to LLVM type conversions.
 void populateSMTToZ3LLVMTypeConverter(TypeConverter &converter);
 
@@ -73,7 +77,8 @@ void populateSMTToZ3LLVMTypeConverter(TypeConverter &converter);
 /// LLVM globals and functions.
 void populateSMTToZ3LLVMConversionPatterns(
     RewritePatternSet &patterns, TypeConverter &converter,
-    SMTGlobalsHandler &globals, const LowerSMTToZ3LLVMOptions &options);
+    SMTGlobalsHandler &globals, const LowerSMTToZ3LLVMOptions &options,
+    SMTModelPrintTracker *modelPrintTracker = nullptr);
 
 } // namespace circt
 

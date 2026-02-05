@@ -1,8 +1,14 @@
-// RUN: not circt-opt %s --convert-verif-to-smt -allow-unregistered-dialect 2>&1 | FileCheck %s
+// RUN: circt-opt %s --convert-verif-to-smt -allow-unregistered-dialect | FileCheck %s
 
-// CHECK: goto/non-consecutive repeat expansion too large
+// This used to fail due to combinatorial expansion of goto/non-consecutive
+// repeat. It is now handled via the NFA-based BMC lowering.
 
 func.func @test_goto_repeat_too_large() -> i1 {
+// CHECK-LABEL: func.func @test_goto_repeat_too_large
+// CHECK:         scf.for
+// CHECK:         func.call @bmc_circuit
+// CHECK:         func.func @bmc_circuit(
+// CHECK-SAME:      -> ({{.*}}, !smt.bool)
   %bmc = verif.bmc bound 18 num_regs 0 initial_values []
   init {
   }

@@ -1,7 +1,7 @@
 // RUN: not circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect 2>&1 | FileCheck %s
 
 // Conflicting edge between bmc.clock_edge and ltl.clock is rejected.
-// CHECK: ltl.delay used with conflicting clock edges
+// CHECK: ltl.delay/ltl.past used with conflicting clock information
 func.func @delay_edge_mixed_conflict() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk", "sig"]

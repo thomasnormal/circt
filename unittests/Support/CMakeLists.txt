@@ -12,6 +12,7 @@ add_circt_unittest(CIRCTSupportTests
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
   ResourceGuardTest.cpp
+  SMTDeadCodeEliminationTest.cpp
   TestReportingTest.cpp
   TwoStateUtilsTest.cpp
   WallClockTimeoutTest.cpp
@@ -23,5 +24,9 @@ target_link_libraries(CIRCTSupportTests
   CIRCTHW
   CIRCTSeq
   CIRCTSupport
+  MLIRArithDialect
   MLIRIR
+  MLIRParser
+  MLIRSCFDialect
+  MLIRSMT
 )

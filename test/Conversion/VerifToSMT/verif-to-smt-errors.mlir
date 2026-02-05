@@ -143,7 +143,7 @@ hw.module @TwoAssertions(in %x: i1, in %y: i1) {
 // -----
 
 func.func @multiple_clocks() -> (i1) {
-  // expected-error @below {{multi-clock BMC requires bmc_reg_clocks with one entry per register}}
+  // expected-error @below {{multi-clock BMC requires bmc_reg_clocks or bmc_reg_clock_sources with one entry per register}}
   %bmc = verif.bmc bound 10 num_regs 1 initial_values [unit]
   init {
     %c0_i1 = hw.constant 0 : i1
@@ -228,5 +228,65 @@ func.func @refines_non_primitive_free_var() -> () {
     %cc = builtin.unrealized_conversion_cast %const : !smt.bv<32> to i32
     verif.yield %cc : i32
   }
+  return
+}
+
+// -----
+
+func.func @ltl_delay_nonzero_outside_bmc(%a: i1) {
+  // expected-error @below {{ltl.delay with delay > 0 must be lowered by the BMC multi-step infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.delay' that was explicitly marked illegal}}
+  %seq = ltl.delay %a, 1, 0 : i1
+  verif.assert %seq : !ltl.sequence
+  return
+}
+
+// -----
+
+func.func @ltl_past_nonzero_outside_bmc(%a: i1) {
+  // expected-error @below {{ltl.past with delay > 0 must be lowered by the BMC multi-step infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.past' that was explicitly marked illegal}}
+  %v = ltl.past %a, 1 : i1
+  verif.assert %v : !ltl.sequence
+  return
+}
+
+// -----
+
+func.func @ltl_eventually_outside_bmc(%a: i1) {
+  // expected-error @below {{ltl.eventually must be lowered by the BMC/LTLToCore infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.eventually' that was explicitly marked illegal}}
+  %v = ltl.eventually %a : i1
+  verif.assert %v : !ltl.property
+  return
+}
+
+// -----
+
+func.func @ltl_until_outside_bmc(%p: i1, %q: i1) {
+  // expected-error @below {{ltl.until must be lowered by the BMC/LTLToCore infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.until' that was explicitly marked illegal}}
+  %v = ltl.until %p, %q : i1, i1
+  verif.assert %v : !ltl.property
+  return
+}
+
+// -----
+
+func.func @ltl_concat_multi_outside_bmc(%a: i1, %b: i1) {
+  // expected-error @below {{ltl.concat with multiple inputs must be lowered by the BMC/LTLToCore infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.concat' that was explicitly marked illegal}}
+  %v = ltl.concat %a, %b : i1, i1
+  verif.assert %v : !ltl.sequence
+  return
+}
+
+// -----
+
+func.func @ltl_repeat_outside_bmc(%a: i1) {
+  // expected-error @below {{ltl.repeat must be lowered by the BMC/LTLToCore infrastructure}}
+  // expected-error @below {{failed to legalize operation 'ltl.repeat' that was explicitly marked illegal}}
+  %v = ltl.repeat %a, 2, 0 : i1
+  verif.assert %v : !ltl.sequence
   return
 }

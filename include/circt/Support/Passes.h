@@ -59,6 +59,14 @@ public:
 /// Create a simple canonicalizer pass.
 std::unique_ptr<Pass> createSimpleCanonicalizerPass();
 
+/// Create a canonicalizer pass configured to use bottom-up traversal, with
+/// region simplification disabled (to match `createSimpleCanonicalizerPass`).
+std::unique_ptr<Pass> createBottomUpSimpleCanonicalizerPass();
+
+/// Create a pass that prunes unused SMT expression and declaration operations
+/// within `smt.solver` scopes.
+std::unique_ptr<Pass> createSMTDeadCodeEliminationPass();
+
 /// Create a canonicalizer pass configured to use bottom-up traversal. This is
 /// intended as a safer default for large IR to avoid pathological behavior that
 /// can occur with top-down traversal in some pipelines.

@@ -14,6 +14,7 @@
 #include "circt/InitAllDialects.h"
 #include "circt/InitAllPasses.h"
 #include "circt/Support/LoweringOptions.h"
+#include "circt/Support/ResourceGuard.h"
 #include "circt/Support/Version.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -31,8 +32,11 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "mlir/Support/FileUtilities.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Support/PrettyStackTrace.h"
+#include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/ToolOutputFile.h"
 
 // Defined in the test directory, no public header.
 namespace circt {
@@ -41,7 +45,22 @@ void registerAnalysisTestPasses();
 } // namespace test
 } // namespace circt
 
+namespace {
+struct ResourceGuardPassInstrumentation final : public mlir::PassInstrumentation {
+  void runBeforePass(mlir::Pass *pass, mlir::Operation *op) override {
+    llvm::StringRef arg = pass->getArgument();
+    llvm::StringRef label = arg.empty() ? pass->getName() : arg;
+    llvm::StringRef opName =
+        op ? op->getName().getStringRef() : llvm::StringRef("<null>");
+    std::string combined = (label + "[" + opName + "]").str();
+    circt::setResourceGuardPhase(combined);
+  }
+};
+} // namespace
+
 int main(int argc, char **argv) {
+  llvm::InitLLVM y(argc, argv);
+
   // Set the bug report message to indicate users should file issues on
   // llvm/circt and not llvm/llvm-project.
   llvm::setBugReportMsg(circt::circtBugReportMsg);
@@ -83,6 +102,37 @@ int main(int argc, char **argv) {
   mlir::registerSROA();
   mlir::registerMem2RegPass();
 
-  return mlir::failed(mlir::MlirOptMain(
-      argc, argv, "CIRCT modular optimizer driver", registry));
+  auto filenames = mlir::registerAndParseCLIOptions(
+      argc, argv, "CIRCT modular optimizer driver", registry);
+  circt::installResourceGuard();
+
+  // Inject pass-level phase labels into the resource guard, while preserving
+  // the default pass pipeline parsing behavior from `MlirOptMainConfig`.
+  auto config = mlir::MlirOptMainConfig::createFromCLOptions();
+  auto baseConfig = config;
+  config.setPassPipelineSetupFn(
+      [baseConfig](mlir::PassManager &pm) mutable -> mlir::LogicalResult {
+        pm.addInstrumentation(
+            std::make_unique<ResourceGuardPassInstrumentation>());
+        return baseConfig.setupPassPipeline(pm);
+      });
+
+  std::string errorMessage;
+  auto file = mlir::openInputFile(filenames.first, &errorMessage);
+  if (!file) {
+    llvm::errs() << errorMessage << "\n";
+    return EXIT_FAILURE;
+  }
+  auto output = mlir::openOutputFile(filenames.second, &errorMessage);
+  if (!output) {
+    llvm::errs() << errorMessage << "\n";
+    return EXIT_FAILURE;
+  }
+
+  circt::setResourceGuardPhase("pass pipeline");
+  if (mlir::failed(mlir::MlirOptMain(output->os(), std::move(file), registry,
+                                     config)))
+    return EXIT_FAILURE;
+  output->keep();
+  return EXIT_SUCCESS;
 }

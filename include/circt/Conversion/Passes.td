@@ -804,6 +804,12 @@ def ConvertVerifToSMT : Pass<"convert-verif-to-smt", "mlir::ModuleOp"> {
     Option<"forSMTLIBExport", "for-smtlib-export", "bool",
            /*default=*/"false",
            "Generate output suitable for SMT-LIB export.">,
+    Option<"approxTemporalOps", "approx-temporal", "bool",
+           /*default=*/"false",
+           "Allow UNSOUND approximations for temporal LTL ops (e.g. treating "
+           "ltl.delay with nonzero delay as trivially true) outside of the "
+           "BMC multi-step lowering. Prefer leaving this disabled so temporal "
+           "gaps fail loudly instead of silently producing incorrect results.">,
   ];
 }
 
