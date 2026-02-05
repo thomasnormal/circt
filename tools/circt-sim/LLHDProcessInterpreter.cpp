@@ -14634,57 +14634,6 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
     tempProcId = nextTempProcId++;
   processStates[tempProcId] = std::move(tempState);
 
-  // Pre-initialize UVM core state before global constructors run.
-  // UVM's get_core_state() checks if m_uvm_core_state queue is empty, and if
-  // so returns 0. uvm_init() only creates the coreservice if get_core_state()
-  // returns non-zero. By pre-initializing the queue with state 1
-  // (UVM_CORE_INITIALIZING), we ensure the coreservice gets created during
-  // the first global constructor that calls uvm_init().
-  {
-    constexpr StringLiteral uvmCoreStateName = "uvm_pkg::m_uvm_core_state";
-    auto blockIt = globalMemoryBlocks.find(uvmCoreStateName);
-    if (blockIt != globalMemoryBlocks.end()) {
-      MemoryBlock &stateBlock = blockIt->second;
-
-      // The global is a struct<(ptr, i64)> where:
-      // - ptr (offset 0-7): pointer to queue data (array of i32)
-      // - i64 (offset 8-15): queue size
-      // We need to allocate memory for an i32 value of 1, then set up the
-      // struct.
-
-      // Allocate a 4-byte block for the i32 core state value (1 =
-      // UVM_CORE_INITIALIZING)
-      uint64_t stateValueAddr = globalNextAddress;
-      globalNextAddress += 8; // Align to 8 bytes
-
-      MemoryBlock valueBlock(4, 32);
-      // Store value 1 (UVM_CORE_INITIALIZING) as little-endian i32
-      valueBlock.data[0] = 1;
-      valueBlock.data[1] = 0;
-      valueBlock.data[2] = 0;
-      valueBlock.data[3] = 0;
-      valueBlock.initialized = true;
-      mallocBlocks[stateValueAddr] = std::move(valueBlock);
-
-      // Update the m_uvm_core_state struct:
-      // - ptr (offset 0-7): address of the state value
-      // - i64 (offset 8-15): 1 (queue has one element)
-      if (stateBlock.data.size() >= 16) {
-        for (unsigned i = 0; i < 8; ++i)
-          stateBlock.data[i] = (stateValueAddr >> (i * 8)) & 0xFF;
-        stateBlock.data[8] = 1; // size = 1
-        for (unsigned i = 9; i < 16; ++i)
-          stateBlock.data[i] = 0;
-        stateBlock.initialized = true;
-      }
-
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Pre-initialized UVM core state to 1 "
-                    "(UVM_CORE_INITIALIZING) at addr 0x"
-                 << llvm::format_hex(stateValueAddr, 16) << "\n");
-    }
-  }
-
   // Execute each constructor in priority order
   for (auto &[priority, ctorName] : ctorEntries) {
     LLVM_DEBUG(llvm::dbgs() << "  Calling constructor: " << ctorName
