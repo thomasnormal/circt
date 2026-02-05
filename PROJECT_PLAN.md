@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 358 - Array Indexing & Assoc Array Fix)
+## Current Status - February 5, 2026 (Iteration 359 - Recursive Call Arg Corruption Fix)
 
 ### Session Summary - Key Milestones
 
@@ -58,6 +58,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **RefType Unwrapping Fix** | ✅ FIXED | alloca field drive `dyn_cast<StructType>` failed on RefType; now unwraps first |
 | **hw.bitcast Layout Conversion** | ✅ FIXED | LLVM↔HW struct layout conversion in bitcast handler |
 | **ProcessStates Unit Test** | ✅ ADDED | ProcessStatesReferenceStability test; 17/17 unit tests pass |
+| **Recursive Call Arg Corruption** | ✅ **FIXED** | Recursive function calls (e.g., `uvm_phase::new()` creating `m_end_node`) now save/restore block arg values, preventing corruption of outer call's `this` pointer |
 | **Recursive Probe Layout Conversion** | ✅ FIXED | `convertLLVMToHWLayout` in probe path; fixes nested struct read data |
 | **DAG False Cycle Detection Fix** | ✅ FIXED | `pushCount` map replaces `inProgress` set (commit `a488f68f9`) |
 | **Instance Output Eval Priority** | ✅ FIXED | `instanceOutputMap` checked before `getSignalId` (commit `a488f68f9`) |
