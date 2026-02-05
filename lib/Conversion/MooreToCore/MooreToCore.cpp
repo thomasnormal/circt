@@ -3307,8 +3307,51 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
       auto zeroAttr = LLVM::ZeroAttr::get(ctx);
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(mod.getBody());
-      LLVM::GlobalOp::create(rewriter, loc, vtableArrayTy, /*isConstant=*/false,
-                             LLVM::Linkage::Internal, vtableGlobalName, zeroAttr);
+      auto placeholderGlobal = LLVM::GlobalOp::create(
+          rewriter, loc, vtableArrayTy, /*isConstant=*/false,
+          LLVM::Linkage::Internal, vtableGlobalName, zeroAttr);
+
+      // Resolve vtable entries by walking the class hierarchy.
+      // Collect the most-derived implementation for each virtual method
+      // by traversing from base to derived (derived overrides base).
+      DenseMap<StringRef, FlatSymbolRefAttr> methodTargets;
+      std::function<void(SymbolRefAttr)> collectTargets =
+          [&](SymbolRefAttr classSym) {
+            auto *classOp = mod.lookupSymbol(classSym);
+            auto classDeclOp = dyn_cast_or_null<ClassDeclOp>(classOp);
+            if (!classDeclOp)
+              return;
+            // Process base class first so derived overrides it
+            if (auto baseAttr = classDeclOp.getBaseAttr())
+              collectTargets(baseAttr);
+            // Collect method implementations from this class
+            for (auto &child : classDeclOp.getBody().front()) {
+              if (auto methodDecl = dyn_cast<ClassMethodDeclOp>(child)) {
+                if (auto implAttr = methodDecl.getImpl()) {
+                  methodTargets[methodDecl.getSymName()] =
+                      FlatSymbolRefAttr::get(
+                          ctx, implAttr->getRootReference());
+                }
+              }
+            }
+          };
+      collectTargets(sym);
+
+      // Build circt.vtable_entries from the resolved targets
+      SmallVector<Attribute> vtableEntries;
+      for (const auto &kv : structInfo->methodToVtableIndex) {
+        auto it = methodTargets.find(kv.first);
+        if (it != methodTargets.end()) {
+          SmallVector<Attribute> entry;
+          entry.push_back(rewriter.getI64IntegerAttr(kv.second));
+          entry.push_back(it->second);
+          vtableEntries.push_back(rewriter.getArrayAttr(entry));
+        }
+      }
+      if (!vtableEntries.empty()) {
+        placeholderGlobal->setAttr("circt.vtable_entries",
+                                   rewriter.getArrayAttr(vtableEntries));
+      }
     }
 
     // Get the address of the class's vtable global and store it
