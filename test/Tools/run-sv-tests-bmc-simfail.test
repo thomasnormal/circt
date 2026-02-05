@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.10--simfail-assert.sv <<\"EOF\"\n/*\n:name: simfail_assert\n:description: simulation-negative assertion test\n:should_fail_because: assertion is intentionally violated\n:type: simulation\n:tags: 16.10\n:unsynthesizable: 1\n*/\nmodule top(input logic clk, input logic a);\n  // Make the property falsifiable. A counterexample exists when a==0.\n  assert property (@(posedge clk) a);\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nmodule {\n  hw.module @top(in %clk : i1, in %a : i1) {\n    %c1 = hw.constant true : i1\n    verif.assert %c1 : i1\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"BMC_RESULT=SAT\"\nEOF\nchmod +x %t/fake-bmc.sh\n'
+// RUN: env OUT=%t/out.txt CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )16\\.10( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/out.txt | FileCheck %s --check-prefix=OUT
+
+// CHECK: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0
+// OUT: PASS{{[[:space:]]+}}16.10--simfail-assert{{[[:space:]]+}}

@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 367 - February 5, 2026
+
+### Summary
+
+Iteration 367: Updated the sv-tests BMC runner to distinguish compilation-negative tests from simulation-negative tests. For simulation-negative tests marked with `:should_fail_because:` and `:type: simulation`, BMC now treats the test as PASS when a counterexample exists (SAT), instead of incorrectly classifying it as XFAIL.
+
+### Accomplishments
+
+1. **sv-tests should_fail classification** - `utils/run_sv_tests_circt_bmc.sh` now treats simulation-negative tests as expecting SAT, and compilation-negative tests as expecting compile failure.
+2. **Regression test** - Added `test/Tools/run-sv-tests-bmc-simfail.test`.
+
+### Verification (February 5, 2026)
+
+- `python3 build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test`
+
 ## Iteration 366 - February 5, 2026
 
 ### Summary
