@@ -360,6 +360,13 @@ static void addUvmSupportIfAvailable() {
   if (opts.format != Format::SV)
     return;
 
+  // Only warn about missing UVM if the user explicitly pointed us at a UVM
+  // installation (via `--uvm-path` or `UVM_HOME`). Otherwise, stay silent: most
+  // CIRCT users are not compiling UVM testbenches, and warning spam breaks
+  // non-UVM regression tests that FileCheck stdout/stderr.
+  const bool uvmExplicitlyRequested =
+      !opts.uvmPath.empty() || (std::getenv("UVM_HOME") != nullptr);
+
   if (opts.uvmPath.empty()) {
     if (const char *uvmHome = std::getenv("UVM_HOME"))
       opts.uvmPath = uvmHome;
@@ -395,14 +402,16 @@ static void addUvmSupportIfAvailable() {
   }
 
   if (uvmPkgPath.empty()) {
-    // No UVM library found. Print a warning to help users find uvm-core.
-    llvm::errs()
-        << "warning: UVM library not found. To use UVM, either:\n"
-        << "  1. Set UVM_HOME environment variable to your uvm-core directory\n"
-        << "  2. Use --uvm-path=<path> to specify the UVM library location\n"
-        << "  3. Use --no-uvm-auto-include to disable UVM auto-inclusion\n"
-        << "  Recommended: Use Accellera's uvm-core from "
-           "https://github.com/accellera-official/uvm-core\n";
+    if (uvmExplicitlyRequested) {
+      // No UVM library found. Print a warning to help users find uvm-core.
+      llvm::errs()
+          << "warning: UVM library not found. To use UVM, either:\n"
+          << "  1. Set UVM_HOME environment variable to your uvm-core directory\n"
+          << "  2. Use --uvm-path=<path> to specify the UVM library location\n"
+          << "  3. Use --no-uvm-auto-include to disable UVM auto-inclusion\n"
+          << "  Recommended: Use Accellera's uvm-core from "
+             "https://github.com/accellera-official/uvm-core\n";
+    }
     return;
   }
 
