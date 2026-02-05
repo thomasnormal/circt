@@ -8857,6 +8857,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // and llhd.prb inside the function can resolve the signal ID.
   llvm::SmallVector<Value, 4> tempSignalMappings;
 
+  // Save current values of block arguments to restore on return.
+  // This is critical for recursive calls where the same func.func definition
+  // (and thus the same SSA Value objects) is used - without this, a recursive
+  // call's arguments overwrite the outer call's arguments in the shared value map.
+  llvm::SmallDenseMap<Value, InterpretedValue, 8> savedArgValues;
+  for (auto arg : entryBlock.getArguments()) {
+    auto it = processStates[procId].valueMap.find(arg);
+    if (it != processStates[procId].valueMap.end())
+      savedArgValues[arg] = it->second;
+  }
+
   // Set function arguments (only if not resuming from a saved position)
   if (!resumeBlock) {
     // Get the call operands so we can trace signal refs through function args.
@@ -8895,10 +8906,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     }
   }
 
-  // Helper to clean up temporary signal mappings before returning.
+  // Helper to restore saved argument values before returning.
+  auto restoreSavedArgValues = [&]() {
+    for (const auto &[arg, val] : savedArgValues)
+      processStates[procId].valueMap[arg] = val;
+  };
+
+  // Helper to clean up temporary signal mappings and restore arg values before
+  // returning. Restoring arg values is critical for recursive calls to the same
+  // function - without it, the inner call's arguments corrupt the outer call's.
   auto cleanupTempMappings = [&]() {
     for (Value v : tempSignalMappings)
       valueToSignal.erase(v);
+    restoreSavedArgValues();
   };
 
   // Execute operations until we hit a return
@@ -13717,6 +13737,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   // Track signal mappings created for this call (to clean up later)
   SmallVector<Value, 4> tempSignalMappings;
 
+  // Save current values of block arguments to restore on return.
+  // This is critical for recursive calls where the same LLVM function definition
+  // (and thus the same SSA Value objects) is used - without this, a recursive
+  // call's arguments overwrite the outer call's arguments in the shared value map.
+  llvm::SmallDenseMap<Value, InterpretedValue, 8> savedArgValues;
+  for (auto arg : entryBlock.getArguments()) {
+    auto it = processStates[procId].valueMap.find(arg);
+    if (it != processStates[procId].valueMap.end())
+      savedArgValues[arg] = it->second;
+  }
+
   for (auto [idx, blockArg] :
        llvm::enumerate(entryBlock.getArguments())) {
     if (idx < args.size())
@@ -13736,11 +13767,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     }
   }
 
-  // Helper to clean up temporary signal mappings before returning
+  // Helper to restore saved argument values
+  auto restoreSavedArgValues = [&]() {
+    for (const auto &[arg, val] : savedArgValues)
+      processStates[procId].valueMap[arg] = val;
+  };
+
+  // Helper to clean up temporary signal mappings and restore arg values
   auto cleanupTempMappings = [&]() {
     for (Value v : tempSignalMappings) {
       valueToSignal.erase(v);
     }
+    restoreSavedArgValues();
   };
 
   // Execute the function body with operation limit to prevent infinite loops
