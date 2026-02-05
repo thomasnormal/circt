@@ -40,6 +40,7 @@ OUT="${OUT:-$PWD/sv-tests-lec-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 LEC_ASSUME_KNOWN_INPUTS="${LEC_ASSUME_KNOWN_INPUTS:-0}"
+LEC_ACCEPT_XPROP_ONLY="${LEC_ACCEPT_XPROP_ONLY:-0}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
@@ -262,6 +263,9 @@ while IFS= read -r -d '' sv; do
   fi
   if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
     lec_args+=("--assume-known-inputs")
+  fi
+  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+    lec_args+=("--accept-xprop-only")
   fi
   if [[ -n "$CIRCT_LEC_ARGS" ]]; then
     read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"

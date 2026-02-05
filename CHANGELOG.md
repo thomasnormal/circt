@@ -11,6 +11,7 @@ Iteration 359: Added a first-class `circt-lec --accept-xprop-only` mode for 2-st
 1. **Accept XPROP_ONLY** - New `--accept-xprop-only` flag converts SAT results that are X-prop-only into `LEC_RESULT=EQ` while still reporting `LEC_DIAG=XPROP_ONLY` and printing the counterexample (if requested).
 2. **Tool regression** - Added `test/Tools/circt-lec/lec-run-smtlib-accept-xprop-only.mlir`.
 3. **OpenTitan AES S-Box Canright** - `utils/run_opentitan_circt_lec.py --impl-filter canright` now reports OK when passing `CIRCT_LEC_ARGS=--accept-xprop-only`, since the mismatch is `XPROP_ONLY`.
+4. **Harness integration** - Formal and regression runner scripts can now forward `--accept-xprop-only` via `LEC_ACCEPT_XPROP_ONLY=1` (and `utils/run_formal_all.sh --lec-accept-xprop-only`) to treat XPROP-only mismatches as equivalent across suites.
 
 ### Verification (February 5, 2026)
 

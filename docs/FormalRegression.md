@@ -17,6 +17,12 @@ Write logs to a custom directory:
 utils/run_formal_all.sh --out-dir /tmp/formal-results
 ```
 
+Accept LEC mismatches that are diagnosed as `XPROP_ONLY`:
+
+```bash
+utils/run_formal_all.sh --lec-accept-xprop-only
+```
+
 Update baselines (updates `utils/formal-baselines.tsv` and the baseline table
 in `PROJECT_PLAN.md`):
 

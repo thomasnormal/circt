@@ -149,6 +149,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 **Minor (not blocking current tests):**
 15. **Arithmetic X-prop precision** - `Div/Mod` still treat any unknown bit as all-unknown; `Mul` now has a <=16-bit 4-state shift/add lowering that produces a more precise unknown mask (still correlation-losing). Next: consider a more scalable per-bit/interval approach or correlation-aware handling for mux-like unknowns.
 16. **Correlation-aware X-prop** - 4-state bitwise logic is correlation-losing; AES canright remains more pessimistic than LUT under strict X-prop (latest counterexample: `op_i=4'h4`, `data_i=16'h6D10`, `c1=16'h035C`, `c2=16'h00FF`). Long-term: add correlation-aware X-prop (BDD/ternary simulation) or a LUT fallback when inputs contain X/Z.
+    - **Pragmatic workaround**: `circt-lec --accept-xprop-only` treats mismatches diagnosed as `LEC_DIAG=XPROP_ONLY` (disappears under `assume-known-inputs`) as equivalent for 2-state equivalence workflows.
 14. **4-state unknown index on non-constant arrays** - still conservative (unknown index => all bits unknown); extend constant-array improvement to general cases.
 10. **`$readmemh` scope verification** - Warning on some testbenches
 11. **alert_handler_tb complexity** - 336 processes, needs optimization or timeout increase

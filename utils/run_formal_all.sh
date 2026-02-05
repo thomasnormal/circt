@@ -20,6 +20,7 @@ Options:
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
+  --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
   --with-avip            Run AVIP compile smoke using run_avip_circt_verilog.sh
@@ -45,6 +46,7 @@ WITH_AVIP=0
 BMC_RUN_SMTLIB=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
+LEC_ACCEPT_XPROP_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -76,6 +78,8 @@ while [[ $# -gt 0 ]]; do
       BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
     --lec-assume-known-inputs)
       LEC_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --lec-accept-xprop-only)
+      LEC_ACCEPT_XPROP_ONLY=1; shift ;;
     --update-baselines)
       UPDATE_BASELINES=1; shift ;;
     --fail-on-diff)
@@ -164,6 +168,7 @@ if [[ -d "$SV_TESTS_DIR" ]]; then
   run_suite sv-tests-lec \
     env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
     Z3_BIN="$Z3_BIN" \
     utils/run_sv_tests_circt_lec.sh "$SV_TESTS_DIR" || true
   line=$(grep -E "sv-tests LEC summary:" "$OUT_DIR/sv-tests-lec.log" | tail -1 || true)
@@ -203,6 +208,7 @@ if [[ -d "$VERILATOR_DIR" ]]; then
   run_suite verilator-lec \
     env OUT="$OUT_DIR/verilator-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
     Z3_BIN="$Z3_BIN" \
     utils/run_verilator_verification_circt_lec.sh "$VERILATOR_DIR" || true
   line=$(grep -E "verilator-verification LEC summary:" "$OUT_DIR/verilator-lec.log" | tail -1 || true)
@@ -246,6 +252,7 @@ if [[ -d "$YOSYS_DIR" ]]; then
   run_suite yosys-lec \
     env OUT="$OUT_DIR/yosys-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
     Z3_BIN="$Z3_BIN" \
     utils/run_yosys_sva_circt_lec.sh "$YOSYS_DIR" || true
   line=$(grep -E "yosys LEC summary:" "$OUT_DIR/yosys-lec.log" | tail -1 || true)
@@ -261,8 +268,12 @@ fi
 
 # OpenTitan LEC (optional)
 if [[ "$WITH_OPENTITAN" == "1" ]]; then
+  opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS")
+  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+    opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
+  fi
   run_suite opentitan-lec \
-    env LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+    env "${opentitan_env[@]}" \
     utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
   line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
   total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')

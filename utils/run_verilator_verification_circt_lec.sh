@@ -13,6 +13,7 @@ CIRCT_OPT_ARGS="${CIRCT_OPT_ARGS:-}"
 CIRCT_LEC_ARGS="${CIRCT_LEC_ARGS:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 LEC_SMOKE_ONLY="${LEC_SMOKE_ONLY:-0}"
+LEC_ACCEPT_XPROP_ONLY="${LEC_ACCEPT_XPROP_ONLY:-0}"
 Z3_BIN="${Z3_BIN:-}"
 OUT="${OUT:-$PWD/verilator-verification-lec-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
@@ -184,6 +185,9 @@ for suite in "${suites[@]}"; do
       lec_args+=("--emit-mlir")
     else
       lec_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+    fi
+    if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+      lec_args+=("--accept-xprop-only")
     fi
     if [[ -n "$CIRCT_LEC_ARGS" ]]; then
       read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"
