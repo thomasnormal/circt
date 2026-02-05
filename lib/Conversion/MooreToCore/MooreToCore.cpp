@@ -1131,6 +1131,147 @@ static Value buildUnknownIndexedRuntimeArray(OpBuilder &builder, Location loc,
   return createFourStateStruct(builder, loc, value, unknown);
 }
 
+static Value adjustIntegerWidth(OpBuilder &builder, Value value,
+                                uint32_t targetWidth, Location loc);
+
+enum class UnknownShiftKind { Shl, LShr, AShr };
+
+static Value buildUnknownShiftConsensus(OpBuilder &builder, Location loc,
+                                       UnknownShiftKind kind, Value inputValue,
+                                       Value inputUnknown, Value amountValue,
+                                       Value amountUnknown) {
+  const unsigned width = cast<IntegerType>(inputValue.getType()).getWidth();
+  constexpr unsigned kMaxUnknownShiftWidth = 16;
+  if (width > kMaxUnknownShiftWidth)
+    return Value();
+
+  Value allOnes = hw::ConstantOp::create(builder, loc, inputValue.getType(), -1);
+  Value zero = hw::ConstantOp::create(builder, loc, inputValue.getType(), 0);
+
+  // Normalize amount widths. Shift ops in comb require amount and value to have
+  // the same width, so we compute our possible-value predicates in that space.
+  amountValue = adjustIntegerWidth(builder, amountValue, width, loc);
+  amountUnknown = adjustIntegerWidth(builder, amountUnknown, width, loc);
+
+  Value knownMask =
+      comb::XorOp::create(builder, loc, amountUnknown, allOnes, false);
+  Value maskedAmount =
+      comb::AndOp::create(builder, loc, amountValue, knownMask, false);
+
+  // Determine whether any out-of-range shift (>= width) is possible. Use a
+  // min/max envelope based on the known bits: min sets unknown bits to 0, max
+  // sets unknown bits to 1.
+  Value minAmount =
+      comb::AndOp::create(builder, loc, amountValue, knownMask, false);
+  Value maxAmount =
+      comb::OrOp::create(builder, loc, minAmount, amountUnknown, false);
+  Value widthConst = hw::ConstantOp::create(builder, loc, amountValue.getType(),
+                                            static_cast<int64_t>(width));
+  Value overflowPossible = comb::ICmpOp::create(
+      builder, loc, comb::ICmpPredicate::uge, maxAmount, widthConst, false);
+
+  auto shiftByConst = [&](unsigned shift) -> std::pair<Value, Value> {
+    Value shiftConst = hw::ConstantOp::create(
+        builder, loc, amountValue.getType(), static_cast<int64_t>(shift));
+    Value shiftedVal;
+    Value shiftedUnk;
+    switch (kind) {
+    case UnknownShiftKind::Shl:
+      shiftedVal =
+          comb::ShlOp::create(builder, loc, inputValue, shiftConst, false);
+      shiftedUnk =
+          comb::ShlOp::create(builder, loc, inputUnknown, shiftConst, false);
+      break;
+    case UnknownShiftKind::LShr:
+      shiftedVal =
+          comb::ShrUOp::create(builder, loc, inputValue, shiftConst, false);
+      shiftedUnk =
+          comb::ShrUOp::create(builder, loc, inputUnknown, shiftConst, false);
+      break;
+    case UnknownShiftKind::AShr:
+      shiftedVal =
+          comb::ShrSOp::create(builder, loc, inputValue, shiftConst, false);
+      // For arithmetic shift, propagate unknown bits logically (zero fill).
+      shiftedUnk =
+          comb::ShrUOp::create(builder, loc, inputUnknown, shiftConst, false);
+      break;
+    }
+    return {shiftedVal, shiftedUnk};
+  };
+
+  auto candidateMaybeOneMask = [&](Value val, Value unk) -> Value {
+    return comb::OrOp::create(builder, loc, val, unk, false);
+  };
+  auto candidateMaybeZeroMask = [&](Value val, Value unk) -> Value {
+    Value notVal = comb::XorOp::create(builder, loc, val, allOnes, false);
+    return comb::OrOp::create(builder, loc, notVal, unk, false);
+  };
+
+  Value maybeOneMask = zero;
+  Value maybeZeroMask = zero;
+
+  // Enumerate all in-range shifts 0..width-1.
+  for (unsigned shift = 0; shift < width; ++shift) {
+    Value shiftConst = hw::ConstantOp::create(
+        builder, loc, amountValue.getType(), static_cast<int64_t>(shift));
+    Value maskedShift =
+        comb::AndOp::create(builder, loc, shiftConst, knownMask, false);
+    Value possible =
+        comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::eq, maskedAmount,
+                             maskedShift, false);
+    Value gate =
+        comb::ReplicateOp::create(builder, loc, inputValue.getType(), possible);
+
+    auto [candVal, candUnk] = shiftByConst(shift);
+    Value candMaybeOne = candidateMaybeOneMask(candVal, candUnk);
+    Value candMaybeZero = candidateMaybeZeroMask(candVal, candUnk);
+    candMaybeOne = comb::AndOp::create(builder, loc, candMaybeOne, gate, false);
+    candMaybeZero =
+        comb::AndOp::create(builder, loc, candMaybeZero, gate, false);
+    maybeOneMask =
+        comb::OrOp::create(builder, loc, maybeOneMask, candMaybeOne, false);
+    maybeZeroMask =
+        comb::OrOp::create(builder, loc, maybeZeroMask, candMaybeZero, false);
+  }
+
+  // Account for out-of-range shifts (>= width) without enumerating them. This
+  // adds a backstop that keeps the transformation sound when the shift amount
+  // can be larger than the value width.
+  Value overflowVal = zero;
+  Value overflowUnk = zero;
+  if (kind == UnknownShiftKind::AShr && width > 0) {
+    Value signVal =
+        comb::ExtractOp::create(builder, loc, inputValue, width - 1, 1);
+    Value signUnk =
+        comb::ExtractOp::create(builder, loc, inputUnknown, width - 1, 1);
+    overflowVal =
+        comb::ReplicateOp::create(builder, loc, inputValue.getType(), signVal);
+    overflowUnk =
+        comb::ReplicateOp::create(builder, loc, inputValue.getType(), signUnk);
+  }
+
+  Value overflowGate = comb::ReplicateOp::create(
+      builder, loc, inputValue.getType(), overflowPossible);
+  Value overflowMaybeOne = candidateMaybeOneMask(overflowVal, overflowUnk);
+  Value overflowMaybeZero = candidateMaybeZeroMask(overflowVal, overflowUnk);
+  overflowMaybeOne = comb::AndOp::create(builder, loc, overflowMaybeOne,
+                                         overflowGate, false);
+  overflowMaybeZero = comb::AndOp::create(builder, loc, overflowMaybeZero,
+                                          overflowGate, false);
+  maybeOneMask = comb::OrOp::create(builder, loc, maybeOneMask, overflowMaybeOne,
+                                    false);
+  maybeZeroMask = comb::OrOp::create(builder, loc, maybeZeroMask,
+                                     overflowMaybeZero, false);
+
+  Value unknown =
+      comb::AndOp::create(builder, loc, maybeOneMask, maybeZeroMask, false);
+  Value notMaybeZero =
+      comb::XorOp::create(builder, loc, maybeZeroMask, allOnes, false);
+  Value value =
+      comb::AndOp::create(builder, loc, maybeOneMask, notMaybeZero, false);
+  return createFourStateStruct(builder, loc, value, unknown);
+}
+
 /// Convert a Moore type to its packed representation (plain integers for
 /// 4-state types). This is used for packed unions where all members share
 /// the same bit storage and we cannot expand 4-state types.
@@ -10902,10 +11043,11 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
       Value amountUnknownCond;
+      Value amountUnknown;
 
       // Handle 4-state amount - extract just the value
       if (isFourStateStructType(amount.getType())) {
-        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
         Value zero =
             hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
         amountUnknownCond = comb::ICmpOp::create(
@@ -10916,25 +11058,41 @@ struct ShlOpConversion : public OpConversionPattern<ShlOp> {
         amountUnknownCond =
             hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
       }
+      if (!amountUnknown) {
+        amountUnknown = hw::ConstantOp::create(rewriter, loc, amount.getType(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
+      amountUnknown = adjustIntegerWidth(rewriter, amountUnknown, width, loc);
 
       // Shift both value and unknown components
       Value shiftedValue = comb::ShlOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShlOp::create(rewriter, loc, unknownComp, amount, false);
 
-      Value zeroVal =
-          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
-      Value allOnes =
-          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
-      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                             zeroVal, shiftedValue);
-      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                               allOnes, shiftedUnknown);
+      Value finalValue = shiftedValue;
+      Value finalUnknown = shiftedUnknown;
+      if (Value consensus = buildUnknownShiftConsensus(
+              rewriter, loc, UnknownShiftKind::Shl, valueComp, unknownComp,
+              amount, amountUnknown)) {
+        Value consensusVal = extractFourStateValue(rewriter, loc, consensus);
+        Value consensusUnk = extractFourStateUnknown(rewriter, loc, consensus);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         consensusVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           consensusUnk, shiftedUnknown);
+      } else {
+        Value zeroVal =
+            hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         zeroVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           allOnes, shiftedUnknown);
+      }
 
-      auto result =
-          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
+      auto result = createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -10972,10 +11130,11 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
       Value amountUnknownCond;
+      Value amountUnknown;
 
       // Handle 4-state amount - extract just the value
       if (isFourStateStructType(amount.getType())) {
-        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
         Value zero =
             hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
         amountUnknownCond = comb::ICmpOp::create(
@@ -10986,25 +11145,41 @@ struct ShrOpConversion : public OpConversionPattern<ShrOp> {
         amountUnknownCond =
             hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
       }
+      if (!amountUnknown) {
+        amountUnknown = hw::ConstantOp::create(rewriter, loc, amount.getType(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
+      amountUnknown = adjustIntegerWidth(rewriter, amountUnknown, width, loc);
 
       // Shift both value and unknown components (zero fill from left)
       Value shiftedValue = comb::ShrUOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
 
-      Value zeroVal =
-          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
-      Value allOnes =
-          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
-      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                             zeroVal, shiftedValue);
-      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                               allOnes, shiftedUnknown);
+      Value finalValue = shiftedValue;
+      Value finalUnknown = shiftedUnknown;
+      if (Value consensus = buildUnknownShiftConsensus(
+              rewriter, loc, UnknownShiftKind::LShr, valueComp, unknownComp,
+              amount, amountUnknown)) {
+        Value consensusVal = extractFourStateValue(rewriter, loc, consensus);
+        Value consensusUnk = extractFourStateUnknown(rewriter, loc, consensus);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         consensusVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           consensusUnk, shiftedUnknown);
+      } else {
+        Value zeroVal =
+            hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         zeroVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           allOnes, shiftedUnknown);
+      }
 
-      auto result =
-          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
+      auto result = createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -11162,10 +11337,11 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
       Value valueComp = extractFourStateValue(rewriter, loc, inputValue);
       Value unknownComp = extractFourStateUnknown(rewriter, loc, inputValue);
       Value amountUnknownCond;
+      Value amountUnknown;
 
       // Handle 4-state amount - extract just the value
       if (isFourStateStructType(amount.getType())) {
-        Value amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
         Value zero =
             hw::ConstantOp::create(rewriter, loc, amountUnknown.getType(), 0);
         amountUnknownCond = comb::ICmpOp::create(
@@ -11176,25 +11352,41 @@ struct AShrOpConversion : public OpConversionPattern<AShrOp> {
         amountUnknownCond =
             hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
       }
+      if (!amountUnknown) {
+        amountUnknown = hw::ConstantOp::create(rewriter, loc, amount.getType(), 0);
+      }
 
       auto width = cast<IntegerType>(valueComp.getType()).getWidth();
       amount = adjustIntegerWidth(rewriter, amount, width, loc);
+      amountUnknown = adjustIntegerWidth(rewriter, amountUnknown, width, loc);
 
       // Arithmetic shift value (sign extension), logical shift unknown (zero fill)
       Value shiftedValue = comb::ShrSOp::create(rewriter, loc, valueComp, amount, false);
       Value shiftedUnknown = comb::ShrUOp::create(rewriter, loc, unknownComp, amount, false);
 
-      Value zeroVal =
-          hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
-      Value allOnes =
-          hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
-      Value finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                             zeroVal, shiftedValue);
-      Value finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
-                                               allOnes, shiftedUnknown);
+      Value finalValue = shiftedValue;
+      Value finalUnknown = shiftedUnknown;
+      if (Value consensus = buildUnknownShiftConsensus(
+              rewriter, loc, UnknownShiftKind::AShr, valueComp, unknownComp,
+              amount, amountUnknown)) {
+        Value consensusVal = extractFourStateValue(rewriter, loc, consensus);
+        Value consensusUnk = extractFourStateUnknown(rewriter, loc, consensus);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         consensusVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           consensusUnk, shiftedUnknown);
+      } else {
+        Value zeroVal =
+            hw::ConstantOp::create(rewriter, loc, valueComp.getType(), 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, unknownComp.getType(), -1);
+        finalValue = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                         zeroVal, shiftedValue);
+        finalUnknown = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                           allOnes, shiftedUnknown);
+      }
 
-      auto result =
-          createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
+      auto result = createFourStateStruct(rewriter, loc, finalValue, finalUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
