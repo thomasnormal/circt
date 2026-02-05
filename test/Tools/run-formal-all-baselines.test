@@ -1,0 +1,9 @@
+// RUN: mkdir -p %t
+// RUN: rm -rf %t/out
+// RUN: printf "| Date | Suite | Mode | Result | Notes |\\n|------|-------|------|--------|-------|\\n" > %t/plan.md
+// RUN: %S/../../utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/missing --verilator %t/missing2 --yosys %t/missing3 --update-baselines --baseline-file %t/baselines.tsv --plan-file %t/plan.md
+// RUN: cat %t/baselines.tsv | FileCheck %s --check-prefix=BASE
+// RUN: cat %t/plan.md | FileCheck %s --check-prefix=PLAN
+
+// BASE: date{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}result
+// PLAN: | Date | Suite | Mode | Result | Notes |
