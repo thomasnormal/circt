@@ -1,0 +1,10 @@
+# sv-tests BMC expectations.
+# Format: test_name<TAB>mode<TAB>reason
+# mode: compile-only | parse-only | xfail | skip
+16.12--property	compile-only	No stimulus for BMC; compile/elaboration only
+16.12--property-disj	compile-only	No stimulus for BMC; compile/elaboration only
+16.7--sequence	compile-only	No clock stimulus for meaningful BMC; compile/elaboration only
+16.9--sequence-cons-repetition	compile-only	No clock stimulus for meaningful BMC; compile/elaboration only
+16.9--sequence-goto-repetition	compile-only	No clock stimulus for meaningful BMC; compile/elaboration only
+16.9--sequence-noncons-repetition	compile-only	No clock stimulus for meaningful BMC; compile/elaboration only
+16.17--expect	compile-only	No clock stimulus for meaningful BMC; compile/elaboration only

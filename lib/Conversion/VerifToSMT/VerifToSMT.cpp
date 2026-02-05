@@ -5749,12 +5749,17 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
-    // Combine results: true if no violations found
-    // For assert check: !violated && !finalCheckViolated
-    // For cover check: violated (we want to find a trace)
+    // Combine results: return true if no "interesting" condition was found.
+    // This matches the tool convention of printing UNSAT when nothing was
+    // found (assertions hold; covers not hit), and SAT when something was
+    // found (assertion violation; cover witness).
     Value res;
     if (isCoverCheck) {
-      res = arith::OrIOp::create(rewriter, loc, violated, finalCoverHit);
+      // Covers are "interesting" when they are hit; invert so `true` means
+      // "no cover witness found".
+      Value anyCoverHit =
+          arith::OrIOp::create(rewriter, loc, violated, finalCoverHit);
+      res = arith::XOrIOp::create(rewriter, loc, anyCoverHit, constTrue);
     } else {
       Value anyViolation =
           arith::OrIOp::create(rewriter, loc, violated, finalCheckViolated);
