@@ -6140,12 +6140,14 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
         auto alloca =
             LLVM::AllocaOp::create(rewriter, loc, ptrTy, arrayTy, one);
 
-        // Initialize with zero values - use LLVM's ZeroOp to create a zeroed
-        // array (all elements zero-initialized, e.g., empty strings)
-        auto zeroVal = LLVM::ZeroOp::create(rewriter, loc, arrayTy);
-
-        // Store the zero-initialized value to alloca
-        LLVM::StoreOp::create(rewriter, loc, zeroVal, alloca);
+        // Use the initial value if provided, otherwise zero-initialize
+        Value initVal = adaptor.getInitial();
+        if (initVal) {
+          LLVM::StoreOp::create(rewriter, loc, initVal, alloca);
+        } else {
+          auto zeroVal = LLVM::ZeroOp::create(rewriter, loc, arrayTy);
+          LLVM::StoreOp::create(rewriter, loc, zeroVal, alloca);
+        }
 
         rewriter.replaceOp(op, alloca.getResult());
         return success();
@@ -8314,6 +8316,25 @@ struct ArrayCreateOpConversion : public OpConversionPattern<ArrayCreateOp> {
   matchAndRewrite(ArrayCreateOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
+
+    // If the result type is an LLVM array (e.g., string[N] → !llvm.array<N x
+    // struct<(ptr, i64)>>), build the array via InsertValueOp since
+    // hw::ArrayCreateOp only handles hw::ArrayType.
+    if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(resultType)) {
+      auto loc = op.getLoc();
+      Value arr = LLVM::UndefOp::create(rewriter, loc, llvmArrayTy);
+      auto elements = adaptor.getElements();
+      for (size_t i = 0, e = elements.size(); i < e; ++i) {
+        // hw::ArrayCreateOp lists elements MSB-first, but LLVM arrays are
+        // indexed from 0. Reverse the order to match.
+        arr = LLVM::InsertValueOp::create(rewriter, loc, arr,
+                                          elements[e - 1 - i],
+                                          ArrayRef<int64_t>{(int64_t)i});
+      }
+      rewriter.replaceOp(op, arr);
+      return success();
+    }
+
     rewriter.replaceOpWithNewOp<hw::ArrayCreateOp>(op, resultType,
                                                    adaptor.getElements());
     return success();
