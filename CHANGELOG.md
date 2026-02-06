@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 416 - February 6, 2026
+
+### Summary
+
+Iteration 416: Propagated sequence length bounds through `or/and/intersect`
+to improve `first_match` boundedness checks for composite sequences.
+
+### Accomplishments
+
+1. **Composite sequence bounds** - `first_match` now treats composite
+   `or/and/intersect` sequences as unbounded when any operand is unbounded,
+   ensuring consistent errors for `within`/repetition compositions.
+2. **Regression coverage** - Added `errors.sv` case for `first_match` with
+   `within` + nonconsecutive repetition.
+
+### Verification (February 6, 2026)
+
+- Not run (error-path regression only)
+
 ## Iteration 415 - February 6, 2026
 
 ### Summary

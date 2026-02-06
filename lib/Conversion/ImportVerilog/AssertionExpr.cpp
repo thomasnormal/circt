@@ -100,6 +100,66 @@ getSequenceLengthBounds(Value seq) {
       result.max = *bounds->max * (repeatOp.getBase() + *more);
     return result;
   }
+  if (auto orOp = seq.getDefiningOp<ltl::OrOp>()) {
+    SequenceLengthBounds result;
+    bool initialized = false;
+    for (auto input : orOp.getInputs()) {
+      auto bounds = getSequenceLengthBounds(input);
+      if (!bounds)
+        return std::nullopt;
+      if (!initialized) {
+        result = *bounds;
+        initialized = true;
+        continue;
+      }
+      result.min = std::min(result.min, bounds->min);
+      if (result.max && bounds->max)
+        result.max = std::max(*result.max, *bounds->max);
+      else
+        result.max.reset();
+    }
+    return result;
+  }
+  if (auto andOp = seq.getDefiningOp<ltl::AndOp>()) {
+    SequenceLengthBounds result;
+    bool initialized = false;
+    for (auto input : andOp.getInputs()) {
+      auto bounds = getSequenceLengthBounds(input);
+      if (!bounds)
+        return std::nullopt;
+      if (!initialized) {
+        result = *bounds;
+        initialized = true;
+        continue;
+      }
+      result.min = std::max(result.min, bounds->min);
+      if (result.max && bounds->max)
+        result.max = std::min(*result.max, *bounds->max);
+      else
+        result.max.reset();
+    }
+    return result;
+  }
+  if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
+    SequenceLengthBounds result;
+    bool initialized = false;
+    for (auto input : intersectOp.getInputs()) {
+      auto bounds = getSequenceLengthBounds(input);
+      if (!bounds)
+        return std::nullopt;
+      if (!initialized) {
+        result = *bounds;
+        initialized = true;
+        continue;
+      }
+      result.min = std::max(result.min, bounds->min);
+      if (result.max && bounds->max)
+        result.max = std::min(*result.max, *bounds->max);
+      else
+        result.max.reset();
+    }
+    return result;
+  }
   if (auto gotoRepeatOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
     auto bounds = getSequenceLengthBounds(gotoRepeatOp.getInput());
     if (!bounds)
