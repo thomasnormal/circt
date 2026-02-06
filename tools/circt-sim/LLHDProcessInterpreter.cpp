@@ -5935,19 +5935,106 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   if (auto bitcastOp = dyn_cast<hw::BitcastOp>(op)) {
     InterpretedValue inputVal = getValue(procId, bitcastOp.getInput());
-    // Bitcast preserves the raw bits, just reinterprets the type
     unsigned outputWidth = getTypeWidth(bitcastOp.getType());
     if (inputVal.isX()) {
       setValue(procId, bitcastOp.getResult(),
                InterpretedValue::makeX(outputWidth));
     } else {
-      // Extend or truncate to match output width if necessary
-      APInt result = inputVal.getAPInt();
-      if (result.getBitWidth() < outputWidth)
-        result = result.zext(outputWidth);
-      else if (result.getBitWidth() > outputWidth)
-        result = result.trunc(outputWidth);
-      setValue(procId, bitcastOp.getResult(), InterpretedValue(result));
+      APInt srcBits = inputVal.getAPInt();
+
+      // Check for 4-state bitcast: {value: iN, unknown: iN} -> nested
+      // per-field {value: iM, unknown: iM} struct.  These two layouts store
+      // 4-state bits in fundamentally different orders, so a raw bit
+      // reinterpretation is wrong -- we must redistribute value/unknown bits
+      // to per-field pairs.
+      auto srcStructType =
+          dyn_cast<hw::StructType>(bitcastOp.getInput().getType());
+      auto destStructType = dyn_cast<hw::StructType>(bitcastOp.getType());
+
+      // Helper: detect a flat 4-state leaf {value: iN, unknown: iN}.
+      auto isFlatFourState = [](hw::StructType ty) -> bool {
+        auto elts = ty.getElements();
+        if (elts.size() != 2)
+          return false;
+        if (elts[0].name.getValue() != "value" ||
+            elts[1].name.getValue() != "unknown")
+          return false;
+        auto valTy = dyn_cast<IntegerType>(elts[0].type);
+        auto unkTy = dyn_cast<IntegerType>(elts[1].type);
+        return valTy && unkTy && valTy.getWidth() == unkTy.getWidth();
+      };
+
+      // Helper: detect a nested 4-state struct (all leaves are {value, unknown}).
+      std::function<bool(Type)> isNestedFourState = [&](Type ty) -> bool {
+        auto st = dyn_cast<hw::StructType>(ty);
+        if (!st)
+          return false;
+        if (isFlatFourState(st))
+          return true;
+        for (auto &elt : st.getElements())
+          if (!isNestedFourState(elt.type))
+            return false;
+        return true;
+      };
+
+      // Helper: recursively redistribute flat value/unknown bits into the
+      // per-field interleaved layout of the destination struct.
+      std::function<APInt(const APInt &, const APInt &, hw::StructType)>
+          interleaveBits = [&](const APInt &val, const APInt &unk,
+                               hw::StructType destTy) -> APInt {
+        auto elts = destTy.getElements();
+
+        // Leaf: {value: iN, unknown: iN}
+        if (isFlatFourState(destTy)) {
+          unsigned N = cast<IntegerType>(elts[0].type).getWidth();
+          APInt res(N * 2, 0);
+          // HW struct: field 0 (value) at MSB, field 1 (unknown) at LSB
+          res.insertBits(val.zextOrTrunc(N), N);
+          res.insertBits(unk.zextOrTrunc(N), 0);
+          return res;
+        }
+
+        // Non-leaf: recursively process each field.
+        unsigned totalDestWidth = getTypeWidth(destTy);
+        APInt res(totalDestWidth, 0);
+        unsigned origOff = 0; // offset in flat value/unknown (from LSB)
+        unsigned destOff = 0; // offset in output (from LSB)
+
+        // HW struct: fields ordered MSB to LSB, so iterate in reverse.
+        for (int i = (int)elts.size() - 1; i >= 0; --i) {
+          unsigned destFieldW = getTypeWidth(elts[i].type);
+          unsigned origFieldW = destFieldW / 2;
+          APInt fv = val.extractBits(origFieldW, origOff);
+          APInt fu = unk.extractBits(origFieldW, origOff);
+          auto nested = cast<hw::StructType>(elts[i].type);
+          res.insertBits(interleaveBits(fv, fu, nested), destOff);
+          origOff += origFieldW;
+          destOff += destFieldW;
+        }
+        return res;
+      };
+
+      if (srcStructType && destStructType && isFlatFourState(srcStructType) &&
+          isNestedFourState(destStructType) &&
+          !isFlatFourState(destStructType)) {
+        unsigned halfWidth =
+            cast<IntegerType>(srcStructType.getElements()[0].type).getWidth();
+        if (srcBits.getBitWidth() < halfWidth * 2)
+          srcBits = srcBits.zext(halfWidth * 2);
+        APInt valueHalf = srcBits.extractBits(halfWidth, halfWidth);
+        APInt unknownHalf = srcBits.extractBits(halfWidth, 0);
+        APInt result =
+            interleaveBits(valueHalf, unknownHalf, destStructType);
+        setValue(procId, bitcastOp.getResult(), InterpretedValue(result));
+      } else {
+        // Normal bitcast: preserve raw bits.
+        APInt result = srcBits;
+        if (result.getBitWidth() < outputWidth)
+          result = result.zext(outputWidth);
+        else if (result.getBitWidth() > outputWidth)
+          result = result.trunc(outputWidth);
+        setValue(procId, bitcastOp.getResult(), InterpretedValue(result));
+      }
     }
     return success();
   }

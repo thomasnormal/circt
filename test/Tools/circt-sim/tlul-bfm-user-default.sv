@@ -1,10 +1,7 @@
 // Test that TL_H2D_DEFAULT localparam struct initialization works correctly.
 // This is a simplified test that doesn't use the full BFM to avoid slow simulation.
 //
-// XFAIL: *
-// NOTE: This test is XFAIL because hw.bitcast from 64-bit value/unknown struct
-// to complex nested struct is not handled correctly by the interpreter yet.
-// The timeout ensures we don't hang even if the test is un-XFAILed.
+// The timeout ensures we don't hang.
 //
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw -I %S/../../../utils/opentitan_wrappers %s -o %t.mlir
 // RUN: circt-sim %t.mlir --timeout=30 | FileCheck %s
