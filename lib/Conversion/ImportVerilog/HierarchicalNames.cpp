@@ -117,16 +117,17 @@ struct HierPathValueExprVisitor
         if (ifaceParentBody && ifaceParentBody != outermostInstBody) {
           auto addHierIfacePath =
               [&](const slang::ast::InstanceBodySymbol *sym,
-                  mlir::StringAttr nameAttr) {
+                  mlir::StringAttr nameAttr,
+                  slang::ast::ArgumentDirection dir) {
                 auto &paths = context.hierInterfacePaths[sym];
                 bool exists = llvm::any_of(paths, [&](const auto &info) {
                   return info.hierName == nameAttr &&
-                         info.ifaceInst == ifaceInst;
+                         info.ifaceInst == ifaceInst &&
+                         info.direction == dir;
                 });
                 if (!exists)
-                  paths.push_back(HierInterfacePathInfo{
-                      nameAttr, {}, slang::ast::ArgumentDirection::In,
-                      ifaceInst});
+                  paths.push_back(
+                      HierInterfacePathInfo{nameAttr, {}, dir, ifaceInst});
               };
 
           SmallVector<const slang::ast::InstanceBodySymbol *, 8> ifaceChain;
@@ -180,9 +181,28 @@ struct HierPathValueExprVisitor
             }
             if (!ifaceName.empty()) {
               auto nameAttr = builder.getStringAttr(ifaceName);
+              // Thread the interface instance upward to the LCA when it is
+              // declared outside the target's ancestor chain (sibling/LCA).
+              SmallString<64> upwardName(ifaceInst->name);
+              for (auto *body = ifaceParentBody; body && body != lca;
+                   body = body->parentInstance
+                              ? body->parentInstance->getParentScope()
+                                    ->getContainingInstance()
+                              : nullptr) {
+                addHierIfacePath(body, builder.getStringAttr(upwardName),
+                                 slang::ast::ArgumentDirection::Out);
+                if (body->parentInstance) {
+                  SmallString<64> nextName;
+                  nextName += body->parentInstance->name;
+                  nextName += ".";
+                  nextName += upwardName;
+                  upwardName = nextName;
+                }
+              }
               for (size_t i = lcaOuterIndex; i > 0; --i) {
                 auto *body = outerChain[i - 1];
-                addHierIfacePath(body, nameAttr);
+                addHierIfacePath(body, nameAttr,
+                                 slang::ast::ArgumentDirection::In);
               }
               handledInterface = true;
             }

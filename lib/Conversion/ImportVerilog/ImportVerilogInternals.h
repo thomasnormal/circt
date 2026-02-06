@@ -546,6 +546,9 @@ struct Context {
   /// stores the MLIR Value (ref to virtual interface) for each interface
   /// instance symbol.
   DenseMap<const slang::ast::InstanceSymbol *, Value> interfaceInstances;
+  /// Interface instances threaded into the current scope via hierarchical
+  /// interface ports (e.g. bind port connections across sibling modules).
+  DenseSet<const slang::ast::InstanceSymbol *> threadedInterfaceInstances;
   DenseMap<const slang::ast::InterfacePortSymbol *, Value> interfacePortValues;
   SmallVector<PendingInterfacePortConnection, 4>
       pendingInterfacePortConnections;
