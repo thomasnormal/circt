@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 413 - February 6, 2026
+
+### Summary
+
+Iteration 413: Added regression coverage for sampled-value functions with
+explicit clocking under default disable conditions.
+
+### Accomplishments
+
+1. **Explicit clock + default disable regression** - Added
+   `sva-sampled-explicit-clock-default-disable.sv` to validate `$rose` with
+   explicit clocking respects default disable gating.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`
+
 ## Iteration 412 - February 6, 2026
 
 ### Summary
