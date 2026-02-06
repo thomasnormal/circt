@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 418 - February 6, 2026
+
+### Summary
+
+Iteration 418: Added regression coverage for `first_match` on clocked
+unbounded sequences to validate new boundedness propagation.
+
+### Accomplishments
+
+1. **Clocked first_match regression** - `errors.sv` now includes a clocked
+   nonconsecutive repetition under `first_match`, ensuring unbounded sequences
+   still trigger the expected error.
+
+### Verification (February 6, 2026)
+
+- Not run (error-path regression only)
+
 ## Iteration 417 - February 6, 2026
 
 ### Summary

@@ -81,6 +81,13 @@ endmodule
 
 // -----
 module Foo;
+  logic clk, a;
+  // expected-error @below {{first_match requires a bounded sequence}}
+  assert property (first_match(@(posedge clk) (a [=2])));
+endmodule
+
+// -----
+module Foo;
   int x;
   bit y;
   // expected-error @below {{unsupported non-blocking assignment timing control: SignalEvent}}
