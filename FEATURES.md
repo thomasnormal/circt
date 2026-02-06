@@ -54,7 +54,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 157 | 157 | 0 | All pass (100%), including OpenTitan TL-UL BFM test |
+| circt-sim | 160 | 160 | 0 | All pass (100%), including OpenTitan TL-UL BFM test |
 
 ## UVM Simulation Feature Status
 
@@ -100,6 +100,8 @@ to commercial simulators like Cadence Xcelium.
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed |
+| `config_db` | WORKS | `config_db_implementation_t::set/get/exists` intercepted with in-memory key-value store |
+| `process::suspend/resume` | WORKS | Lowered in ImportVerilog; interpreter suspends process execution and resumes on `resume()` call |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
 | Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; gap: `->>` NBA scheduling, event clearing between time slots |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
@@ -145,3 +147,5 @@ to commercial simulators like Cadence Xcelium.
 | Interface path threading | Improved hierarchical interface path threading in ImportVerilog for nested module instances |
 | Dynamic array allocation | MooreToCore now passes byte count (elemCount * elemSize) to `__moore_dyn_array_new`; interpreter registers native blocks |
 | String array initializer | `ArrayCreateOpConversion` handles LLVM array types; `VariableOpConversion` stores initial values for LLVM arrays |
+| config_db runtime | `config_db_implementation_t::set/get/exists` intercepted with key-value store |
+| process suspend/resume | ImportVerilog lowering + interpreter `__moore_process_suspend/resume` handlers |
