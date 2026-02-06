@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 421 - February 6, 2026
+
+### Summary
+
+Iteration 421: Added ImportVerilog coverage for nested `disable iff` in SVA.
+
+### Accomplishments
+
+1. **Nested disable iff regression** - Added
+   `sva-disable-iff-nested.sv` to validate that nested disable conditions are
+   emitted as stacked `ltl.or` nodes with `sva.disable_iff` annotations.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
 ## Iteration 420 - February 6, 2026
 
 ### Summary
