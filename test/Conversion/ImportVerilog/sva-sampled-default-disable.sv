@@ -16,6 +16,21 @@ endmodule
 // CHECK: moore.wait_event
 // CHECK: moore.blocking_assign
 
+module sampled_default_clocking_only(input logic clk, a);
+  default clocking @(posedge clk); endclocking
+
+  property p;
+    $rose(a);
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_default_clocking_only
+// CHECK-NOT: moore.past
+// CHECK: moore.procedure always
+// CHECK: moore.wait_event
+
 module sampled_explicit_clock_in_assert(input logic clk, fast, a);
   property p;
     @(posedge clk) $rose(a, @(posedge fast));

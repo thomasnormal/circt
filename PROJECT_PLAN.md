@@ -270,6 +270,10 @@ and 1 preprocessor macro concatenation edge case.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 406 - Default Clocking for Sampled Values)
+- **Implicit clocking for sampled values**: `$rose/$fell/$stable/$changed` and `$past` now use default/implicit clocking inside assertions even without explicit clocking args.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/sva-past-default-clocking-implicit.sv` and extended `sva-sampled-default-disable.sv`.
+
 ### New Findings (2026-02-06, Iteration 405 - $past Default Disable Reset)
 - **Reset-aware `$past` history**: when default disable is asserted, `$past` history now resets to the init value rather than retaining stale samples.
 - **Regression coverage**: added `test/Conversion/ImportVerilog/sva-past-default-disable-reset.sv`.
