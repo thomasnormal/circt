@@ -260,6 +260,21 @@ struct ProcessExecutionState {
   llvm::DenseMap<mlir::Operation *, llvm::DenseMap<uint64_t, unsigned>>
       recursionVisited;
 
+  /// Function result cache for pure functions called repeatedly with the same
+  /// arguments. Used to speed up UVM phase graph traversal where functions like
+  /// get_schedule, get_domain, get_phase_type, find, m_find_successor, and
+  /// m_find_predecessor are called thousands of times with the same args.
+  /// Key: (funcOp pointer, hash of argument values).
+  /// Value: cached return values.
+  /// Invalidated when uvm_phase::add is called (modifies the phase graph).
+  llvm::DenseMap<mlir::Operation *,
+                 llvm::DenseMap<uint64_t,
+                                llvm::SmallVector<InterpretedValue, 2>>>
+      funcResultCache;
+
+  /// Number of function result cache hits (for diagnostics).
+  size_t funcCacheHits = 0;
+
   /// Last operation executed by this process (for diagnostics).
   mlir::Operation *lastOp = nullptr;
 
