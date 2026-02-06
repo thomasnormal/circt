@@ -273,6 +273,10 @@ Full sv-tests simulation pipeline tested (717 tests). String array initializer b
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 409 - Bind Parent-Scope Signals)
+- **Bind parent-scope signals**: added regression to ensure bind port connections can reference parent-scope signals not present on the bound target module.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/bind-parent-port.sv`.
+
 ### New Findings (2026-02-06, Iteration 408 - Bind Param/Generate Coverage)
 - **Bind + param/generate coverage**: added regression for instance-specific binds through parameterized generate blocks with interface port references in bind scope.
 - **Regression coverage**: added `test/Conversion/ImportVerilog/bind-interface-param-generate.sv`.

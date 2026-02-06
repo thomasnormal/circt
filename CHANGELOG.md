@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 409 - February 6, 2026
+
+### Summary
+
+Iteration 409: Added bind coverage for parent-scope signal references inside
+bind directives to mirror OpenTitan-style bind usage.
+
+### Accomplishments
+
+1. **Bind regression coverage** - Added `bind-parent-port.sv` to validate that
+   bind port connections can reference parent-scope signals not present on the
+   bound target module.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-parent-port.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-parent-port.sv`
+
 ## Iteration 408 - February 6, 2026
 
 ### Summary
