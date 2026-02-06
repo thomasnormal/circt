@@ -3591,6 +3591,32 @@ struct RvalueExprVisitor : public ExprVisitor {
               .getResult(0);
         }
 
+        if (subroutine->name == "suspend") {
+          auto suspendFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()), {i64Ty});
+          auto suspendFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_suspend", suspendFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, suspendFunc,
+                                     ValueRange{handle});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        if (subroutine->name == "resume") {
+          auto resumeFuncTy = mlir::LLVM::LLVMFunctionType::get(
+              mlir::LLVM::LLVMVoidType::get(context.getContext()), {i64Ty});
+          auto resumeFunc = getOrCreateRuntimeFunc(
+              context, "__moore_process_resume", resumeFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, resumeFunc,
+                                     ValueRange{handle});
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
         if (subroutine->name == "status") {
           auto statusFuncTy =
               mlir::LLVM::LLVMFunctionType::get(i32Ty, {i64Ty});

@@ -9962,6 +9962,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         return failure();
       }
 
+      // Check if the process was suspended (e.g., by process::suspend() on self)
+      {
+        auto stIt2 = processStates.find(procId);
+        if (stIt2 != processStates.end() && stIt2->second.waiting) {
+          // Save the current position for resumption
+          stIt2->second.currentOp = std::next(opIt);
+          stIt2->second.currentBlock = currentBlock;
+          stIt2->second.resumeAtCurrentOp = true;
+          cleanupTempMappings();
+          return success();
+        }
+      }
+
       if (auto returnOp = dyn_cast<mlir::func::ReturnOp>(&op)) {
         // Gather return values
         for (Value operand : returnOp.getOperands()) {
@@ -13181,6 +13194,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               state.waiting = true;
               if (auto *proc = scheduler.getProcess(procId))
                 proc->setState(ProcessState::Waiting);
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_suspend - suspend a running process.
+    // Implements SystemVerilog process::suspend().
+    if (calleeName == "__moore_process_suspend") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            if (auto *proc = scheduler.getProcess(targetId)) {
+              auto curState = proc->getState();
+              if (curState != ProcessState::Terminated) {
+                proc->setState(ProcessState::Suspended);
+                auto &state = processStates[targetId];
+                state.waiting = true;
+                // If suspending self, the caller will stop executing
+                // after this call returns success().
+              }
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_process_resume - resume a suspended process.
+    // Implements SystemVerilog process::resume().
+    if (calleeName == "__moore_process_resume") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
+        if (!handleVal.isX()) {
+          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
+          if (targetId != InvalidProcessId) {
+            if (auto *proc = scheduler.getProcess(targetId)) {
+              if (proc->getState() == ProcessState::Suspended) {
+                resumeProcess(targetId);
+              }
             }
           }
         }
