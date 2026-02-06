@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 415 - February 6, 2026
+
+### Summary
+
+Iteration 415: Enabled nested `disable iff` lowering by combining disable
+conditions, with new LTLToCore regression coverage.
+
+### Accomplishments
+
+1. **Nested disable iff support** - LTLToCore now combines nested disable
+   conditions instead of erroring, allowing stacked `disable iff` usage.
+2. **Regression coverage** - Added `disable-iff-nested.mlir` to validate the
+   combined-disable reset and final-check lowering.
+
+### Verification (February 6, 2026)
+
+- Not run (LTLToCore regression only)
+
 ## Iteration 414 - February 6, 2026
 
 ### Summary
