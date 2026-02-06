@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 410 - February 6, 2026
+
+### Summary
+
+Iteration 410: Added bind coverage for interface modports in parameterized
+generate hierarchies to mirror OpenTitan-style bind usage.
+
+### Accomplishments
+
+1. **Bind regression coverage** - Added `bind-interface-modport-generate.sv` to
+   validate instance-specific binds across parameterized generate blocks with
+   interface modport references in the bind scope.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-modport-generate.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-modport-generate.sv`
+
 ## Iteration 409 - February 6, 2026
 
 ### Summary
