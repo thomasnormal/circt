@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 417 - February 6, 2026
+
+### Summary
+
+Iteration 417: Improved `first_match` boundedness tracking through clocked
+sequences and composite operators, with new regression coverage.
+
+### Accomplishments
+
+1. **Clocked sequence bounds** - `first_match` now propagates sequence length
+   bounds through `ltl.clock` and `ltl.past`, avoiding missed unbounded cases.
+2. **Composite unbounded regressions** - Added `errors.sv` cases for `and`/`or`
+   with nonconsecutive repetition to ensure boundedness errors are reported.
+
+### Verification (February 6, 2026)
+
+- Not run (error-path regression only)
+
 ## Iteration 416 - February 6, 2026
 
 ### Summary
