@@ -46,7 +46,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 140 | 139 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
+| circt-sim | 144 | 143 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
 
 ## UVM Simulation Feature Status
 
@@ -66,7 +66,7 @@ to commercial simulators like Cadence Xcelium.
 | `process::self()` | WORKS | Intercepted for both old and new compilations |
 | **Data Structures** | | |
 | Associative arrays | WORKS | Auto-create on null, integer and string keys |
-| Queues | WORKS | `push_back`, `pop_front`, `size` |
+| Queues | WORKS | `push_back`, `pop_front`, `size`, `sort`, `rsort`, `shuffle`, `reverse`, `unique` |
 | Dynamic arrays | WORKS | Basic operations |
 | Mailboxes | WORKS | DPI-based blocking/non-blocking |
 | **Memory / I/O** | | |
@@ -126,3 +126,4 @@ to commercial simulators like Cadence Xcelium.
 | `%c` format | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
 | Semaphore support | Full pipeline: ImportVerilog method lowering, constructor keyCount, interpreter interceptors with blocking |
 | `$test$plusargs` | Runtime call via `__moore_test_plusargs`; traces through `IntToStringOp` to extract compile-time string; skips constant eval |
+| Queue sort/rsort/shuffle/reverse | Interpreter interceptors with element size inference from data block; handles native/interpreter/mixed memory |
