@@ -315,6 +315,38 @@ struct LTLPropertyLowerer {
       uint64_t maxLen = bounds->second * (repeatOp.getBase() + *more);
       return std::make_pair(minLen, maxLen);
     }
+    if (auto orOp = seq.getDefiningOp<ltl::OrOp>()) {
+      std::optional<std::pair<uint64_t, uint64_t>> result;
+      for (auto input : orOp.getInputs()) {
+        auto bounds = getSequenceLengthBounds(input);
+        if (!bounds)
+          return std::nullopt;
+        if (!result) {
+          result = *bounds;
+        } else {
+          result->first = std::min(result->first, bounds->first);
+          result->second = std::max(result->second, bounds->second);
+        }
+      }
+      return result;
+    }
+    if (auto andOp = seq.getDefiningOp<ltl::AndOp>()) {
+      std::optional<std::pair<uint64_t, uint64_t>> result;
+      for (auto input : andOp.getInputs()) {
+        auto bounds = getSequenceLengthBounds(input);
+        if (!bounds)
+          return std::nullopt;
+        if (!result) {
+          result = *bounds;
+        } else {
+          result->first = std::max(result->first, bounds->first);
+          result->second = std::min(result->second, bounds->second);
+        }
+      }
+      if (result && result->first > result->second)
+        return std::nullopt;
+      return result;
+    }
     if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
       std::optional<uint64_t> minLen;
       std::optional<uint64_t> maxLen;
