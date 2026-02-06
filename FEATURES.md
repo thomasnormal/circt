@@ -46,7 +46,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 148 | 147 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
+| circt-sim | 150 | 149 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
 
 ## UVM Simulation Feature Status
 
@@ -80,7 +80,7 @@ to commercial simulators like Cadence Xcelium.
 | Signal probing (`llhd.prb`) | WORKS | Read signal values |
 | **Known Gaps** | | |
 | `$test$plusargs` | WORKS | Runtime `__moore_test_plusargs` checks `CIRCT_UVM_ARGS`/`UVM_ARGS` env var |
-| `$value$plusargs` | PARTIAL | Still stubbed to 0; UVM uses DPI-based fallback for `+UVM_TESTNAME` |
+| `$value$plusargs` | WORKS | Runtime `__moore_value_plusargs` reads from `CIRCT_UVM_ARGS`/`UVM_ARGS` env var; supports `%d`, `%h`, `%o`, `%b` formats |
 | `$urandom` / `$random` | WORKS | mt19937-based RNG via `__moore_urandom()` interceptors |
 | `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
@@ -129,3 +129,4 @@ to commercial simulators like Cadence Xcelium.
 | Queue sort/rsort/shuffle/reverse | Interpreter interceptors with element size inference from data block; handles native/interpreter/mixed memory |
 | Queue unique fix | Interpreter-managed queue support; native memory block registration for cross-operation data access |
 | Native memory threshold fix | Queue operations check `nativeMemoryBlocks` map instead of just address threshold; fixes systems with low malloc addresses |
+| `$value$plusargs` | Runtime `__moore_value_plusargs` with signal-aware output; traces SSA through `UnrealizedConversionCastOp` to drive `llhd.sig` |
