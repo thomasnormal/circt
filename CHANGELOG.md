@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 428 - February 6, 2026
+
+### Summary
+
+Iteration 428: Tightened `first_match` boundedness checks to reject sequences
+with unknown or unbounded length.
+
+### Accomplishments
+
+1. **first_match boundedness** - `first_match` now errors when sequence length
+   bounds are unknown or unbounded, matching SVA requirements and existing
+   regression expectations.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog change only)
+
 ## Iteration 427 - February 6, 2026
 
 ### Summary
