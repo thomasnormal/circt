@@ -31,7 +31,9 @@ UVM testbenches, compared to commercial simulators like Cadence Xcelium.
 | **Known Gaps** | | |
 | `+UVM_TESTNAME` plusarg | PARTIAL | Runtime parsing works (CIRCT_UVM_ARGS env var); `$test$plusargs`/`$value$plusargs` stubbed to 0 in ImportVerilog |
 | `$urandom` / `$random` | WORKS | mt19937-based RNG via `__moore_urandom()` interceptors |
-| `randomize()` (constrained) | PARTIAL | `__moore_randomize_basic()` stubbed (returns 1, doesn't write random bytes); constraint functions not intercepted |
+| `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
+| `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
+| `randomize()` (with ranges) | MISSING | `__moore_randomize_with_ranges()` not yet intercepted |
 | Interface ports | MISSING | Required by AXI-VIP and similar verification IPs |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | MISSING | String formatting gap |
@@ -58,7 +60,7 @@ UVM testbenches, compared to commercial simulators like Cadence Xcelium.
 
 | Suite | Total | Pass | XFail | Unsupported |
 |-------|-------|------|-------|-------------|
-| circt-sim | 137 | 136 | 1 | 0 |
+| circt-sim | 138 | 137 | 1 | 0 |
 | sv-tests BMC | 26 | 23 | 3 | 0 |
 | sv-tests LEC | 23 | 23 | 0 | 0 |
 
@@ -74,3 +76,5 @@ UVM testbenches, compared to commercial simulators like Cadence Xcelium.
 | Static vtable fallback | Eliminates dispatch warnings for corrupt pointers |
 | Native store OOB fallback | Falls through when native block too small |
 | Shutdown `_exit` | Placed in `processInput()` before destructor runs |
+| `randomize_basic` | Fills object memory with random bytes instead of no-op |
+| `randomize_with_dist` | Weighted distribution constraints with range/weight arrays |
