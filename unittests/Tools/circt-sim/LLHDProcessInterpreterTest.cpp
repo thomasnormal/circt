@@ -13,11 +13,13 @@
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Parser/Parser.h"
 #include "gtest/gtest.h"
+#include <cstring>
 
 using namespace circt;
 using namespace circt::sim;
@@ -76,6 +78,10 @@ public:
       Type hwType, Type llvmType) {
     return interpreter.convertHWToLLVMLayout(std::move(value), hwType,
                                              llvmType);
+  }
+  static void registerNativeMemoryBlock(LLHDProcessInterpreter &interpreter,
+                                        uint64_t addr, size_t size) {
+    interpreter.nativeMemoryBlocks[addr] = size;
   }
 };
 } // namespace sim
@@ -165,6 +171,33 @@ module {
       llhd.halt
     }
 
+    hw.output
+  }
+}
+)MLIR";
+
+static constexpr llvm::StringLiteral kNativeStoreFallbackIR = R"MLIR(
+module {
+  hw.module @test() {
+    %t1 = llhd.constant_time <1ns, 0d, 0e>
+    llhd.process {
+      %c1 = arith.constant 1 : i64
+      %ptr = llvm.alloca %c1 x !llvm.struct<(i32, i32, i32)> : (i64) -> !llvm.ptr
+      %slot = llvm.alloca %c1 x !llvm.ptr : (i64) -> !llvm.ptr
+      llvm.store %ptr, %slot : !llvm.ptr, !llvm.ptr
+      llhd.wait delay %t1, ^bb1
+    ^bb1:
+      %loaded = llvm.load %slot : !llvm.ptr -> !llvm.ptr
+      %c42 = arith.constant 42 : i32
+      %c99 = arith.constant 99 : i32
+      %c7 = arith.constant 7 : i32
+      %undef = llvm.mlir.undef : !llvm.struct<(i32, i32, i32)>
+      %s0 = llvm.insertvalue %c42, %undef[0] : !llvm.struct<(i32, i32, i32)>
+      %s1 = llvm.insertvalue %c99, %s0[1] : !llvm.struct<(i32, i32, i32)>
+      %s2 = llvm.insertvalue %c7, %s1[2] : !llvm.struct<(i32, i32, i32)>
+      llvm.store %s2, %loaded : !llvm.struct<(i32, i32, i32)>, !llvm.ptr
+      llhd.halt
+    }
     hw.output
   }
 }
@@ -787,6 +820,7 @@ TEST(LLHDProcessInterpreterToolTest, ProbeEncodedUnknown) {
 
 TEST(LLHDProcessInterpreterToolTest, LLVMSignalLoadStore) {
   MLIRContext context;
+  context.loadDialect<arith::ArithDialect>();
   context.loadDialect<hw::HWDialect>();
   context.loadDialect<llhd::LLHDDialect>();
   context.loadDialect<LLVM::LLVMDialect>();
@@ -827,6 +861,69 @@ TEST(LLHDProcessInterpreterToolTest, LLVMSignalLoadStore) {
   const SignalValue &inVal = scheduler.getSignalValue(sigInId);
   const SignalValue &outVal = scheduler.getSignalValue(sigOutId);
   EXPECT_EQ(inVal.getAPInt(), outVal.getAPInt());
+}
+
+TEST(LLHDProcessInterpreterToolTest, LLVMNativeStoreFallback) {
+  MLIRContext context;
+  context.loadDialect<arith::ArithDialect>();
+  context.loadDialect<hw::HWDialect>();
+  context.loadDialect<llhd::LLHDDialect>();
+  context.loadDialect<LLVM::LLVMDialect>();
+
+  OwningOpRef<ModuleOp> module =
+      parseSourceString<ModuleOp>(kNativeStoreFallbackIR, &context);
+  ASSERT_TRUE(module);
+
+  SymbolTable symbols(*module);
+  auto hwModule = symbols.lookup<hw::HWModuleOp>("test");
+  ASSERT_TRUE(hwModule);
+
+  ProcessScheduler scheduler;
+  LLHDProcessInterpreter interpreter(scheduler);
+  ASSERT_TRUE(succeeded(interpreter.initialize(hwModule)));
+
+  llhd::ProcessOp procOp;
+  LLVM::AllocaOp structAlloca;
+  hwModule.walk([&](llhd::ProcessOp op) { procOp = op; });
+  ASSERT_TRUE(procOp);
+  procOp.walk([&](LLVM::AllocaOp op) {
+    if (isa<LLVM::LLVMStructType>(op.getElemType()))
+      structAlloca = op;
+  });
+  ASSERT_TRUE(structAlloca);
+
+  ASSERT_TRUE(scheduler.executeDeltaCycle());
+
+  ProcessId procId =
+      LLHDProcessInterpreterTest::getProcessId(interpreter, procOp);
+  ASSERT_NE(procId, InvalidProcessId);
+
+  auto &states = LLHDProcessInterpreterTest::getProcessStates(interpreter);
+  auto &procState = states[procId];
+  auto addrIt = procState.valueMap.find(structAlloca.getResult());
+  ASSERT_TRUE(addrIt != procState.valueMap.end());
+  ASSERT_FALSE(addrIt->second.isX());
+  uint64_t baseAddr = addrIt->second.getUInt64();
+
+  LLHDProcessInterpreterTest::registerNativeMemoryBlock(interpreter, baseAddr,
+                                                        /*size=*/8);
+
+  ASSERT_TRUE(scheduler.advanceTime());
+  scheduler.executeCurrentTime();
+
+  auto blockIt = procState.memoryBlocks.find(structAlloca.getResult());
+  ASSERT_TRUE(blockIt != procState.memoryBlocks.end());
+  const auto &data = blockIt->second.data;
+  ASSERT_GE(data.size(), 12u);
+  uint32_t v0 = 0;
+  uint32_t v1 = 0;
+  uint32_t v2 = 0;
+  std::memcpy(&v0, data.data() + 0, sizeof(v0));
+  std::memcpy(&v1, data.data() + 4, sizeof(v1));
+  std::memcpy(&v2, data.data() + 8, sizeof(v2));
+  EXPECT_EQ(v0, 42u);
+  EXPECT_EQ(v1, 99u);
+  EXPECT_EQ(v2, 7u);
 }
 
 TEST(LLHDProcessInterpreterToolTest, LLVMSignalAggregateLayout) {
