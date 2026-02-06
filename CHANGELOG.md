@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 376 - February 6, 2026
+
+### Summary
+
+Iteration 376: Improved circt-bmc clock handling to avoid spurious multi-clock errors from LLHD alias wiring and allowed async-reset registers to be externalized, with new regression tests.
+
+### Accomplishments
+
+1. **Async reset externalization** - circt-bmc now externalizes async-reset registers instead of rejecting them, enabling BMC on designs that model async resets.
+2. **Clock alias canonicalization** - LowerToBMC now canonicalizes LLHD port/wire aliases and clock-key inputs to deduplicate equivalent clocks and avoid false multi-clock errors.
+3. **Regression coverage** - Added tests for async-reset externalization and LLHD clock alias handling.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build check-circt-tools-circt-bmc`
+
 ## Iteration 375 - February 6, 2026
 
 ### Summary

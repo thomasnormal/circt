@@ -6,10 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
+#include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Seq/SeqTypes.h"
 #include "circt/Dialect/Verif/VerifOps.h"
@@ -163,6 +167,122 @@ static Attribute makeClockKeySourceAttr(OpBuilder &builder, StringRef key,
 
 static Value getI1ClockValueForKey(Value clock, bool &invert) {
   invert = false;
+  auto canonicalizeLLHDAlias = [](Value value) -> Value {
+    if (!value)
+      return value;
+    Value base = getStructFieldBase(value, "value");
+    if (!base || !isFourStateStructType(base.getType()))
+      return value;
+
+    auto findValueField = [](Value structVal) -> Value {
+      for (Operation *user : structVal.getUsers()) {
+        if (auto extract = dyn_cast<hw::StructExtractOp>(user)) {
+          if (extract.getFieldName() == "value")
+            return extract.getResult();
+          continue;
+        }
+        if (auto explode = dyn_cast<hw::StructExplodeOp>(user)) {
+          auto structTy =
+              dyn_cast<hw::StructType>(explode.getInput().getType());
+          if (!structTy)
+            continue;
+          auto elements = structTy.getElements();
+          for (auto [idx, element] : llvm::enumerate(elements)) {
+            if (element.name.getValue() == "value") {
+              if (idx < explode->getNumResults())
+                return explode->getResult(idx);
+              break;
+            }
+          }
+        }
+      }
+      return Value();
+    };
+
+    DenseSet<Value> visited;
+    Value currentBase = base;
+    Value currentValue = value;
+    if (Value directValue = findValueField(currentBase))
+      currentValue = directValue;
+    auto isTrivialDelay = [](Value time) -> bool {
+      auto constTime = time.getDefiningOp<llhd::ConstantTimeOp>();
+      if (!constTime)
+        return false;
+      auto attr = constTime.getValueAttr();
+      if (attr.getTime() != 0)
+        return false;
+      if (attr.getDelta() != 0)
+        return false;
+      return attr.getEpsilon() <= 1;
+    };
+    while (currentBase) {
+      if (!visited.insert(currentBase).second)
+        break;
+      auto probe = currentBase.getDefiningOp<llhd::ProbeOp>();
+      if (!probe)
+        break;
+      Value signal = probe.getSignal();
+      auto sigOp = signal.getDefiningOp<llhd::SignalOp>();
+      if (!sigOp)
+        break;
+
+      Value driven;
+      bool hasDrive = false;
+      bool conflicting = false;
+      for (Operation *user : signal.getUsers()) {
+        auto drive = dyn_cast<llhd::DriveOp>(user);
+        if (!drive || drive.getSignal() != signal)
+          continue;
+        if (drive.getEnable()) {
+          if (auto literal = getConstI1Value(drive.getEnable());
+              !literal || !*literal) {
+            conflicting = true;
+            break;
+          }
+        }
+        if (!isTrivialDelay(drive.getTime())) {
+          conflicting = true;
+          break;
+        }
+        Value driveValue = drive.getValue();
+        if (!hasDrive) {
+          driven = driveValue;
+          hasDrive = true;
+        } else if (driven != driveValue) {
+          conflicting = true;
+          break;
+        }
+      }
+      if (!hasDrive || conflicting)
+        break;
+      if (sigOp.getInit() != driven)
+        break;
+      if (driven.getType() != currentBase.getType())
+        break;
+
+      Value nextValue = findValueField(driven);
+      if (!nextValue)
+        break;
+      currentBase = driven;
+      currentValue = nextValue;
+    }
+    return currentValue;
+  };
+  auto canonicalize = [&](Value value) -> Value {
+    if (!value)
+      return value;
+    if (auto andOp = value.getDefiningOp<comb::AndOp>()) {
+      if (andOp.getNumOperands() == 2) {
+        if (auto gated =
+                matchFourStateClockGate(andOp.getOperand(0), andOp.getOperand(1)))
+          return gated;
+        if (auto gated =
+                matchFourStateClockGate(andOp.getOperand(1), andOp.getOperand(0)))
+          return gated;
+      }
+    }
+    return canonicalizeLLHDAlias(value);
+  };
   Value cur = clock;
   while (cur) {
     if (auto invOp = cur.getDefiningOp<seq::ClockInverterOp>()) {
@@ -173,12 +293,14 @@ static Value getI1ClockValueForKey(Value clock, bool &invert) {
     if (auto toClock = cur.getDefiningOp<seq::ToClockOp>()) {
       auto simplified = simplifyI1Value(toClock.getInput());
       invert ^= simplified.invert;
-      return simplified.value ? simplified.value : toClock.getInput();
+      Value base = simplified.value ? simplified.value : toClock.getInput();
+      return canonicalize(base);
     }
     if (cur.getType().isInteger(1)) {
       auto simplified = simplifyI1Value(cur);
       invert ^= simplified.invert;
-      return simplified.value ? simplified.value : cur;
+      Value base = simplified.value ? simplified.value : cur;
+      return canonicalize(base);
     }
     break;
   }
@@ -370,6 +492,10 @@ static bool traceClockRoot(Value value, Value &root) {
 struct ExternalizeRegistersPass
     : public circt::impl::ExternalizeRegistersBase<ExternalizeRegistersPass> {
   using ExternalizeRegistersBase::ExternalizeRegistersBase;
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<comb::CombDialect, hw::HWDialect, seq::SeqDialect,
+                    llhd::LLHDDialect>();
+  }
   void runOnOperation() override;
 
 private:
@@ -692,12 +818,6 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   }
   regClockSources[module.getSymNameAttr()].push_back(clockSource);
   if (reset) {
-    if (isAsync) {
-      // Async reset
-      op->emitError("registers with an async reset are not yet supported");
-      return failure();
-    }
-    // Sync reset
     auto mux = comb::MuxOp::create(builder, op->getLoc(), regType, reset,
                                    resetValue, next);
     module.appendOutput(newOutputName, mux);
