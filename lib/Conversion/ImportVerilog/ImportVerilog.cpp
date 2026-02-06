@@ -28,6 +28,8 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/Support/SourceMgr.h"
 
+#include "slang/ast/Compilation.h"
+#include "slang/ast/SystemSubroutine.h"
 #include "slang/diagnostics/DiagnosticClient.h"
 #include "slang/diagnostics/ExpressionsDiags.h"
 #include "slang/driver/Driver.h"
@@ -319,6 +321,14 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
   // Elaborate the input.
   auto compileTimer = ts.nest("Verilog elaboration");
   auto compilation = driver.createCompilation();
+
+  // Register vendor-specific system functions as stubs.
+  // $get_initial_random_seed is a Verilator extension that returns the
+  // initial random seed. We stub it to return int (value 0 at runtime).
+  compilation->addSystemSubroutine(
+      std::make_shared<slang::ast::NonConstantFunction>(
+          "$get_initial_random_seed", compilation->getIntType()));
+
   for (auto &diag : compilation->getAllDiagnostics())
     driver.diagEngine.issue(diag);
   if (!parseSuccess || driver.diagEngine.getNumErrors() > 0)
