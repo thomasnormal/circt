@@ -73,6 +73,10 @@ getSequenceLengthBounds(Value seq) {
       result.max = *inputBounds->max + *maxDelay;
     return result;
   }
+  if (auto clockOp = seq.getDefiningOp<ltl::ClockOp>())
+    return getSequenceLengthBounds(clockOp.getInput());
+  if (auto pastOp = seq.getDefiningOp<ltl::PastOp>())
+    return getSequenceLengthBounds(pastOp.getInput());
   if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
     SequenceLengthBounds result;
     result.min = 0;
