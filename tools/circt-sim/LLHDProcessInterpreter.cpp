@@ -2535,8 +2535,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         frame.kind = EvalKind::Xor;
         frame.stage = 1;
         auto xorOp = current.getDefiningOp<comb::XorOp>();
-        pushValue(xorOp.getOperand(0));
-        pushValue(xorOp.getOperand(1));
+        for (Value operand : xorOp.getOperands())
+          pushValue(operand);
         continue;
       }
 
@@ -2596,8 +2596,8 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         frame.kind = EvalKind::Add;
         frame.stage = 1;
         auto addOp = current.getDefiningOp<comb::AddOp>();
-        pushValue(addOp.getOperand(0));
-        pushValue(addOp.getOperand(1));
+        for (Value operand : addOp.getOperands())
+          pushValue(operand);
         continue;
       }
 
@@ -2966,17 +2966,21 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     }
     case EvalKind::Xor: {
       auto xorOp = current.getDefiningOp<comb::XorOp>();
-      InterpretedValue lhs = getCached(xorOp.getOperand(0));
-      InterpretedValue rhs = getCached(xorOp.getOperand(1));
-      if (lhs.isX() || rhs.isX()) {
-        finish(makeUnknown(current));
-        break;
-      }
-      llvm::APInt lhsVal = lhs.getAPInt();
-      llvm::APInt rhsVal = rhs.getAPInt();
       unsigned width = getTypeWidth(current.getType());
-      normalizeWidths(lhsVal, rhsVal, width);
-      finish(InterpretedValue(lhsVal ^ rhsVal));
+      llvm::APInt result = APInt::getZero(width);
+      bool sawX = false;
+      for (Value operand : xorOp.getOperands()) {
+        InterpretedValue opVal = getCached(operand);
+        if (opVal.isX()) { sawX = true; break; }
+        llvm::APInt v = opVal.getAPInt();
+        if (v.getBitWidth() != width)
+          v = v.zextOrTrunc(width);
+        result ^= v;
+      }
+      if (sawX)
+        finish(makeUnknown(current));
+      else
+        finish(InterpretedValue(result));
       break;
     }
     case EvalKind::And: {
@@ -3123,17 +3127,21 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     }
     case EvalKind::Add: {
       auto addOp = current.getDefiningOp<comb::AddOp>();
-      InterpretedValue lhs = getCached(addOp.getOperand(0));
-      InterpretedValue rhs = getCached(addOp.getOperand(1));
-      if (lhs.isX() || rhs.isX()) {
-        finish(makeUnknown(current));
-        break;
-      }
-      llvm::APInt lhsVal = lhs.getAPInt();
-      llvm::APInt rhsVal = rhs.getAPInt();
       unsigned width = getTypeWidth(current.getType());
-      normalizeWidths(lhsVal, rhsVal, width);
-      finish(InterpretedValue(lhsVal + rhsVal));
+      llvm::APInt result = APInt::getZero(width);
+      bool sawX = false;
+      for (Value operand : addOp.getOperands()) {
+        InterpretedValue opVal = getCached(operand);
+        if (opVal.isX()) { sawX = true; break; }
+        llvm::APInt v = opVal.getAPInt();
+        if (v.getBitWidth() != width)
+          v = v.zextOrTrunc(width);
+        result += v;
+      }
+      if (sawX)
+        finish(makeUnknown(current));
+      else
+        finish(InterpretedValue(result));
       break;
     }
     case EvalKind::Sub: {
@@ -4049,6 +4057,21 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   if (auto constTimeOp = dyn_cast<llhd::ConstantTimeOp>(op))
     return interpretConstantTime(procId, constTimeOp);
 
+  // Handle llhd.sig.extract - extracts a bit range from a signal/ref.
+  // For signal-backed refs, propagate the signal mapping.
+  // For alloca-backed refs, just succeed - llhd.drv/llhd.prb trace the def chain.
+  if (auto sigExtractOp = dyn_cast<llhd::SigExtractOp>(op)) {
+    // Try to propagate signal mapping from input to result
+    SignalId inputSigId = getSignalId(sigExtractOp.getInput());
+    if (inputSigId != 0) {
+      valueToSignal[sigExtractOp.getResult()] = inputSigId;
+    }
+    // For alloca-backed refs, the result is just a narrowed ref.
+    // The drv/prb handlers will trace back through this op to find
+    // the alloca and compute the bit offset.
+    return success();
+  }
+
   // Handle llhd.sig (runtime signal creation for local variables in initial blocks)
   // When global constructors or initial blocks execute, local variable declarations
   // produce llhd.sig operations at runtime. We need to dynamically register these
@@ -4784,20 +4807,22 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   if (auto addOp = dyn_cast<comb::AddOp>(op)) {
-    InterpretedValue lhs = getValue(procId, addOp.getOperand(0));
-    InterpretedValue rhs = getValue(procId, addOp.getOperand(1));
     unsigned targetWidth = getTypeWidth(addOp.getType());
-
-    if (lhs.isX() || rhs.isX()) {
-      setValue(procId, addOp.getResult(),
-               InterpretedValue::makeX(targetWidth));
-    } else {
-      APInt lhsVal = lhs.getAPInt();
-      APInt rhsVal = rhs.getAPInt();
-      normalizeWidths(lhsVal, rhsVal, targetWidth);
-      APInt result = lhsVal + rhsVal;
-      setValue(procId, addOp.getResult(), InterpretedValue(result));
+    // comb.add is variadic - handle N operands (canonicalization merges nested adds)
+    APInt result = APInt::getZero(targetWidth);
+    for (Value operand : addOp.getOperands()) {
+      InterpretedValue val = getValue(procId, operand);
+      if (val.isX()) {
+        setValue(procId, addOp.getResult(),
+                 InterpretedValue::makeX(targetWidth));
+        return success();
+      }
+      APInt v = val.getAPInt();
+      if (v.getBitWidth() != targetWidth)
+        v = v.zextOrTrunc(targetWidth);
+      result += v;
     }
+    setValue(procId, addOp.getResult(), InterpretedValue(result));
     return success();
   }
 
@@ -7066,6 +7091,95 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       return success();
     }
 
+    // Handle llhd.sig.extract - probe a bit range from a signal/ref.
+    // Pattern: %alloca -> cast to !llhd.ref<i32> -> sig.extract -> prb
+    if (auto bitExtractOp = signal.getDefiningOp<llhd::SigExtractOp>()) {
+      InterpretedValue lowBitVal = getValue(procId, bitExtractOp.getLowBit());
+      unsigned totalBitOffset = lowBitVal.isX() ? 0 : lowBitVal.getUInt64();
+
+      // Chase through nested SigExtractOps
+      Value parentRef = bitExtractOp.getInput();
+      while (auto nestedExtract = parentRef.getDefiningOp<llhd::SigExtractOp>()) {
+        InterpretedValue nestedLowBit =
+            getValue(procId, nestedExtract.getLowBit());
+        totalBitOffset += nestedLowBit.isX() ? 0 : nestedLowBit.getUInt64();
+        parentRef = nestedExtract.getInput();
+      }
+
+      unsigned resultWidth = getTypeWidth(probeOp.getResult().getType());
+
+      // Check for alloca-backed ref
+      if (auto castOp =
+              parentRef.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() == 1) {
+          Value input = castOp.getInputs()[0];
+          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+            unsigned parentWidth = getTypeWidth(parentRef.getType());
+            unsigned loadSize = (parentWidth + 7) / 8;
+
+            MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+            if (!block) {
+              auto &state = processStates[procId];
+              auto it = state.memoryBlocks.find(allocaOp.getResult());
+              if (it != state.memoryBlocks.end())
+                block = &it->second;
+            }
+
+            if (!block || !block->initialized) {
+              setValue(procId, probeOp.getResult(),
+                      InterpretedValue::makeX(resultWidth));
+              return success();
+            }
+
+            // Read the full value from memory
+            APInt fullVal = APInt::getZero(parentWidth);
+            for (unsigned i = 0; i < loadSize && i < block->data.size(); ++i) {
+              unsigned insertPos = i * 8;
+              unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
+              if (bitsToInsert > 0 && insertPos < parentWidth) {
+                APInt byteVal(bitsToInsert,
+                              block->data[i] & ((1u << bitsToInsert) - 1));
+                fullVal.insertBits(byteVal, insertPos);
+              }
+            }
+
+            // Extract the requested bit range
+            APInt extractedVal = fullVal.extractBits(resultWidth, totalBitOffset);
+            setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe sig.extract alloca: bits ["
+                       << totalBitOffset << ":" << (totalBitOffset + resultWidth)
+                       << "] = " << extractedVal.getZExtValue() << "\n");
+            return success();
+          }
+        }
+      }
+
+      // Check for signal-backed ref
+      SignalId parentSigId = getSignalId(parentRef);
+      if (parentSigId == 0)
+        parentSigId = resolveSignalId(parentRef);
+
+      if (parentSigId != 0) {
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+
+        if (parentVal.isX()) {
+          setValue(procId, probeOp.getResult(),
+                  InterpretedValue::makeX(resultWidth));
+        } else {
+          APInt fullVal = parentVal.getAPInt();
+          APInt extractedVal = fullVal.extractBits(resultWidth, totalBitOffset);
+          setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
+        }
+        return success();
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Error: Could not resolve parent for sig.extract probe\n");
+      return failure();
+    }
+
     // Handle llhd.sig.array_get - probe an element within an array signal.
     // We need to read the parent signal and extract the relevant element bits.
     if (auto sigArrayGetOp = signal.getDefiningOp<llhd::SigArrayGetOp>()) {
@@ -7244,6 +7358,154 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
   // Get the signal ID
   SignalId sigId = getSignalId(signal);
   if (sigId == 0) {
+    // Handle llhd.sig.extract on alloca-backed refs.
+    // Pattern: %alloca -> cast to !llhd.ref<i32> -> sig.extract -> !llhd.ref<i1>
+    // This is used in uvm_oneway_hash to manipulate individual bits of local vars.
+    if (auto bitExtractOp = signal.getDefiningOp<llhd::SigExtractOp>()) {
+      // Get the lowBit value
+      InterpretedValue lowBitVal = getValue(procId, bitExtractOp.getLowBit());
+      unsigned lowBit = lowBitVal.isX() ? 0 : lowBitVal.getUInt64();
+
+      // Trace through to find the underlying alloca
+      Value parentRef = bitExtractOp.getInput();
+      // Chase through nested SigExtractOps
+      unsigned totalBitOffset = lowBit;
+      while (auto nestedExtract = parentRef.getDefiningOp<llhd::SigExtractOp>()) {
+        InterpretedValue nestedLowBit =
+            getValue(procId, nestedExtract.getLowBit());
+        totalBitOffset += nestedLowBit.isX() ? 0 : nestedLowBit.getUInt64();
+        parentRef = nestedExtract.getInput();
+      }
+
+      // Now parentRef should be from UnrealizedConversionCastOp -> AllocaOp
+      if (auto castOp =
+              parentRef.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() == 1) {
+          Value input = castOp.getInputs()[0];
+          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+            InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+            MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+            if (!block) {
+              auto &state = processStates[procId];
+              auto it = state.memoryBlocks.find(allocaOp.getResult());
+              if (it != state.memoryBlocks.end())
+                block = &it->second;
+            }
+
+            if (!block) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to sig.extract alloca failed - "
+                            "memory not found\n");
+              return failure();
+            }
+
+            // Read-modify-write: read parent value, modify bits, write back
+            unsigned parentWidth = getTypeWidth(parentRef.getType());
+            unsigned storeSize = (parentWidth + 7) / 8;
+
+            if (storeSize > block->size) {
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to sig.extract: out of bounds\n");
+              return failure();
+            }
+
+            // Read current value from memory
+            APInt currentVal = APInt::getZero(parentWidth);
+            for (unsigned i = 0; i < storeSize && i < block->data.size();
+                 ++i) {
+              unsigned insertPos = i * 8;
+              unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
+              if (bitsToInsert > 0 && insertPos < parentWidth) {
+                APInt byteVal(bitsToInsert,
+                              block->data[i] & ((1u << bitsToInsert) - 1));
+                currentVal.insertBits(byteVal, insertPos);
+              }
+            }
+
+            // Insert the drive value at the bit offset
+            unsigned extractWidth = driveVal.getWidth();
+            if (!driveVal.isX()) {
+              APInt insertVal = driveVal.getAPInt();
+              if (insertVal.getBitWidth() != extractWidth)
+                insertVal = insertVal.zextOrTrunc(extractWidth);
+              currentVal.insertBits(insertVal, totalBitOffset);
+            }
+
+            // Write back to memory
+            for (unsigned i = 0; i < storeSize; ++i) {
+              unsigned extractPos = i * 8;
+              unsigned bitsToExtract = std::min(8u, parentWidth - extractPos);
+              if (bitsToExtract > 0 && extractPos < parentWidth) {
+                block->data[i] = static_cast<uint8_t>(
+                    currentVal.extractBits(bitsToExtract, extractPos)
+                        .getZExtValue());
+              }
+            }
+            block->initialized = true;
+
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive to sig.extract alloca: bit " << totalBitOffset
+                       << " = "
+                       << (driveVal.isX() ? "X"
+                                          : std::to_string(driveVal.getUInt64()))
+                       << "\n");
+            return success();
+          }
+        }
+      }
+
+      // Check if the parent has a signal ID (for actual signal bit extracts)
+      SignalId parentSigId = getSignalId(parentRef);
+      if (parentSigId == 0)
+        parentSigId = resolveSignalId(parentRef);
+
+      if (parentSigId != 0) {
+        // Drive to a bit range within an actual signal - use read-modify-write
+        InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+        unsigned parentWidth = parentVal.getWidth();
+
+        APInt result = parentVal.isX() ? APInt::getZero(parentWidth)
+                                       : parentVal.getAPInt();
+
+        unsigned extractWidth = driveVal.getWidth();
+        if (!driveVal.isX()) {
+          APInt insertVal = driveVal.getAPInt();
+          if (insertVal.getBitWidth() != extractWidth)
+            insertVal = insertVal.zextOrTrunc(extractWidth);
+          result.insertBits(insertVal, totalBitOffset);
+        }
+
+        // Schedule the signal update
+        SimTime delay = convertTimeValue(procId, driveOp.getTime());
+        SimTime currentTime = scheduler.getCurrentTime();
+        SimTime targetTime = currentTime.advanceTime(delay.realTime);
+        if (delay.deltaStep > 0)
+          targetTime.deltaStep = delay.deltaStep;
+
+        uint64_t driverId = (static_cast<uint64_t>(procId) << 32) |
+                            static_cast<uint64_t>(parentSigId);
+
+        SignalValue newVal(result);
+        scheduler.getEventScheduler().schedule(
+            targetTime, SchedulingRegion::NBA,
+            Event([this, parentSigId, driverId, newVal]() {
+              scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
+                                                 DriveStrength::Strong,
+                                                 DriveStrength::Strong);
+            }));
+
+        return success();
+      }
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Drive to sig.extract failed - could not resolve ref\n");
+      return failure();
+    }
+
     // Check if this is a local variable access via UnrealizedConversionCastOp
     // This happens when local variables in functions are accessed - they're
     // backed by llvm.alloca and cast to !llhd.ref, not actual LLHD signals.
@@ -8950,6 +9212,72 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     args.push_back(getValue(procId, operand));
   }
 
+  // Function result caching for hot UVM phase traversal functions.
+  // These functions are pure (no side effects on global state) and called
+  // thousands of times with the same args during phase graph construction.
+  // Caching their results avoids re-executing expensive DFS traversals.
+  bool isCacheableFunc = false;
+  uint64_t cacheArgHash = 0;
+  {
+    llvm::StringRef calleeName = callOp.getCallee();
+    // Cache functions involved in UVM phase graph traversal.
+    // These are called repeatedly with the same args during get_common_domain()
+    // and uvm_component::new, and their results only change when add() modifies
+    // the graph. Invalidation happens in the add() handler below.
+    if (calleeName.contains("uvm_phase::")) {
+      if (calleeName.contains("get_schedule") ||
+          calleeName.contains("get_domain") ||
+          calleeName.contains("get_phase_type") ||
+          calleeName.contains("::find") ||
+          calleeName.contains("m_find_successor") ||
+          calleeName.contains("m_find_predecessor") ||
+          calleeName.contains("m_find_successor_by_name") ||
+          calleeName.contains("m_find_predecessor_by_name")) {
+        isCacheableFunc = true;
+      }
+    }
+    if (isCacheableFunc) {
+      // Compute hash of all argument values
+      cacheArgHash = 0x517cc1b727220a95ULL; // seed
+      for (const auto &arg : args) {
+        uint64_t v = arg.isX() ? 0xDEADBEEFULL : arg.getUInt64();
+        cacheArgHash = cacheArgHash * 0x9e3779b97f4a7c15ULL + v;
+      }
+      // Check cache
+      auto &cacheState = processStates[procId];
+      auto funcIt = cacheState.funcResultCache.find(funcOp.getOperation());
+      if (funcIt != cacheState.funcResultCache.end()) {
+        auto argIt = funcIt->second.find(cacheArgHash);
+        if (argIt != funcIt->second.end()) {
+          // Cache hit - return cached results
+          const auto &cachedResults = argIt->second;
+          auto results = callOp.getResults();
+          for (auto [result, cached] : llvm::zip(results, cachedResults)) {
+            setValue(procId, result, cached);
+          }
+          ++cacheState.funcCacheHits;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  func.call: cache hit for '" << calleeName
+                     << "' (hits=" << cacheState.funcCacheHits << ")\n");
+          return success();
+        }
+      }
+    }
+  }
+
+  // Invalidate function result cache when uvm_phase::add is called,
+  // since it modifies the phase graph (successor/predecessor relationships).
+  if (callOp.getCallee().contains("uvm_phase::add")) {
+    auto &cacheState = processStates[procId];
+    if (!cacheState.funcResultCache.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call: invalidating func result cache ("
+                 << cacheState.funcResultCache.size()
+                 << " functions cached) due to phase::add\n");
+      cacheState.funcResultCache.clear();
+    }
+  }
+
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
   auto &state = processStates[procId];
   constexpr size_t maxCallDepth = 200;
@@ -9029,6 +9357,18 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Map return values to call results
   for (auto [result, retVal] : llvm::zip(callOp.getResults(), returnValues)) {
     setValue(procId, result, retVal);
+  }
+
+  // Store result in function cache for cacheable functions
+  if (isCacheableFunc && !returnValues.empty()) {
+    auto &cacheStore = processStates[procId];
+    cacheStore.funcResultCache[funcOp.getOperation()][cacheArgHash] =
+        llvm::SmallVector<InterpretedValue, 2>(returnValues.begin(),
+                                                returnValues.end());
+    LLVM_DEBUG(llvm::dbgs()
+               << "  func.call: cached result for '" << callOp.getCallee()
+               << "' (argHash=0x" << llvm::format_hex(cacheArgHash, 16)
+               << ")\n");
   }
 
   return success();
@@ -10818,15 +11158,28 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
         // Get the address assigned to this Value.
         // Check the original process's valueMap first (child copies parent
         // valueMap), then fall back to the block-owning process's valueMap.
-        auto it = processStates[procId].valueMap.find(val);
-        if (it == processStates[procId].valueMap.end())
-          it = state.valueMap.find(val);
-        if (it != state.valueMap.end() && !it->second.isX()) {
-          uint64_t blockAddr = it->second.getUInt64();
-          if (addr >= blockAddr && addr < blockAddr + block.size) {
-            if (outOffset) *outOffset = addr - blockAddr;
-            return &block;
+        // NOTE: We must NOT compare iterators across different DenseMaps
+        // (would trigger epoch assertion in debug builds when cur != procId).
+        uint64_t blockAddr = 0;
+        bool foundAddr = false;
+        {
+          auto &procVM = processStates[procId].valueMap;
+          auto it = procVM.find(val);
+          if (it != procVM.end() && !it->second.isX()) {
+            blockAddr = it->second.getUInt64();
+            foundAddr = true;
           }
+        }
+        if (!foundAddr) {
+          auto it2 = state.valueMap.find(val);
+          if (it2 != state.valueMap.end() && !it2->second.isX()) {
+            blockAddr = it2->second.getUInt64();
+            foundAddr = true;
+          }
+        }
+        if (foundAddr && addr >= blockAddr && addr < blockAddr + block.size) {
+          if (outOffset) *outOffset = addr - blockAddr;
+          return &block;
         }
       }
       cur = state.parentProcessId;
