@@ -273,6 +273,10 @@ Full sv-tests simulation pipeline tested (717 tests). String array initializer b
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 413 - Sampled Explicit Clocking + Disable)
+- **Sampled explicit clocking + disable**: added regression for `$rose` with explicit clocking under default disable to ensure gating is preserved.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`.
+
 ### New Findings (2026-02-06, Iteration 412 - Explicit Clocking + Default Disable)
 - **Explicit clocking + default disable**: added regression for `$past` with explicit clocking and enable under default disable to ensure both gates are lowered.
 - **Regression coverage**: added `test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`.
