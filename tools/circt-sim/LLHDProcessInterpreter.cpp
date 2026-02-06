@@ -11038,6 +11038,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
         }
       }
     }
+    // Check process-local allocas by address. This is needed when a pointer
+    // is passed through a function argument (different SSA Value from the
+    // original alloca result).
+    if (!block) {
+      uint64_t localOffset = 0;
+      block = findMemoryBlockByAddress(addr, procId, &localOffset);
+      if (block) {
+        offset = localOffset;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.load: found local alloca by address at offset "
+                   << offset << "\n");
+      }
+    }
     if (!block) {
       if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
         useNative = true;
@@ -11247,6 +11260,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             break;
           }
         }
+      }
+    }
+
+    // Check process-local allocas by address. This is needed when a pointer
+    // is passed through a function argument (different SSA Value from the
+    // original alloca result).
+    if (!block) {
+      uint64_t localOffset = 0;
+      block = findMemoryBlockByAddress(addr, procId, &localOffset);
+      if (block) {
+        offset = localOffset;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.store: found local alloca by address at offset "
+                   << offset << "\n");
       }
     }
 
