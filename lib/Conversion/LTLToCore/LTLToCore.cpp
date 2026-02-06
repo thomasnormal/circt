@@ -356,10 +356,6 @@ struct LTLPropertyLowerer {
 
   PropertyResult lowerDisableIff(ltl::OrOp orOp, Value clock,
                                  ltl::ClockEdge edge) {
-    if (disable) {
-      orOp.emitError("nested disable iff is not supported");
-      return {Value(), {}};
-    }
     auto inputs = orOp.getInputs();
     if (inputs.size() != 2) {
       orOp.emitError("disable iff expects two inputs");
@@ -384,8 +380,15 @@ struct LTLPropertyLowerer {
       return {Value(), {}};
     }
 
-    disable = disableInput;
+    Value savedDisable = disable;
+    Value combinedDisable = disableInput;
+    if (disable) {
+      combinedDisable = comb::OrOp::create(
+          builder, loc, SmallVector<Value, 2>{disable, disableInput}, true);
+    }
+    disable = combinedDisable;
     auto result = lowerProperty(propertyInput, clock, edge);
+    disable = savedDisable;
     if (!result.safety || !result.finalCheck) {
       orOp.emitError("invalid property lowering");
       return {Value(), {}};
