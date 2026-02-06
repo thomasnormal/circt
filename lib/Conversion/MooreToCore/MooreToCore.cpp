@@ -4021,7 +4021,7 @@ struct ClassNewOpConversion : public OpConversionPattern<ClassNewOp> {
                   if (!isa<StringType>(keyType)) {
                     auto convertedKeyType = typeConverter->convertType(keyType);
                     if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
-                      keySize = intTy.getWidth() / 8;
+                      keySize = (intTy.getWidth() + 7) / 8;
                     else if (isa<LLVM::LLVMPointerType>(convertedKeyType))
                       keySize = 8; // Pointer size
                     else
@@ -5859,7 +5859,7 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
         // For non-string keys, get the bit width
         auto convertedKeyType = typeConverter->convertType(keyType);
         if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
-          keySize = intTy.getWidth() / 8;
+          keySize = (intTy.getWidth() + 7) / 8;
         else
           keySize = 8; // Default to 64-bit for unknown types
       }
@@ -6381,7 +6381,7 @@ struct GlobalVariableOpConversion
         // For non-string keys, get the bit width
         auto convertedKeyType = typeConverter->convertType(keyType);
         if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
-          keySize = intTy.getWidth() / 8;
+          keySize = (intTy.getWidth() + 7) / 8;
         else
           keySize = 8; // Default to 64-bit for unknown types
       }
@@ -19142,7 +19142,7 @@ struct AssocArrayCreateOpConversion
       if (!isa<StringType>(keyType)) {
         auto convertedKeyType = typeConverter->convertType(keyType);
         if (auto intTy = dyn_cast<IntegerType>(convertedKeyType))
-          keySize = intTy.getWidth() / 8;
+          keySize = (intTy.getWidth() + 7) / 8;
         else
           keySize = 8; // Default to 64-bit for unknown types
       }
