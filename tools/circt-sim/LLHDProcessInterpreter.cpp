@@ -16688,10 +16688,101 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // ---- __moore_queue_sort ----
     // Signature: (queue: ptr) -> void
+    // Sorts queue elements in ascending order using unsigned little-endian
+    // comparison. Element size is inferred from the data block allocation.
     if (calleeName == "__moore_queue_sort") {
-      // Stub - sorting would require knowing element size and comparator
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  llvm.call: __moore_queue_sort() (stub)\n");
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        if (queueAddr != 0) {
+          // For native pointers, delegate to runtime sort_inplace
+          if (queueAddr >= 0x10000000000ULL) {
+            auto *nativeQueue =
+                reinterpret_cast<MooreQueue *>(queueAddr);
+            if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
+              __moore_queue_sort_inplace(nativeQueue, 8);
+            }
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  llvm.call: __moore_queue_sort(native 0x"
+                       << llvm::format_hex(queueAddr, 16) << ")\n");
+          } else {
+            // Interpreter-managed memory
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              // Read data pointer and length from queue struct
+              // Layout: [ptr data @0, i64 len @8]
+              uint64_t dataPtr = 0;
+              int64_t queueLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->data[queueOffset + 8 + i])
+                            << (i * 8);
+
+              if (queueLen > 1 && dataPtr != 0) {
+                if (dataPtr >= 0x10000000000ULL) {
+                  // Data is in native memory but queue struct is interpreted
+                  // Wrap in a temporary MooreQueue and delegate
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = queueLen;
+                  __moore_queue_sort_inplace(&tmpQ, 8);
+                } else {
+                  // Both queue and data are in interpreter memory.
+                  // Infer element size from data block size / queue length.
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized &&
+                      dataBlock->data.size() > 0) {
+                    int64_t availableSize = static_cast<int64_t>(
+                        dataBlock->data.size() - dataOffset);
+                    int64_t elemSize = availableSize / queueLen;
+                    if (elemSize > 0) {
+                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      // Copy elements into a sortable vector
+                      std::vector<std::vector<uint8_t>> elements(queueLen);
+                      for (int64_t i = 0; i < queueLen; ++i) {
+                        elements[i].assign(base + i * elemSize,
+                                           base + (i + 1) * elemSize);
+                      }
+                      // Sort ascending using unsigned little-endian comparison
+                      std::sort(
+                          elements.begin(), elements.end(),
+                          [elemSize](const std::vector<uint8_t> &a,
+                                     const std::vector<uint8_t> &b) {
+                            // Compare from most significant byte down
+                            for (int64_t j = elemSize - 1; j >= 0; --j) {
+                              if (a[j] != b[j])
+                                return a[j] < b[j];
+                            }
+                            return false;
+                          });
+                      // Write sorted elements back in-place
+                      for (int64_t i = 0; i < queueLen; ++i) {
+                        std::memcpy(base + i * elemSize, elements[i].data(),
+                                    elemSize);
+                      }
+                    }
+                  }
+                }
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_sort(0x"
+                         << llvm::format_hex(queueAddr, 16)
+                         << ", len=" << queueLen << ")\n");
+            }
+          }
+        }
+      }
       return success();
     }
 
