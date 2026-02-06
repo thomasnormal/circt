@@ -257,6 +257,12 @@ struct ProcessExecutionState {
   /// Total operations executed by this process.
   size_t totalSteps = 0;
 
+  /// Total operations executed inside function bodies (subset of totalSteps).
+  size_t funcBodySteps = 0;
+
+  /// Name of the function currently being executed (empty if at process level).
+  std::string currentFuncName;
+
   /// Total operations in this process/initial body (used for step budget).
   size_t opCount = 0;
 
@@ -894,7 +900,7 @@ private:
   SyncPrimitivesManager syncPrimitivesManager;
 
   /// Maximum number of ops a process may execute before forcing a stop.
-  size_t maxProcessSteps = 50000;
+  size_t maxProcessSteps = 0;
 
   /// Name of the top module (for hierarchical path construction).
   std::string moduleName;

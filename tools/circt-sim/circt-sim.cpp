@@ -151,8 +151,8 @@ static llvm::cl::opt<uint64_t>
 
 static llvm::cl::opt<uint64_t>
     maxProcessSteps("max-process-steps",
-                    llvm::cl::desc("Maximum operations per process activation (0 = no limit)"),
-                    llvm::cl::init(50000), llvm::cl::cat(simCategory));
+                    llvm::cl::desc("Maximum total operations per process (0 = no limit)"),
+                    llvm::cl::init(0), llvm::cl::cat(simCategory));
 
 static llvm::cl::opt<uint64_t>
     timeout("timeout",
@@ -1557,7 +1557,7 @@ int main(int argc, char **argv) {
       "CIRCT Event-Driven Simulation Tool\n\n"
       "This tool simulates hardware designs using CIRCT's event-driven\n"
       "simulation infrastructure with IEEE 1800 scheduling semantics.\n");
-  // circt-sim-specific: apply tighter resource limits than the generic 12 GB
+  // circt-sim-specific: apply tighter resource limits than the generic 10 GB
   // defaults.  Multiple circt-sim instances may be launched in parallel (e.g.
   // by lit), so each instance must stay well below the system total.  Using
   // setenv with overwrite=0 means explicit user settings (env vars or CLI
