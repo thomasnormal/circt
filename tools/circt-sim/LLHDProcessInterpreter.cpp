@@ -11554,13 +11554,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
   // Fallback: use comprehensive address-based search (also checks
   // process-local allocas by address, which findMemoryBlock's SSA
   // tracing may miss when the pointer was loaded from memory).
-  if (!block && !useNative && !ptrVal.isX()) {
-    uint64_t fbOffset = 0;
-    block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
-    if (block) {
-      offset = fbOffset;
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: findMemoryBlockByAddress found "
-                                 "block at offset " << offset << "\n");
+  // Also try this when useNative is set but the native block is too small
+  // for the requested load size (e.g., an 8-byte assoc array slot matched
+  // but we need to load a 24-byte struct from a larger malloc'd block).
+  if (!block && !ptrVal.isX()) {
+    unsigned loadSizeCheck = getLLVMTypeSize(loadOp.getResult().getType());
+    if (!useNative || (offset + loadSizeCheck > nativeSize)) {
+      uint64_t fbOffset = 0;
+      auto *fbBlock = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
+      if (fbBlock) {
+        block = fbBlock;
+        offset = fbOffset;
+        useNative = false;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.load: findMemoryBlockByAddress found "
+                                   "block at offset " << offset << "\n");
+      }
     }
   }
 
@@ -11783,13 +11791,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // Fallback: use comprehensive address-based search (also checks
   // process-local allocas by address, which findMemoryBlock's SSA
   // tracing may miss when the pointer was loaded from memory).
-  if (!block && !useNative && !ptrVal.isX()) {
-    uint64_t fbOffset = 0;
-    block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
-    if (block) {
-      offset = fbOffset;
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: findMemoryBlockByAddress found "
-                                 "block at offset " << offset << "\n");
+  // Also try this when useNative is set but the native block is too small
+  // for the requested store size (e.g., an 8-byte assoc array slot matched
+  // but we need to store a 24-byte struct into a larger malloc'd block).
+  if (!block && !ptrVal.isX()) {
+    if (!useNative || (offset + storeSize > nativeSize)) {
+      uint64_t fbOffset = 0;
+      auto *fbBlock = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
+      if (fbBlock) {
+        block = fbBlock;
+        offset = fbOffset;
+        useNative = false;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.store: findMemoryBlockByAddress found "
+                                   "block at offset " << offset << "\n");
+      }
     }
   }
 
