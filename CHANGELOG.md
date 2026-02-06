@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 414 - February 6, 2026
+
+### Summary
+
+Iteration 414: Treat non-consecutive (`[=]`) and goto (`[->]`) repetition as
+unbounded for `first_match` boundedness checks, with new regression coverage.
+
+### Accomplishments
+
+1. **First_match boundedness tightening** - `first_match` now flags sequences
+   containing non-consecutive or goto repetitions as unbounded, aligning with
+   SVA semantics (gaps can be arbitrarily long).
+2. **Regression coverage** - Added `errors.sv` cases for `first_match` with
+   `[=]` and `[->]` repetitions to ensure the boundedness error is reported.
+
+### Verification (February 6, 2026)
+
+- Not run (error-path regression only)
+
 ## Iteration 413 - February 6, 2026
 
 ### Summary

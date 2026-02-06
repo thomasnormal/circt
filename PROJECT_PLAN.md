@@ -525,6 +525,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 - **Phase 3 (Bind/hierarchy)**: Complete interface path threading across bind scopes (including LCA/sibling references in generated hierarchies) with regression tests covering param/genvar-heavy designs.
 - **Phase 4 (Liveness/k-induction)**: Add CLI modes for k-induction and liveness, encode fairness and loop constraints in BMC/SMT, and add MLIR+SV end-to-end proof/CE tests.
 - **Phase 5 (Trace UX)**: Emit hierarchical signal maps + per-clock sampling annotations; add a small trace post-processor to recover wave-friendly names for counterexamples.
+- **Progress**: `first_match` boundedness checks now treat `[=]`/`[->]` repetition as unbounded (new `errors.sv` regression).
 
 ### Previous Blocker: UVM Factory Registration (typedef specialization) - ✅ FIXED
 

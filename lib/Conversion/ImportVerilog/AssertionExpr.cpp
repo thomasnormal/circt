@@ -100,6 +100,27 @@ getSequenceLengthBounds(Value seq) {
       result.max = *bounds->max * (repeatOp.getBase() + *more);
     return result;
   }
+  if (auto gotoRepeatOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
+    auto bounds = getSequenceLengthBounds(gotoRepeatOp.getInput());
+    if (!bounds)
+      return std::nullopt;
+    SequenceLengthBounds result;
+    result.min = bounds->min * gotoRepeatOp.getBase();
+    // Non-consecutive repetition can insert unbounded gaps between matches.
+    result.max.reset();
+    return result;
+  }
+  if (auto nonConsecutiveRepeatOp =
+          seq.getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
+    auto bounds = getSequenceLengthBounds(nonConsecutiveRepeatOp.getInput());
+    if (!bounds)
+      return std::nullopt;
+    SequenceLengthBounds result;
+    result.min = bounds->min * nonConsecutiveRepeatOp.getBase();
+    // Non-consecutive repetition can insert unbounded gaps between matches.
+    result.max.reset();
+    return result;
+  }
   if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>())
     return getSequenceLengthBounds(firstMatch.getInput());
 

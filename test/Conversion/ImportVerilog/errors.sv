@@ -46,6 +46,20 @@ endmodule
 
 // -----
 module Foo;
+  logic a;
+  // expected-error @below {{first_match requires a bounded sequence}}
+  assert property (first_match(a [=2:3]));
+endmodule
+
+// -----
+module Foo;
+  logic a;
+  // expected-error @below {{first_match requires a bounded sequence}}
+  assert property (first_match(a [->1:2]));
+endmodule
+
+// -----
+module Foo;
   int x;
   bit y;
   // expected-error @below {{unsupported non-blocking assignment timing control: SignalEvent}}
