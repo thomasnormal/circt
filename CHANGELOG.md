@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 422 - February 6, 2026
+
+### Summary
+
+Iteration 422: Added bounded `within/throughout/intersect` regression coverage
+for sequence composition.
+
+### Accomplishments
+
+1. **Sequence composition coverage** - Added
+   `sva-within-throughout-intersect.sv` to validate bounded `within`,
+   `throughout`, and `intersect` lowering paths.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
 ## Iteration 421 - February 6, 2026
 
 ### Summary
