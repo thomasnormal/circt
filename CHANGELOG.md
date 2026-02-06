@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 404 - February 6, 2026
+
+### Summary
+
+Iteration 404: Added support for assertion port timing controls inside SVA
+event arguments, plus a regression covering event-typed sequence arguments.
+
+### Accomplishments
+
+1. **Timing control assertion ports** - Event controls that reference assertion
+   port symbols now substitute the bound timing control when present.
+2. **Regression coverage** - Added `sva-event-arg.sv` to validate event-typed
+   sequence arguments with posedge/negedge actuals.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-event-arg.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-event-arg.sv`
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-event-arg.sv`
+
 ## Iteration 403 - February 6, 2026
 
 ### Summary

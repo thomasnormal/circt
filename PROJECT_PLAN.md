@@ -270,6 +270,10 @@ and 1 preprocessor macro concatenation edge case.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 404 - Event Argument Timing Controls)
+- **Event-typed sequence arguments**: assertion event controls now substitute timing-control assertion port bindings, enabling `sequence s(event e); @e ...` with posedge/negedge actuals.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/sva-event-arg.sv`.
+
 ### New Findings (2026-02-06, Iteration 403 - JIT k-induction)
 - **JIT k-induction**: `circt-bmc --k-induction --run` now works by running base/step checks via the JIT (no SMT-LIB export required).
 - **Result message suppression**: LowerToBMC can silence per-run BMC_RESULT messages to keep induction output focused.
