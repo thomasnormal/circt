@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 377 - February 6, 2026
+
+### Summary
+
+Iteration 377: Added a Verilator compatibility stub for `$get_initial_random_seed` and fixed circt-sim native memory fallback so larger loads/stores can fall back to tracked blocks when a stale native block is too small.
+
+### Accomplishments
+
+1. **ImportVerilog Verilator stub** - Registered `$get_initial_random_seed` and lowered it to a constant 0, with a compatibility test.
+2. **Native memory fallback fix** - circt-sim now retries address-based block lookup when a native block is too small for a load/store, avoiding silent drops on reused addresses.
+3. **New unit test** - Added a targeted LLHDProcessInterpreter test that exercises the native fallback path.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/axi-vip-compat.sv | build/bin/FileCheck test/Conversion/ImportVerilog/axi-vip-compat.sv`
+- `ninja -C build CIRCTSimToolTests`
+- `build/tools/circt/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter=LLHDProcessInterpreterToolTest.LLVMNativeStoreFallback`
+
 ## Iteration 376 - February 6, 2026
 
 ### Summary

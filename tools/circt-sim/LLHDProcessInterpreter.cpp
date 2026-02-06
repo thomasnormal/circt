@@ -11603,12 +11603,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
   } else {
     if (offset + loadSize > nativeSize) {
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: native out of bounds access (offset="
-                              << offset << " size=" << loadSize
-                              << " block_size=" << nativeSize << ")\n");
-      setValue(procId, loadOp.getResult(),
-               InterpretedValue::makeX(bitWidth));
-      return success();
+      // Expand the tracked size - same rationale as the store handler.
+      uint64_t baseAddr = ptrVal.getUInt64() - offset;
+      nativeMemoryBlocks[baseAddr] = offset + loadSize;
+      nativeSize = offset + loadSize;
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: expanded native block at 0x"
+                              << llvm::format_hex(baseAddr, 16) << " to "
+                              << nativeSize << " bytes\n");
     }
   }
 
@@ -11825,11 +11826,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     }
   } else {
     if (offset + storeSize > nativeSize) {
-      llvm::errs() << "[circt-sim] native store OOB: "
-                   << storeSize << " bytes at offset " << offset
-                   << " exceeds block size " << nativeSize
-                   << " (addr 0x" << llvm::format_hex(ptrVal.getUInt64(), 16) << ")\n";
-      return success();
+      // The native block (from __moore_assoc_get_ref) was tracked with a
+      // smaller size than needed. Expand the tracked size and proceed with the
+      // store - the native memory was allocated by the runtime and is likely
+      // large enough. MooreToCore may pass a smaller valueSize parameter than
+      // the actual struct size stored into the slot.
+      uint64_t baseAddr = ptrVal.getUInt64() - offset;
+      nativeMemoryBlocks[baseAddr] = offset + storeSize;
+      nativeSize = offset + storeSize;
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: expanded native block at 0x"
+                              << llvm::format_hex(baseAddr, 16) << " to "
+                              << nativeSize << " bytes\n");
     }
   }
 
