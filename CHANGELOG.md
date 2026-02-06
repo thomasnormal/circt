@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 411 - February 6, 2026
+
+### Summary
+
+Iteration 411: Fixed bind hierarchy threading for nested interface instances by
+threading the outer interface instance and added regression coverage.
+
+### Accomplishments
+
+1. **Nested interface bind fix** - Hierarchical interface member references now
+   thread the outer interface instance when nested interface instances appear
+   in the path, avoiding missing `top.bus.leaf` values.
+2. **Regression coverage** - Added `bind-interface-nested-generate.sv` to
+   validate bind through generate hierarchies with nested interface instances.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-nested-generate.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-nested-generate.sv`
+
 ## Iteration 410 - February 6, 2026
 
 ### Summary
