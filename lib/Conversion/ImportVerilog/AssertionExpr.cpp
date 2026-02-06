@@ -1105,7 +1105,7 @@ Value Context::convertAssertionCallExpression(
       }
     }
 
-    if (inAssertionExpr && !clockingCtrl && (hasClockingArg || enableExpr)) {
+    if (inAssertionExpr && !clockingCtrl) {
       if (currentAssertionClock)
         clockingCtrl = currentAssertionClock;
       if (!clockingCtrl && currentAssertionTimingControl)
@@ -1119,7 +1119,7 @@ Value Context::convertAssertionCallExpression(
       }
     }
 
-    if (clockingCtrl && inAssertionExpr && (hasClockingArg || enableExpr)) {
+    if (clockingCtrl && inAssertionExpr) {
       return lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
           invertEnable, loc);
@@ -1251,14 +1251,12 @@ Value Context::convertAssertionCallExpression(
         }
       }
     };
-    if (!enableExpr && currentScope)
-      defaultDisableExpr = compilation.getDefaultDisable(*currentScope);
-
-    if (enableExpr)
-      maybeSetImplicitClocking();
-    else if (defaultDisableExpr) {
-      maybeSetImplicitClocking();
-      if (clockingCtrl) {
+    if (inAssertionExpr) {
+      if (!clockingCtrl)
+        maybeSetImplicitClocking();
+      if (!enableExpr && currentScope)
+        defaultDisableExpr = compilation.getDefaultDisable(*currentScope);
+      if (!enableExpr && defaultDisableExpr && clockingCtrl) {
         enableExpr = defaultDisableExpr;
         invertEnable = true;
       }

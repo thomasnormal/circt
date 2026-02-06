@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 406 - February 6, 2026
+
+### Summary
+
+Iteration 406: Applied default/implicit clocking when lowering sampled-value
+functions in assertions without explicit clocking arguments.
+
+### Accomplishments
+
+1. **Implicit clocking for sampled values** - `$rose/$fell/$stable/$changed`
+   and `$past` now lower using default/implicit clocking in assertions even when
+   no explicit clocking or enable is provided.
+2. **Regression coverage** - Added default-clocking tests for `$rose` and
+   `$past` to ensure they lower via clocked procedures rather than `moore.past`.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-clocking-implicit.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-clocking-implicit.sv`
+
 ## Iteration 405 - February 6, 2026
 
 ### Summary
