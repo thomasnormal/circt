@@ -5833,21 +5833,118 @@ struct RvalueExprVisitor : public ExprVisitor {
       return context.materializeConversion(ty, bytesRead, expr.type->isSigned(), loc);
     }
 
-    // Handle $value$plusargs separately since it has an output argument.
+    // Handle $value$plusargs with runtime support.
     // $value$plusargs(format, var) returns 1 if arg found, 0 otherwise.
     // IEEE 1800-2017 Section 21.6 "Command line input"
-    // Currently stubbed to always return 0 (not found) since we don't
-    // have command line argument handling.
+    // Emits a runtime call to __moore_value_plusargs which checks
+    // CIRCT_UVM_ARGS / UVM_ARGS environment variables.
     if (subroutine.name == "$value$plusargs" && args.size() == 2) {
-      // First argument is format string (input), second is output variable.
-      // The output variable is wrapped as AssignmentExpression.
-      // Since we're stubbing this to "not found", we don't write to the output.
-      // Just return 0.
-      auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+      // First argument is format string (input).
+      Value fmtVal = context.convertRvalueExpression(*args[0]);
+      if (!fmtVal)
+        return {};
+
+      // Extract format string at compile time.
+      std::string fmtStr;
+      if (auto constStrOp =
+              fmtVal.getDefiningOp<moore::ConstantStringOp>()) {
+        fmtStr = constStrOp.getValue().str();
+      } else if (auto intToStr =
+                     fmtVal.getDefiningOp<moore::IntToStringOp>()) {
+        if (auto constStrOp =
+                intToStr.getInput()
+                    .getDefiningOp<moore::ConstantStringOp>()) {
+          fmtStr = constStrOp.getValue().str();
+        }
+      }
+
+      if (fmtStr.empty()) {
+        // Can't determine string at compile time, fall back to 0.
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+        auto ty = context.convertType(*expr.type);
+        return context.materializeConversion(ty, result,
+                                             expr.type->isSigned(), loc);
+      }
+
+      // Second argument: output variable (wrapped as AssignmentExpression).
+      Value destLhs;
+      if (auto *assignExpr =
+              args[1]->as_if<slang::ast::AssignmentExpression>()) {
+        destLhs = context.convertLvalueExpression(assignExpr->left());
+        if (!destLhs)
+          return {};
+      } else {
+        // Fall back to 0 if can't get output variable.
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        auto result = moore::ConstantOp::create(builder, loc, intTy, 0);
+        auto ty = context.convertType(*expr.type);
+        return context.materializeConversion(ty, result,
+                                             expr.type->isSigned(), loc);
+      }
+
+      // Create LLVM global for format string.
+      auto module = context.intoModuleOp;
+      std::string safeName;
+      for (char c : fmtStr)
+        safeName += (std::isalnum(c) || c == '_') ? c : '_';
+      std::string globalName = "__valueplusarg_" + safeName;
+
+      auto i8Ty = builder.getIntegerType(8);
+      auto strLen = static_cast<int64_t>(fmtStr.size());
+      auto arrayTy =
+          mlir::LLVM::LLVMArrayType::get(i8Ty, strLen + 1);
+
+      if (!module.lookupSymbol<mlir::LLVM::GlobalOp>(globalName)) {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        mlir::LLVM::GlobalOp::create(
+            builder, loc, arrayTy, /*isConstant=*/true,
+            mlir::LLVM::Linkage::Internal, globalName,
+            builder.getStringAttr(fmtStr + '\0'));
+      }
+
+      // Get pointer to global string.
+      auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+      auto addrOf = mlir::LLVM::AddressOfOp::create(builder, loc, ptrTy,
+                                                     globalName);
+      auto i32Ty = builder.getIntegerType(32);
+      auto lenConst = mlir::LLVM::ConstantOp::create(
+          builder, loc, i32Ty, builder.getI32IntegerAttr(strLen));
+
+      // Cast Moore ref to LLVM pointer for the runtime call.
+      auto outputPtr = mlir::UnrealizedConversionCastOp::create(
+                            builder, loc, ptrTy, destLhs)
+                            .getResult(0);
+
+      // Determine output width in bytes.
+      auto refType = cast<moore::RefType>(destLhs.getType());
+      auto nestedType = refType.getNestedType();
+      int64_t outputBytes = 8; // default
+      if (auto intType = dyn_cast<moore::IntType>(nestedType))
+        outputBytes = (intType.getWidth() + 7) / 8;
+      auto bytesConst = mlir::LLVM::ConstantOp::create(
+          builder, loc, i32Ty, builder.getI32IntegerAttr(outputBytes));
+
+      // Call __moore_value_plusargs(format_ptr, format_len, output_ptr,
+      //                            output_bytes) -> i32
+      auto funcTy = mlir::LLVM::LLVMFunctionType::get(
+          i32Ty, {ptrTy, i32Ty, ptrTy, i32Ty});
+      auto func = getOrCreateRuntimeFunc(
+          context, "__moore_value_plusargs", funcTy);
+      auto callResult = mlir::LLVM::CallOp::create(
+          builder, loc, func,
+          ValueRange{addrOf, lenConst, outputPtr, bytesConst});
+
+      auto mooreIntTy =
+          moore::IntType::getInt(context.getContext(), 32);
+      auto castResult =
+          mlir::UnrealizedConversionCastOp::create(
+              builder, loc, mooreIntTy, callResult.getResult())
+              .getResult(0);
       auto ty = context.convertType(*expr.type);
-      return context.materializeConversion(ty, result, expr.type->isSigned(),
-                                           loc);
+      return context.materializeConversion(ty, castResult,
+                                           expr.type->isSigned(), loc);
     }
 
     // Handle $dist_* distribution functions (IEEE 1800-2017 Section 20.15).
