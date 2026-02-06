@@ -1,9 +1,59 @@
-# circt-sim UVM Simulation Feature Status
+# CIRCT Tool Feature Status
 
-This document tracks the feature parity status of `circt-sim` for running
-UVM testbenches, compared to commercial simulators like Cadence Xcelium.
+This document tracks the feature parity status of CIRCT tools (`circt-verilog`,
+`circt-sim`, `circt-bmc`, `circt-lec`) against the IEEE 1800 SystemVerilog
+standard and UVM testbenches.
 
-## Feature Gap Table
+## sv-tests Compliance (IEEE 1800)
+
+Tested against the [sv-tests](https://github.com/chipsalliance/sv-tests)
+repository (1,036 tests across 15 IEEE chapters).
+
+### Overall Results
+
+| Mode | Eligible | Pass | Fail | Rate | Notes |
+|------|----------|------|------|------|-------|
+| Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
+| Elaboration | 850 | 845 | 5 | **99.4%** | 2 real bugs (llhd.wait in function), 3 need external defines |
+| Simulation | 256 | 255 | 1 | **99.6%** | 1 compile bug (llhd.wait in function); 91 skipped: 50 negative, 37 UVM, 4 both |
+| BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
+| LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
+
+### Remaining Bugs for 100%
+
+| Test | Mode | Bug | Root Cause |
+|------|------|-----|------------|
+| `9.3.3--event.sv` | Elaboration | `llhd.wait` op expects parent `llhd.process` | MooreToCore emits `llhd.wait` inside `llvm.func` instead of `llhd.process` |
+| `9.4.2.4--event_sequence.sv` | Elaboration + Sim | Same `llhd.wait` issue | Same root cause |
+| `22.5.1--define-expansion_26.sv` | Elaboration | Macro concatenation (`` ` `` `` ` ``) edge case | Preprocessor token pasting |
+| `5.6.4--*-macro_0.sv` | Elaboration | Needs `-DTEST_VAR` | Test harness metadata not applied |
+| `5.6.4--*-macro_1.sv` | Elaboration | Needs `-DVAR_1=2 -DVAR_2=5` | Test harness metadata not applied |
+
+### What's Needed for True 100%
+
+1. **Fix `llhd.wait` in function context** (2 tests): MooreToCore needs to handle
+   event control (`@(posedge clk)`) inside functions/tasks that are called from
+   non-process contexts. This is a lowering bug, not a simulator bug.
+
+2. **Apply test `:defines:` metadata** (2 tests): The sv-tests runner script
+   needs to extract `:defines:` from test metadata and pass them as `-D` flags.
+   Not a real tool bug.
+
+3. **Preprocessor macro concatenation** (1 test): Edge case in `` `define ``
+   with token pasting (`` ` `` `` ` ``). Low priority.
+
+### circt-sim Unit Tests
+
+| Suite | Total | Pass | XFail | Notes |
+|-------|-------|------|-------|-------|
+| circt-sim | 139 | 138 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
+
+## UVM Simulation Feature Status
+
+Feature parity status of `circt-sim` for running UVM testbenches, compared
+to commercial simulators like Cadence Xcelium.
+
+### Feature Gap Table
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -46,7 +96,7 @@ UVM testbenches, compared to commercial simulators like Cadence Xcelium.
 | String methods | PARTIAL | Some native implementations, gaps remain |
 | Simulation performance | SLOW | Large UVM designs (APB AVIP) take >300s wall-clock |
 
-## AVIP Simulation Status
+### AVIP Simulation Status
 
 | AVIP | HvlTop | HdlTop | Combined | Notes |
 |------|--------|--------|----------|-------|
@@ -55,14 +105,6 @@ UVM testbenches, compared to commercial simulators like Cadence Xcelium.
 | UART | Runs | Runs | Runs | Reaches ~559.7 us sim time |
 | I2S | Runs | - | - | `I2sBaseTest` starts, slow |
 | I3C | Error | - | - | `ase_test` not registered (test config, not sim bug) |
-
-## Test Counts
-
-| Suite | Total | Pass | XFail | Unsupported |
-|-------|-------|------|-------|-------------|
-| circt-sim | 138 | 137 | 1 | 0 |
-| sv-tests BMC | 26 | 23 | 3 | 0 |
-| sv-tests LEC | 23 | 23 | 0 | 0 |
 
 ## Key Fixes History
 
