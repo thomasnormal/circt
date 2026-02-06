@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 419 - February 6, 2026
+
+### Summary
+
+Iteration 419: Refined composite sequence length bounds to treat unbounded
+operands as infinite for `and/intersect`, reducing false `first_match` errors.
+
+### Accomplishments
+
+1. **Composite bounds refinement** - `first_match` now preserves bounds for
+   `and/intersect` when only one operand is unbounded, while still treating
+   `or` as unbounded if any operand is unbounded.
+2. **Regression updates** - Adjusted `errors.sv` composite cases to use
+   unbounded operands on both sides of `and/or` so the boundedness error
+   remains intentional.
+
+### Verification (February 6, 2026)
+
+- Not run (error-path regression only)
+
 ## Iteration 418 - February 6, 2026
 
 ### Summary
