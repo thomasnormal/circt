@@ -13003,6 +13003,24 @@ struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
   }
 };
 
+struct FormatCharOpConversion : public OpConversionPattern<FormatCharOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FormatCharOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // Get the input value, handling 4-state types which are lowered to
+    // {value, unknown} structs.
+    Value inputValue = adaptor.getValue();
+    if (auto structType = dyn_cast<hw::StructType>(inputValue.getType()))
+      inputValue =
+          hw::StructExtractOp::create(rewriter, op.getLoc(), inputValue, "value");
+
+    rewriter.replaceOpWithNewOp<sim::FormatCharOp>(op, inputValue);
+    return success();
+  }
+};
+
 struct FormatClassOpConversion : public OpConversionPattern<FormatClassOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -23749,6 +23767,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     FormatLiteralOpConversion,
     FormatConcatOpConversion,
     FormatIntOpConversion,
+    FormatCharOpConversion,
     FormatClassOpConversion,
     FormatRealOpConversion,
     FormatStringOpConversion,

@@ -186,6 +186,9 @@ struct FormatStringParser {
     case 't':
       return emitTime(arg, options);
 
+    case 'c':
+      return emitChar(arg, options);
+
     case 's':
       return emitString(arg, options);
 
@@ -251,6 +254,22 @@ struct FormatStringParser {
 
     fragments.push_back(moore::FormatIntOp::create(
         builder, loc, value, format, alignment, padding, widthAttr, isSigned));
+    return success();
+  }
+
+  /// Emit a character value with the %c format specifier.
+  /// See IEEE 1800-2017 § 21.2.1.2 "Format specifications".
+  LogicalResult emitChar(const slang::ast::Expression &arg,
+                         const FormatOptions &options) {
+    auto rVal = context.convertRvalueExpression(arg);
+    if (!rVal)
+      return failure();
+
+    auto value = context.convertToSimpleBitVector(rVal);
+    if (!value)
+      return failure();
+
+    fragments.push_back(moore::FormatCharOp::create(builder, loc, value));
     return success();
   }
 

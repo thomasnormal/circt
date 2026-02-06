@@ -2386,6 +2386,19 @@ def FormatIntOp : MooreOp<"fmt.int", [Pure]> {
   }];
 }
 
+def FormatCharOp : MooreOp<"fmt.char", [Pure]> {
+  let summary = "Format an integer value as a character";
+  let description = [{
+    Format an integer value as a single ASCII character. For values up to 127,
+    ASCII encoding is used. For larger values, behavior is unspecified.
+
+    See IEEE 1800-2017 § 21.2.1.2 "Format specifications".
+  }];
+  let arguments = (ins IntType:$value);
+  let results = (outs FormatStringType:$result);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
 def FmtFlt:I32EnumAttrCase<"Float", 0, "float">;
 def FmtExp:I32EnumAttrCase<"Exponential", 1, "exponential">;
 def FmtGen:I32EnumAttrCase<"General", 2, "general">;
