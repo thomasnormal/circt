@@ -7,7 +7,51 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 6, 2026 (Iteration 375 - RTTI Parent Table for $cast Hierarchy)
+## Current Status - February 6, 2026 (Iteration 383 - Comprehensive sv-tests Compliance)
+
+### Session Summary - Iteration 383
+
+Full sv-tests compliance audit across all 1,036 tests. Near-100% across all modes.
+
+| Mode | Eligible | Pass | Rate |
+|------|----------|------|------|
+| Parsing | 853 | 853 | **100%** |
+| Elaboration | 850 | 845 | **99.4%** |
+| Simulation | 256 | 255 | **99.6%** |
+| BMC (full Z3) | 26 | 26 | **100%** |
+| LEC (full Z3) | 23 | 23 | **100%** |
+| circt-sim unit tests | 139 | 138+1xfail | **100%** |
+
+Only 2 real bugs remain: `llhd.wait` in function context (MooreToCore lowering)
+and 1 preprocessor macro concatenation edge case.
+
+### Workstream Status
+
+| Track | Focus | Status | Next Action |
+|-------|-------|--------|-------------|
+| **A: sv-tests** | IEEE 1800 compliance | **99.4-100%** | Fix llhd.wait in function context (2 tests) |
+| **B: AVIP Sim** | UVM testbench simulation | APB/AHB/UART run | Push SPI/AXI4 AVIP, improve performance |
+| **C: External Tests** | yosys/verilator/opentitan | Not started | Run yosys sim tests, verilator UVM cookbook |
+| **D: Missing Features** | Interface ports, coverage, etc | Planning | Interface ports (unblocks AXI-VIP) |
+
+### Remaining Feature Gaps for Xcelium Parity
+
+| Feature | Priority | Effort | Impact |
+|---------|----------|--------|--------|
+| Interface ports | HIGH | Large | Unblocks AXI-VIP and similar |
+| Simulation performance | HIGH | Medium | APB/AHB take >300s |
+| `randomize()` with ranges | MEDIUM | Small | `__moore_randomize_with_ranges()` |
+| `$finish` exit code | MEDIUM | Small | Return non-zero on UVM_FATAL |
+| Coverage collection | LOW | Large | Functional/code coverage |
+| SVA runtime checking | LOW | Large | Runtime assertion evaluation |
+| ClockVar support | LOW | Medium | Some testbenches need it |
+| `%c` format specifier | LOW | Small | String formatting |
+| DPI-C full support | LOW | Large | Most stubbed currently |
+| String methods (full) | LOW | Medium | Some gaps remain |
+
+---
+
+## Previous Status - February 6, 2026 (Iteration 375 - RTTI Parent Table for $cast Hierarchy)
 
 ### Session Summary - Key Milestones
 
