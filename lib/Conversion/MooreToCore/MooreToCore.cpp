@@ -216,6 +216,10 @@ struct ClassTypeCache {
     // Inheritance depth (0 for root classes, 1 for direct derived, etc.)
     int32_t inheritanceDepth = 0;
 
+    // Parent type ID for RTTI hierarchy walking.
+    // 0 means this is a root class (no parent).
+    int32_t parentTypeId = 0;
+
     // Vtable pointer field index (1 for root classes - after typeId).
     // The vtable pointer is stored right after the type ID in root classes.
     // Derived classes access it through their base class prefix at [0, 1].
@@ -268,6 +272,17 @@ struct ClassTypeCache {
     if (auto it = classToStructMap.find(classSym); it != classToStructMap.end())
       return it->second;
     return std::nullopt;
+  }
+
+  /// Build the RTTI parent table: table[typeId] = parentTypeId (0 = root).
+  SmallVector<int32_t> getRTTIParentTable() const {
+    int32_t maxId = 0;
+    for (const auto &kv : classToStructMap)
+      maxId = std::max(maxId, kv.second.typeId);
+    SmallVector<int32_t> table(maxId + 1, 0);
+    for (const auto &kv : classToStructMap)
+      table[kv.second.typeId] = kv.second.parentTypeId;
+    return table;
   }
 
 private:
@@ -1661,6 +1676,7 @@ static LogicalResult resolveClassStructBody(ClassDeclOp op,
 
     // Derived class inherits from base, so increment depth
     structBody.inheritanceDepth = baseClassStruct->inheritanceDepth + 1;
+    structBody.parentTypeId = baseClassStruct->typeId;
   } else {
     // Root class: add type ID field and vtable pointer as the first members.
     // This field stores the runtime type ID for RTTI support ($cast).
@@ -24014,6 +24030,19 @@ void MooreToCorePass::runOnOperation() {
       cf::BranchOp::create(builder, forkOp.getLoc(), loopHeader);
     }
   });
+
+  // Emit RTTI parent table as a module attribute for $cast hierarchy checking.
+  // table[typeId] = parentTypeId, where 0 means root (no parent).
+  {
+    auto rttiTable = classCache.getRTTIParentTable();
+    if (rttiTable.size() > 1) {
+      auto i32Ty = IntegerType::get(&context, 32);
+      auto tensorTy = RankedTensorType::get(
+          {static_cast<int64_t>(rttiTable.size())}, i32Ty);
+      auto tableAttr = DenseIntElementsAttr::get(tensorTy, rttiTable);
+      module->setAttr("circt.rtti_parent_table", tableAttr);
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//

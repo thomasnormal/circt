@@ -5227,14 +5227,14 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     // share a single counter.
     auto emitVtableWarning = [&](StringRef reason) {
       static unsigned vtableWarnCount = 0;
-      if (vtableWarnCount < 3) {
+      if (vtableWarnCount < 30) {
         ++vtableWarnCount;
         llvm::errs() << "[circt-sim] WARNING: virtual method call "
                      << "(func.call_indirect) failed: " << reason
                      << ". Callee operand: ";
         calleeValue.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
         llvm::errs() << " (type: " << calleeValue.getType() << ")\n";
-      } else if (vtableWarnCount == 3) {
+      } else if (vtableWarnCount == 30) {
         ++vtableWarnCount;
         llvm::errs() << "[circt-sim] (suppressing further vtable warnings)\n";
       }
@@ -5273,6 +5273,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     }
 
     StringRef calleeName = it->second;
+    // Temporary debug: trace factory virtual dispatch
+    if (calleeName.contains("create_object") || calleeName.contains("find_override"))
+      llvm::errs() << "[vtable] dispatching " << calleeName << " (addr=0x"
+                   << llvm::format_hex(funcAddr, 16) << ")\n";
     LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
                             << llvm::format_hex(funcAddr, 16)
                             << " -> " << calleeName << "\n");
@@ -5367,6 +5371,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     // Set results
     for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
       setValue(procId, result, retVal);
+      // Temporary debug: trace create_object return values
+      if (calleeName.contains("create_object") || calleeName.contains("create_object_by_type")) {
+        llvm::errs() << "[vtable] " << calleeName << " returned: "
+                     << (retVal.isX() ? "X" : ("0x" + llvm::utohexstr(retVal.getUInt64())))
+                     << "\n";
+      }
     }
 
     return success();
@@ -8733,6 +8743,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                            mlir::func::CallOp callOp) {
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
+
+  // Temporary debug: trace factory-related func.call
+  {
+    StringRef cn = callOp.getCallee();
+    if (cn.contains("create_by_type") || cn.contains("create_9") ||
+        cn.contains("create_object_by_type") || cn.contains("report_handler"))
+      llvm::errs() << "[func.call] " << cn << "\n";
+  }
 
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
@@ -14116,7 +14134,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64());
         int32_t inheritanceDepth = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(2)).getUInt64());
-        bool result = __moore_dyn_cast_check(srcId, targetId, inheritanceDepth);
+        // Use RTTI parent table for correct hierarchy checking
+        bool result = checkRTTICast(srcId, targetId);
         // Return type is i1 (bool) in the runtime, but MLIR may widen to i32
         unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
         setValue(procId, callOp.getResult(),
@@ -16086,6 +16105,62 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   // If no return was encountered, return nothing
   cleanupTempMappings();
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// RTTI Parent Table (for $cast hierarchy checking)
+//===----------------------------------------------------------------------===//
+
+void LLHDProcessInterpreter::loadRTTIParentTable() {
+  if (rttiTableLoaded)
+    return;
+  rttiTableLoaded = true;
+
+  if (!rootModule)
+    return;
+
+  // Look for the circt.rtti_parent_table module attribute emitted by
+  // MooreToCore. It maps typeId -> parentTypeId (0 = root).
+  // The attribute is on the builtin.module (rootModule itself), not its parent.
+  auto tableAttr =
+      rootModule->getAttrOfType<DenseIntElementsAttr>("circt.rtti_parent_table");
+  if (!tableAttr)
+    return;
+
+  rttiParentTable.clear();
+  for (auto val : tableAttr.getValues<int32_t>())
+    rttiParentTable.push_back(val);
+
+  LLVM_DEBUG(llvm::dbgs() << "Loaded RTTI parent table with "
+                          << rttiParentTable.size() << " entries\n");
+}
+
+bool LLHDProcessInterpreter::checkRTTICast(int32_t srcTypeId,
+                                            int32_t targetTypeId) {
+  if (srcTypeId == 0 || targetTypeId == 0)
+    return false;
+  if (srcTypeId == targetTypeId)
+    return true;
+
+  // Load the RTTI table on first use
+  loadRTTIParentTable();
+
+  // If we have a hierarchy table, walk the parent chain
+  if (!rttiParentTable.empty()) {
+    int32_t current = srcTypeId;
+    // Guard against infinite loops with a max depth
+    for (int i = 0; i < 1000 && current != 0; ++i) {
+      if (current < 0 || current >= static_cast<int32_t>(rttiParentTable.size()))
+        break;
+      current = rttiParentTable[current];
+      if (current == targetTypeId)
+        return true;
+    }
+    return false;
+  }
+
+  // Fallback: use the simple >= heuristic (backward compat for old MLIR files)
+  return srcTypeId >= targetTypeId;
 }
 
 //===----------------------------------------------------------------------===//
