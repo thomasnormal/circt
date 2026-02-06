@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 405 - February 6, 2026
+
+### Summary
+
+Iteration 405: Ensured `$past` history resets when default disable is asserted,
+matching reset-aware sampling expectations and adding regression coverage.
+
+### Accomplishments
+
+1. **Reset-aware `$past` history** - When default disable is active, `$past`
+   history now resets to the init value instead of retaining stale samples.
+2. **Regression coverage** - Added `sva-past-default-disable-reset.sv` to
+   validate `$past` history reset with default disable.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-default-disable-reset.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-disable-reset.sv`
+
 ## Iteration 404 - February 6, 2026
 
 ### Summary

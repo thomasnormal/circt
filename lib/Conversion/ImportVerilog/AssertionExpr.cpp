@@ -252,7 +252,8 @@ static Value lowerSampledValueFunctionWithClocking(
       return {};
     Value resultValue = selectWithEnable(result, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
-    Value nextPrev = selectWithEnable(current, prev);
+    Value prevReset = invertEnable ? prevInit : prev;
+    Value nextPrev = selectWithEnable(current, prevReset);
     moore::BlockingAssignOp::create(builder, loc, prevVar, nextPrev);
     moore::ReturnOp::create(builder, loc);
   }
@@ -386,14 +387,32 @@ static Value lowerPastWithClocking(Context &context,
     Value resultValue = selectWithEnable(pastValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
 
+    auto selectHistoryUpdate = [&](Value onTrue, Value onHold) -> Value {
+      if (!hasEnable)
+        return onTrue;
+      Value resetValue = invertEnable ? init : onHold;
+      auto conditional =
+          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
+      auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+      auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+      {
+        OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPointToStart(&trueBlock);
+        moore::YieldOp::create(builder, loc, onTrue);
+        builder.setInsertionPointToStart(&falseBlock);
+        moore::YieldOp::create(builder, loc, resetValue);
+      }
+      return conditional.getResult();
+    };
+
     for (int64_t i = historyDepth - 1; i > 0; --i) {
       Value prev = moore::ReadOp::create(builder, loc, historyVars[i]);
       Value prevPrev = moore::ReadOp::create(builder, loc, historyVars[i - 1]);
-      Value next = selectWithEnable(prevPrev, prev);
+      Value next = selectHistoryUpdate(prevPrev, prev);
       moore::BlockingAssignOp::create(builder, loc, historyVars[i], next);
     }
     Value prev0 = moore::ReadOp::create(builder, loc, historyVars[0]);
-    Value next0 = selectWithEnable(current, prev0);
+    Value next0 = selectHistoryUpdate(current, prev0);
     moore::BlockingAssignOp::create(builder, loc, historyVars[0], next0);
     moore::ReturnOp::create(builder, loc);
   }
