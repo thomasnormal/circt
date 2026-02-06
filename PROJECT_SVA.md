@@ -2,7 +2,7 @@
 
 This document tracks the status of SVA support in CIRCT, including bugs, missing features, and test coverage.
 
-**Last Updated**: January 25, 2026
+**Last Updated**: February 6, 2026
 
 ## Overview
 
@@ -127,6 +127,21 @@ Additional compile-only or XFAIL expectations live in
 6. **Property disable iff edge cases**
    - Test: 16.15--property-disable-iff-fail.sv
 
+## Roadmap (Feb 6, 2026)
+
+1. **Core semantics + regressions**
+   - `first_match` boundedness, `throughout/within/intersect`, open-ended ranges,
+     repetition operators, and sequence/property arguments (with default clocking).
+2. **Clocking/disable semantics**
+   - Multi-clock sampling; default clocking/disable propagation; reset-aware
+     sampled-value functions.
+3. **Bind + hierarchy**
+   - Robust bind across param/genvar-heavy hierarchies with stable naming.
+4. **Liveness**
+   - k-induction with final checks and liveness operators.
+5. **Trace UX**
+   - Hierarchical, clock-aware counterexample mapping.
+
 ## Implementation Status
 
 ### Completed Features
@@ -162,6 +177,10 @@ Additional compile-only or XFAIL expectations live in
 - **Sequence event controls (`@seq`)**:
   - Lowered to clocked wait loops with NFA-based sequence matching
   - sv-tests 9.4.2.4 event sequence now supported
+- **Clocking `iff` gating**:
+  - `@(posedge clk iff cond)` now gates the clocked input with `cond`
+- **Event-typed assertion ports**:
+  - Timing-control ports now substitute into event controls (e.g., `$past(..., @(e))`)
 
 ### Pipeline
 

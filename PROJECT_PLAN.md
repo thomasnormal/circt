@@ -38,6 +38,42 @@ Full sv-tests simulation pipeline tested (717 tests). String array initializer b
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | OpenTitan formal verification (Codex handles) |
 | **F: Formal (BMC)** | k-induction + liveness | In progress | JIT k-induction landed; Codex handles remaining |
 
+### SVA Formal Feature Roadmap (February 6, 2026)
+
+Goal: close remaining SVA semantic gaps for sv-tests + OpenTitan formal while
+keeping memory growth controlled.
+
+**Phase 1: SVA core semantics (ImportVerilog + SVAToLTL)**
+- Finish coverage + fixes for `throughout`, `within`, `intersect`, `first_match`,
+  open-ended ranges, and repetition operators in bounded contexts.
+- Validate sequence/property arguments across default clocking/disable contexts
+  (include event-typed arguments).
+- Add focused regressions in `test/Conversion/ImportVerilog` and
+  `test/Tools/circt-bmc` for every new edge case.
+
+**Phase 2: Clocking/disable semantics**
+- Multi-clock sampling for assertions and sampled-value functions.
+- Default clocking/disable propagation across nested sequences and properties.
+- Reset-aware sampled-value semantics (`$past`, `$rose/$fell/$stable/$changed`)
+  for explicit clocking and default clocking.
+
+**Phase 3: Bind + hierarchy robustness (OpenTitan)**
+- Bind resolution across param/genvar-heavy hierarchies.
+- Stable hierarchical naming for bound assertions to improve traceability.
+- Regression suite in `test/Tools/circt-bmc` plus OpenTitan mini-repros.
+
+**Phase 4: Liveness + k-induction**
+- Enable liveness operators and final checks in k-induction flows.
+- Add first-class `--liveness` / `--induction` workflows in `circt-bmc`
+  with test coverage (bounded and induction step).
+
+**Phase 5: Trace UX**
+- Counterexample signal mapping to hierarchy + clock domain annotations.
+- Structured trace output (stable signal names + clock edges).
+
+**Long-term scaffolding**
+- Selective flattening and property slicing to cap IR size.
+- Full SVA front-end parity (clocking/disable/sequence args).
 ### Remaining Feature Gaps for Xcelium Parity
 
 | Feature | Priority | Effort | Impact |
