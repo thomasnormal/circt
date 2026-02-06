@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 374 - February 6, 2026
+
+### Summary
+
+Iteration 374: Fixed assoc array keySize truncation in MooreToCore for sub-byte integer keys (i1-i7). This caused all integer keys to collide in associative arrays with small enum keys (like UVM severity i2), silently swallowing UVM_FATAL errors. The fix exposed a real UVM factory $cast issue that was being masked.
+
+### Accomplishments
+
+1. **Assoc array keySize truncation fix** - `intTy.getWidth() / 8` truncated to 0 for sub-byte integer types (i1, i2, ..., i7), creating StringKey arrays instead of IntKey arrays. All integer keys collided to a single entry. In UVM, this meant `get_action(UVM_WARNING)` returned the action for UVM_FATAL (EXIT|DISPLAY) instead of just DISPLAY, causing premature `die()`. Fixed to `(intTy.getWidth() + 7) / 8` at all 4 conversion sites in MooreToCore.cpp.
+2. **New regression test** - `assoc-array-subbyte-key.mlir` tests i1, i2, i7 keys (sub-byte), i1 values, both sub-byte, and i9 (multi-byte rounding). All pass through FileCheck.
+3. **Diagnostic trace cleanup** - Removed ~435 lines of temporary debugging traces from LLHDProcessInterpreter.cpp.
+4. **APB AVIP recompilation** - Confirmed keySize=1 for i2 severity keys in new compilation. Exposed real UVM_FATAL FCTTYP (factory $cast failure for uvm_report_handler).
+
+### Current Test Status
+
+| Suite | Pass | XFail | Unsupported | Fail |
+|-------|------|-------|-------------|------|
+| circt-sim lit | 126 | 1 | 0 | 0 |
+| MooreToCore | 120 | 1 | 0 | 1 (pre-existing) |
+| sv-tests BMC | 23 | 3 | - | 0 |
+| sv-tests LEC | 23 | 0 | - | 0 |
+
+### AVIP Status
+
+| AVIP | Top | Result |
+|------|-----|--------|
+| APB (fixed) | hvl_top | UVM_FATAL FCTTYP (factory $cast failure - progress!) |
+| APB (old) | hvl_top | PASS at ~271us (keySize=0 masked FCTTYP) |
+
+### Commits
+
+- `3e4676018` - [MooreToCore] Fix assoc array keySize truncation for sub-byte integer keys
+
 ## Iteration 373 - February 6, 2026
 
 ### Summary
