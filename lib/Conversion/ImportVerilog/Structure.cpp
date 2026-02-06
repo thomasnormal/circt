@@ -2560,6 +2560,7 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       continue;
     auto arg = lowering.op.getBody()->getArgument(*hierIface.idx);
     interfaceInstances[hierIface.ifaceInst] = arg;
+    threadedInterfaceInstances.insert(hierIface.ifaceInst);
   }
 
   // Keep track of the current scope for %m format specifier.

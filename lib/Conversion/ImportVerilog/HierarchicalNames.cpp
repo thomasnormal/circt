@@ -33,6 +33,93 @@ struct HierPathValueExprVisitor
       : context(context), loc(loc), builder(context.builder),
         outermostModule(outermostModule) {}
 
+  void threadInterfaceInstance(const slang::ast::InstanceSymbol *ifaceInst,
+                               mlir::StringAttr pathName) {
+    if (!ifaceInst)
+      return;
+    auto *outermostInstBody =
+        outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+    if (!outermostInstBody)
+      return;
+
+    auto *ifaceParentBody =
+        ifaceInst->getParentScope()->getContainingInstance();
+    if (!ifaceParentBody)
+      return;
+    if (ifaceParentBody == outermostInstBody)
+      return;
+
+    SmallVector<const slang::ast::InstanceBodySymbol *, 8> ifaceChain;
+    SmallVector<const slang::ast::InstanceBodySymbol *, 8> outerChain;
+    for (auto *body = ifaceParentBody; body;
+         body = body->parentInstance
+                    ? body->parentInstance->getParentScope()
+                          ->getContainingInstance()
+                    : nullptr)
+      ifaceChain.push_back(body);
+    for (auto *body = outermostInstBody; body;
+         body = body->parentInstance
+                    ? body->parentInstance->getParentScope()
+                          ->getContainingInstance()
+                    : nullptr)
+      outerChain.push_back(body);
+
+    DenseMap<const slang::ast::InstanceBodySymbol *, size_t> ifaceIndex;
+    ifaceIndex.reserve(ifaceChain.size());
+    for (size_t i = 0; i < ifaceChain.size(); ++i)
+      ifaceIndex[ifaceChain[i]] = i;
+
+    const slang::ast::InstanceBodySymbol *lca = nullptr;
+    size_t lcaOuterIndex = 0;
+    for (size_t i = 0; i < outerChain.size(); ++i) {
+      if (ifaceIndex.count(outerChain[i])) {
+        lca = outerChain[i];
+        lcaOuterIndex = i;
+        break;
+      }
+    }
+    if (!lca)
+      return;
+
+    auto addHierIfacePath =
+        [&](const slang::ast::InstanceBodySymbol *sym,
+            mlir::StringAttr nameAttr,
+            slang::ast::ArgumentDirection dir) {
+          auto &paths = context.hierInterfacePaths[sym];
+          bool exists = llvm::any_of(paths, [&](const auto &info) {
+            return info.hierName == nameAttr &&
+                   info.ifaceInst == ifaceInst && info.direction == dir;
+          });
+          if (!exists)
+            paths.push_back(HierInterfacePathInfo{nameAttr, {}, dir, ifaceInst});
+        };
+
+    SmallString<64> upwardName(ifaceInst->name);
+    for (auto *body = ifaceParentBody; body && body != lca;
+         body = body->parentInstance
+                    ? body->parentInstance->getParentScope()
+                          ->getContainingInstance()
+                    : nullptr) {
+      addHierIfacePath(body, builder.getStringAttr(upwardName),
+                       slang::ast::ArgumentDirection::Out);
+      if (body->parentInstance) {
+        SmallString<64> nextName;
+        nextName += body->parentInstance->name;
+        nextName += ".";
+        nextName += upwardName;
+        upwardName = nextName;
+      }
+    }
+
+    if (!pathName)
+      pathName = builder.getStringAttr(upwardName);
+
+    for (size_t i = lcaOuterIndex; i > 0; --i) {
+      auto *body = outerChain[i - 1];
+      addHierIfacePath(body, pathName, slang::ast::ArgumentDirection::In);
+    }
+  }
+
   // Handle hierarchical values
   void handle(const slang::ast::HierarchicalValueExpression &expr) {
     if (failed(result))
@@ -50,6 +137,33 @@ struct HierPathValueExprVisitor
     }
     auto *outermostInstBody =
         outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+
+    // Handle hierarchical references to interface instances directly.
+    if (auto *ifaceInst =
+            expr.symbol.as_if<slang::ast::InstanceSymbol>()) {
+      if (ifaceInst->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        SmallString<64> ifaceName;
+        for (const auto &elem : expr.ref.path) {
+          if (auto *instSym =
+                  elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+            if (!ifaceName.empty())
+              ifaceName += ".";
+            ifaceName += instSym->name;
+            continue;
+          }
+          if (auto *ifacePort =
+                  elem.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+            if (!ifaceName.empty())
+              ifaceName += ".";
+            ifaceName += ifacePort->name;
+          }
+        }
+        if (!ifaceName.empty())
+          threadInterfaceInstance(ifaceInst, builder.getStringAttr(ifaceName));
+        return;
+      }
+    }
 
     // Like module Foo; int a; Foo.a; endmodule.
     // Ignore "Foo.a" invoked by this module itself.
@@ -115,97 +229,28 @@ struct HierPathValueExprVisitor
         auto *ifaceParentBody =
             ifaceInst->getParentScope()->getContainingInstance();
         if (ifaceParentBody && ifaceParentBody != outermostInstBody) {
-          auto addHierIfacePath =
-              [&](const slang::ast::InstanceBodySymbol *sym,
-                  mlir::StringAttr nameAttr,
-                  slang::ast::ArgumentDirection dir) {
-                auto &paths = context.hierInterfacePaths[sym];
-                bool exists = llvm::any_of(paths, [&](const auto &info) {
-                  return info.hierName == nameAttr &&
-                         info.ifaceInst == ifaceInst &&
-                         info.direction == dir;
-                });
-                if (!exists)
-                  paths.push_back(
-                      HierInterfacePathInfo{nameAttr, {}, dir, ifaceInst});
-              };
-
-          SmallVector<const slang::ast::InstanceBodySymbol *, 8> ifaceChain;
-          SmallVector<const slang::ast::InstanceBodySymbol *, 8> outerChain;
-          for (auto *body = ifaceParentBody; body;
-               body = body->parentInstance
-                          ? body->parentInstance->getParentScope()
-                                ->getContainingInstance()
-                          : nullptr)
-            ifaceChain.push_back(body);
-          for (auto *body = outermostInstBody; body;
-               body = body->parentInstance
-                          ? body->parentInstance->getParentScope()
-                                ->getContainingInstance()
-                          : nullptr)
-            outerChain.push_back(body);
-
-          DenseMap<const slang::ast::InstanceBodySymbol *, size_t> ifaceIndex;
-          ifaceIndex.reserve(ifaceChain.size());
-          for (size_t i = 0; i < ifaceChain.size(); ++i)
-            ifaceIndex[ifaceChain[i]] = i;
-
-          const slang::ast::InstanceBodySymbol *lca = nullptr;
-          size_t lcaOuterIndex = 0;
-          for (size_t i = 0; i < outerChain.size(); ++i) {
-            if (ifaceIndex.count(outerChain[i])) {
-              lca = outerChain[i];
-              lcaOuterIndex = i;
+          SmallString<64> ifaceName;
+          for (size_t i = 0; i < expr.ref.path.size(); ++i) {
+            if (auto *instSym =
+                    expr.ref.path[i].symbol->as_if<
+                        slang::ast::InstanceSymbol>()) {
+              if (!ifaceName.empty())
+                ifaceName += ".";
+              ifaceName += instSym->name;
+            } else if (auto *ifacePort =
+                           expr.ref.path[i].symbol
+                               ->as_if<slang::ast::InterfacePortSymbol>()) {
+              if (!ifaceName.empty())
+                ifaceName += ".";
+              ifaceName += ifacePort->name;
+            }
+            if (i == ifaceInstIndex)
               break;
-            }
           }
-
-          if (lca) {
-            SmallString<64> ifaceName;
-            for (size_t i = 0; i < expr.ref.path.size(); ++i) {
-              if (auto *instSym =
-                      expr.ref.path[i].symbol->as_if<
-                          slang::ast::InstanceSymbol>()) {
-                if (!ifaceName.empty())
-                  ifaceName += ".";
-                ifaceName += instSym->name;
-              } else if (auto *ifacePort =
-                             expr.ref.path[i].symbol
-                                 ->as_if<slang::ast::InterfacePortSymbol>()) {
-                if (!ifaceName.empty())
-                  ifaceName += ".";
-                ifaceName += ifacePort->name;
-              }
-              if (i == ifaceInstIndex)
-                break;
-            }
-            if (!ifaceName.empty()) {
-              auto nameAttr = builder.getStringAttr(ifaceName);
-              // Thread the interface instance upward to the LCA when it is
-              // declared outside the target's ancestor chain (sibling/LCA).
-              SmallString<64> upwardName(ifaceInst->name);
-              for (auto *body = ifaceParentBody; body && body != lca;
-                   body = body->parentInstance
-                              ? body->parentInstance->getParentScope()
-                                    ->getContainingInstance()
-                              : nullptr) {
-                addHierIfacePath(body, builder.getStringAttr(upwardName),
-                                 slang::ast::ArgumentDirection::Out);
-                if (body->parentInstance) {
-                  SmallString<64> nextName;
-                  nextName += body->parentInstance->name;
-                  nextName += ".";
-                  nextName += upwardName;
-                  upwardName = nextName;
-                }
-              }
-              for (size_t i = lcaOuterIndex; i > 0; --i) {
-                auto *body = outerChain[i - 1];
-                addHierIfacePath(body, nameAttr,
-                                 slang::ast::ArgumentDirection::In);
-              }
-              handledInterface = true;
-            }
+          if (!ifaceName.empty()) {
+            auto nameAttr = builder.getStringAttr(ifaceName);
+            threadInterfaceInstance(ifaceInst, nameAttr);
+            handledInterface = true;
           }
         } else if (ifaceParentBody == outermostInstBody) {
           handledInterface = true;
@@ -320,6 +365,48 @@ struct HierPathValueExprVisitor
     }
   }
 
+  void handle(const slang::ast::NamedValueExpression &expr) {
+    if (failed(result))
+      return;
+    if (auto *ifacePort =
+            expr.symbol.as_if<slang::ast::InterfacePortSymbol>()) {
+      auto *outermostInstBody =
+          outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+      const slang::ast::Scope *portScope = ifacePort->getParentScope();
+      const auto *portBody =
+          portScope
+              ? portScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()
+              : nullptr;
+      if (outermostInstBody && portBody != outermostInstBody) {
+        auto &ports = context.bindScopeInterfacePorts[outermostInstBody];
+        bool exists = llvm::any_of(ports, [&](const auto &info) {
+          return info.ifacePort == ifacePort;
+        });
+        if (!exists)
+          ports.push_back({ifacePort, std::nullopt});
+      }
+      return;
+    }
+    if (auto *ifaceInst =
+            expr.symbol.as_if<slang::ast::InstanceSymbol>()) {
+      if (ifaceInst->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        threadInterfaceInstance(ifaceInst, mlir::StringAttr{});
+      }
+    }
+  }
+
+  void handle(const slang::ast::ArbitrarySymbolExpression &expr) {
+    if (failed(result))
+      return;
+    if (auto *ifaceInst = expr.symbol->as_if<slang::ast::InstanceSymbol>()) {
+      if (ifaceInst->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        threadInterfaceInstance(ifaceInst, mlir::StringAttr{});
+      }
+    }
+  }
+
   void handle(const slang::ast::InvalidExpression &expr) {
     if (failed(result))
       return;
@@ -427,67 +514,66 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
     if (!bindScope)
       continue;
 
-  slang::ast::ASTContext astContext(*bindScope,
-                                    slang::ast::LookupLocation::max);
+    slang::ast::ASTContext astContext(*bindScope,
+                                      slang::ast::LookupLocation::max);
 
-  auto collectFromPropertyExpr =
-      [&](const slang::syntax::PropertyExprSyntax &syntax) -> LogicalResult {
-    if (syntax.kind == slang::syntax::SyntaxKind::SimplePropertyExpr) {
-      auto seqExpr = syntax.as<slang::syntax::SimplePropertyExprSyntax>().expr;
-      if (seqExpr->kind == slang::syntax::SyntaxKind::SimpleSequenceExpr) {
-        auto &simpleSeq =
-            seqExpr->as<slang::syntax::SimpleSequenceExprSyntax>();
-        if (!simpleSeq.repetition && simpleSeq.expr) {
-          const auto &expr =
-              slang::ast::Expression::bind(*simpleSeq.expr, astContext);
-          if (expr.bad())
-            return failure();
-          return context.collectHierarchicalValues(expr, body);
+    auto collectFromPropertyExpr =
+        [&](const slang::syntax::PropertyExprSyntax &syntax) -> LogicalResult {
+      if (syntax.kind == slang::syntax::SyntaxKind::SimplePropertyExpr) {
+        auto seqExpr = syntax.as<slang::syntax::SimplePropertyExprSyntax>().expr;
+        if (seqExpr->kind == slang::syntax::SyntaxKind::SimpleSequenceExpr) {
+          auto &simpleSeq =
+              seqExpr->as<slang::syntax::SimpleSequenceExprSyntax>();
+          if (!simpleSeq.repetition && simpleSeq.expr) {
+            const auto &expr =
+                slang::ast::Expression::bind(*simpleSeq.expr, astContext);
+            if (expr.bad())
+              return failure();
+            return context.collectHierarchicalValues(expr, body);
+          }
         }
       }
-    }
 
-    const auto &expr = slang::ast::AssertionExpr::bind(
-        syntax, astContext, /*allowDisable=*/true);
-    auto loc = context.convertLocation(syntax.sourceRange());
-    BindAssertionExprVisitor visitor(context, loc, body);
-    expr.visit(visitor);
-    return visitor.result;
-  };
+      const auto &expr = slang::ast::AssertionExpr::bind(
+          syntax, astContext, /*allowDisable=*/true);
+      auto loc = context.convertLocation(syntax.sourceRange());
+      BindAssertionExprVisitor visitor(context, loc, body);
+      expr.visit(visitor);
+      return visitor.result;
+    };
 
-  auto collectFromInstances = [&](const auto &instances) -> LogicalResult {
-    for (auto *inst : instances) {
-      for (auto *conn : inst->connections) {
-        if (auto *ordered =
-                conn->template as_if<slang::syntax::OrderedPortConnectionSyntax>()) {
-          if (!ordered->expr)
+    auto collectFromCheckerInstances =
+        [&](const auto &instances) -> LogicalResult {
+      for (auto *inst : instances) {
+        for (auto *conn : inst->connections) {
+          if (auto *ordered =
+                  conn->template as_if<
+                      slang::syntax::OrderedPortConnectionSyntax>()) {
+            if (!ordered->expr)
+              continue;
+            if (failed(collectFromPropertyExpr(*ordered->expr)))
+              return failure();
             continue;
-          if (failed(collectFromPropertyExpr(*ordered->expr)))
-            return failure();
-          continue;
-        }
-        if (auto *named =
-                conn->template as_if<slang::syntax::NamedPortConnectionSyntax>()) {
-          if (!named->expr)
+          }
+          if (auto *named =
+                  conn->template as_if<
+                      slang::syntax::NamedPortConnectionSyntax>()) {
+            if (!named->expr)
+              continue;
+            if (failed(collectFromPropertyExpr(*named->expr)))
+              return failure();
             continue;
-          if (failed(collectFromPropertyExpr(*named->expr)))
-            return failure();
-          continue;
+          }
         }
       }
-    }
       return success();
     };
 
-    if (auto *inst =
-            bindSyntax->instantiation
-                ->template as_if<slang::syntax::HierarchyInstantiationSyntax>()) {
-      if (failed(collectFromInstances(inst->instances)))
-        return failure();
-    } else if (auto *checker =
-                   bindSyntax->instantiation
-                       ->template as_if<slang::syntax::CheckerInstantiationSyntax>()) {
-      if (failed(collectFromInstances(checker->instances)))
+    // Module bind instances show up in the instance body and are handled by
+    // InstBodyVisitor; only checker binds need special property parsing here.
+    if (auto *checker = bindSyntax->instantiation->template as_if<
+            slang::syntax::CheckerInstantiationSyntax>()) {
+      if (failed(collectFromCheckerInstances(checker->instances)))
         return failure();
     }
   }

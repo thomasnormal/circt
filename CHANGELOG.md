@@ -1,5 +1,23 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 400 - February 6, 2026
+
+### Summary
+
+Iteration 400: Enabled bind port connections to thread interface instances
+across sibling/LCA hierarchies and added regression coverage.
+
+### Accomplishments
+
+1. **Bind + interface threading** - Hierarchical interface instances in bind
+   port connections now thread upward to the LCA and back down to the target.
+2. **Regression coverage** - Added a bind test that connects to a sibling
+   interface instance.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/bind-interface-instance-sibling.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-instance-sibling.sv`
+
 ## Iteration 399 - February 6, 2026
 
 ### Summary
