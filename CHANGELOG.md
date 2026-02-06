@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 399 - February 6, 2026
+
+### Summary
+
+Iteration 399: Added k-induction SAT-path regression coverage.
+
+### Accomplishments
+
+1. **k-induction SAT test** - Added a regression that confirms base SAT exits
+   early without running the induction step.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-bmc -b 1 --k-induction --run-smtlib --z3-path=test/Tools/circt-bmc/Inputs/fake-z3-sat-model.sh --module top test/Tools/circt-bmc/bmc-k-induction-sat.mlir | build/bin/FileCheck test/Tools/circt-bmc/bmc-k-induction-sat.mlir`
+
 ## Iteration 398 - February 6, 2026
 
 ### Summary
