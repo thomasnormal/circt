@@ -14492,6 +14492,168 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_value_plusargs ----
+    // Signature: (format_ptr: ptr, format_len: i32, output_ptr: ptr,
+    //             output_bytes: i32) -> i32
+    // Checks CIRCT_UVM_ARGS / UVM_ARGS for a matching +name=value plusarg.
+    // Parses the format string (e.g., "UVM_TESTNAME=%s", "TIMEOUT=%d"),
+    // extracts the value, writes it to the output pointer, and returns 1.
+    // Returns 0 if the plusarg is not found.
+    // IEEE 1800-2017 Section 21.6
+    if (calleeName == "__moore_value_plusargs") {
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 4) {
+        // Read the format string from global memory.
+        uint64_t fmtAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t fmtLen = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t outAddr = getValue(procId, callOp.getOperand(2)).getUInt64();
+        int32_t outBytes = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+
+        std::string fmtStr;
+        if (fmtAddr != 0 && fmtLen > 0) {
+          uint64_t blockOffset = 0;
+          auto *block =
+              findMemoryBlockByAddress(fmtAddr, procId, &blockOffset);
+          if (block && block->initialized) {
+            for (int32_t i = 0; i < fmtLen; ++i) {
+              size_t idx = blockOffset + i;
+              if (idx < block->data.size()) {
+                char c = static_cast<char>(block->data[idx]);
+                if (c == '\0')
+                  break;
+                fmtStr += c;
+              }
+            }
+          }
+        }
+
+        // Parse format: split at '%' to get plusarg name and format code.
+        // E.g., "UVM_TESTNAME=%s" -> name="UVM_TESTNAME", code='s'
+        std::string plusargName;
+        char fmtCode = 's'; // default to string
+        auto pctPos = fmtStr.find('%');
+        if (pctPos != std::string::npos) {
+          plusargName = fmtStr.substr(0, pctPos);
+          // Remove trailing '=' from name if present.
+          while (!plusargName.empty() && plusargName.back() == '=')
+            plusargName.pop_back();
+          if (pctPos + 1 < fmtStr.size())
+            fmtCode = std::tolower(fmtStr[pctPos + 1]);
+        } else {
+          plusargName = fmtStr;
+        }
+
+        // Search CIRCT_UVM_ARGS / UVM_ARGS for +name=value.
+        std::string foundValue;
+        if (!plusargName.empty()) {
+          const char *env = std::getenv("CIRCT_UVM_ARGS");
+          if (!env)
+            env = std::getenv("UVM_ARGS");
+          if (env) {
+            std::string args(env);
+            std::string searchFor = "+" + plusargName + "=";
+            auto pos = args.find(searchFor);
+            if (pos != std::string::npos) {
+              pos += searchFor.size();
+              // Extract value until space or end.
+              auto endPos = args.find(' ', pos);
+              if (endPos == std::string::npos)
+                endPos = args.size();
+              foundValue = args.substr(pos, endPos - pos);
+              result = 1;
+            }
+          }
+        }
+
+        // Write value to the output location if found.
+        if (result == 1 && outBytes > 0) {
+          // Parse the value based on format code.
+          int64_t intVal = 0;
+          if (fmtCode == 'd' || fmtCode == 'h' || fmtCode == 'o' ||
+              fmtCode == 'b') {
+            if (!foundValue.empty()) {
+              char *endPtr = nullptr;
+              int base = 10;
+              if (fmtCode == 'h')
+                base = 16;
+              else if (fmtCode == 'o')
+                base = 8;
+              else if (fmtCode == 'b')
+                base = 2;
+              intVal = std::strtoll(foundValue.c_str(), &endPtr, base);
+            }
+          } else {
+            // String format: pack string into integer (big-endian).
+            for (size_t i = 0; i < foundValue.size() && i < 8; ++i)
+              intVal = (intVal << 8) |
+                       static_cast<uint8_t>(foundValue[i]);
+          }
+
+          // Trace the output operand through unrealized_conversion_cast
+          // to find the underlying signal or alloca.
+          Value outOperand = callOp.getOperand(2);
+          bool written = false;
+
+          // Try to trace through unrealized_conversion_cast to signal.
+          if (auto castOp = outOperand.getDefiningOp<
+                  mlir::UnrealizedConversionCastOp>()) {
+            Value castInput = castOp.getInputs()[0];
+            SignalId sigId = resolveSignalId(castInput);
+            if (sigId != 0) {
+              // Drive the value to the signal (epsilon delay for
+              // blocking assignment semantics).
+              unsigned width = outBytes * 8;
+              InterpretedValue driveVal(static_cast<uint64_t>(intVal),
+                                       width);
+              pendingEpsilonDrives[sigId] = driveVal;
+              SignalValue newVal = driveVal.toSignalValue();
+              auto targetTime = scheduler.getCurrentTime();
+              targetTime.deltaStep++;
+              uint64_t driverId =
+                  (static_cast<uint64_t>(procId) << 32) |
+                  static_cast<uint64_t>(sigId);
+              scheduler.getEventScheduler().schedule(
+                  targetTime, SchedulingRegion::NBA,
+                  Event([this, sigId, driverId, newVal]() {
+                    scheduler.updateSignalWithStrength(
+                        sigId, driverId, newVal, DriveStrength::Strong,
+                        DriveStrength::Strong);
+                  }));
+              written = true;
+            }
+          }
+
+          // Fallback: try writing to memory directly.
+          if (!written && outAddr != 0) {
+            uint64_t blockOffset = 0;
+            auto *outBlock =
+                findMemoryBlockByAddress(outAddr, procId, &blockOffset);
+            if (outBlock) {
+              for (int32_t i = 0;
+                   i < outBytes &&
+                   (blockOffset + i) < outBlock->data.size();
+                   ++i)
+                outBlock->data[blockOffset + i] =
+                    static_cast<uint8_t>((intVal >> (i * 8)) & 0xFF);
+              written = true;
+            }
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_value_plusargs(\"" << fmtStr
+                   << "\") = " << result
+                   << (result ? " value=\"" + foundValue + "\"" : "") << "\n");
+      }
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 32));
+      }
+      return success();
+    }
+
     // Handle __moore_int_to_string - convert i64 to string struct {ptr, i64}
     if (calleeName == "__moore_int_to_string" ||
         calleeName == "__moore_string_itoa") {
