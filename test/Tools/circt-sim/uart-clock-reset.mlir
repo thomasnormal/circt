@@ -15,7 +15,7 @@
 // CHECK-SAME: {{[0-9]+}}
 // CHECK: Edges detected:
 // CHECK-SAME: {{[0-9]+}}
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @UartClockReset() {
   %true = hw.constant true

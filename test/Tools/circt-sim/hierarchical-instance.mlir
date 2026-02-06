@@ -5,7 +5,7 @@
 // processes from child modules.
 
 // CHECK: Registered {{[0-9]+}} LLHD signals and 3 LLHD processes
-// CHECK: Simulation finished successfully
+// CHECK: Simulation completed
 
 // Child module with a process that runs a counter
 hw.module private @counter(in %clk : !llhd.ref<i1>, in %rst : !llhd.ref<i1>) {

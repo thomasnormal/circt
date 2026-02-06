@@ -19,7 +19,7 @@
 // CHECK: After driving a=42: a: 42, b: 0
 // CHECK: After driving b=99: a: 42, b: 99
 // CHECK: After driving a=7: a: 7, b: 99
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %c1_i64 = llvm.mlir.constant(1 : i64) : i64

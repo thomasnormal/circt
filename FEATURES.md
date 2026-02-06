@@ -46,7 +46,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 139 | 138 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
+| circt-sim | 140 | 139 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
 
 ## UVM Simulation Feature Status
 
@@ -83,17 +83,17 @@ to commercial simulators like Cadence Xcelium.
 | `$urandom` / `$random` | WORKS | mt19937-based RNG via `__moore_urandom()` interceptors |
 | `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
-| `randomize()` (with ranges) | MISSING | `__moore_randomize_with_ranges()` not yet intercepted |
+| `randomize()` (with ranges) | WORKS | `__moore_randomize_with_ranges()` generates uniform random within range pairs |
 | Interface ports | MISSING | Required by AXI-VIP and similar verification IPs |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | MISSING | String formatting gap |
 | Coverage collection | MISSING | Functional and code coverage not implemented |
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
-| `$finish` exit code | PARTIAL | Process exits 0 even on `UVM_FATAL` |
+| `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed |
 | Semaphores | UNKNOWN | May work via DPI stubs |
 | Named events | PARTIAL | Basic `wait` / `trigger` works |
-| String methods | PARTIAL | Some native implementations, gaps remain |
+| String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
 | Simulation performance | SLOW | Large UVM designs (APB AVIP) take >300s wall-clock |
 
 ### AVIP Simulation Status
@@ -120,3 +120,5 @@ to commercial simulators like Cadence Xcelium.
 | Shutdown `_exit` | Placed in `processInput()` before destructor runs |
 | `randomize_basic` | Fills object memory with random bytes instead of no-op |
 | `randomize_with_dist` | Weighted distribution constraints with range/weight arrays |
+| `randomize_with_ranges` | Uniform random within range pairs for constrained random |
+| `$finish` exit code | Propagates exit code; checks error count for UVM `die()` → `$finish` |

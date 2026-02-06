@@ -25,7 +25,7 @@
 // Fork child shares parent-scope allocas, so writes are visible after join.
 // CHECK: Items consumed: 4
 // CHECK-NOT: ERROR(PROCESS_STEP_OVERFLOW)
-// CHECK: Simulation finished successfully
+// CHECK: Simulation completed
 
 !i32 = i32
 !i64 = i64

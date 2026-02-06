@@ -1,7 +1,7 @@
 // RUN: circt-sim %s --max-deltas=5 2>&1 | FileCheck %s
 
 // CHECK: self_drive=0
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 // CHECK-NOT: ERROR(DELTA_OVERFLOW)
 
 hw.module @test() {

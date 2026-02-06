@@ -10,7 +10,7 @@
 // CHECK: Processes executed:
 // CHECK: Delta cycles:
 // CHECK: Signal updates:
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %true = hw.constant true

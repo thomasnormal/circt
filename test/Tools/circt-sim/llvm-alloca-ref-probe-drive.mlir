@@ -15,7 +15,7 @@
 // CHECK: Initial value: 0
 // CHECK: After drive: 42
 // CHECK: After second drive: 99
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %c1_i64 = llvm.mlir.constant(1 : i64) : i64

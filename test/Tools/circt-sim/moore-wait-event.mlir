@@ -13,7 +13,7 @@
 // CHECK-SAME: {{[0-9]+}}
 // CHECK: Signal updates:
 // CHECK-SAME: {{[0-9]+}}
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @MooreWaitEventTest() {
   %true = hw.constant true

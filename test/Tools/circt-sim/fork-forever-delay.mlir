@@ -14,7 +14,7 @@
 // CHECK-DAG: tick
 // CHECK-DAG: main done
 // CHECK-NOT: ERROR(PROCESS_STEP_OVERFLOW)
-// CHECK: Simulation finished successfully
+// CHECK: Simulation completed
 
 llvm.func @__moore_delay(i64)
 

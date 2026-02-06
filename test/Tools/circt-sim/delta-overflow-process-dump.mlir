@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --max-deltas=5 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --max-deltas=5 2>&1 | FileCheck %s
 
 // CHECK: ERROR(DELTA_OVERFLOW)
 // CHECK: [circt-sim] Process states:

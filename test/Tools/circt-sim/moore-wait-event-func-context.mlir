@@ -7,7 +7,7 @@
 // CHECK: [circt-sim] Found {{[0-9]+}} LLHD process
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 // A function that contains wait_event - this simulates forked code.
 // In real UVM, this would be inside a class task called from a fork.

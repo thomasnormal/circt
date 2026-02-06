@@ -19,7 +19,7 @@
 // CHECK: Condition now true
 // CHECK: Child condition met
 // CHECK: Test PASSED
-// CHECK: Simulation finished successfully
+// CHECK: Simulation completed
 // CHECK-NOT: ERROR
 
 module {

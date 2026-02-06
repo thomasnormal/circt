@@ -11,7 +11,7 @@
 // CHECK: Value updated to: 1
 // CHECK: Value updated to: 2
 // CHECK: Value updated to: 3
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %true = hw.constant true

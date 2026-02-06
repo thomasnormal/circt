@@ -11,7 +11,7 @@
 // CHECK: i128 signal LSB: 1
 // CHECK: i256 signal LSB: 1
 // CHECK: Wide signal test: completed
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %true = hw.constant true
