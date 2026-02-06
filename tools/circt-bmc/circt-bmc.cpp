@@ -491,11 +491,16 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(hw::createFlattenModules());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  // Normalize aggregate bitcasts before externalizing registers so any clock
+  // keys computed during externalization match the post-normalization form
+  // seen by LowerToBMC. This avoids multi-clock key mismatches caused by
+  // alternate 4-state field extraction forms (e.g. hw.struct_extract vs
+  // hw.struct_explode/comb.concat/comb.extract).
+  pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
+  pm.addPass(hw::createHWConvertBitcasts());
   ExternalizeRegistersOptions externalizeOptions;
   externalizeOptions.allowMultiClock = allowMultiClock;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
-  pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
-  pm.addPass(hw::createHWConvertBitcasts());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = clockBound;
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;

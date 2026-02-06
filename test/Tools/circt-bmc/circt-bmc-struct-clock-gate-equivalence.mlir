@@ -1,7 +1,7 @@
 // RUN: circt-opt --externalize-registers --hw-aggregate-to-comb --hw-convert-bitcasts --lower-to-bmc="top-module=top bound=2" %s | FileCheck %s
 
 // CHECK: verif.bmc
-// CHECK: bmc_clock_keys = ["arg{{[0-9]+}}{{(:inv)?}}"]
+// CHECK: bmc_clock_keys = ["port:clk{{(:inv)?}}"]
 // CHECK: init {
 // CHECK: seq.to_clock
 // CHECK-NOT: seq.to_clock

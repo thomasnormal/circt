@@ -635,9 +635,114 @@ void LowerToBMCPass::runOnOperation() {
       }
       return canonical;
     };
+    auto canonicalizeClockKeyValue = [&](Value value) -> Value {
+      if (!value)
+        return value;
+      Value base = getStructFieldBase(value, "value");
+      if (!base || !isFourStateStructType(base.getType()))
+        return value;
+
+      auto findValueField = [](Value structVal) -> Value {
+        for (Operation *user : structVal.getUsers()) {
+          if (auto extract = dyn_cast<hw::StructExtractOp>(user)) {
+            if (extract.getFieldName() == "value")
+              return extract.getResult();
+            continue;
+          }
+          if (auto explode = dyn_cast<hw::StructExplodeOp>(user)) {
+            auto structTy =
+                dyn_cast<hw::StructType>(explode.getInput().getType());
+            if (!structTy)
+              continue;
+            auto elements = structTy.getElements();
+            for (auto [idx, element] : llvm::enumerate(elements)) {
+              if (element.name.getValue() == "value") {
+                if (idx < explode->getNumResults())
+                  return explode->getResult(idx);
+                break;
+              }
+            }
+          }
+        }
+        return Value();
+      };
+
+      DenseSet<Value> visited;
+      Value currentBase = base;
+      Value currentValue = value;
+      if (Value directValue = findValueField(currentBase))
+        currentValue = directValue;
+
+      auto isTrivialDelay = [&](Value time) -> bool {
+        auto constTime = time.getDefiningOp<llhd::ConstantTimeOp>();
+        if (!constTime)
+          return false;
+        auto attr = constTime.getValueAttr();
+        if (attr.getTime() != 0)
+          return false;
+        if (attr.getDelta() != 0)
+          return false;
+        return attr.getEpsilon() <= 1;
+      };
+
+      while (currentBase) {
+        if (!visited.insert(currentBase).second)
+          break;
+        auto probe = currentBase.getDefiningOp<llhd::ProbeOp>();
+        if (!probe)
+          break;
+        Value signal = probe.getSignal();
+        auto sigOp = signal.getDefiningOp<llhd::SignalOp>();
+        if (!sigOp)
+          break;
+
+        Value driven;
+        bool hasDrive = false;
+        bool conflicting = false;
+        for (Operation *user : signal.getUsers()) {
+          auto drive = dyn_cast<llhd::DriveOp>(user);
+          if (!drive || drive.getSignal() != signal)
+            continue;
+          if (drive.getEnable()) {
+            if (auto literal = getConstI1Value(drive.getEnable());
+                !literal || !*literal) {
+              conflicting = true;
+              break;
+            }
+          }
+          if (!isTrivialDelay(drive.getTime())) {
+            conflicting = true;
+            break;
+          }
+          Value driveValue = drive.getValue();
+          if (!hasDrive) {
+            driven = driveValue;
+            hasDrive = true;
+          } else if (driven != driveValue) {
+            conflicting = true;
+            break;
+          }
+        }
+        if (!hasDrive || conflicting)
+          break;
+        if (sigOp.getInit() != driven)
+          break;
+        if (driven.getType() != currentBase.getType())
+          break;
+
+        Value nextValue = findValueField(driven);
+        if (!nextValue)
+          break;
+        currentBase = driven;
+        currentValue = nextValue;
+      }
+      return currentValue;
+    };
     auto getFourStateClockBase = [&](Value input) -> Value {
       if (!input)
         return Value();
+      if (auto base = getStructFieldBase(input, "value"))
+        return base;
       if (auto extract = input.getDefiningOp<hw::StructExtractOp>()) {
         if (auto fieldAttr = extract.getFieldNameAttr()) {
           if (fieldAttr.getValue() == "value" &&
@@ -660,6 +765,83 @@ void LowerToBMCPass::runOnOperation() {
       return Value();
     };
 
+    // Canonicalize 4-state clock bases through trivial LLHD port/wire signals.
+    //
+    // ImportVerilog/LLHD lowering often introduces intermediate `llhd.sig`
+    // values for hierarchical port connections (e.g. `dut/clk`) that are
+    // unconditionally driven from another probe value after an epsilon delay.
+    // These should not force BMC into multi-clock mode. Chase through such
+    // signals to recover a stable base for clock deduplication.
+    auto canonicalizeFourStateClockBase = [&](Value base) -> Value {
+      if (!base || !isFourStateStructType(base.getType()))
+        return base;
+
+      DenseSet<Value> visited;
+      Value current = base;
+      auto isTrivialDelay = [&](Value time) -> bool {
+        auto constTime = time.getDefiningOp<llhd::ConstantTimeOp>();
+        if (!constTime)
+          return false;
+        auto attr = constTime.getValueAttr();
+        if (attr.getTime() != 0)
+          return false;
+        if (attr.getDelta() != 0)
+          return false;
+        // Treat epsilon-only delays as wiring for clock purposes.
+        return attr.getEpsilon() <= 1;
+      };
+
+      while (current) {
+        if (!visited.insert(current).second)
+          break;
+        auto probe = current.getDefiningOp<llhd::ProbeOp>();
+        if (!probe)
+          break;
+        Value signal = probe.getSignal();
+        auto sigOp = signal.getDefiningOp<llhd::SignalOp>();
+        if (!sigOp)
+          break;
+
+        Value driven;
+        bool hasDrive = false;
+        bool conflicting = false;
+        for (Operation *user : signal.getUsers()) {
+          auto drive = dyn_cast<llhd::DriveOp>(user);
+          if (!drive || drive.getSignal() != signal)
+            continue;
+          if (drive.getEnable()) {
+            if (auto literal = getConstI1Value(drive.getEnable());
+                !literal || !*literal) {
+              conflicting = true;
+              break;
+            }
+          }
+          if (!isTrivialDelay(drive.getTime())) {
+            conflicting = true;
+            break;
+          }
+          Value driveValue = drive.getValue();
+          if (!hasDrive) {
+            driven = driveValue;
+            hasDrive = true;
+          } else if (driven != driveValue) {
+            conflicting = true;
+            break;
+          }
+        }
+        if (!hasDrive || conflicting)
+          break;
+        // Only treat as a trivial alias when the signal's init matches the
+        // driven value, which is typical for port-connection wires.
+        if (sigOp.getInit() != driven)
+          break;
+        if (driven.getType() != current.getType())
+          break;
+        current = driven;
+      }
+      return current;
+    };
+
     auto maybeAddClockInput = [&](Value input) {
       if (!input || input.getType() != builder.getI1Type())
         return;
@@ -668,7 +850,11 @@ void LowerToBMCPass::runOnOperation() {
       Value base = getFourStateClockBase(canonical);
       if (!base)
         base = getFourStateClockBase(input);
-      auto inputKey = getI1ValueKeyWithBlockArgNames(input, getBlockArgName);
+      if (base)
+        base = canonicalizeFourStateClockBase(base);
+      Value keyValue = canonicalizeClockKeyValue(canonical);
+      auto inputKey =
+          getI1ValueKeyWithBlockArgNames(keyValue, getBlockArgName);
       // Graph regions can use values before they are defined, which prevents
       // CSE from collapsing equivalent clock expressions. Deduplicate
       // structurally equivalent inputs here to avoid spurious multi-clock
@@ -825,19 +1011,22 @@ void LowerToBMCPass::runOnOperation() {
         }
       }
 
-      auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
-        bool invert = false;
-        Value canonical = canonicalizeClockValue(input, invert);
-        auto inputKey =
-            getI1ValueKeyWithBlockArgNames(input, getBlockArgName);
-        Value base = getFourStateClockBase(canonical);
-        if (!base)
-          base = getFourStateClockBase(input);
-        for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
-          if (invert != existing.invert)
-            continue;
-          if (inputKey && existing.inputKey &&
-              *inputKey == *existing.inputKey)
+    auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
+      bool invert = false;
+      Value canonical = canonicalizeClockValue(input, invert);
+      Value keyValue = canonicalizeClockKeyValue(canonical);
+      auto inputKey =
+          getI1ValueKeyWithBlockArgNames(keyValue, getBlockArgName);
+      Value base = getFourStateClockBase(canonical);
+      if (!base)
+        base = getFourStateClockBase(input);
+      if (base)
+        base = canonicalizeFourStateClockBase(base);
+      for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
+        if (invert != existing.invert)
+          continue;
+        if (inputKey && existing.inputKey &&
+            *inputKey == *existing.inputKey)
             return idx;
           if (equivalence.isEquivalent(canonical, existing.canonical) ||
               (base && existing.fourStateBase &&
@@ -918,6 +1107,10 @@ void LowerToBMCPass::runOnOperation() {
       clockKeyAttrs.clear();
       clockKeyAttrs.reserve(clockInputs.size());
       for (const auto &input : clockInputs) {
+        if (input.inputKey) {
+          clockKeyAttrs.push_back(builder.getStringAttr(*input.inputKey));
+          continue;
+        }
         auto keyValue = input.canonical ? input.canonical : input.value;
         clockKeyAttrs.push_back(makeClockKey(keyValue));
       }
