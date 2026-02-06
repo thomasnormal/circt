@@ -1,0 +1,29 @@
+// RUN: circt-verilog %s --parse-only | FileCheck %s
+
+module sampled_default_disable(input logic clk, reset, a);
+  default clocking @(posedge clk); endclocking
+  default disable iff (reset);
+
+  property p;
+    $rose(a);
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_default_disable
+// CHECK: moore.procedure always
+// CHECK: moore.wait_event
+// CHECK: moore.blocking_assign
+
+module sampled_explicit_clock_in_assert(input logic clk, fast, a);
+  property p;
+    @(posedge clk) $rose(a, @(posedge fast));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_explicit_clock_in_assert
+// CHECK: moore.procedure always
+// CHECK: moore.wait_event

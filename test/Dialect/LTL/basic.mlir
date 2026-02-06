@@ -69,6 +69,11 @@ ltl.repeat %s, 0 : !ltl.sequence
 ltl.repeat %s, 42 : !ltl.sequence
 ltl.repeat %s, 42, 1337 : !ltl.sequence
 
+// CHECK: ltl.goto_repeat {{%.+}}, 2 : !ltl.sequence
+// CHECK: ltl.non_consecutive_repeat {{%.+}}, 2 : !ltl.sequence
+ltl.goto_repeat %s, 2 : !ltl.sequence
+ltl.non_consecutive_repeat %s, 2 : !ltl.sequence
+
 //===----------------------------------------------------------------------===//
 // Properties
 //===----------------------------------------------------------------------===//
@@ -117,4 +122,3 @@ ltl.clock %s, negedge %true : !ltl.sequence
 unrealized_conversion_cast %clk0 : !ltl.sequence to index
 unrealized_conversion_cast %clk1 : !ltl.sequence to index
 unrealized_conversion_cast %clk2 : !ltl.property to index
-

@@ -139,6 +139,9 @@ hw.module @Sequences(in %clk: i1, in %a: i1, in %b: i1) {
   // CHECK: assert property (a[->5:6]);
   %gtr2 = ltl.goto_repeat %a, 5, 1 : i1
   sv.assert_property %gtr2 : !ltl.sequence
+  // CHECK: assert property (a[->4:$]);
+  %gtr3 = ltl.goto_repeat %a, 4 : i1
+  sv.assert_property %gtr3 : !ltl.sequence
 
   // CHECK: assert property (a[=0]);
   %ncr0 = ltl.non_consecutive_repeat %a, 0, 0 : i1
@@ -149,6 +152,9 @@ hw.module @Sequences(in %clk: i1, in %a: i1, in %b: i1) {
   // CHECK: assert property (a[=5:6]);
   %ncr2 = ltl.non_consecutive_repeat %a, 5, 1 : i1
   sv.assert_property %ncr2 : !ltl.sequence
+  // CHECK: assert property (a[=4:$]);
+  %ncr3 = ltl.non_consecutive_repeat %a, 4 : i1
+  sv.assert_property %ncr3 : !ltl.sequence
 
   // CHECK: assert property (@(posedge clk) a);
   %k0 = ltl.clock %a, posedge %clk : i1
@@ -282,8 +288,10 @@ hw.module @LivenessExample(in %clock: i1, in %reset: i1, in %isLive: i1) {
   %true = hw.constant true
 
   // CHECK: wire _GEN = ~isLive;
-  // CHECK: assert property (disable iff (reset) @(posedge clock) $fell(reset) & _GEN |-> (s_eventually isLive));
-  // CHECK: assume property (disable iff (reset) @(posedge clock) $fell(reset) & _GEN |-> (s_eventually isLive));
+  // CHECK: assert property (disable iff (reset)
+  // CHECK-NEXT: @(posedge clock) $fell(reset) & _GEN |-> (s_eventually isLive));
+  // CHECK: assume property (disable iff (reset)
+  // CHECK-NEXT: @(posedge clock) $fell(reset) & _GEN |-> (s_eventually isLive));
   %not_isLive = comb.xor %isLive, %true : i1
   %fell_reset = sv.verbatim.expr "$fell({{0}})"(%reset) : (i1) -> i1
   %0 = comb.and %fell_reset, %not_isLive : i1
@@ -293,8 +301,10 @@ hw.module @LivenessExample(in %clock: i1, in %reset: i1, in %isLive: i1) {
   sv.assert_property %liveness_after_reset disable_iff %reset : !ltl.property
   sv.assume_property %liveness_after_reset disable_iff %reset : !ltl.property
 
-  // CHECK: assert property (disable iff (reset) @(posedge clock) isLive ##1 _GEN |-> (s_eventually isLive));
-  // CHECK-NEXT: assume property (disable iff (reset) @(posedge clock) isLive ##1 _GEN |-> (s_eventually isLive));
+  // CHECK: assert property (disable iff (reset)
+  // CHECK-NEXT: @(posedge clock) isLive ##1 _GEN |-> (s_eventually isLive));
+  // CHECK: assume property (disable iff (reset)
+  // CHECK-NEXT: @(posedge clock) isLive ##1 _GEN |-> (s_eventually isLive));
   %4 = ltl.delay %not_isLive, 1, 0 : i1
   %5 = ltl.concat %isLive, %4 : i1, !ltl.sequence
   %6 = ltl.implication %5, %1 : !ltl.sequence, !ltl.property

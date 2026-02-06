@@ -1,5 +1,238 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 397 - February 6, 2026
+
+### Summary
+
+Iteration 397: Re-verified recent SVA open-ended range and default clocking/disable lowering updates and fixed ExportVerilog checks to match multi-line property emission.
+
+### Accomplishments
+
+1. **ExportVerilog test fix** - Adjusted liveness property checks to accept line breaks between `disable iff` and clocking in emitted assertions.
+2. **Targeted verification** - Ran focused ImportVerilog, SVAToLTL, VerifToSMT, and ExportVerilog checks for unbounded ranges and default clocking/disable behavior.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build circt-verilog circt-opt circt-translate`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-clocking.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-clocking.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-disable.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-disable.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-throughout-unbounded.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-throughout-unbounded.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-within-unbounded.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-within-unbounded.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva_bounded_delay.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva_bounded_delay.sv`
+- `build/bin/circt-translate --import-verilog --verify-diagnostics --split-input-file test/Conversion/ImportVerilog/errors.sv`
+- `build/bin/circt-opt test/Dialect/LTL/basic.mlir | build/bin/circt-opt | build/bin/FileCheck test/Dialect/LTL/basic.mlir`
+- `build/bin/circt-opt test/Dialect/SVA/basic.mlir | build/bin/circt-opt | build/bin/FileCheck test/Dialect/SVA/basic.mlir`
+- `build/bin/circt-opt test/Conversion/SVAToLTL/sequence-ops.mlir --lower-sva-to-ltl | build/bin/FileCheck test/Conversion/SVAToLTL/sequence-ops.mlir`
+- `build/bin/circt-opt test/Conversion/VerifToSMT/ltl-temporal.mlir --convert-verif-to-smt=approx-temporal=true --reconcile-unrealized-casts | build/bin/FileCheck test/Conversion/VerifToSMT/ltl-temporal.mlir`
+- `build/bin/circt-opt test/Conversion/ExportVerilog/verif.mlir --export-verilog | build/bin/FileCheck test/Conversion/ExportVerilog/verif.mlir`
+
+## Iteration 396 - February 6, 2026
+
+### Summary
+
+Iteration 396: Fixed bind + hierarchy handling for hierarchical interface references through generate blocks and improved interface port matching during instance wiring.
+
+### Accomplishments
+
+1. **Generate-aware hierarchical collection** - Traverse generate blocks/arrays and instance arrays when collecting hierarchical names, ensuring bind-driven hierarchy references are seen.
+2. **Interface bind threading fix** - Resolve interface paths that pass through interface ports and improve interface port fallback matching for hierarchical interface values.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build circt-verilog`
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-generate.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-generate.sv`
+
+## Iteration 394 - February 6, 2026
+
+### Summary
+
+Iteration 394: Documented the remaining bind + hierarchy gap for hierarchical
+interface instance references in bind port connections.
+
+### Accomplishments
+
+1. **Project plan update** - Added a bind/hierarchy workstream item to track
+   sibling/LCA threading for hierarchical interface instance references used by
+   bind directives (OpenTitan readiness).
+
+### Verification (February 6, 2026)
+
+- Not run (planning update only)
+
+## Iteration 395 - February 6, 2026
+
+### Summary
+
+Iteration 395: Expanded SVA/LTL lowering for open-ended repetitions and default clocking/disable semantics, plus added runtime lowering for `$test$plusargs`.
+
+### Accomplishments
+
+1. **SVA open-ended repetition support** - Allow `[->m:$]`/`[=m:$]` lowering by making repeat `more` optional and propagating to LTL NFA and SMT/Export paths.
+2. **Default clocking/disable lowering** - Sampled value functions and `$past` now honor default clocking and default disable iff, with parse-only regression coverage.
+3. **`$test$plusargs` runtime call** - Lowered `$test$plusargs` to `__moore_test_plusargs` with global string emission and added a circt-sim regression test.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build circt-verilog`
+- `./build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-clocking.sv --parse-only | ./build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-clocking.sv`
+- `./build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-disable.sv --parse-only | ./build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-disable.sv`
+- `./build/bin/circt-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv --parse-only | ./build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+- `./build/bin/circt-verilog test/Conversion/ImportVerilog/sva-throughout-unbounded.sv --parse-only | ./build/bin/FileCheck test/Conversion/ImportVerilog/sva-throughout-unbounded.sv`
+- `./build/bin/circt-verilog test/Conversion/ImportVerilog/sva-within-unbounded.sv --parse-only | ./build/bin/FileCheck test/Conversion/ImportVerilog/sva-within-unbounded.sv`
+- `./build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-generate.sv | rg -n "moore.instance \\\"mon"`
+
+## Iteration 393 - February 6, 2026
+
+### Summary
+
+Iteration 393: Added regression coverage for instance-specific bind directives
+through generate hierarchies.
+
+### Accomplishments
+
+1. **Bind + generate coverage** - Added ImportVerilog coverage to ensure
+   instance-specific binds targeting generated instances produce distinct module
+   variants.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 392 - February 6, 2026
+
+### Summary
+
+Iteration 392: Added coverage for unbounded `##[min:$]` delays in bounded-delay assertions.
+
+### Accomplishments
+
+1. **Regression coverage** - Added a parse-only test for `##[2:$]` delay lowering to an unbounded `ltl.delay`.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 391 - February 6, 2026
+
+### Summary
+
+Iteration 391: Added coverage for `within` with an unbounded RHS delay to ensure unbounded ranges lower without a length cap.
+
+### Accomplishments
+
+1. **Regression coverage** - Added a parse-only test for `(a ##1 b) within (c ##[2:$] c)`.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 390 - February 6, 2026
+
+### Summary
+
+Iteration 390: Added a clearer diagnostic for unbounded `first_match` sequences in ImportVerilog.
+
+### Accomplishments
+
+1. **Early error for unbounded first_match** - ImportVerilog now rejects `first_match` on unbounded sequences with a targeted diagnostic instead of failing later in lowering.
+2. **Regression coverage** - Added a diagnostics test for `first_match` with `##[m:$]`.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 389 - February 6, 2026
+
+### Summary
+
+Iteration 389: Improved `throughout` lowering for unbounded RHS by preserving the minimum sequence length and added regression coverage.
+
+### Accomplishments
+
+1. **Minimum-length tracking** - Sequence length analysis now preserves minimum length even when the maximum is unbounded, allowing `throughout` to repeat the LHS for the correct minimum duration.
+2. **Regression coverage** - Added a parse-only test for `throughout` with an unbounded RHS range.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 388 - February 6, 2026
+
+### Summary
+
+Iteration 388: Enabled unbounded nonconsecutive and goto repetition (`[=m:$]`, `[->m:$]`) by allowing optional max bounds in LTL/SVA repeat ops.
+
+### Accomplishments
+
+1. **Unbounded nonconsecutive/goto repeats** - `ltl.non_consecutive_repeat` and `ltl.goto_repeat` now accept an omitted `more` bound, enabling `[=m:$]` and `[->m:$]` semantics.
+2. **Lowering support** - Updated NFA construction, BMC expansion, and Verilog export to handle unbounded nonconsecutive/goto repeats.
+3. **Regression coverage** - Added ImportVerilog, dialect, conversion, ExportVerilog, and VerifToSMT checks for `[=m:$]` and `[->m:$]`.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 387 - February 6, 2026
+
+### Summary
+
+Iteration 387: Added lit coverage for open-ended ranges in `eventually`/`always` (and their strong variants) to ensure unbounded delays and repeats lower without a length cap.
+
+### Accomplishments
+
+1. **Open-ended range coverage** - Added ImportVerilog checks for `s_eventually [min:$]`, `eventually [min:$]`, `s_always [min:$]`, and `always [min:$]`.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 386 - February 6, 2026
+
+### Summary
+
+Iteration 386: Made sampled value functions ($rose/$fell/$stable/$changed) honor default disable iff and explicit clocking inside assertions by lowering them through clocked history procedures.
+
+### Accomplishments
+
+1. **Reset-aware sampled functions** - Sampled value functions now respect default disable iff by freezing history and returning unknown while disabled.
+2. **Explicit clocking inside assertions** - `$rose/$fell/$stable/$changed` with explicit clocking arguments now lower using clocked history procedures, enabling multi-clock sampling.
+3. **Regression coverage** - Added parse-only tests covering default disable and explicit clocking inside assertions.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 385 - February 6, 2026
+
+### Summary
+
+Iteration 385: Made `$past` honor default `disable iff` by treating it as an implicit enable under the scope's clocking.
+
+### Accomplishments
+
+1. **Reset-aware $past** - `$past(expr, delay)` now uses the scope's default `disable iff` as an implicit enable when clocked, returning unknown and freezing history while disabled.
+2. **Regression coverage** - Added a parse-only test that checks `$past` under default clocking + default disable lowers via a clocked history procedure.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
+## Iteration 384 - February 6, 2026
+
+### Summary
+
+Iteration 384: Enabled `$past(..., enable)` to use default clocking events when no explicit clocking is provided, adding regression coverage.
+
+### Accomplishments
+
+1. **Default clocking for $past enable** - `$past(expr, delay, enable)` now falls back to the scope's default clocking block when no explicit clocking is supplied.
+2. **Regression coverage** - Added a parse-only test that exercises `$past` with enable under default clocking.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
 ## Iteration 383 - February 6, 2026
 
 ### Summary

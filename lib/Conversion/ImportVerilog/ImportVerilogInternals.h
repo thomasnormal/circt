@@ -110,6 +110,16 @@ struct HierPathInfo {
   const slang::ast::ValueSymbol *valueSym;
 };
 
+/// Hierarchical path information for interface instances.
+/// These paths thread a specific interface instance through module ports so
+/// hierarchical interface member references can be resolved.
+struct HierInterfacePathInfo {
+  mlir::StringAttr hierName;
+  std::optional<unsigned int> idx;
+  slang::ast::ArgumentDirection direction;
+  const slang::ast::InstanceSymbol *ifaceInst;
+};
+
 /// Information about interface ports needed from bind scopes.
 /// When a bound instance references an interface port from its bind scope,
 /// that interface needs to be threaded through the target module's ports.
@@ -511,6 +521,12 @@ struct Context {
   /// Collect all hierarchical names used for the per module/instance.
   DenseMap<const slang::ast::InstanceBodySymbol *, SmallVector<HierPathInfo>>
       hierPaths;
+
+  /// Collect hierarchical interface instances that need to be threaded through
+  /// module ports.
+  DenseMap<const slang::ast::InstanceBodySymbol *,
+           SmallVector<HierInterfacePathInfo>>
+      hierInterfacePaths;
 
   /// Interface ports from bind scopes that need to be threaded through
   /// target modules. Maps target module body to the interface ports needed.

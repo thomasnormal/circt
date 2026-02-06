@@ -158,7 +158,8 @@ struct NFABuilder {
     return repeat(anyFrag, 0, std::nullopt);
   }
 
-  Fragment gotoRepeat(Fragment input, uint64_t minCount, uint64_t maxCount) {
+  Fragment gotoRepeat(Fragment input, uint64_t minCount,
+                      std::optional<uint64_t> maxCount) {
     Fragment anyStar = makeAnyStar();
     Fragment result;
     bool initialized = false;
@@ -172,7 +173,21 @@ struct NFABuilder {
         result = concat(result, copy);
       }
     }
-    for (uint64_t i = minCount; i < maxCount; ++i) {
+    if (!maxCount.has_value()) {
+      if (!initialized) {
+        result = makeEmpty();
+        initialized = true;
+      }
+      Fragment copy = cloneFragment(input);
+      Fragment option = concat(anyStar, copy);
+      for (int accept : result.accepts)
+        addEpsilon(accept, option.start);
+      for (int accept : option.accepts)
+        addEpsilon(accept, option.start);
+      result.accepts.append(option.accepts.begin(), option.accepts.end());
+      return result;
+    }
+    for (uint64_t i = minCount; i < *maxCount; ++i) {
       Fragment copy = cloneFragment(input);
       Fragment option = concat(anyStar, copy);
       for (int accept : result.accepts)
@@ -183,7 +198,7 @@ struct NFABuilder {
   }
 
   Fragment nonConsecutiveRepeat(Fragment input, uint64_t minCount,
-                                uint64_t maxCount) {
+                                std::optional<uint64_t> maxCount) {
     Fragment result = gotoRepeat(input, minCount, maxCount);
     Fragment anyStar = makeAnyStar();
     return concat(result, anyStar);
@@ -310,13 +325,17 @@ struct NFABuilder {
     }
     if (auto gotoOp = dyn_cast<ltl::GoToRepeatOp>(defOp)) {
       auto input = build(gotoOp.getInput(), loc, builder);
-      return gotoRepeat(input, gotoOp.getBase(),
-                        gotoOp.getBase() + gotoOp.getMore());
+      std::optional<uint64_t> maxCount;
+      if (auto more = gotoOp.getMore())
+        maxCount = gotoOp.getBase() + *more;
+      return gotoRepeat(input, gotoOp.getBase(), maxCount);
     }
     if (auto nonconOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(defOp)) {
       auto input = build(nonconOp.getInput(), loc, builder);
-      return nonConsecutiveRepeat(input, nonconOp.getBase(),
-                                  nonconOp.getBase() + nonconOp.getMore());
+      std::optional<uint64_t> maxCount;
+      if (auto more = nonconOp.getMore())
+        maxCount = nonconOp.getBase() + *more;
+      return nonConsecutiveRepeat(input, nonconOp.getBase(), maxCount);
     }
     if (auto orOp = dyn_cast<ltl::OrOp>(defOp)) {
       auto inputs = orOp.getInputs();

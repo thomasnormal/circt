@@ -30,6 +30,8 @@ hw.module @test_sequence_ops(in %clk: i1, in %a: i1, in %b: i1, in %c: i1) {
 
   // CHECK: ltl.goto_repeat %a, 2, 4 : i1
   %seq_goto = sva.seq.goto_repeat %a, 2, 4 : i1
+  // CHECK: ltl.goto_repeat %a, 2 : i1
+  %seq_goto_unbounded = sva.seq.goto_repeat %a, 2 : i1
 
   //===--------------------------------------------------------------------===//
   // Non-Consecutive Repeat
@@ -37,6 +39,8 @@ hw.module @test_sequence_ops(in %clk: i1, in %a: i1, in %b: i1, in %c: i1) {
 
   // CHECK: ltl.non_consecutive_repeat %b, 1, 3 : i1
   %seq_noncon = sva.seq.non_consecutive_repeat %b, 1, 3 : i1
+  // CHECK: ltl.non_consecutive_repeat %b, 1 : i1
+  %seq_noncon_unbounded = sva.seq.non_consecutive_repeat %b, 1 : i1
 
   //===--------------------------------------------------------------------===//
   // Sequence First Match

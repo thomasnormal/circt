@@ -324,6 +324,20 @@ func.func @test_ltl_goto_repeat_one(%a: i1) {
   return
 }
 
+// CHECK-LABEL: func.func @test_ltl_goto_repeat_unbounded
+// CHECK:       smt.bv.constant
+// CHECK:       builtin.unrealized_conversion_cast
+// CHECK:       smt.eq
+// CHECK:       smt.not
+// CHECK:       smt.assert
+// CHECK:       return
+// goto_repeat(seq, N) is seq itself at a single step (unbounded)
+func.func @test_ltl_goto_repeat_unbounded(%a: i1) {
+  %seq = ltl.goto_repeat %a, 2 : i1
+  verif.assert %seq : !ltl.sequence
+  return
+}
+
 // CHECK-LABEL: func.func @test_ltl_non_consecutive_repeat_zero
 // CHECK:       smt.constant true
 // CHECK:       smt.not
@@ -346,6 +360,20 @@ func.func @test_ltl_non_consecutive_repeat_zero(%a: i1) {
 // non_consecutive_repeat(seq, 1, N) is seq itself at a single step
 func.func @test_ltl_non_consecutive_repeat_one(%a: i1) {
   %seq = ltl.non_consecutive_repeat %a, 1, 2 : i1
+  verif.assert %seq : !ltl.sequence
+  return
+}
+
+// CHECK-LABEL: func.func @test_ltl_non_consecutive_repeat_unbounded
+// CHECK:       smt.bv.constant
+// CHECK:       builtin.unrealized_conversion_cast
+// CHECK:       smt.eq
+// CHECK:       smt.not
+// CHECK:       smt.assert
+// CHECK:       return
+// non_consecutive_repeat(seq, N) is seq itself at a single step (unbounded)
+func.func @test_ltl_non_consecutive_repeat_unbounded(%a: i1) {
+  %seq = ltl.non_consecutive_repeat %a, 2 : i1
   verif.assert %seq : !ltl.sequence
   return
 }

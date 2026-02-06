@@ -47,12 +47,17 @@ static Value createUnknownOrZeroConstant(Context &context, Location loc,
       FVInt(APInt(width, 0), APInt::getAllOnes(width)));
 }
 
-static std::optional<std::pair<uint64_t, uint64_t>>
+struct SequenceLengthBounds {
+  uint64_t min = 0;
+  std::optional<uint64_t> max;
+};
+
+static std::optional<SequenceLengthBounds>
 getSequenceLengthBounds(Value seq) {
   if (!seq)
     return std::nullopt;
   if (!isa<ltl::SequenceType>(seq.getType()))
-    return std::make_pair<uint64_t, uint64_t>(1, 1);
+    return SequenceLengthBounds{1, 1};
 
   if (auto delayOp = seq.getDefiningOp<ltl::DelayOp>()) {
     auto inputBounds = getSequenceLengthBounds(delayOp.getInput());
@@ -62,33 +67,38 @@ getSequenceLengthBounds(Value seq) {
     std::optional<uint64_t> maxDelay;
     if (auto length = delayOp.getLength())
       maxDelay = minDelay + *length;
-    if (!maxDelay)
-      return std::nullopt;
-    return std::make_pair(inputBounds->first + minDelay,
-                          inputBounds->second + *maxDelay);
+    SequenceLengthBounds result;
+    result.min = inputBounds->min + minDelay;
+    if (inputBounds->max && maxDelay)
+      result.max = *inputBounds->max + *maxDelay;
+    return result;
   }
   if (auto concatOp = seq.getDefiningOp<ltl::ConcatOp>()) {
-    uint64_t minLen = 0;
-    uint64_t maxLen = 0;
+    SequenceLengthBounds result;
+    result.min = 0;
+    result.max = 0;
     for (auto input : concatOp.getInputs()) {
       auto bounds = getSequenceLengthBounds(input);
       if (!bounds)
         return std::nullopt;
-      minLen += bounds->first;
-      maxLen += bounds->second;
+      result.min += bounds->min;
+      if (result.max && bounds->max)
+        *result.max += *bounds->max;
+      else
+        result.max.reset();
     }
-    return std::make_pair(minLen, maxLen);
+    return result;
   }
   if (auto repeatOp = seq.getDefiningOp<ltl::RepeatOp>()) {
     auto more = repeatOp.getMore();
-    if (!more)
-      return std::nullopt;
     auto bounds = getSequenceLengthBounds(repeatOp.getInput());
     if (!bounds)
       return std::nullopt;
-    uint64_t minLen = bounds->first * repeatOp.getBase();
-    uint64_t maxLen = bounds->second * (repeatOp.getBase() + *more);
-    return std::make_pair(minLen, maxLen);
+    SequenceLengthBounds result;
+    result.min = bounds->min * repeatOp.getBase();
+    if (bounds->max && more)
+      result.max = *bounds->max * (repeatOp.getBase() + *more);
+    return result;
   }
   if (auto firstMatch = seq.getDefiningOp<ltl::FirstMatchOp>())
     return getSequenceLengthBounds(firstMatch.getInput());
@@ -99,7 +109,7 @@ getSequenceLengthBounds(Value seq) {
 static Value lowerSampledValueFunctionWithClocking(
     Context &context, const slang::ast::Expression &valueExpr,
     const slang::ast::TimingControl &timingCtrl, StringRef funcName,
-    Location loc) {
+    const slang::ast::Expression *enableExpr, bool invertEnable, Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
   if (!insertionBlock)
@@ -186,6 +196,36 @@ static Value lowerSampledValueFunctionWithClocking(
       current = context.materializeConversion(sampleType, current,
                                               /*isSigned=*/false, loc);
 
+    Value enable;
+    bool hasEnable = false;
+    if (enableExpr) {
+      enable = context.convertRvalueExpression(*enableExpr);
+      if (!enable)
+        return {};
+      enable = context.convertToBool(enable);
+      if (!enable)
+        return {};
+      if (invertEnable)
+        enable = moore::NotOp::create(builder, loc, enable).getResult();
+      hasEnable = true;
+    }
+    auto selectWithEnable = [&](Value onTrue, Value onFalse) -> Value {
+      if (!hasEnable)
+        return onTrue;
+      auto conditional =
+          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
+      auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+      auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+      {
+        OpBuilder::InsertionGuard g(builder);
+        builder.setInsertionPointToStart(&trueBlock);
+        moore::YieldOp::create(builder, loc, onTrue);
+        builder.setInsertionPointToStart(&falseBlock);
+        moore::YieldOp::create(builder, loc, onFalse);
+      }
+      return conditional.getResult();
+    };
+
     Value prev = moore::ReadOp::create(builder, loc, prevVar);
     Value result;
     if (isStable || isChanged) {
@@ -207,8 +247,13 @@ static Value lowerSampledValueFunctionWithClocking(
       }
     }
 
-    moore::BlockingAssignOp::create(builder, loc, resultVar, result);
-    moore::BlockingAssignOp::create(builder, loc, prevVar, current);
+    Value disabledValue = createUnknownOrZeroConstant(context, loc, resultType);
+    if (!disabledValue)
+      return {};
+    Value resultValue = selectWithEnable(result, disabledValue);
+    moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
+    Value nextPrev = selectWithEnable(current, prev);
+    moore::BlockingAssignOp::create(builder, loc, prevVar, nextPrev);
     moore::ReturnOp::create(builder, loc);
   }
 
@@ -220,6 +265,7 @@ static Value lowerPastWithClocking(Context &context,
                                    const slang::ast::TimingControl &timingCtrl,
                                    int64_t delay,
                                    const slang::ast::Expression *enableExpr,
+                                   bool invertEnable,
                                    Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
@@ -309,6 +355,8 @@ static Value lowerPastWithClocking(Context &context,
       enable = context.convertToBool(enable);
       if (!enable)
         return {};
+      if (invertEnable)
+        enable = moore::NotOp::create(builder, loc, enable).getResult();
       hasEnable = true;
     }
 
@@ -482,17 +530,6 @@ struct AssertionExprVisitor {
 
     using slang::ast::SequenceRepetition;
 
-    // Check if repetition range is required
-    if ((repetition.kind == SequenceRepetition::Nonconsecutive ||
-         repetition.kind == SequenceRepetition::GoTo) &&
-        !repetitionRange) {
-      mlir::emitError(loc,
-                      repetition.kind == SequenceRepetition::Nonconsecutive
-                          ? "Nonconsecutive repetition requires a maximum value"
-                          : "GoTo repetition requires a maximum value");
-      return {};
-    }
-
     switch (repetition.kind) {
     case SequenceRepetition::Consecutive:
       return ltl::RepeatOp::create(builder, loc, inputSequence, minRepetitions,
@@ -614,6 +651,12 @@ struct AssertionExprVisitor {
         context.convertAssertionExpression(expr.seq, loc, /*applyDefaults=*/false);
     if (!sequenceValue)
       return {};
+    if (auto bounds = getSequenceLengthBounds(sequenceValue)) {
+      if (!bounds->max) {
+        mlir::emitError(loc) << "first_match requires a bounded sequence";
+        return {};
+      }
+    }
     if (failed(handleMatchItems(expr.matchItems)))
       return {};
     return ltl::FirstMatchOp::create(builder, loc, sequenceValue);
@@ -667,9 +710,10 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::NextTime: {
       auto minRepetitions = builder.getI64IntegerAttr(1);
-      auto lengthAttr = builder.getI64IntegerAttr(0);
+      mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);
       if (expr.range.has_value()) {
         minRepetitions = builder.getI64IntegerAttr(expr.range.value().min);
+        lengthAttr = mlir::IntegerAttr{};
         if (expr.range.value().max.has_value()) {
           lengthAttr = builder.getI64IntegerAttr(expr.range.value().max.value() -
                                                  expr.range.value().min);
@@ -680,9 +724,10 @@ struct AssertionExprVisitor {
     }
     case UnaryAssertionOperator::SNextTime: {
       auto minRepetitions = builder.getI64IntegerAttr(1);
-      auto lengthAttr = builder.getI64IntegerAttr(0);
+      mlir::IntegerAttr lengthAttr = builder.getI64IntegerAttr(0);
       if (expr.range.has_value()) {
         minRepetitions = builder.getI64IntegerAttr(expr.range.value().min);
+        lengthAttr = mlir::IntegerAttr{};
         if (expr.range.value().max.has_value()) {
           lengthAttr = builder.getI64IntegerAttr(expr.range.value().max.value() -
                                                  expr.range.value().min);
@@ -725,10 +770,9 @@ struct AssertionExprVisitor {
       auto minAttr = builder.getI64IntegerAttr(0);
       mlir::IntegerAttr moreAttr;
       if (auto bounds = getSequenceLengthBounds(rhs)) {
-        minAttr = builder.getI64IntegerAttr(bounds->first);
-        if (bounds->second >= bounds->first)
-          moreAttr =
-              builder.getI64IntegerAttr(bounds->second - bounds->first);
+        minAttr = builder.getI64IntegerAttr(bounds->min);
+        if (bounds->max && *bounds->max >= bounds->min)
+          moreAttr = builder.getI64IntegerAttr(*bounds->max - bounds->min);
       }
       auto lhsRepeat =
           ltl::RepeatOp::create(builder, loc, lhs, minAttr, moreAttr);
@@ -1015,14 +1059,57 @@ Value Context::convertAssertionCallExpression(
                            << subroutine.name;
       return {};
     }
+    const slang::ast::TimingControl *clockingCtrl = nullptr;
     bool hasClockingArg =
         args.size() > 1 &&
         args[1]->kind == slang::ast::ExpressionKind::ClockingEvent;
-    if (hasClockingArg && !inAssertionExpr) {
+    if (hasClockingArg) {
       if (auto *clockExpr =
               args[1]->as_if<slang::ast::ClockingEventExpression>()) {
+        clockingCtrl = &clockExpr->timingControl;
+      } else if (!inAssertionExpr) {
+        auto resultType = moore::IntType::getInt(builder.getContext(), 1);
+        mlir::emitWarning(loc)
+            << subroutine.name
+            << " with explicit clocking is not yet lowered outside assertions; "
+               "returning 0 as a placeholder";
+        return moore::ConstantOp::create(builder, loc, resultType, 0);
+      }
+    }
+
+    const slang::ast::Expression *enableExpr = nullptr;
+    bool invertEnable = false;
+    if (inAssertionExpr && currentScope) {
+      if (auto *defaultDisable = compilation.getDefaultDisable(*currentScope)) {
+        enableExpr = defaultDisable;
+        invertEnable = true;
+      }
+    }
+
+    if (inAssertionExpr && !clockingCtrl && (hasClockingArg || enableExpr)) {
+      if (currentAssertionClock)
+        clockingCtrl = currentAssertionClock;
+      if (!clockingCtrl && currentAssertionTimingControl)
+        clockingCtrl = currentAssertionTimingControl;
+      if (!clockingCtrl && currentScope) {
+        if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockingCtrl = &clockBlock->getEvent();
+        }
+      }
+    }
+
+    if (clockingCtrl && inAssertionExpr && (hasClockingArg || enableExpr)) {
+      return lowerSampledValueFunctionWithClocking(
+          *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
+          invertEnable, loc);
+    }
+
+    if (hasClockingArg && !inAssertionExpr) {
+      if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
-            *this, *args[0], clockExpr->timingControl, subroutine.name, loc);
+            *this, *args[0], *clockingCtrl, subroutine.name, nullptr, false, loc);
       }
       auto resultType = moore::IntType::getInt(builder.getContext(), 1);
       mlir::emitWarning(loc)
@@ -1088,6 +1175,8 @@ Value Context::convertAssertionCallExpression(
     int64_t delay = 1;
     const slang::ast::TimingControl *clockingCtrl = nullptr;
     const slang::ast::Expression *enableExpr = nullptr;
+    const slang::ast::Expression *defaultDisableExpr = nullptr;
+    bool invertEnable = false;
     if (args.size() > 1 &&
         args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
       if (args[1]->kind == slang::ast::ExpressionKind::ClockingEvent) {
@@ -1130,13 +1219,34 @@ Value Context::convertAssertionCallExpression(
         return {};
       }
     }
-    if (!clockingCtrl && enableExpr && currentAssertionClock)
-      clockingCtrl = currentAssertionClock;
-    if (!clockingCtrl && enableExpr && currentAssertionTimingControl)
-      clockingCtrl = currentAssertionTimingControl;
+    auto maybeSetImplicitClocking = [&]() {
+      if (!clockingCtrl && currentAssertionClock)
+        clockingCtrl = currentAssertionClock;
+      if (!clockingCtrl && currentAssertionTimingControl)
+        clockingCtrl = currentAssertionTimingControl;
+      if (!clockingCtrl && currentScope) {
+        if (auto *clocking = compilation.getDefaultClocking(*currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockingCtrl = &clockBlock->getEvent();
+        }
+      }
+    };
+    if (!enableExpr && currentScope)
+      defaultDisableExpr = compilation.getDefaultDisable(*currentScope);
+
+    if (enableExpr)
+      maybeSetImplicitClocking();
+    else if (defaultDisableExpr) {
+      maybeSetImplicitClocking();
+      if (clockingCtrl) {
+        enableExpr = defaultDisableExpr;
+        invertEnable = true;
+      }
+    }
     if (clockingCtrl)
       return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
-                                   enableExpr, loc);
+                                   enableExpr, invertEnable, loc);
     if (enableExpr) {
       mlir::emitError(loc)
           << "unsupported $past enable expression without explicit clocking";

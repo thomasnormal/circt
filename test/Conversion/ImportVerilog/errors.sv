@@ -39,6 +39,13 @@ endmodule
 
 // -----
 module Foo;
+  logic a, b;
+  // expected-error @below {{first_match requires a bounded sequence}}
+  assert property (first_match(a ##[1:$] b));
+endmodule
+
+// -----
+module Foo;
   int x;
   bit y;
   // expected-error @below {{unsupported non-blocking assignment timing control: SignalEvent}}

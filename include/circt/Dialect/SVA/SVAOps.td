@@ -141,7 +141,7 @@ def SequenceGotoRepeatOp : SVAOp<"seq.goto_repeat", [Pure]> {
     match the specified number of times, but not necessarily in consecutive
     cycles. The match ends when the final repetition completes.
 
-    This corresponds to the SVA `[->n]` and `[->m:n]` operators.
+    This corresponds to the SVA `[->n]`, `[->m:n]`, and `[->m:$]` operators.
 
     Example:
     ```mlir
@@ -153,13 +153,13 @@ def SequenceGotoRepeatOp : SVAOp<"seq.goto_repeat", [Pure]> {
   let arguments = (ins
     SVAAnySequenceType:$input,
     I64Attr:$base,
-    I64Attr:$more
+    OptionalAttr<I64Attr>:$more
   );
 
   let results = (outs SVASequenceType:$result);
 
   let assemblyFormat = [{
-    $input `,` $base `,` $more attr-dict `:` type($input)
+    $input `,` $base (`,` $more^)? attr-dict `:` type($input)
   }];
 }
 
@@ -170,7 +170,7 @@ def SequenceNonConsecutiveRepeatOp : SVAOp<"seq.non_consecutive_repeat", [Pure]>
     the specified number of times, but not necessarily in consecutive cycles.
     Unlike goto repetition, the match can continue after the final repetition.
 
-    This corresponds to the SVA `[=n]` and `[=m:n]` operators.
+    This corresponds to the SVA `[=n]`, `[=m:n]`, and `[=m:$]` operators.
 
     Example:
     ```mlir
@@ -182,13 +182,13 @@ def SequenceNonConsecutiveRepeatOp : SVAOp<"seq.non_consecutive_repeat", [Pure]>
   let arguments = (ins
     SVAAnySequenceType:$input,
     I64Attr:$base,
-    I64Attr:$more
+    OptionalAttr<I64Attr>:$more
   );
 
   let results = (outs SVASequenceType:$result);
 
   let assemblyFormat = [{
-    $input `,` $base `,` $more attr-dict `:` type($input)
+    $input `,` $base (`,` $more^)? attr-dict `:` type($input)
   }];
 }
 

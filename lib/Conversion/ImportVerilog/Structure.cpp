@@ -1086,6 +1086,40 @@ struct ModuleVisitor : public BaseVisitor {
       inputValues.push_back(hierValue);
     }
 
+    for (const auto &hierIface : context.hierInterfacePaths[&instNode.body]) {
+      if (!hierIface.hierName ||
+          hierIface.direction != ArgumentDirection::In)
+        continue;
+      auto value = context.resolveInterfaceInstance(hierIface.ifaceInst, loc);
+      if (!value && hierIface.hierName) {
+        auto hierName = hierIface.hierName.getValue();
+        auto baseName = hierName;
+        if (auto dot = baseName.rfind('.'); dot != StringRef::npos)
+          baseName = baseName.substr(dot + 1);
+
+        Value candidate;
+        bool ambiguous = false;
+        for (const auto &entry : context.interfacePortValues) {
+          if (llvm::StringRef(entry.first->name) != baseName)
+            continue;
+          if (candidate) {
+            ambiguous = true;
+            break;
+          }
+          candidate = entry.second;
+        }
+        if (!ambiguous)
+          value = candidate;
+      }
+      if (!value) {
+        mlir::emitError(loc)
+            << "missing hierarchical interface value for `"
+            << hierIface.hierName.getValue() << "`";
+        return failure();
+      }
+      inputValues.push_back(value);
+    }
+
     // Pass bind scope interface port values to the target module.
     // These are interface ports from the current (instantiating) scope that
     // bound instances inside the target module need.
@@ -2359,6 +2393,27 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
     }
   }
 
+  // Add hierarchical interface instance ports.
+  for (auto &hierIface : hierInterfacePaths[module]) {
+    auto *ifaceInst = hierIface.ifaceInst;
+    if (!ifaceInst)
+      continue;
+    auto *ifaceLowering = convertInterfaceHeader(&ifaceInst->body);
+    if (!ifaceLowering)
+      return {};
+
+    auto ifaceName = ifaceLowering->op.getSymName();
+    auto ifaceRef = mlir::FlatSymbolRefAttr::get(getContext(), ifaceName);
+    auto vifType = moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+    auto portType = moore::RefType::get(vifType);
+
+    auto portName = hierIface.hierName;
+    hierIface.idx = inputIdx++;
+    modulePorts.push_back({portName, portType, hw::ModulePort::Input});
+    auto portLoc = convertLocation(ifaceInst->location);
+    block->addArgument(portType, portLoc);
+  }
+
   // Add interface ports needed from bind scopes. When a bound instance
   // references an interface port from its bind scope, that interface needs
   // to be threaded through the target module's ports.
@@ -2473,6 +2528,15 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     auto arg = lowering.op.getBody()->getArgument(*bindIfacePort.idx);
     interfacePortValues[ifacePort] = arg;
     ifacePortSymbols.push_back(ifacePort);
+  }
+
+  // Register hierarchical interface instance ports so interface member
+  // references can resolve via resolveInterfaceInstance.
+  for (const auto &hierIface : hierInterfacePaths[module]) {
+    if (!hierIface.idx || !hierIface.ifaceInst)
+      continue;
+    auto arg = lowering.op.getBody()->getArgument(*hierIface.idx);
+    interfaceInstances[hierIface.ifaceInst] = arg;
   }
 
   // Keep track of the current scope for %m format specifier.
@@ -3072,12 +3136,32 @@ Value Context::resolveInterfaceInstance(
         (void)modport;
         if (ifaceConn == target)
           return entry.second;
-        continue;
+        if (ifaceConn) {
+          if (auto *ifaceInst =
+                  ifaceConn->as_if<slang::ast::InstanceSymbol>()) {
+            if (&ifaceInst->getDefinition() == &targetDef &&
+                ifaceInst->name == target->name &&
+                matchInterfaceArrayIndices(*ifaceInst, *target))
+              return entry.second;
+          }
+        }
       }
       if (!ifacePort->isGeneric && ifacePort->interfaceDef == &targetDef) {
         if (candidate) {
           ambiguous = true;
           continue;
+        }
+        candidate = entry.second;
+      }
+    }
+    if (!candidate && !ambiguous) {
+      for (const auto &entry : interfacePortValues) {
+        auto *ifacePort = entry.first;
+        if (ifacePort->name != target->name)
+          continue;
+        if (candidate) {
+          ambiguous = true;
+          break;
         }
         candidate = entry.second;
       }

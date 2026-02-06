@@ -33,6 +33,7 @@ and 1 preprocessor macro concatenation edge case.
 | **B: AVIP Sim** | UVM testbench simulation | APB/AHB/UART run | Push SPI/AXI4 AVIP, improve performance |
 | **C: External Tests** | yosys/verilator/opentitan | Not started | Run yosys sim tests, verilator UVM cookbook |
 | **D: Missing Features** | Interface ports, coverage, etc | Planning | Interface ports (unblocks AXI-VIP) |
+| **E: Bind + Hierarchy** | OpenTitan formal readiness | Planning | Support hierarchical interface instance references in bind port connections (sibling/LCA threading) |
 
 ### Remaining Feature Gaps for Xcelium Parity
 
@@ -457,6 +458,20 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 2. **coverpoint `iff` lowering** - IR capture done, runtime sampling stubbed. Priority: MEDIUM.
 3. **Simulation performance** - AVIP sims slow. Priority: MEDIUM (after correctness).
 4. **`dist` constraint `$` upper bounds** - Slang limitation, workaround in runner. Priority: LOW.
+
+**Track E - SVA Semantics & Bind/Hierarchy (sv-tests 100% + OpenTitan formal)**:
+1. **Sequence operator completeness** - `throughout/within/intersect/first_match`, open-ended ranges, and repetition operators (`[->]`, `[=]`) as first-class IR.
+2. **Default clocking / disable semantics** - Ensure sampled value functions and `$past` honor default clocking and default disable iff.
+3. **Bind + hierarchy** - Thread hierarchical interface instance references in bind port connections (OpenTitan blocker).
+4. **Liveness / k-induction** - Add liveness encoding and k-induction modes for unbounded properties in circt-bmc.
+5. **Trace UX** - Hierarchical mapping + clock-domain annotations for counterexamples.
+
+**Track E Plan (2026-02-06)**:
+- **Phase 1 (SVA sequences)**: Finish open-ended ranges for all repetition operators + `within/throughout/intersect/first_match` edge cases (boundedness checks), and add sequence/property argument support. Add targeted ImportVerilog + SVAToLTL tests.
+- **Phase 2 (Clocking/disable)**: Extend default clocking/disable to multi-clock sampling, `disable iff` in nested scopes, and reset-aware `$past` behavior across property instances.
+- **Phase 3 (Bind/hierarchy)**: Complete interface path threading across bind scopes (including LCA/sibling references in generated hierarchies) with regression tests covering param/genvar-heavy designs.
+- **Phase 4 (Liveness/k-induction)**: Add CLI modes for k-induction and liveness, encode fairness and loop constraints in BMC/SMT, and add MLIR+SV end-to-end proof/CE tests.
+- **Phase 5 (Trace UX)**: Emit hierarchical signal maps + per-clock sampling annotations; add a small trace post-processor to recover wave-friendly names for counterexamples.
 
 ### Previous Blocker: UVM Factory Registration (typedef specialization) - ✅ FIXED
 
