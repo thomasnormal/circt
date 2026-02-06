@@ -13,6 +13,7 @@
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/LiteralExpressions.h"
 #include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -1388,6 +1389,25 @@ struct RvalueExprVisitor : public ExprVisitor {
       : ExprVisitor(context, loc, /*isLvalue=*/false) {}
   using ExprVisitor::visit;
 
+  Value convertAssertionPortBinding(const AssertionPortBinding &binding) {
+    switch (binding.kind) {
+    case AssertionPortBinding::Kind::Expr:
+      if (!binding.expr)
+        return {};
+      return context.convertRvalueExpression(*binding.expr);
+    case AssertionPortBinding::Kind::AssertionExpr:
+      if (!binding.assertionExpr)
+        return {};
+      return context.convertAssertionExpression(*binding.assertionExpr, loc,
+                                                /*applyDefaults=*/false);
+    case AssertionPortBinding::Kind::TimingControl:
+      mlir::emitError(loc)
+          << "assertion timing control arguments are not yet supported";
+      return {};
+    }
+    llvm_unreachable("unknown assertion port binding kind");
+  }
+
   // Handle references to the left-hand side of a parent assignment.
   Value visit(const slang::ast::LValueReferenceExpression &expr) {
     assert(!context.lvalueStack.empty() && "parent assignments push lvalue");
@@ -1398,6 +1418,11 @@ struct RvalueExprVisitor : public ExprVisitor {
   // Handle named values, such as references to declared variables.
   Value visit(const slang::ast::NamedValueExpression &expr) {
     if (context.inAssertionExpr) {
+      if (auto *port =
+              expr.symbol.as_if<slang::ast::AssertionPortSymbol>()) {
+        if (auto *binding = context.lookupAssertionPortBinding(port))
+          return convertAssertionPortBinding(*binding);
+      }
       if (auto *local =
               expr.symbol.as_if<slang::ast::LocalAssertionVarSymbol>()) {
         auto *binding = context.lookupAssertionLocalVarBinding(local);
@@ -6555,6 +6580,77 @@ struct RvalueExprVisitor : public ExprVisitor {
   }
 
   Value visit(const slang::ast::AssertionInstanceExpression &expr) {
+    context.pushAssertionPortScope();
+    context.pushAssertionLocalVarScope();
+    auto scopeGuard = llvm::make_scope_exit([&] {
+      context.popAssertionLocalVarScope();
+      context.popAssertionPortScope();
+    });
+
+    DenseMap<const slang::ast::AssertionPortSymbol *,
+             const slang::ast::AssertionInstanceExpression::ActualArg *>
+        actualArgs;
+    for (const auto &arg : expr.arguments) {
+      auto *formal = std::get<0>(arg);
+      if (!formal)
+        continue;
+      actualArgs[formal] = &std::get<1>(arg);
+      AssertionPortBinding binding;
+      if (auto *exprArg = std::get_if<const slang::ast::Expression *>(
+              &std::get<1>(arg))) {
+        binding.kind = AssertionPortBinding::Kind::Expr;
+        binding.expr = *exprArg;
+      } else if (auto *assertArg =
+                     std::get_if<const slang::ast::AssertionExpr *>(
+                         &std::get<1>(arg))) {
+        binding.kind = AssertionPortBinding::Kind::AssertionExpr;
+        binding.assertionExpr = *assertArg;
+      } else if (auto *timingArg =
+                     std::get_if<const slang::ast::TimingControl *>(
+                         &std::get<1>(arg))) {
+        binding.kind = AssertionPortBinding::Kind::TimingControl;
+        binding.timingControl = *timingArg;
+      }
+      context.setAssertionPortBinding(formal, binding);
+    }
+
+    auto convertActualArg =
+        [&](const slang::ast::AssertionInstanceExpression::ActualArg &actual)
+        -> Value {
+      if (auto *exprArg =
+              std::get_if<const slang::ast::Expression *>(&actual)) {
+        if (!*exprArg)
+          return {};
+        return context.convertRvalueExpression(**exprArg);
+      }
+      if (auto *assertArg =
+              std::get_if<const slang::ast::AssertionExpr *>(&actual)) {
+        if (!*assertArg)
+          return {};
+        return context.convertAssertionExpression(**assertArg, loc,
+                                                  /*applyDefaults=*/false);
+      }
+      if (std::get_if<const slang::ast::TimingControl *>(&actual)) {
+        mlir::emitError(loc)
+            << "assertion timing control arguments are not yet supported";
+        return {};
+      }
+      return {};
+    };
+
+    for (auto *local : expr.localVars) {
+      if (!local || !local->formalPort)
+        continue;
+      auto it = actualArgs.find(local->formalPort);
+      if (it == actualArgs.end())
+        continue;
+      Value bound = convertActualArg(*it->second);
+      if (!bound)
+        return {};
+      context.setAssertionLocalVarBinding(
+          local, bound, context.getAssertionSequenceOffset());
+    }
+
     // Defaults apply at the outer assertion; avoid double-applying default
     // clocking/disable when instantiating a named property.
     auto *parentScope = expr.symbol.getParentScope();

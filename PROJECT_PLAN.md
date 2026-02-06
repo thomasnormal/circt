@@ -270,6 +270,10 @@ and 1 preprocessor macro concatenation edge case.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 402 - SVA Assertion Arguments)
+- **Assertion argument binding**: sequence/property formal arguments now bind to actuals when referenced inside assertion expressions (supports sequence/property-typed ports).
+- **Regression coverage**: added `test/Conversion/ImportVerilog/sva-assertion-args.sv` to exercise sequence + property arguments.
+
 ### New Findings (2026-02-06, Iteration 373 - Function Pointer Args & Native Pointer Guards)
 - **findMemoryBlock SSA identity gap FIXED** (commit `fac3c529e`): `findMemoryBlock(ptr)` looks up memory blocks by SSA Value identity. When a pointer is passed through a function argument, the argument `%p` is a different SSA Value from the caller's alloca result `%ptr`. Fix: detect `BlockArgument` in entry blocks and do address-based fallback via `findMemoryBlockByAddress`. New test: `func-ptr-arg-memory.mlir`.
 - **Native pointer guard** (commit `2eb2762e0`): The interpreter assigns synthetic addresses via `globalNextAddress` (low range). Native heap pointers are at high addresses (>= 0x10000000000). Runtime functions like `__moore_stream_concat_strings` must NOT receive synthetic addresses. Added guard `dp >= 0x10000000000ULL` before calling native stream/pack/queue functions.
