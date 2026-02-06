@@ -15633,24 +15633,30 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                           << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
-              // Read last element from data array
-              void *realDataPtr = reinterpret_cast<void *>(dataPtr);
-              void *lastElem = static_cast<char *>(realDataPtr) +
-                               (queueLen - 1) * elemSize;
+              // Look up queue data via interpreter memory model
+              uint64_t dataOffset = 0;
+              auto *dataBlock =
+                  findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+              if (dataBlock && dataBlock->initialized) {
+                // Read last element from data array
+                size_t lastElemOff =
+                    dataOffset + (queueLen - 1) * elemSize;
 
-              // Write to result_ptr in interpreter memory
-              uint64_t resultOffset = 0;
-              auto *resultBlock = findMemoryBlockByAddress(
-                  resultAddr, procId, &resultOffset);
-              if (resultBlock) {
-                size_t avail =
-                    resultBlock->data.size() - resultOffset;
-                size_t copySize =
-                    std::min<size_t>(elemSize, avail);
-                std::memcpy(
-                    resultBlock->data.data() + resultOffset,
-                    lastElem, copySize);
-                resultBlock->initialized = true;
+                // Write to result_ptr in interpreter memory
+                uint64_t resultOffset = 0;
+                auto *resultBlock = findMemoryBlockByAddress(
+                    resultAddr, procId, &resultOffset);
+                if (resultBlock &&
+                    lastElemOff + elemSize <= dataBlock->data.size()) {
+                  size_t avail =
+                      resultBlock->data.size() - resultOffset;
+                  size_t copySize =
+                      std::min<size_t>(elemSize, avail);
+                  std::memcpy(
+                      resultBlock->data.data() + resultOffset,
+                      dataBlock->data.data() + lastElemOff, copySize);
+                  resultBlock->initialized = true;
+                }
               }
 
               // Decrement length
@@ -15697,29 +15703,38 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                           << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
-              void *realDataPtr = reinterpret_cast<void *>(dataPtr);
+              // Look up queue data via interpreter memory model
+              uint64_t dataOffset = 0;
+              auto *dataBlock =
+                  findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+              if (dataBlock && dataBlock->initialized) {
+                // Write first element to result_ptr
+                uint64_t resultOffset = 0;
+                auto *resultBlock = findMemoryBlockByAddress(
+                    resultAddr, procId, &resultOffset);
+                if (resultBlock &&
+                    dataOffset + elemSize <= dataBlock->data.size()) {
+                  size_t avail =
+                      resultBlock->data.size() - resultOffset;
+                  size_t copySize =
+                      std::min<size_t>(elemSize, avail);
+                  std::memcpy(
+                      resultBlock->data.data() + resultOffset,
+                      dataBlock->data.data() + dataOffset, copySize);
+                  resultBlock->initialized = true;
+                }
 
-              // Write first element to result_ptr
-              uint64_t resultOffset = 0;
-              auto *resultBlock = findMemoryBlockByAddress(
-                  resultAddr, procId, &resultOffset);
-              if (resultBlock) {
-                size_t avail =
-                    resultBlock->data.size() - resultOffset;
-                size_t copySize =
-                    std::min<size_t>(elemSize, avail);
-                std::memcpy(
-                    resultBlock->data.data() + resultOffset,
-                    realDataPtr, copySize);
-                resultBlock->initialized = true;
-              }
-
-              // Shift remaining elements
-              if (queueLen > 1) {
-                std::memmove(realDataPtr,
-                             static_cast<char *>(realDataPtr) +
-                                 elemSize,
-                             (queueLen - 1) * elemSize);
+                // Shift remaining elements within the data block
+                if (queueLen > 1) {
+                  size_t moveSize = (queueLen - 1) * elemSize;
+                  if (dataOffset + elemSize + moveSize <=
+                      dataBlock->data.size()) {
+                    std::memmove(
+                        dataBlock->data.data() + dataOffset,
+                        dataBlock->data.data() + dataOffset + elemSize,
+                        moveSize);
+                  }
+                }
               }
 
               // Decrement length
