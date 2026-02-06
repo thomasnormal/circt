@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 424 - February 6, 2026
+
+### Summary
+
+Iteration 424: Propagated `disable iff` conditions into sampled value lowering
+for $past and sampled functions, with regression coverage.
+
+### Accomplishments
+
+1. **Disable iff propagation** - Nested `disable iff` conditions are now
+   threaded into sampled value lowering so `$past` history resets when disable
+   holds (in addition to default disable).
+2. **Regression coverage** - Added `sva-past-disable-iff.sv` to validate
+   `$past` under explicit `disable iff` emits reset gating.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
 ## Iteration 423 - February 6, 2026
 
 ### Summary

@@ -315,6 +315,18 @@ struct Context {
       return;
     assertionSequenceOffsetStack.back() = offset;
   }
+  void pushAssertionDisableExpr(const slang::ast::Expression *expr) {
+    if (expr)
+      assertionDisableExprStack.push_back(expr);
+  }
+  void popAssertionDisableExpr() {
+    if (!assertionDisableExprStack.empty())
+      assertionDisableExprStack.pop_back();
+  }
+  std::span<const slang::ast::Expression *const>
+  getAssertionDisableExprs() const {
+    return assertionDisableExprStack;
+  }
 
   // Traverse the whole AST to collect hierarchical names.
   LogicalResult
@@ -543,6 +555,7 @@ struct Context {
               2>
       assertionPortScopes;
   SmallVector<uint64_t, 4> assertionSequenceOffsetStack;
+  SmallVector<const slang::ast::Expression *, 2> assertionDisableExprStack;
   /// A list of global variables that still need their initializers to be
   /// converted.
   SmallVector<const slang::ast::ValueSymbol *> globalVariableWorklist;
