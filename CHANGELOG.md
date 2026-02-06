@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 408 - February 6, 2026
+
+### Summary
+
+Iteration 408: Added bind coverage for parameterized generate hierarchies with
+interface port references to ensure bind + hierarchy stays robust.
+
+### Accomplishments
+
+1. **Bind regression coverage** - Added `bind-interface-param-generate.sv` to
+   validate instance-specific binds across parameterized generate blocks with
+   interface port references in the bind scope.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-param-generate.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-param-generate.sv`
+
 ## Iteration 407 - February 6, 2026
 
 ### Summary
