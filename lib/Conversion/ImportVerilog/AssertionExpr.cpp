@@ -208,7 +208,7 @@ static Value lowerSampledValueFunctionWithClocking(
     Context &context, const slang::ast::Expression &valueExpr,
     const slang::ast::TimingControl &timingCtrl, StringRef funcName,
     const slang::ast::Expression *enableExpr,
-    const slang::ast::Expression *disableExpr, Location loc) {
+    std::span<const slang::ast::Expression *const> disableExprs, Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
   if (!insertionBlock)
@@ -308,14 +308,21 @@ static Value lowerSampledValueFunctionWithClocking(
     }
     Value disable;
     bool hasDisable = false;
-    if (disableExpr) {
-      disable = context.convertRvalueExpression(*disableExpr);
-      if (!disable)
+    for (auto *disableExpr : disableExprs) {
+      if (!disableExpr)
+        continue;
+      Value term = context.convertRvalueExpression(*disableExpr);
+      if (!term)
         return {};
-      disable = context.convertToBool(disable);
-      if (!disable)
+      term = context.convertToBool(term);
+      if (!term)
         return {};
-      hasDisable = true;
+      if (!hasDisable) {
+        disable = term;
+        hasDisable = true;
+      } else {
+        disable = moore::OrOp::create(builder, loc, disable, term);
+      }
     }
     auto selectWithControl = [&](Value onUpdate, Value onHold,
                                  Value onReset) -> Value {
@@ -405,7 +412,8 @@ static Value lowerPastWithClocking(Context &context,
                                    const slang::ast::TimingControl &timingCtrl,
                                    int64_t delay,
                                    const slang::ast::Expression *enableExpr,
-                                   const slang::ast::Expression *disableExpr,
+                                   std::span<const slang::ast::Expression *const>
+                                       disableExprs,
                                    Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
@@ -499,14 +507,21 @@ static Value lowerPastWithClocking(Context &context,
     }
     Value disable;
     bool hasDisable = false;
-    if (disableExpr) {
-      disable = context.convertRvalueExpression(*disableExpr);
-      if (!disable)
+    for (auto *disableExpr : disableExprs) {
+      if (!disableExpr)
+        continue;
+      Value term = context.convertRvalueExpression(*disableExpr);
+      if (!term)
         return {};
-      disable = context.convertToBool(disable);
-      if (!disable)
+      term = context.convertToBool(term);
+      if (!term)
         return {};
-      hasDisable = true;
+      if (!hasDisable) {
+        disable = term;
+        hasDisable = true;
+      } else {
+        disable = moore::OrOp::create(builder, loc, disable, term);
+      }
     }
     auto selectWithControl = [&](Value onUpdate, Value onHold,
                                  Value onReset) -> Value {
@@ -1158,6 +1173,9 @@ struct AssertionExprVisitor {
     if (!disableCond)
       return {};
 
+    context.pushAssertionDisableExpr(&expr.condition);
+    auto disableGuard =
+        llvm::make_scope_exit([&] { context.popAssertionDisableExpr(); });
     auto assertionExpr =
         context.convertAssertionExpression(expr.expr, loc, /*applyDefaults=*/false);
     if (!assertionExpr)
@@ -1262,9 +1280,16 @@ Value Context::convertAssertionCallExpression(
     }
 
     const slang::ast::Expression *enableExpr = nullptr;
-    const slang::ast::Expression *disableExpr = nullptr;
-    if (inAssertionExpr && currentScope)
-      disableExpr = compilation.getDefaultDisable(*currentScope);
+    SmallVector<const slang::ast::Expression *, 4> disableExprs;
+    if (inAssertionExpr) {
+      if (currentScope) {
+        if (auto *defaultDisable =
+                compilation.getDefaultDisable(*currentScope))
+          disableExprs.push_back(defaultDisable);
+      }
+      for (auto *expr : getAssertionDisableExprs())
+        disableExprs.push_back(expr);
+    }
 
     if (inAssertionExpr && !clockingCtrl) {
       if (currentAssertionClock)
@@ -1280,17 +1305,19 @@ Value Context::convertAssertionCallExpression(
       }
     }
 
+    if (!clockingCtrl)
+      disableExprs.clear();
     if (clockingCtrl && inAssertionExpr) {
       return lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
-          disableExpr, loc);
+          disableExprs, loc);
     }
 
     if (hasClockingArg && !inAssertionExpr) {
       if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
-            *this, *args[0], *clockingCtrl, subroutine.name, nullptr, nullptr,
-            loc);
+            *this, *args[0], *clockingCtrl, subroutine.name, nullptr,
+            std::span<const slang::ast::Expression *const>{}, loc);
       }
       auto resultType = moore::IntType::getInt(builder.getContext(), 1);
       mlir::emitWarning(loc)
@@ -1356,7 +1383,7 @@ Value Context::convertAssertionCallExpression(
     int64_t delay = 1;
     const slang::ast::TimingControl *clockingCtrl = nullptr;
     const slang::ast::Expression *enableExpr = nullptr;
-    const slang::ast::Expression *disableExpr = nullptr;
+    SmallVector<const slang::ast::Expression *, 4> disableExprs;
     if (args.size() > 1 &&
         args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
       if (args[1]->kind == slang::ast::ExpressionKind::ClockingEvent) {
@@ -1415,14 +1442,19 @@ Value Context::convertAssertionCallExpression(
     if (inAssertionExpr) {
       if (!clockingCtrl)
         maybeSetImplicitClocking();
-      if (currentScope)
-        disableExpr = compilation.getDefaultDisable(*currentScope);
+      if (currentScope) {
+        if (auto *defaultDisable =
+                compilation.getDefaultDisable(*currentScope))
+          disableExprs.push_back(defaultDisable);
+      }
+      for (auto *expr : getAssertionDisableExprs())
+        disableExprs.push_back(expr);
       if (!clockingCtrl)
-        disableExpr = nullptr;
+        disableExprs.clear();
     }
     if (clockingCtrl)
       return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
-                                   enableExpr, disableExpr, loc);
+                                   enableExpr, disableExprs, loc);
     if (enableExpr) {
       mlir::emitError(loc)
           << "unsupported $past enable expression without explicit clocking";
