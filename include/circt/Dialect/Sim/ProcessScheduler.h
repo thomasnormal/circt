@@ -1398,6 +1398,9 @@ public:
   /// Get a semaphore by ID.
   Semaphore *getSemaphore(SemaphoreId id);
 
+  /// Get or create a semaphore by ID (auto-creates with given initial count).
+  Semaphore *getOrCreateSemaphore(SemaphoreId id, int64_t initialCount = 0);
+
   //===------------------------------------------------------------------===//
   // Mailbox Management
   //===------------------------------------------------------------------===//

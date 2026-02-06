@@ -363,6 +363,10 @@ struct ProcessExecutionState {
   /// Non-zero when this process is waiting to peek a mailbox.
   uint64_t pendingMailboxPeekId = 0;
 
+  /// The semaphore ID for a pending blocking get operation.
+  /// Non-zero when this process is waiting for semaphore keys.
+  uint64_t pendingSemaphoreGetId = 0;
+
   /// Parent process ID for shared memory in fork/join.
   /// When a child process is created by sim.fork, parent-scope allocas are
   /// accessed through this chain rather than deep-copied.  Only allocas

@@ -1213,7 +1213,7 @@ SemaphoreId SyncPrimitivesManager::createSemaphore(int64_t initialCount) {
 
 void SyncPrimitivesManager::semaphoreGet(SemaphoreId id, ProcessId caller,
                                          int64_t count) {
-  Semaphore *sem = getSemaphore(id);
+  Semaphore *sem = getOrCreateSemaphore(id);
   if (!sem)
     return;
 
@@ -1234,14 +1234,14 @@ void SyncPrimitivesManager::semaphoreGet(SemaphoreId id, ProcessId caller,
 }
 
 bool SyncPrimitivesManager::semaphoreTryGet(SemaphoreId id, int64_t count) {
-  Semaphore *sem = getSemaphore(id);
+  Semaphore *sem = getOrCreateSemaphore(id);
   if (!sem)
     return false;
   return sem->tryGet(count);
 }
 
 void SyncPrimitivesManager::semaphorePut(SemaphoreId id, int64_t count) {
-  Semaphore *sem = getSemaphore(id);
+  Semaphore *sem = getOrCreateSemaphore(id);
   if (!sem)
     return;
 
@@ -1260,6 +1260,18 @@ void SyncPrimitivesManager::semaphorePut(SemaphoreId id, int64_t count) {
 Semaphore *SyncPrimitivesManager::getSemaphore(SemaphoreId id) {
   auto it = semaphores.find(id);
   return it != semaphores.end() ? it->second.get() : nullptr;
+}
+
+Semaphore *SyncPrimitivesManager::getOrCreateSemaphore(SemaphoreId id,
+                                                        int64_t initialCount) {
+  auto it = semaphores.find(id);
+  if (it != semaphores.end())
+    return it->second.get();
+  // Auto-create a semaphore for this ID (supports address-based IDs)
+  semaphores[id] = std::make_unique<Semaphore>(id, initialCount);
+  LLVM_DEBUG(llvm::dbgs() << "Auto-created semaphore " << id
+                          << " with initial count " << initialCount << "\n");
+  return semaphores[id].get();
 }
 
 MailboxId SyncPrimitivesManager::createMailbox(int32_t bound) {

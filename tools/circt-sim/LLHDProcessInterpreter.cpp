@@ -14326,6 +14326,117 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Handle __moore_semaphore_create - register a semaphore with initial count
+    // Signature: (sem_addr: i64, keyCount: i32) -> void
+    if (calleeName == "__moore_semaphore_create") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t semAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t keyCount = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        // Create the semaphore with the given initial key count,
+        // using the object address as the semaphore ID
+        syncPrimitivesManager.getOrCreateSemaphore(
+            static_cast<SemaphoreId>(semAddr), keyCount);
+
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_semaphore_create(0x"
+                                << llvm::format_hex(semAddr, 16) << ", "
+                                << keyCount << ")\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_semaphore_get - blocking get
+    // Signature: (sem_addr: i64, keyCount: i32) -> void
+    // Blocks if insufficient keys are available
+    if (calleeName == "__moore_semaphore_get") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t semAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t keyCount = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        auto semId = static_cast<SemaphoreId>(semAddr);
+
+        // Try non-blocking get first
+        if (syncPrimitivesManager.semaphoreTryGet(semId, keyCount)) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_semaphore_get(0x"
+                     << llvm::format_hex(semAddr, 16) << ", " << keyCount
+                     << ") - acquired immediately\n");
+
+          // After acquiring, try to wake other waiting processes
+          // (semaphorePut handles this, but get doesn't release keys)
+        } else {
+          // Not enough keys - block until available
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_semaphore_get(0x"
+                     << llvm::format_hex(semAddr, 16) << ", " << keyCount
+                     << ") - blocking (insufficient keys)\n");
+
+          // Add this process to the semaphore wait queue
+          Semaphore *sem =
+              syncPrimitivesManager.getOrCreateSemaphore(semId);
+          if (sem)
+            sem->addWaiter(procId, keyCount);
+
+          // Suspend the process
+          auto &state = processStates[procId];
+          state.pendingSemaphoreGetId = semAddr;
+          state.waiting = true;
+          state.destBlock = callOp->getBlock();
+          state.currentOp = std::next(Block::iterator(callOp));
+          state.resumeAtCurrentOp = true;
+
+          Process *proc = scheduler.getProcess(procId);
+          if (proc)
+            proc->setState(ProcessState::Waiting);
+        }
+      }
+      return success();
+    }
+
+    // Handle __moore_semaphore_put - put keys back
+    // Signature: (sem_addr: i64, keyCount: i32) -> void
+    if (calleeName == "__moore_semaphore_put") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t semAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t keyCount = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        auto semId = static_cast<SemaphoreId>(semAddr);
+
+        syncPrimitivesManager.semaphorePut(semId, keyCount);
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_semaphore_put(0x"
+                   << llvm::format_hex(semAddr, 16) << ", " << keyCount
+                   << ")\n");
+
+        // semaphorePut already handles waking blocked processes
+      }
+      return success();
+    }
+
+    // Handle __moore_semaphore_try_get - non-blocking get
+    // Signature: (sem_addr: i64, keyCount: i32) -> i1
+    if (calleeName == "__moore_semaphore_try_get") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t semAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t keyCount = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        auto semId = static_cast<SemaphoreId>(semAddr);
+
+        bool success = syncPrimitivesManager.semaphoreTryGet(semId, keyCount);
+
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(success ? 1ULL : 0ULL, 1));
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_semaphore_try_get(0x"
+                   << llvm::format_hex(semAddr, 16) << ", " << keyCount
+                   << ") = " << (success ? "true" : "false") << "\n");
+      }
+      return success();
+    }
+
     // Handle __moore_int_to_string - convert i64 to string struct {ptr, i64}
     if (calleeName == "__moore_int_to_string" ||
         calleeName == "__moore_string_itoa") {
