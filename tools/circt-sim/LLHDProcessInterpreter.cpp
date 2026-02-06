@@ -11551,6 +11551,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     }
   }
 
+  // Fallback: use comprehensive address-based search (also checks
+  // process-local allocas by address, which findMemoryBlock's SSA
+  // tracing may miss when the pointer was loaded from memory).
+  if (!block && !useNative && !ptrVal.isX()) {
+    uint64_t fbOffset = 0;
+    block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
+    if (block) {
+      offset = fbOffset;
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.load: findMemoryBlockByAddress found "
+                                 "block at offset " << offset << "\n");
+    }
+  }
+
   // Native pointer access is only allowed for known blocks registered by the
   // runtime (e.g., associative array element refs). If a pointer is not in any
   // tracked block, return X (unknown value).
@@ -11766,6 +11779,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
   // Get the value to store
   InterpretedValue storeVal = getValue(procId, storeOp.getValue());
   unsigned storeSize = getLLVMTypeSize(storeOp.getValue().getType());
+
+  // Fallback: use comprehensive address-based search (also checks
+  // process-local allocas by address, which findMemoryBlock's SSA
+  // tracing may miss when the pointer was loaded from memory).
+  if (!block && !useNative && !ptrVal.isX()) {
+    uint64_t fbOffset = 0;
+    block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId, &fbOffset);
+    if (block) {
+      offset = fbOffset;
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: findMemoryBlockByAddress found "
+                                 "block at offset " << offset << "\n");
+    }
+  }
 
   // Native pointer access is only allowed for known blocks registered by the
   // runtime. If pointer is not tracked, the store is silently skipped (stores
