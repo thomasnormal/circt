@@ -449,7 +449,7 @@ void circt::installResourceGuard() {
   uint64_t effectiveMaxWallMs = maxWallMs;
 
   auto applyDefaultMaxRSS = [&]() {
-    // Default to a conservative fraction of system memory, but cap at 12GB.
+    // Default to a conservative fraction of system memory, but cap at 10GB.
     // This is intentionally sized to prevent runaway memory growth on typical
     // developer workstations while remaining easy to override for large
     // one-off jobs.
@@ -461,7 +461,7 @@ void circt::installResourceGuard() {
         byPercent = (*memTotalMB * 60ull) / 100ull;
       else
         byPercent = (*memTotalMB * 40ull) / 100ull;
-      effectiveMaxRSSMB = std::min<uint64_t>(12288ull, byPercent);
+      effectiveMaxRSSMB = std::min<uint64_t>(10240ull, byPercent);
     } else {
       effectiveMaxRSSMB = 8192ull;
     }
