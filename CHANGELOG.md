@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 407 - February 6, 2026
+
+### Summary
+
+Iteration 407: Full sv-tests simulation pipeline (717 tests, 96.7% pass rate). Fixed
+string array initializer bug and dynamic array allocation. Added config_db runtime
+support. All 6 AVIPs pass within 60s.
+
+### Accomplishments
+
+1. **Full sv-tests simulation pipeline** - Tested all 717 sv-tests through circt-verilog
+   → circt-sim. 555 compile, 489 simulate, 473 pass (96.7%). 9 timeouts (SVA, process
+   class, always loops). 0 genuine simulation failures.
+2. **String array initializer fix** - `ArrayCreateOpConversion` now handles LLVM array
+   types via `InsertValueOp`. `VariableOpConversion` stores initial values for LLVM array
+   variables. Fixes 2 sv-test timeouts (string comparison loops). Commit `0be544c26`.
+3. **Dynamic array allocation fix** - MooreToCore `DynArrayNewOpConversion` passes byte
+   count (elemCount * elemSize) instead of element count. Interpreter registers native
+   memory blocks for cross-operation access. Commit `aa84fb0ee`.
+4. **config_db runtime support** - `config_db_implementation_t::set/get/exists` methods
+   intercepted with in-memory key-value store. Supports wildcard field name matching.
+5. **Unit tests** - `string-array-init.sv`, `dynamic-array-basic.sv`, `format-char.sv`,
+   `semaphore-basic.sv`, `string-methods.sv` all added and passing.
+6. **circt-sim regression** - 157/157 tests pass (100%).
+
+### Verification (February 6, 2026)
+
+- `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` → 157/157 PASS
+- All 6 AVIPs (APB, AHB, UART, I2S, I3C, SPI) complete within 60s
+
+## Iteration 407 - February 6, 2026
+
+### Summary
+
+Iteration 407: Applied default disable resets even when `$past` uses an explicit
+enable condition, ensuring history is cleared during disable windows.
+
+### Accomplishments
+
+1. **Default disable + enable handling** - `$past` history now resets when
+   default disable is asserted even if an explicit enable argument is present.
+2. **Regression coverage** - Added `sva-past-default-disable-enable.sv` and
+   updated the default-disable reset check to validate reset-first behavior.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-default-disable-reset.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-disable-reset.sv`
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-default-disable-enable.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-disable-enable.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+- `build/bin/circt-verilog test/Conversion/ImportVerilog/sva-past-default-clocking-implicit.sv --parse-only | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-default-clocking-implicit.sv`
+
 ## Iteration 406 - February 6, 2026
 
 ### Summary

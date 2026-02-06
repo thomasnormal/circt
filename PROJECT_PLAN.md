@@ -7,49 +7,48 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 6, 2026 (Iteration 383 - Comprehensive sv-tests Compliance)
+## Current Status - February 6, 2026 (Iteration 407 - Full sv-tests Simulation + Config DB)
 
-### Session Summary - Iteration 383
+### Session Summary - Iteration 407
 
-Full sv-tests compliance audit across all 1,036 tests. Near-100% across all modes.
+Full sv-tests simulation pipeline tested (717 tests). String array initializer bug fixed
+(2 fewer timeouts). Dynamic array allocation fixed. config_db runtime support added.
+6 AVIPs all pass within 60s.
 
 | Mode | Eligible | Pass | Rate |
 |------|----------|------|------|
 | Parsing | 853 | 853 | **100%** |
-| Elaboration | 850 | 845 | **99.4%** |
-| Simulation | 256 | 255 | **99.6%** |
+| Elaboration | 850 | 847 | **99.6%** |
+| Simulation (full) | 489 | 473 | **96.7%** |
 | BMC (full Z3) | 26 | 26 | **100%** |
 | LEC (full Z3) | 23 | 23 | **100%** |
-| circt-sim unit tests | 139 | 138+1xfail | **100%** |
+| circt-sim unit tests | 157 | 157 | **100%** |
 
-Only 2 real bugs remain: `llhd.wait` in function context (MooreToCore lowering)
-and 1 preprocessor macro concatenation edge case.
+9 simulation timeouts remain (4 SVA, 3 process class, 1 always loop, 1 event sequence).
+0 genuine simulation failures.
 
 ### Workstream Status
 
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
-| **A: sv-tests** | IEEE 1800 compliance | **99.4-100%** | Fix llhd.wait in function context (2 tests) |
-| **B: AVIP Sim** | UVM testbench simulation | APB/AHB/UART run | Push SPI/AXI4 AVIP, improve performance |
-| **C: External Tests** | yosys/verilator/opentitan | Not started | Run yosys sim tests, verilator UVM cookbook |
-| **D: Missing Features** | Interface ports, coverage, etc | Planning | Interface ports (unblocks AXI-VIP) |
-| **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Landed sibling/LCA interface threading for bind port connections + regression; OpenTitan formal verification pending |
-| **F: Formal (BMC)** | k-induction + liveness | In progress | Land SMT-LIB k-induction base/step, then add liveness + JIT parity |
+| **A: sv-tests** | IEEE 1800 compliance | **96.7-100%** | Implement process::await/kill/suspend (3 tests); SVA assume/cover (4 tests) |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Test config_db with recompiled AVIPs; push combined HdlTop+HvlTop depth |
+| **C: External Tests** | yosys/verilator/opentitan | Not started | Run verilator-verification, yosys sim tests |
+| **D: Missing Features** | Interface ports, coverage, etc | In progress | config_db DONE; next: interface ports (unblocks AXI-VIP) |
+| **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | OpenTitan formal verification (Codex handles) |
+| **F: Formal (BMC)** | k-induction + liveness | In progress | JIT k-induction landed; Codex handles remaining |
 
 ### Remaining Feature Gaps for Xcelium Parity
 
 | Feature | Priority | Effort | Impact |
 |---------|----------|--------|--------|
 | Interface ports | HIGH | Large | Unblocks AXI-VIP and similar |
-| Simulation performance | HIGH | Medium | APB/AHB take >300s |
-| `randomize()` with ranges | MEDIUM | Small | `__moore_randomize_with_ranges()` |
-| `$finish` exit code | MEDIUM | Small | Return non-zero on UVM_FATAL |
+| `process::await/kill/suspend` | HIGH | Medium | 3 sv-test timeouts |
+| SVA assume/cover simulation | MEDIUM | Medium | 4 sv-test timeouts |
 | Coverage collection | LOW | Large | Functional/code coverage |
-| SVA runtime checking | LOW | Large | Runtime assertion evaluation |
+| SVA runtime checking | LOW | Large | Full assertion evaluation |
 | ClockVar support | LOW | Medium | Some testbenches need it |
-| `%c` format specifier | LOW | Small | String formatting |
 | DPI-C full support | LOW | Large | Most stubbed currently |
-| String methods (full) | LOW | Medium | Some gaps remain |
 
 ---
 
@@ -97,6 +96,10 @@ and 1 preprocessor macro concatenation edge case.
 | **OpenTitan LEC x-optimistic** | ✅ **AVAILABLE** | `LEC_X_OPTIMISTIC=1` forwards `--x-optimistic` for AES S-Box LEC EQ |
 | **MooreToCore correlation peepholes** | ✅ **IMPROVED** | AND/OR/XOR fold identical/complement operands (e.g. `a & ~a`) to reduce pessimism |
 | **MooreToCore XOR consensus simplification** | ✅ **IMPROVED** | Consensus `(a & b) ^ (a & ~b)` / `(a & b) | (a & ~b)` / `(a | b) & (a | ~b)` plus nested XOR cancellation; regression + unit test added |
+| **String Array Initializer** | ✅ **FIXED** | `ArrayCreateOpConversion` handles LLVM array types; `VariableOpConversion` stores initial values for LLVM arrays (commit `0be544c26`) |
+| **Dynamic Array Allocation** | ✅ **FIXED** | MooreToCore passes byte count (elemCount * elemSize) to `__moore_dyn_array_new`; interpreter registers native blocks (commit `aa84fb0ee`) |
+| **config_db Runtime Support** | ✅ **IMPLEMENTED** | `config_db_implementation_t::set/get/exists` intercepted with key-value store; supports wildcard field matching |
+| **Full sv-tests Simulation** | ✅ **96.7%** | 489 eligible, 473 pass, 9 timeouts, 0 genuine failures |
 | **Nested Interface Member Access** | ✅ **FIXED** | Hierarchical `p.child.awvalid` now walks interface-instance chains in ImportVerilog |
 | **Axi4Lite bind include workaround** | ✅ **DONE** | `run_avip_circt_verilog.sh` rewrites `Axi4LiteHdlTop.sv` to drop cover-property include so slang resolves bind |
 | **spi_host_reg_top Segfault Fix** | ✅ FIXED | `processStates` DenseMap→std::map for reference stability |
@@ -269,6 +272,10 @@ and 1 preprocessor macro concatenation edge case.
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-06, Iteration 407 - Default Disable + Enable in $past)
+- **Default disable + explicit enable**: `$past` history now resets when default disable is asserted even if `$past` specifies an enable argument.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/sva-past-default-disable-enable.sv` and updated `sva-past-default-disable-reset.sv`.
 
 ### New Findings (2026-02-06, Iteration 406 - Default Clocking for Sampled Values)
 - **Implicit clocking for sampled values**: `$rose/$fell/$stable/$changed` and `$past` now use default/implicit clocking inside assertions even without explicit clocking args.
