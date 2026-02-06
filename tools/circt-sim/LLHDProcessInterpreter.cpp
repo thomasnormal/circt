@@ -5413,16 +5413,111 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     uint64_t funcAddr = funcPtrVal.getUInt64();
     auto it = addressToFunction.find(funcAddr);
     if (it == addressToFunction.end()) {
-      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: address 0x"
-                              << llvm::format_hex(funcAddr, 16)
-                              << " not in vtable map\n");
-      std::string reason = "address " +
-          llvm::utohexstr(funcAddr) + " not found in vtable map";
-      emitVtableWarning(reason);
-      // Return zero/null instead of X to prevent cascading X-propagation.
-      for (Value result : callIndirectOp.getResults()) {
-        unsigned width = getTypeWidth(result.getType());
-        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      // Runtime vtable pointer is corrupt or unmapped. Try static resolution
+      // by tracing the SSA chain back to the vtable global, which is always
+      // correct regardless of runtime memory corruption.
+      bool staticResolved = false;
+      do {
+        auto castOp =
+            calleeValue.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!castOp || castOp.getInputs().size() != 1)
+          break;
+        Value rawPtr = castOp.getInputs()[0];
+        auto funcPtrLoad = rawPtr.getDefiningOp<LLVM::LoadOp>();
+        if (!funcPtrLoad)
+          break;
+        auto vtableGEP =
+            funcPtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+        if (!vtableGEP)
+          break;
+        auto vtableIndices = vtableGEP.getIndices();
+        if (vtableIndices.size() < 2)
+          break;
+        auto lastIdx = vtableIndices[vtableIndices.size() - 1];
+        int64_t methodIndex = -1;
+        if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(lastIdx))
+          methodIndex = intAttr.getInt();
+        else if (auto dynIdx = llvm::dyn_cast_if_present<Value>(lastIdx)) {
+          InterpretedValue dynVal = getValue(procId, dynIdx);
+          if (!dynVal.isX())
+            methodIndex = static_cast<int64_t>(dynVal.getUInt64());
+        }
+        if (methodIndex < 0)
+          break;
+        auto vtablePtrLoad =
+            vtableGEP.getBase().getDefiningOp<LLVM::LoadOp>();
+        if (!vtablePtrLoad)
+          break;
+        auto objGEP =
+            vtablePtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+        if (!objGEP)
+          break;
+        std::string vtableGlobalName;
+        if (auto structTy =
+                dyn_cast<LLVM::LLVMStructType>(objGEP.getElemType())) {
+          if (structTy.isIdentified())
+            vtableGlobalName = structTy.getName().str() + "::__vtable__";
+        }
+        if (vtableGlobalName.empty())
+          break;
+        auto globalIt = globalMemoryBlocks.find(vtableGlobalName);
+        if (globalIt == globalMemoryBlocks.end())
+          break;
+        auto &vtableBlock = globalIt->second;
+        unsigned slotOffset = methodIndex * 8;
+        if (slotOffset + 8 > vtableBlock.size)
+          break;
+        uint64_t resolvedFuncAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          resolvedFuncAddr |=
+              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              << (i * 8);
+        if (resolvedFuncAddr == 0)
+          break;
+        auto funcIt2 = addressToFunction.find(resolvedFuncAddr);
+        if (funcIt2 == addressToFunction.end())
+          break;
+        StringRef resolvedName = funcIt2->second;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  func.call_indirect: static fallback: "
+                   << vtableGlobalName << "[" << methodIndex << "] -> "
+                   << resolvedName << "\n");
+        auto &st2 = processStates[procId];
+        Operation *par = st2.processOrInitialOp;
+        while (par && !isa<ModuleOp>(par))
+          par = par->getParentOp();
+        ModuleOp modOp = par ? cast<ModuleOp>(par) : rootModule;
+        auto fOp = modOp.lookupSymbol<func::FuncOp>(resolvedName);
+        if (!fOp)
+          break;
+        SmallVector<InterpretedValue, 4> sArgs;
+        for (Value arg : callIndirectOp.getArgOperands())
+          sArgs.push_back(getValue(procId, arg));
+        auto &cs2 = processStates[procId];
+        ++cs2.callDepth;
+        SmallVector<InterpretedValue, 4> sResults;
+        auto callRes = interpretFuncBody(procId, fOp, sArgs, sResults,
+                                         callIndirectOp);
+        --cs2.callDepth;
+        if (failed(callRes))
+          break;
+        for (auto [result, val] :
+             llvm::zip(callIndirectOp.getResults(), sResults))
+          setValue(procId, result, val);
+        staticResolved = true;
+      } while (false);
+      if (!staticResolved) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  func.call_indirect: address 0x"
+                   << llvm::format_hex(funcAddr, 16)
+                   << " not in vtable map\n");
+        std::string reason = "address " +
+            llvm::utohexstr(funcAddr) + " not found in vtable map";
+        emitVtableWarning(reason);
+        for (Value result : callIndirectOp.getResults()) {
+          unsigned width = getTypeWidth(result.getType());
+          setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+        }
       }
       return success();
     }
