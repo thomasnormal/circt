@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 375 - February 6, 2026
+
+### Summary
+
+Iteration 375: Implemented RTTI parent table for correct $cast hierarchy checking. MooreToCore now emits `circt.rtti_parent_table` module attribute mapping typeId to parentTypeId, and the interpreter walks the ancestor chain instead of using a simple >= heuristic. Discovered the real root cause of FCTTYP: factory's create_object_by_type returns null because the function body exits before reaching find_override_by_type (not a $cast issue).
+
+### Accomplishments
+
+1. **RTTI parent table for $cast hierarchy** - MooreToCore emits `circt.rtti_parent_table` module attribute (typeId -> parentTypeId). The interpreter now walks the ancestor chain for correct `$cast` dynamic type checking instead of using a simple >= heuristic. Unit test: `test/Conversion/MooreToCore/rtti-parent-table.mlir`. APB AVIP loads 1092 RTTI entries.
+2. **FCTTYP root cause discovered** - Factory's `create_object_by_type` returns null because the function body exits before reaching `find_override_by_type`. This is NOT a `$cast` issue as previously suspected. Previous factory calls work fine through the same vtable dispatch path.
+3. **AVIP recompilation verified** - APB, AHB, UART all compile successfully with latest circt-verilog. APB HvlTop gets to UVM init with RTTI table loaded correctly.
+
+### Current Test Status
+
+| Suite | Pass | XFail | Unsupported | Fail |
+|-------|------|-------|-------------|------|
+| circt-sim lit | 126 | 1 | 0 | 0 |
+| sv-tests BMC | 23 | 3 | - | 0 |
+| sv-tests LEC | 23 | 0 | - | 0 |
+
+### Parse Benchmarks
+
+| Suite | Pass | Total | Rate |
+|-------|------|-------|------|
+| verilator-verification | 122 | 154 | 79% |
+| yosys SVA | 14 | 16 | 88% |
+
+### AVIP Status
+
+| AVIP | Top | Result |
+|------|-----|--------|
+| APB | hvl_top | UVM init OK, RTTI loaded (1092 entries), FCTTYP (factory returns null) |
+| AHB | - | Compiles successfully |
+| UART | - | Compiles successfully |
+
+### Commits
+
+- `5b3785dda` - [MooreToCore] Implement RTTI parent table for correct $cast hierarchy checking
+
 ## Iteration 374 - February 6, 2026
 
 ### Summary
