@@ -6,5 +6,6 @@
 // CHECK-DAG: --print-counterexample
 // CHECK-DAG: --assume-known-inputs
 // CHECK-DAG: --fail-on-violation
+// CHECK-DAG: --flatten-modules
 // CHECK-DAG: --print-solver-output
 // CHECK-DAG: --emit-smtlib

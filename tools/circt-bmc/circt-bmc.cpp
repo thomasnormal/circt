@@ -24,8 +24,8 @@
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
-#include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
 #include "circt/Dialect/LTL/LTLDialect.h"
@@ -192,6 +192,13 @@ static cl::opt<bool> allowMultiClock(
 static cl::opt<bool> pruneUnreachableSymbols(
     "prune-unreachable-symbols",
     cl::desc("Prune symbols not reachable from the entry module"),
+    cl::init(true), cl::cat(mainCategory));
+
+static cl::opt<bool> flattenModules(
+    "flatten-modules",
+    cl::desc("Flatten all module instances before processing (which will "
+             "increase code size but allows multiple assertions across module "
+             "boundaries to be supported)"),
     cl::init(true), cl::cat(mainCategory));
 
 #ifdef CIRCT_BMC_ENABLE_JIT
@@ -488,9 +495,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   pm.addPass(mlir::createCSEPass());
   pm.addPass(createBottomUpSimpleCanonicalizerPass());
-  pm.addPass(hw::createFlattenModules());
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  if (flattenModules) {
+    pm.addPass(hw::createFlattenModules());
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  }
   // Normalize aggregate bitcasts before externalizing registers so any clock
   // keys computed during externalization match the post-normalization form
   // seen by LowerToBMC. This avoids multi-clock key mismatches caused by

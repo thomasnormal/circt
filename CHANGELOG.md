@@ -1,5 +1,20 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 378 - February 6, 2026
+
+### Summary
+
+Iteration 378: Added a circt-bmc `--flatten-modules` toggle (default on) so multi-assert workflows can disable flattening when they need to preserve hierarchy, plus command-line coverage.
+
+### Accomplishments
+
+1. **Configurable flattening** - circt-bmc now gates the flattening phase behind `--flatten-modules`/`--no-flatten-modules`, keeping the default behavior but allowing hierarchy preservation when needed.
+2. **CLI coverage** - Added a command-line test for the new flag.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build check-circt-tools-circt-bmc`
+
 ## Iteration 377 - February 6, 2026
 
 ### Summary
