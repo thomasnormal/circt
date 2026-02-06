@@ -11,6 +11,7 @@
 
 #include "circt/Support/LLVM.h"
 #include <memory>
+#include <string>
 
 namespace mlir {
 class Pass;
@@ -18,6 +19,8 @@ class Pass;
 
 namespace circt {
 class Namespace;
+
+enum class BMCCheckMode { Bounded, InductionBase, InductionStep };
 
 #define GEN_PASS_DECL_LOWERCLOCKEDASSERTLIKE
 #define GEN_PASS_DECL_CONVERTVERIFTOSMT
@@ -27,7 +30,7 @@ class Namespace;
 void populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
-    bool forSMTLIBExport, bool approxTemporalOps,
+    bool forSMTLIBExport, BMCCheckMode bmcMode, bool approxTemporalOps,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps);
 

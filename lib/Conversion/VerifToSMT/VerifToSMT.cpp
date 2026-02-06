@@ -2021,18 +2021,27 @@ struct VerifBoundedModelCheckingOpConversion
   VerifBoundedModelCheckingOpConversion(
       TypeConverter &converter, MLIRContext *context, Namespace &names,
       bool risingClocksOnly, bool assumeKnownInputs, bool forSMTLIBExport,
+      BMCCheckMode bmcMode,
       SmallVectorImpl<Operation *> &propertylessBMCOps,
       SmallVectorImpl<Operation *> &coverBMCOps)
       : OpConversionPattern(converter, context), names(names),
         risingClocksOnly(risingClocksOnly),
         assumeKnownInputs(assumeKnownInputs),
         forSMTLIBExport(forSMTLIBExport),
+        bmcMode(bmcMode),
         propertylessBMCOps(propertylessBMCOps), coverBMCOps(coverBMCOps) {}
   LogicalResult
   matchAndRewrite(verif::BoundedModelCheckingOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     bool emitSMTLIB = forSMTLIBExport;
+    bool inductionStep = bmcMode == BMCCheckMode::InductionStep;
+
+    if (inductionStep && !emitSMTLIB) {
+      op.emitError("k-induction currently requires SMT-LIB export "
+                   "(use --run-smtlib)");
+      return failure();
+    }
 
     bool isCoverCheck =
         std::find(coverBMCOps.begin(), coverBMCOps.end(), op) !=
@@ -2843,6 +2852,37 @@ struct VerifBoundedModelCheckingOpConversion
     size_t numNonFinalChecks = nonFinalOps.size();
     size_t numFinalChecks = opsToErase.size();
     uint64_t boundValue = op.getBound();
+
+    if (inductionStep) {
+      if (isCoverCheck) {
+        op.emitError("k-induction does not support cover properties yet");
+        return failure();
+      }
+      if (numNonFinalChecks == 0) {
+        op.emitError("k-induction requires at least one non-final assertion");
+        return failure();
+      }
+      if (numFinalChecks > 0) {
+        op.emitError("k-induction does not support final checks yet");
+        return failure();
+      }
+      if (auto ignoreAttr =
+              op->getAttrOfType<IntegerAttr>("ignore_asserts_until")) {
+        if (ignoreAttr.getValue().getZExtValue() != 0) {
+          op.emitError("k-induction does not support ignore-asserts-until");
+          return failure();
+        }
+      }
+      bool hasLiveness = false;
+      circuitBlock.walk([&](Operation *ltlOp) {
+        if (isa<ltl::EventuallyOp, ltl::UntilOp>(ltlOp))
+          hasLiveness = true;
+      });
+      if (hasLiveness) {
+        op.emitError("k-induction does not support liveness operators yet");
+        return failure();
+      }
+    }
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
@@ -3741,6 +3781,7 @@ struct VerifBoundedModelCheckingOpConversion
     size_t origCircuitArgsSize =
         oldCircuitInputTy.size() - totalDelaySlots - totalNFAStateSlots;
 
+    bool useInitValues = !inductionStep;
     size_t initIndex = 0;
     SmallVector<Value> inputDecls;
     SmallVector<int> clockIndexes;
@@ -3759,6 +3800,12 @@ struct VerifBoundedModelCheckingOpConversion
       op.emitError("unsupported boolean type in BMC conversion");
       return Value();
     };
+    auto declareInput = [&](Type ty, size_t index) -> Value {
+      StringAttr namePrefix;
+      if (index < inputNamePrefixes.size())
+        namePrefix = inputNamePrefixes[index];
+      return smt::DeclareFunOp::create(rewriter, loc, ty, namePrefix);
+    };
     for (auto [curIndex, oldTy, newTy] :
          llvm::enumerate(oldCircuitInputTy, circuitInputTy)) {
       // Check if this is a delay buffer or NFA state slot (added at the end)
@@ -3766,21 +3813,31 @@ struct VerifBoundedModelCheckingOpConversion
       bool isDelayBuffer =
           curIndex >= delayStartIndex && curIndex < nfaStartIndex;
       if (isDelayBuffer) {
-        // Initialize delay buffers to false (no prior history at step 0)
-        Value initVal = makeBoolConstant(newTy, false);
-        if (!initVal)
-          return failure();
-        inputDecls.push_back(initVal);
+        if (useInitValues) {
+          // Initialize delay buffers to false (no prior history at step 0)
+          Value initVal = makeBoolConstant(newTy, false);
+          if (!initVal)
+            return failure();
+          inputDecls.push_back(initVal);
+        } else {
+          auto decl = declareInput(newTy, curIndex);
+          inputDecls.push_back(decl);
+        }
         continue;
       }
       if (isNFAState) {
         size_t stateIndex = curIndex - nfaStartIndex;
-        bool isStart =
-            stateIndex < nfaStartStates.size() && nfaStartStates[stateIndex];
-        Value initVal = makeBoolConstant(newTy, isStart);
-        if (!initVal)
-          return failure();
-        inputDecls.push_back(initVal);
+        if (useInitValues) {
+          bool isStart =
+              stateIndex < nfaStartStates.size() && nfaStartStates[stateIndex];
+          Value initVal = makeBoolConstant(newTy, isStart);
+          if (!initVal)
+            return failure();
+          inputDecls.push_back(initVal);
+        } else {
+          auto decl = declareInput(newTy, curIndex);
+          inputDecls.push_back(decl);
+        }
         continue;
       }
 
@@ -3809,7 +3866,13 @@ struct VerifBoundedModelCheckingOpConversion
                        "values for SMT-LIB export");
           return failure();
         }
-        inputDecls.push_back(initVals[initIndex++]);
+        if (useInitValues) {
+          inputDecls.push_back(initVals[initIndex++]);
+        } else {
+          auto decl = declareInput(newTy, curIndex);
+          inputDecls.push_back(decl);
+          initIndex++;
+        }
         clockIndexes.push_back(curIndex);
         nonRegIndex++;
         continue;
@@ -3817,6 +3880,12 @@ struct VerifBoundedModelCheckingOpConversion
       if (!isRegister)
         nonRegIndex++;
       if (isRegister) {
+        if (!useInitValues) {
+          auto decl = declareInput(newTy, curIndex);
+          inputDecls.push_back(decl);
+          maybeAssertKnown(oldTy, decl, rewriter);
+          continue;
+        }
         auto initVal =
             initialValues[curIndex - origCircuitArgsSize + numRegs];
         if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
@@ -3870,8 +3939,17 @@ struct VerifBoundedModelCheckingOpConversion
 
     auto numStateArgs = initVals.size() - initIndex;
     // Add the rest of the init vals (state args)
-    for (; initIndex < initVals.size(); ++initIndex)
-      inputDecls.push_back(initVals[initIndex]);
+    if (useInitValues) {
+      for (; initIndex < initVals.size(); ++initIndex)
+        inputDecls.push_back(initVals[initIndex]);
+    } else {
+      for (; initIndex < initOutputTy.size(); ++initIndex) {
+        auto decl = smt::DeclareFunOp::create(rewriter, loc,
+                                              initOutputTy[initIndex],
+                                              StringAttr{});
+        inputDecls.push_back(decl);
+      }
+    }
 
     struct ClockSourceInfo {
       unsigned pos = 0;
@@ -4822,9 +4900,16 @@ struct VerifBoundedModelCheckingOpConversion
                 combinedCheckCond =
                     smt::OrOp::create(rewriter, loc, combinedCheckCond, term);
             }
-            if (combinedCheckCond)
-              violated =
-                  smt::OrOp::create(rewriter, loc, violated, combinedCheckCond);
+            if (combinedCheckCond) {
+              if (inductionStep && iter + 1 < boundValue) {
+                Value mustHold =
+                    smt::NotOp::create(rewriter, loc, combinedCheckCond);
+                smt::AssertOp::create(rewriter, loc, mustHold);
+              } else {
+                violated = smt::OrOp::create(rewriter, loc, violated,
+                                             combinedCheckCond);
+              }
+            }
           }
         }
 
@@ -5796,6 +5881,7 @@ struct VerifBoundedModelCheckingOpConversion
   bool risingClocksOnly;
   bool assumeKnownInputs;
   bool forSMTLIBExport;
+  BMCCheckMode bmcMode;
   SmallVectorImpl<Operation *> &propertylessBMCOps;
   SmallVectorImpl<Operation *> &coverBMCOps;
 };
@@ -5829,11 +5915,20 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
                                      approxTemporalOps);
 }
 
+static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
+  if (mode.empty() || mode == "bounded")
+    return BMCCheckMode::Bounded;
+  if (mode == "induction-base")
+    return BMCCheckMode::InductionBase;
+  if (mode == "induction-step")
+    return BMCCheckMode::InductionStep;
+  return failure();
+}
+
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
-    bool forSMTLIBExport,
-    bool approxTemporalOps,
+    bool forSMTLIBExport, BMCCheckMode bmcMode, bool approxTemporalOps,
     SmallVectorImpl<Operation *> &propertylessBMCOps,
     SmallVectorImpl<Operation *> &coverBMCOps) {
   // Add LTL operation conversion patterns
@@ -5848,7 +5943,7 @@ void circt::populateVerifToSMTConversionPatterns(
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, risingClocksOnly,
       assumeKnownInputs,
-      forSMTLIBExport,
+      forSMTLIBExport, bmcMode,
       propertylessBMCOps, coverBMCOps);
 }
 
@@ -5866,6 +5961,14 @@ void ConvertVerifToSMTPass::runOnOperation() {
   SymbolTable symbolTable(getOperation());
   SmallVector<Operation *> propertylessBMCOps;
   SmallVector<Operation *> coverBMCOps;
+  auto bmcModeOr = parseBMCMode(bmcMode);
+  if (failed(bmcModeOr)) {
+    getOperation().emitError()
+        << "invalid bmc-mode: '" << bmcMode
+        << "' (expected bounded, induction-base, or induction-step)";
+    signalPassFailure();
+    return;
+  }
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
@@ -6029,7 +6132,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
   patterns.add<VerifBoundedModelCheckingOpConversion>(
       converter, patterns.getContext(), names, (bool)risingClocksOnly,
       (bool)this->assumeKnownInputs,
-      (bool)this->forSMTLIBExport,
+      (bool)this->forSMTLIBExport, *bmcModeOr,
       propertylessBMCOps, coverBMCOps);
 
   if (failed(mlir::applyPartialConversion(getOperation(), verifTarget,
