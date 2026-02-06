@@ -33,7 +33,7 @@ and 1 preprocessor macro concatenation edge case.
 | **B: AVIP Sim** | UVM testbench simulation | APB/AHB/UART run | Push SPI/AXI4 AVIP, improve performance |
 | **C: External Tests** | yosys/verilator/opentitan | Not started | Run yosys sim tests, verilator UVM cookbook |
 | **D: Missing Features** | Interface ports, coverage, etc | Planning | Interface ports (unblocks AXI-VIP) |
-| **E: Bind + Hierarchy** | OpenTitan formal readiness | Planning | Support hierarchical interface instance references in bind port connections (sibling/LCA threading) |
+| **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Landed sibling/LCA interface threading for bind port connections + regression; OpenTitan formal verification pending |
 | **F: Formal (BMC)** | k-induction + liveness | In progress | Land SMT-LIB k-induction base/step, then add liveness + JIT parity |
 
 ### Remaining Feature Gaps for Xcelium Parity
