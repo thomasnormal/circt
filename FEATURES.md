@@ -40,7 +40,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 151 | 151 | 0 | All pass (100%), including OpenTitan TL-UL BFM test |
+| circt-sim | 157 | 157 | 0 | All pass (100%), including OpenTitan TL-UL BFM test |
 
 ## UVM Simulation Feature Status
 
@@ -61,7 +61,7 @@ to commercial simulators like Cadence Xcelium.
 | **Data Structures** | | |
 | Associative arrays | WORKS | Auto-create on null, integer and string keys |
 | Queues | WORKS | `push_back`, `pop_front`, `size`, `sort`, `rsort`, `shuffle`, `reverse`, `unique` |
-| Dynamic arrays | WORKS | Basic operations |
+| Dynamic arrays | WORKS | `new[N]`, element access, `size()` — fixed allocation sizing and native memory tracking |
 | Mailboxes | WORKS | DPI-based blocking/non-blocking |
 | **Memory / I/O** | | |
 | `$readmemh` | WORKS | File I/O for memory initialization |
@@ -87,7 +87,7 @@ to commercial simulators like Cadence Xcelium.
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
-| Named events | PARTIAL | Basic `wait` / `trigger` works |
+| Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; gap: `->>` NBA scheduling, event clearing between time slots |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
 | Simulation performance | OK | All AVIPs complete within 60s wall-clock |
 
@@ -125,3 +125,8 @@ to commercial simulators like Cadence Xcelium.
 | Queue unique fix | Interpreter-managed queue support; native memory block registration for cross-operation data access |
 | Native memory threshold fix | Queue operations check `nativeMemoryBlocks` map instead of just address threshold; fixes systems with low malloc addresses |
 | `$value$plusargs` | Runtime `__moore_value_plusargs` with signal-aware output; traces SSA through `UnrealizedConversionCastOp` to drive `llhd.sig` |
+| hw.bitcast 4-state | Recursive bit redistribution between flat and per-field four-state struct types |
+| `llhd.wait` in fork | Fixed `llhd.wait` in nested/fork context to properly wait for time advance |
+| Event `.triggered` | Initialize process results to 0 at registration; prevents X reads for self-referential process bodies |
+| Interface path threading | Improved hierarchical interface path threading in ImportVerilog for nested module instances |
+| Dynamic array allocation | MooreToCore now passes byte count (elemCount * elemSize) to `__moore_dyn_array_new`; interpreter registers native blocks |

@@ -19098,7 +19098,28 @@ struct DynArrayNewOpConversion
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
 
+    // Compute byte size = element_count * element_size_in_bytes.
+    // The runtime allocates exactly this many bytes via calloc.
+    auto elemType =
+        cast<OpenUnpackedArrayType>(op.getResult().getType()).getElementType();
+    Type llvmElemType = getTypeConverter()->convertType(elemType);
+    int64_t elemByteSize = 1;
+    if (llvmElemType)
+      elemByteSize = getTypeSizeInBytes(llvmElemType);
+    if (elemByteSize <= 0)
+      elemByteSize = 1;
+    Value byteSize = adaptor.getSize();
+    if (elemByteSize > 1) {
+      auto elemSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(elemByteSize));
+      byteSize =
+          LLVM::MulOp::create(rewriter, loc, i32Ty, byteSize, elemSizeConst);
+    }
+
     // Two variants: with and without init array.
+    // The runtime allocates byteSize bytes but the struct's .len field should
+    // hold the element count (for arr.size()). We patch .len after the call.
+    auto i64Ty = IntegerType::get(ctx, 64);
     if (adaptor.getInit()) {
       // __moore_dyn_array_new_copy(size, init_ptr) -> {ptr, i64}
       auto fnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy});
@@ -19114,8 +19135,14 @@ struct DynArrayNewOpConversion
 
       auto call = LLVM::CallOp::create(
           rewriter, loc, TypeRange{dynArrayTy}, SymbolRefAttr::get(fn),
-          ValueRange{adaptor.getSize(), initAlloca});
-      rewriter.replaceOp(op, call.getResult());
+          ValueRange{byteSize, initAlloca});
+      // Patch .len to element count instead of byte count.
+      auto elemCount = arith::ExtSIOp::create(rewriter, loc, i64Ty,
+                                               adaptor.getSize());
+      auto result = LLVM::InsertValueOp::create(rewriter, loc, call.getResult(),
+                                                 elemCount,
+                                                 ArrayRef<int64_t>{1});
+      rewriter.replaceOp(op, result);
     } else {
       // __moore_dyn_array_new(size) -> {ptr, i64}
       auto fnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty});
@@ -19124,8 +19151,14 @@ struct DynArrayNewOpConversion
 
       auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{dynArrayTy},
                                        SymbolRefAttr::get(fn),
-                                       ValueRange{adaptor.getSize()});
-      rewriter.replaceOp(op, call.getResult());
+                                       ValueRange{byteSize});
+      // Patch .len to element count instead of byte count.
+      auto elemCount = arith::ExtSIOp::create(rewriter, loc, i64Ty,
+                                               adaptor.getSize());
+      auto result = LLVM::InsertValueOp::create(rewriter, loc, call.getResult(),
+                                                 elemCount,
+                                                 ArrayRef<int64_t>{1});
+      rewriter.replaceOp(op, result);
     }
     return success();
   }

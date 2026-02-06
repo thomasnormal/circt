@@ -16271,6 +16271,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         packedResult.insertBits(APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
+        // Register the allocated memory so that subsequent GEP-based
+        // stores/loads through the returned pointer are handled correctly.
+        // MooreToCore passes element count but the runtime allocates that
+        // many bytes; GEP may index beyond with larger element types, so
+        // the native store path will auto-expand as needed.
+        if (result.data && size > 0)
+          nativeMemoryBlocks[ptrVal] = static_cast<uint64_t>(size);
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_dyn_array_new("
                                 << size << ") = {0x"
                                 << llvm::format_hex(ptrVal, 16) << ", "
@@ -16309,6 +16316,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         packedResult.insertBits(APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
+        if (result.data && size > 0)
+          nativeMemoryBlocks[ptrVal] = static_cast<uint64_t>(size);
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_dyn_array_new_copy(" << size
                    << ", 0x" << llvm::format_hex(initAddr, 16) << ")\n");
