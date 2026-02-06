@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 403 - February 6, 2026
+
+### Summary
+
+Iteration 403: Enabled `--k-induction` with JIT execution and added a JIT
+regression test, while suppressing per-run BMC_RESULT prints during induction.
+
+### Accomplishments
+
+1. **JIT k-induction support** - `circt-bmc --k-induction --run` now performs
+   base/step checks via the JIT without requiring SMT-LIB export.
+2. **Result message control** - Added a LowerToBMC option to silence per-run
+   BMC_RESULT output when orchestrating multi-run flows like k-induction.
+3. **Regression coverage** - Added a bmc-jit k-induction test.
+
+### Verification (February 6, 2026)
+
+- Not run (requires bmc-jit + z3)
+
 ## Iteration 402 - February 6, 2026
 
 ### Summary

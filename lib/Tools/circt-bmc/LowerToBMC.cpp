@@ -1619,41 +1619,42 @@ void LowerToBMCPass::runOnOperation() {
   for (auto op : constantTimes)
     op.erase();
 
-  // Define global string constants to print on success/failure
-  auto createUniqueStringGlobal = [&](StringRef str) -> FailureOr<Value> {
-    Location loc = moduleOp.getLoc();
+  if (emitResultMessages) {
+    // Define global string constants to print on success/failure.
+    auto createUniqueStringGlobal = [&](StringRef str) -> FailureOr<Value> {
+      Location loc = moduleOp.getLoc();
 
-    OpBuilder b = OpBuilder::atBlockEnd(moduleOp.getBody());
-    auto arrayTy = LLVM::LLVMArrayType::get(b.getI8Type(), str.size() + 1);
-    auto global = LLVM::GlobalOp::create(
-        b, loc, arrayTy, /*isConstant=*/true, LLVM::linkage::Linkage::Private,
-        "resultString",
-        StringAttr::get(b.getContext(), Twine(str).concat(Twine('\00'))));
-    SymbolTable symTable(moduleOp);
-    if (failed(symTable.renameToUnique(global, {&symTable}))) {
-      return mlir::failure();
+      OpBuilder b = OpBuilder::atBlockEnd(moduleOp.getBody());
+      auto arrayTy = LLVM::LLVMArrayType::get(b.getI8Type(), str.size() + 1);
+      auto global = LLVM::GlobalOp::create(
+          b, loc, arrayTy, /*isConstant=*/true, LLVM::linkage::Linkage::Private,
+          "resultString",
+          StringAttr::get(b.getContext(), Twine(str).concat(Twine('\00'))));
+      SymbolTable symTable(moduleOp);
+      if (failed(symTable.renameToUnique(global, {&symTable})))
+        return mlir::failure();
+
+      return success(
+          LLVM::AddressOfOp::create(builder, loc, global)->getResult(0));
+    };
+
+    auto successStrAddr = createUniqueStringGlobal(
+        "BMC_RESULT=UNSAT\nBound reached with no violations!\n");
+    auto failureStrAddr = createUniqueStringGlobal(
+        "BMC_RESULT=SAT\nAssertion can be violated!\n");
+
+    if (failed(successStrAddr) || failed(failureStrAddr)) {
+      moduleOp->emitOpError("could not create result message strings");
+      return signalPassFailure();
     }
 
-    return success(
-        LLVM::AddressOfOp::create(builder, loc, global)->getResult(0));
-  };
+    auto formatString =
+        LLVM::SelectOp::create(builder, loc, bmcOp.getResult(),
+                               successStrAddr.value(), failureStrAddr.value());
 
-  auto successStrAddr = createUniqueStringGlobal(
-      "BMC_RESULT=UNSAT\nBound reached with no violations!\n");
-  auto failureStrAddr =
-      createUniqueStringGlobal("BMC_RESULT=SAT\nAssertion can be violated!\n");
-
-  if (failed(successStrAddr) || failed(failureStrAddr)) {
-    moduleOp->emitOpError("could not create result message strings");
-    return signalPassFailure();
+    LLVM::CallOp::create(builder, loc, printfFunc.value(),
+                         ValueRange{formatString});
   }
-
-  auto formatString =
-      LLVM::SelectOp::create(builder, loc, bmcOp.getResult(),
-                             successStrAddr.value(), failureStrAddr.value());
-
-  LLVM::CallOp::create(builder, loc, printfFunc.value(),
-                       ValueRange{formatString});
   LLVM::CallOp::create(builder, loc, reportFunc.value(),
                        ValueRange{bmcOp.getResult()});
   func::ReturnOp::create(builder, loc);
