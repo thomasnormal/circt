@@ -14810,13 +14810,132 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     // ---- __moore_randomize_basic ----
+    // Signature: (classPtr: ptr, classSize: i64) -> i32
+    // Fills the object's memory with random bytes using std::rand().
     if (calleeName == "__moore_randomize_basic") {
-      // Stub: return 1 (success). Full constrained randomization would need
-      // to write random values to the object's rand fields.
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t classAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t classSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        if (classAddr != 0 && classSize > 0) {
+          uint64_t offset = 0;
+          auto *block =
+              findMemoryBlockByAddress(classAddr, procId, &offset);
+          if (block) {
+            size_t avail = block->data.size() - offset;
+            size_t fillSize = std::min<size_t>(classSize, avail);
+            // Fill in 4-byte chunks for efficiency
+            size_t fullWords = fillSize / 4;
+            for (size_t i = 0; i < fullWords; ++i) {
+              uint32_t rval = static_cast<uint32_t>(std::rand());
+              for (int b = 0; b < 4; ++b)
+                block->data[offset + i * 4 + b] =
+                    static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
+            }
+            // Fill remaining bytes
+            size_t remaining = fillSize % 4;
+            if (remaining > 0) {
+              uint32_t rval = static_cast<uint32_t>(std::rand());
+              for (size_t b = 0; b < remaining; ++b)
+                block->data[offset + fullWords * 4 + b] =
+                    static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
+            }
+            block->initialized = true;
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_randomize_basic(0x"
+                   << llvm::format_hex(classAddr, 16)
+                   << ", " << classSize << ") = 1\n");
+      }
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, 1)));
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  llvm.call: __moore_randomize_basic() = 1 (stub)\n");
+      return success();
+    }
+
+    // ---- __moore_randomize_with_dist ----
+    // Signature: (ranges: ptr, weights: ptr, perRange: ptr,
+    //             numRanges: i64, isSigned: i64) -> i64
+    // Returns a random value from the weighted distribution of ranges.
+    if (calleeName == "__moore_randomize_with_dist") {
+      int64_t result = 0;
+      if (callOp.getNumOperands() >= 4) {
+        uint64_t rangesAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t weightsAddr =
+            getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t perRangeAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        int64_t numRanges = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+
+        // Helper to read i64 from interpreter memory at address
+        auto readI64 = [&](uint64_t addr) -> int64_t {
+          uint64_t off = 0;
+          auto *blk = findMemoryBlockByAddress(addr, procId, &off);
+          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+            return 0;
+          int64_t val = 0;
+          for (int i = 0; i < 8; ++i)
+            val |= static_cast<int64_t>(
+                       static_cast<uint64_t>(blk->data[off + i]) << (i * 8));
+          return val;
+        };
+
+        if (numRanges > 0 && rangesAddr != 0) {
+          // Read ranges (pairs of low/high), weights, perRange
+          std::vector<int64_t> ranges(numRanges * 2);
+          std::vector<int64_t> weights(numRanges);
+          std::vector<int64_t> perRange(numRanges);
+          for (int64_t i = 0; i < numRanges * 2; ++i)
+            ranges[i] = readI64(rangesAddr + i * 8);
+          for (int64_t i = 0; i < numRanges; ++i)
+            weights[i] = readI64(weightsAddr + i * 8);
+          for (int64_t i = 0; i < numRanges; ++i)
+            perRange[i] = readI64(perRangeAddr + i * 8);
+
+          // Compute effective weights
+          int64_t totalWeight = 0;
+          std::vector<int64_t> effectiveWeights(numRanges);
+          for (int64_t i = 0; i < numRanges; ++i) {
+            int64_t low = ranges[i * 2];
+            int64_t high = ranges[i * 2 + 1];
+            int64_t rangeSize = high - low + 1;
+            if (perRange[i] == 0)
+              effectiveWeights[i] = weights[i] * rangeSize;
+            else
+              effectiveWeights[i] = weights[i];
+            totalWeight += effectiveWeights[i];
+          }
+
+          if (totalWeight > 0) {
+            int64_t randomWeight =
+                static_cast<int64_t>(std::rand()) % totalWeight;
+            int64_t cumulative = 0;
+            for (int64_t i = 0; i < numRanges; ++i) {
+              cumulative += effectiveWeights[i];
+              if (randomWeight < cumulative) {
+                int64_t low = ranges[i * 2];
+                int64_t high = ranges[i * 2 + 1];
+                int64_t rangeSize = high - low + 1;
+                result = (rangeSize == 1) ? low
+                                          : low + std::rand() % rangeSize;
+                break;
+              }
+            }
+          } else {
+            result = ranges[0];
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_randomize_with_dist(nRanges="
+                   << numRanges << ") = " << result << "\n");
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
       return success();
     }
 
