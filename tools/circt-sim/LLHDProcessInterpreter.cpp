@@ -17,6 +17,7 @@
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
+#include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Runtime/MooreRuntime.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -3806,6 +3807,10 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   // Execute operations until we suspend or halt
   constexpr size_t kAbortCheckInterval = 1000;
+  // Per-activation step limit: if a process runs this many steps in a single
+  // activation without hitting llhd.wait, it's an infinite loop (e.g.,
+  // combinational always blocks or deferred assertions like `assume #0`).
+  constexpr size_t kMaxStepsPerActivation = 1000000;
   size_t localStepCount = 0;
   while (!state.halted && !state.waiting) {
     ++localStepCount;
@@ -3815,6 +3820,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       finalizeProcess(procId, /*killed=*/false);
       if (abortCallback)
         abortCallback();
+      break;
+    }
+    // Per-activation infinite loop detection: if a process runs too many
+    // steps without hitting llhd.wait (which sets state.waiting=true), it's
+    // stuck in a combinational loop. Finalize it to prevent hanging.
+    if (localStepCount > kMaxStepsPerActivation) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process " << procId
+                 << " exceeded per-activation step limit ("
+                 << kMaxStepsPerActivation
+                 << ") - likely infinite loop without llhd.wait\n");
+      finalizeProcess(procId, /*killed=*/false);
       break;
     }
     LLVM_DEBUG({
@@ -6853,6 +6870,17 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     LLVM_DEBUG(llvm::dbgs() << "  builtin.unrealized_conversion_cast: propagated "
                             << castOp.getNumOperands() << " inputs to "
                             << castOp.getNumResults() << " outputs\n");
+    return success();
+  }
+
+  // Verification ops (assert/assume/cover) are formal-only constructs.
+  // In simulation, halt the enclosing process since it has no useful work.
+  // These typically appear in processes like: ^bb1: verif.cover ... / cf.br ^bb1
+  // which would spin forever if we just returned success().
+  if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op)) {
+    LLVM_DEBUG(llvm::dbgs() << "  Formal verification op in simulation - "
+                            << "halting process\n");
+    finalizeProcess(procId, /*killed=*/false);
     return success();
   }
 
