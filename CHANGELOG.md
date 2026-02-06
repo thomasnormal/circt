@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 402 - February 6, 2026
+
+### Summary
+
+Iteration 402: Bound sequence/property assertion arguments to their actuals,
+allowing higher-order sequence/property ports to resolve inside assertion
+expressions.
+
+### Accomplishments
+
+1. **Assertion port bindings** - Assertion port symbols now map to actual
+   arguments within assertion expressions, covering sequence/property-typed
+   ports and their local-variable bindings.
+2. **Regression coverage** - Added `sva-assertion-args.sv` to exercise
+   sequence and property arguments.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertion-args.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertion-args.sv`
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertion-args.sv`
+
 ## Iteration 400 - February 6, 2026
 
 ### Summary

@@ -29,9 +29,13 @@
 namespace slang {
 namespace ast {
 class LocalAssertionVarSymbol;
+class AssertionExpr;
+class AssertionPortSymbol;
+class Expression;
 class Pattern;
 class InstanceSymbol;
 class HierarchicalReference;
+class TimingControl;
 enum class CaseStatementCondition;
 } // namespace ast
 } // namespace slang
@@ -133,6 +137,14 @@ struct BindScopeInterfacePortInfo {
 struct AssertionLocalVarBinding {
   Value value;
   uint64_t offset = 0;
+};
+
+struct AssertionPortBinding {
+  enum class Kind { Expr, AssertionExpr, TimingControl };
+  Kind kind = Kind::Expr;
+  const slang::ast::Expression *expr = nullptr;
+  const slang::ast::AssertionExpr *assertionExpr = nullptr;
+  const slang::ast::TimingControl *timingControl = nullptr;
 };
 
 /// A helper class to facilitate the conversion from a Slang AST to MLIR
@@ -270,6 +282,24 @@ struct Context {
     if (assertionLocalVarScopes.empty())
       return;
     assertionLocalVarScopes.back()[sym] = {value, offset};
+  }
+  void pushAssertionPortScope() { assertionPortScopes.emplace_back(); }
+  void popAssertionPortScope() { assertionPortScopes.pop_back(); }
+  const AssertionPortBinding *lookupAssertionPortBinding(
+      const slang::ast::AssertionPortSymbol *sym) const {
+    for (auto it = assertionPortScopes.rbegin(); it != assertionPortScopes.rend();
+         ++it) {
+      auto entry = it->find(sym);
+      if (entry != it->end())
+        return &entry->second;
+    }
+    return nullptr;
+  }
+  void setAssertionPortBinding(const slang::ast::AssertionPortSymbol *sym,
+                               const AssertionPortBinding &binding) {
+    if (assertionPortScopes.empty())
+      return;
+    assertionPortScopes.back()[sym] = binding;
   }
   void pushAssertionSequenceOffset(uint64_t offset) {
     assertionSequenceOffsetStack.push_back(offset);
@@ -508,6 +538,10 @@ struct Context {
                        AssertionLocalVarBinding>,
               2>
       assertionLocalVarScopes;
+  SmallVector<DenseMap<const slang::ast::AssertionPortSymbol *,
+                       AssertionPortBinding>,
+              2>
+      assertionPortScopes;
   SmallVector<uint64_t, 4> assertionSequenceOffsetStack;
   /// A list of global variables that still need their initializers to be
   /// converted.
