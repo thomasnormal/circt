@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 5, 2026 (Iteration 369 - UVM Core State Pre-Init & Workstream Planning)
+## Current Status - February 6, 2026 (Iteration 372 - Global Step Counter & UVM Debug)
 
 ### Session Summary - Key Milestones
 
@@ -59,6 +59,12 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **hw.bitcast Layout Conversion** | ✅ FIXED | LLVM↔HW struct layout conversion in bitcast handler |
 | **ProcessStates Unit Test** | ✅ ADDED | ProcessStatesReferenceStability test; 17/17 unit tests pass |
 | **Recursive Call Arg Corruption** | ✅ **FIXED** | Recursive function calls (e.g., `uvm_phase::new()` creating `m_end_node`) now save/restore block arg values, preventing corruption of outer call's `this` pointer |
+| **Global Step Counter** | ✅ **IMPLEMENTED** | `totalSteps` tracks ALL operations (process body + nested function bodies) for accurate step limiting; both `interpretFuncBody` versions increment global counter (commit `0262b6da2`) |
+| **Zero-on-Error for UVM** | ✅ **FIXED** | Vtable dispatch failures and max call depth exceeded now return zero/null instead of X, preventing cascading X-propagation in UVM code (commit `0262b6da2`) |
+| **Call Depth 50→200** | ✅ **INCREASED** | `maxCallDepth` increased from 50 to 200 for UVM's deep call chains (run_test → do_phase → traverse → m_find_successor) |
+| **Default Step Limit Unlimited** | ✅ **CHANGED** | `--max-process-steps` default changed from 50000 to 0 (unlimited), relying on timeout watchdog instead |
+| **Function Body Abort Checking** | ✅ **ADDED** | Timeout watchdog now checked every 10K funcBodySteps inside function bodies, preventing stuck simulations |
+| **Runtime Interceptors (43 total)** | ✅ **IMPLEMENTED** | 23 string/queue/assoc ops (commit `81fea58e9`) + 20 dynamic array/randomize/coverage ops (commit `dc023786d`) |
 | **Recursive Probe Layout Conversion** | ✅ FIXED | `convertLLVMToHWLayout` in probe path; fixes nested struct read data |
 | **DAG False Cycle Detection Fix** | ✅ FIXED | `pushCount` map replaces `inProgress` set (commit `a488f68f9`) |
 | **Instance Output Eval Priority** | ✅ FIXED | `instanceOutputMap` checked before `getSignalId` (commit `a488f68f9`) |
@@ -117,6 +123,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **UVM Root Init Re-entrancy Fix** | ✅ FIXED | Mirror `m_inst` store to `uvm_top` + defer `sim.terminate` during init (commit `2db5b8bfa`) |
 | **$sformatf Runtime Functions** | ✅ FIXED | `__moore_int_to_string`, `__moore_string_concat` handlers (commit `72ea6abf4`) |
 | **UVM Factory Creates Test** | ✅ WORKING | `run_test("apb_base_test")` creates `uvm_test_top` object successfully |
+| **VTable Cache Fix** | ✅ **FIXED** | Cache `methodToImpl` in `ClassStructInfo` during `resolveClassStructBody` so ClassNewOpConversion works even after ClassDeclOps are erased (commit `d70ce8164`). 981/1037 APB AVIP vtable globals now have entries. |
+| **$readmemh/$readmemb Runtime** | ✅ **IMPLEMENTED** | MooreToCore lowering + interpreter handler for `__moore_readmemh/b`. Test `readmemh-basic.sv` passes (commit `6fbc36ca7`). |
+| **circt-sim Test Count** | ✅ **124 total** | 123 pass + 1 xfail (up from 119) |
+| **Runtime Feature Gap Analysis** | ✅ **COMPLETED** | 52 `__moore_*` functions emitted but not intercepted (returning X). Priority: $cast, $random, config_db, file I/O, string methods. |
+| **Runtime Interceptors ($cast, $random, file I/O)** | ✅ **IMPLEMENTED** | 10 interceptors: dyn_cast_check, urandom, urandom_range, random, urandom_seeded, random_seeded, randomize_basic, fopen, fwrite, fclose (commit `ed418591b`). |
+| **UVM Pre-Init Bug FIXED** | ✅ **FIXED** | Removed erroneous pre-init block (commit `5f45c43c0`) that set m_uvm_core_state=1 before constructors, causing UVM_FATAL UVM/INIT/MULTI. Now uvm_init() takes correct first-time init path. APB AVIP progresses past UVM init (commit `fea34b2c1`). |
+| **sv-tests Parsing Benchmark** | ✅ **COMPLETED** | 845/1036 pass (81.6%), 90.9% effective rate excluding UVM/includes. 2 lowering bugs (llhd.wait in initial), 3 genuine failures (macro expansion). |
+| **Verilator-Verification Benchmark** | ✅ **COMPLETED** | 122/154 pass (79.2%). Key gaps: net strength syntax (8), UVM no --uvm-path (11). |
+| **Yosys Tests Benchmark** | ✅ **COMPLETED** | 80/105 pass (76.2%). 2 lowering bugs (hw.bitcast, moore.net). |
 | **UVM Process Context Detection** | ⚠️ DIAGNOSED | UVM `run_test()` rejects call - circt-sim lacks SystemVerilog `$process` context |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
@@ -199,6 +214,25 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 372 - Global Step Counter & UVM Debug)
+- **Global step counter** (commit `0262b6da2`): Process step limit (`--max-process-steps`) previously only counted process-body-level operations. Each `func.call` counted as 1 step, but nested function bodies could execute up to 100K ops internally. Now `totalSteps` and `funcBodySteps` are incremented inside BOTH `interpretFuncBody` versions (func.func and LLVM::LLVMFuncOp), giving accurate global step counting.
+- **Zero-on-error for UVM** (commit `0262b6da2`): Changed 6 locations where failed vtable dispatch or max call depth exceeded would return `InterpretedValue::makeX()` to return zero/null instead. X-on-error causes cascading failures in UVM (X in comparisons produces X, X in cond_br takes false branch). Zero-on-error allows UVM code that checks for null to recover gracefully.
+- **Call depth 50→200** (commit `0262b6da2`): UVM's deep call chains (run_test → do_phase → traverse → m_find_successor → get_schedule → get_domain) exceed 50 frames. Increased to 200.
+- **Default step limit unlimited** (commit `0262b6da2`): `--max-process-steps` default changed from 50K to 0 (unlimited), relying on timeout watchdog instead. The old 50K limit was meaningless since function body ops weren't counted.
+- **Recursive call SSA corruption fix** (commit `dc3a7da55`): Recursive function calls (e.g., `uvm_phase::new()` creating `m_end_node`) now save/restore block arg values, preventing corruption of outer call's `this` pointer.
+- **43 new runtime interceptors** (commits `81fea58e9`, `dc023786d`): 23 string/queue/assoc array ops + 20 dynamic array/randomize/coverage ops. These return sensible defaults instead of X for common UVM runtime operations.
+- **APB AVIP diagnosis**: With unlimited step limit, APB AVIP stalls in `m_find_successor` recursive DFS at callDepth 198-200, alternating between `get_domain`, `get_schedule`, and `m_find_successor`. Root cause investigation ongoing: UVM coreservice singleton stays null after `uvm_init()`.
+- **Test counts**: circt-sim 125 total (124 pass + 1 xfail), 0 unexpected failures.
+- **Commits this session**: `0262b6da2` (global step counter), `dc3a7da55` (recursive call fix), `dc023786d` (20 interceptors), `81fea58e9` (23 interceptors).
+
+### New Findings (2026-02-05, Iteration 371 - UVM Init Fix & Parsing Benchmarks)
+- **UVM/INIT/MULTI FIXED** (commit `fea34b2c1`): The pre-initialization block from commit `5f45c43c0` was the root cause. It set `m_uvm_core_state` to 1 (UVM_CORE_INITIALIZING) before global constructors, forcing `uvm_init()` to take the race-detection path (`^bb2`) instead of the correct first-time init path (`^bb8`). Removing the 51-line block fixes the crash. APB AVIP now prints `UVM_INFO @ 0: NOMAXQUITOVR`, `UVM/RELNOTES`, and reaches the test execution phase.
+- **New blocker: "attempt to find build phase object failed"**: After UVM init succeeds, `uvm_test_top` is created but `UVM_FATAL [COMP/INTERNAL]` fires because the build phase object can't be found in the phase registry. This suggests UVM phase registration is not happening correctly during init.
+- **Runtime interceptors added** (commit `ed418591b`): 10 new interceptors for `$cast`, `$random/$urandom` (with seeded variants), `$fopen/$fwrite/$fclose`, and `randomize()` stub.
+- **Parsing benchmarks completed**: sv-tests 845/1036 (81.6% raw, 90.9% effective), verilator-verification 122/154 (79.2%), yosys 80/105 (76.2%). Key gaps: net strength syntax, llhd.wait in initial blocks, macro token pasting.
+- **Test counts**: circt-sim 124 (123 pass + 1 xfail), sv-tests BMC 26 (23+3), LEC 23 (all pass).
+- **Commits this session**: `d70ce8164` (vtable cache), `6fbc36ca7` ($readmemh test), `ed418591b` (runtime interceptors), `fea34b2c1` (UVM pre-init removal).
+
 ### New Findings (2026-02-05, Iteration 369 - UVM Core State & Workstream Planning)
 - **UVM core state pre-initialization** (commit `5f45c43c0`): Pre-seeds `m_uvm_core_state` queue with `UVM_CORE_INITIALIZING` before `global_ctors` run, ensuring `uvm_init()` creates the coreservice singleton during factory registration.
 - **Vtable dispatch tracing**: Added detailed tracing for first 3 vtable-miss failures, tracing through `unrealized_conversion_cast` -> `llvm.load` -> `llvm.getelementptr` to identify root cause (uninitialized object, missing vtable entry, or stale MLIR).
@@ -220,7 +254,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **Next blocker**: UVM factory registration (`UVM_FATAL [INVTST] Requested test not found`) - vtable dispatch for factory registration methods still returns X (uninitialized function pointers). Need to investigate why `my_test` type_id isn't registered with the factory.
 
 ### New Findings (2026-02-05, Iteration 348 - Memory Guardrails & AVIP Testing)
-- **circt-verilog wall-clock timeout**: Added 10-minute default timeout via `CIRCT_MAX_WALL_MS=600000` (overwrite=0). Smart RSS defaults already cap at 12GB for >16GB systems. Prevents circt-verilog from consuming unbounded memory/time.
+- **circt-verilog wall-clock timeout**: Added 10-minute default timeout via `CIRCT_MAX_WALL_MS=600000` (overwrite=0). Smart RSS defaults already cap at 10GB for >16GB systems. Prevents circt-verilog from consuming unbounded memory/time.
 - **Memory-backed !llhd.ref struct extract fix VERIFIED**: Unit test passes (a=42 b=99). All 116 circt-sim lit tests pass. All 457 total tests (BMC+LEC+circt-sim) pass with 0 unexpected failures.
 - **AVIP simulation status**: UART/APB reach `[circt-sim] Starting simulation` with 1575 LLHD signals registered. AHB core (35MB MLIR) parsing takes >3 min but stays within memory limits (280MB). Vtable warnings properly throttled.
 - **Regression results**: BMC 82 pass + 13 xfail + 122 unsupported. LEC 102 pass + 3 xfail + 19 unsupported. circt-sim 115 pass + 1 xfail.

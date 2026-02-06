@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 372 - February 6, 2026
+
+### Summary
+
+Iteration 372: Global step counter for accurate process step limiting, zero-on-error for UVM vtable/call-depth failures, deeper call stack (50→200), 43 new runtime interceptors, and recursive call SSA corruption fix.
+
+### Accomplishments
+
+1. **Global step counter** - `totalSteps` now tracks ALL operations across process body and nested function bodies in both `interpretFuncBody` versions. Previously, a `func.call` counted as 1 step while the callee could execute up to 100K ops internally.
+2. **Zero-on-error for UVM** - Changed 6 locations where failed vtable dispatch or max call depth exceeded would return X to return zero/null instead. Prevents cascading X-propagation in UVM code.
+3. **Call depth 50→200** - UVM's deep call chains (run_test → do_phase → traverse → m_find_successor) exceed 50 frames.
+4. **Default step limit unlimited** - `--max-process-steps` default changed from 50K to 0 (unlimited), relying on timeout watchdog.
+5. **Recursive call SSA corruption fix** - Recursive function calls now save/restore block arg values, preventing corruption of outer call's `this` pointer.
+6. **43 new runtime interceptors** - 23 string/queue/assoc array ops + 20 dynamic array/randomize/coverage ops returning sensible defaults.
+7. **Function body abort checking** - Timeout watchdog checked every 10K funcBodySteps inside function bodies.
+
+### Current Test Status
+
+| Suite | Pass | XFail | Unsupported | Fail |
+|-------|------|-------|-------------|------|
+| circt-sim lit | 124 | 1 | 0 | 0 |
+
+### Commits
+
+- `0262b6da2` - [circt-sim] Global step counter, deeper call stack, zero-on-error for UVM
+- `dc3a7da55` - [circt-sim] Fix recursive call SSA value corruption in interpreter
+- `dc023786d` - [circt-sim] Add 20 runtime interceptors for dynamic arrays, randomization, and coverage
+- `81fea58e9` - [circt-sim] Add 23 runtime interceptors for string, queue, assoc array ops
+
 ## Iteration 369 - February 5, 2026
 
 ### Summary
@@ -30,6 +59,37 @@ Iteration 369: Comprehensive status assessment and workstream planning. Pre-init
 - **AVIP MLIR regeneration**: Requires >24GB RAM and >10min; cannot recompile in-session
 - **$readmemh**: Not yet implemented in circt-sim runtime
 - **coverpoint iff**: Not yet lowered in ImportVerilog
+
+## Iteration 371 - February 5, 2026
+
+### Summary
+
+Iteration 371: Lowered the default ResourceGuard RSS cap from 12GB to 10GB so circt tools abort earlier on runaway memory use when no explicit limits are configured.
+
+### Accomplishments
+
+1. **Resource guard default cap lowered** - Default RSS cap is now 10GB (was 12GB), reducing the chance that `circt-opt` or other tools consume tens of GB before aborting.
+2. **Documentation updates** - Updated tool comments and project plan references to the new default cap.
+
+### Verification (February 5, 2026)
+
+- Not run (resource-guard default change and comment updates only)
+
+## Iteration 370 - February 5, 2026
+
+### Summary
+
+Iteration 370: Improved BMC clock-key canonicalization for LLHD port aliases (including duplicate drives) and enabled async-reset externalization in `externalize-registers`.
+
+### Accomplishments
+
+1. **LLHD clock alias canonicalization** - Clock keys now deduplicate through LLHD port-forwarded 4-state clocks even when the port has multiple identical drives, avoiding spurious multi-clock BMC splits.
+2. **Async reset externalization** - `externalize-registers` now lowers async reset registers to reset muxes instead of rejecting them.
+3. **Regression tests** - Added `lower-to-bmc-llhd-clock-alias.mlir` and `externalize-registers-async-reset.mlir`.
+
+### Verification (February 5, 2026)
+
+- `ninja -C build circt-bmc`
 
 ## Iteration 368 - February 5, 2026
 
