@@ -37,6 +37,9 @@ def LowerToBMC : Pass<"lower-to-bmc", "::mlir::ModuleOp"> {
     Option<"allowMultiClock", "allow-multi-clock", "bool",
            /*default=*/"false",
            "Allow multiple explicit clock inputs by interleaving toggles.">,
+    Option<"emitResultMessages", "emit-result-messages", "bool",
+           /*default=*/"true",
+           "Emit BMC_RESULT messages in the lowered output.">,
   ];
 
   let dependentDialects = [

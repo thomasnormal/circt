@@ -420,7 +420,8 @@ static const char *toResultString(BMCResult result) {
 static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
                                      TimingScope &ts,
                                      ConvertVerifToSMTOptions convertOptions,
-                                     unsigned boundOverride) {
+                                     unsigned boundOverride,
+                                     bool emitResultMessages) {
   PassManager pm(&context);
   pm.enableVerifier(verifyPasses);
   pm.enableTiming(ts);
@@ -511,6 +512,7 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   lowerToBMCOptions.topModule = moduleName;
   lowerToBMCOptions.risingClocksOnly = risingClocksOnly;
   lowerToBMCOptions.allowMultiClock = allowMultiClock;
+  lowerToBMCOptions.emitResultMessages = emitResultMessages;
   pm.addPass(createLowerToBMC(lowerToBMCOptions));
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertCombToSMT());
@@ -745,25 +747,120 @@ runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
   return failure();
 }
 
+#ifdef CIRCT_BMC_ENABLE_JIT
+static FailureOr<BMCResult> runJITSolver(ModuleOp module, TimingScope &ts) {
+  auto handleErr = [](llvm::Error error) -> LogicalResult {
+    llvm::handleAllErrors(std::move(error),
+                          [](const llvm::ErrorInfoBase &info) {
+                            llvm::errs() << "Error: ";
+                            info.log(llvm::errs());
+                            llvm::errs() << '\n';
+                          });
+    return failure();
+  };
+
+  std::unique_ptr<mlir::ExecutionEngine> engine;
+  std::function<llvm::Error(llvm::Module *)> transformer =
+      mlir::makeOptimizingTransformer(
+          /*optLevel*/ 3, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
+  {
+    auto timer = ts.nest("Setting up the JIT");
+    auto entryPoint =
+        dyn_cast_or_null<LLVM::LLVMFuncOp>(module->lookupSymbol(moduleName));
+    if (!entryPoint || entryPoint.empty()) {
+      llvm::errs() << "no valid entry point found, expected 'llvm.func' named '"
+                   << moduleName << "'\n";
+      return failure();
+    }
+
+    if (entryPoint.getNumArguments() != 0) {
+      llvm::errs() << "entry point '" << moduleName
+                   << "' must have no arguments";
+      return failure();
+    }
+
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+
+    SmallVector<StringRef, 4> sharedLibraries(sharedLibs.begin(),
+                                              sharedLibs.end());
+    mlir::ExecutionEngineOptions engineOptions;
+    engineOptions.transformer = transformer;
+    engineOptions.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
+    engineOptions.sharedLibPaths = sharedLibraries;
+    engineOptions.enableObjectDump = true;
+
+    auto expectedEngine =
+        mlir::ExecutionEngine::create(module, engineOptions);
+    if (!expectedEngine)
+      return handleErr(expectedEngine.takeError());
+
+    engine = std::move(*expectedEngine);
+
+    // Register the circt_bmc_report_result callback symbol so JIT-compiled code
+    // can call back to report BMC results.
+    engine->registerSymbols([](llvm::orc::MangleAndInterner interner) {
+      llvm::orc::SymbolMap symbolMap;
+      symbolMap[interner("circt_bmc_report_result")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_bmc_report_result),
+          llvm::JITSymbolFlags::Exported};
+      symbolMap[interner("circt_smt_print_model_header")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_header),
+          llvm::JITSymbolFlags::Exported};
+      symbolMap[interner("circt_smt_print_model_value")] = {
+          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_value),
+          llvm::JITSymbolFlags::Exported};
+      return symbolMap;
+    });
+  }
+
+  auto timer = ts.nest("JIT Execution");
+  bmcJitResult.store(-1, std::memory_order_relaxed);
+  if (auto err = engine->invokePacked(moduleName))
+    return handleErr(std::move(err));
+  int result = bmcJitResult.load(std::memory_order_relaxed);
+  if (result < 0) {
+    llvm::errs() << "BMC JIT did not report a result\n";
+    return failure();
+  }
+
+  return result ? BMCResult::Unsat : BMCResult::Sat;
+}
+#endif
+
 static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
                                        TimingScope &ts,
                                        ConvertVerifToSMTOptions convertOptions,
                                        unsigned boundOverride,
                                        bool wantSolverOutput,
-                                       bool printResultLines) {
+                                       bool printResultLines,
+                                       bool emitResultMessages) {
   if (failed(runPassPipeline(context, module, ts, convertOptions,
-                             boundOverride)))
+                             boundOverride, emitResultMessages)))
     return failure();
+
+#ifdef CIRCT_BMC_ENABLE_JIT
+  if (outputFormat == OutputRunJIT)
+    return runJITSolver(module, ts);
+#endif
+
   circt::setResourceGuardPhase("run z3");
   auto timer = ts.nest("Run SMT-LIB via z3");
   return runSMTLIBSolver(module, wantSolverOutput, printResultLines);
 }
 
 static LogicalResult executeBMCWithInduction(MLIRContext &context) {
+#ifdef CIRCT_BMC_ENABLE_JIT
+  if (outputFormat != OutputRunSMTLIB && outputFormat != OutputRunJIT) {
+    llvm::errs() << "--k-induction requires --run or --run-smtlib\n";
+    return failure();
+  }
+#else
   if (outputFormat != OutputRunSMTLIB) {
     llvm::errs() << "--k-induction requires --run-smtlib\n";
     return failure();
   }
+#endif
 
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
@@ -796,9 +893,15 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
 
   OwningOpRef<ModuleOp> baseModule(
       llvm::cast<ModuleOp>(module->clone()));
+  bool emitResultMessages = true;
+#ifdef CIRCT_BMC_ENABLE_JIT
+  if (outputFormat == OutputRunJIT)
+    emitResultMessages = false;
+#endif
   auto baseResultOr =
       runBMCOnce(context, *baseModule, ts, baseOptions, clockBound,
-                 wantSolverOutput, /*printResultLines=*/false);
+                 wantSolverOutput, /*printResultLines=*/false,
+                 emitResultMessages);
   if (failed(baseResultOr))
     return failure();
   BMCResult baseResult = *baseResultOr;
@@ -822,7 +925,8 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
       llvm::cast<ModuleOp>(module->clone()));
   auto stepResultOr =
       runBMCOnce(context, *stepModule, ts, stepOptions, clockBound + 1,
-                 wantSolverOutput, /*printResultLines=*/false);
+                 wantSolverOutput, /*printResultLines=*/false,
+                 emitResultMessages);
   if (failed(stepResultOr))
     return failure();
   BMCResult stepResult = *stepResultOr;
@@ -880,7 +984,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
   convertVerifToSMTOptions.bmcMode = "bounded";
   if (failed(runPassPipeline(context, *module, ts, convertVerifToSMTOptions,
-                             clockBound)))
+                             clockBound, /*emitResultMessages=*/true)))
     return failure();
 
   if (outputFormat == OutputMLIR) {
@@ -935,84 +1039,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
 
 #ifdef CIRCT_BMC_ENABLE_JIT
-
-  auto handleErr = [](llvm::Error error) -> LogicalResult {
-    llvm::handleAllErrors(std::move(error),
-                          [](const llvm::ErrorInfoBase &info) {
-                            llvm::errs() << "Error: ";
-                            info.log(llvm::errs());
-                            llvm::errs() << '\n';
-                          });
+  auto resultOr = runJITSolver(*module, ts);
+  if (failed(resultOr))
     return failure();
-  };
-
-  std::unique_ptr<mlir::ExecutionEngine> engine;
-  std::function<llvm::Error(llvm::Module *)> transformer =
-      mlir::makeOptimizingTransformer(
-          /*optLevel*/ 3, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
-  {
-    auto timer = ts.nest("Setting up the JIT");
-    auto entryPoint =
-        dyn_cast_or_null<LLVM::LLVMFuncOp>(module->lookupSymbol(moduleName));
-    if (!entryPoint || entryPoint.empty()) {
-      llvm::errs() << "no valid entry point found, expected 'llvm.func' named '"
-                   << moduleName << "'\n";
-      return failure();
-    }
-
-    if (entryPoint.getNumArguments() != 0) {
-      llvm::errs() << "entry point '" << moduleName
-                   << "' must have no arguments";
-      return failure();
-    }
-
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-
-    SmallVector<StringRef, 4> sharedLibraries(sharedLibs.begin(),
-                                              sharedLibs.end());
-    mlir::ExecutionEngineOptions engineOptions;
-    engineOptions.transformer = transformer;
-    engineOptions.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-    engineOptions.sharedLibPaths = sharedLibraries;
-    engineOptions.enableObjectDump = true;
-
-    auto expectedEngine =
-        mlir::ExecutionEngine::create(module.get(), engineOptions);
-    if (!expectedEngine)
-      return handleErr(expectedEngine.takeError());
-
-    engine = std::move(*expectedEngine);
-
-    // Register the circt_bmc_report_result callback symbol so JIT-compiled code
-    // can call back to report BMC results.
-    engine->registerSymbols([](llvm::orc::MangleAndInterner interner) {
-      llvm::orc::SymbolMap symbolMap;
-      symbolMap[interner("circt_bmc_report_result")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_bmc_report_result),
-          llvm::JITSymbolFlags::Exported};
-      symbolMap[interner("circt_smt_print_model_header")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_header),
-          llvm::JITSymbolFlags::Exported};
-      symbolMap[interner("circt_smt_print_model_value")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_value),
-          llvm::JITSymbolFlags::Exported};
-      return symbolMap;
-    });
-  }
-
-  auto timer = ts.nest("JIT Execution");
-  bmcJitResult.store(-1, std::memory_order_relaxed);
-  if (auto err = engine->invokePacked(moduleName))
-    return handleErr(std::move(err));
-  int result = bmcJitResult.load(std::memory_order_relaxed);
-  if (result < 0) {
-    llvm::errs() << "BMC JIT did not report a result\n";
+  if (failOnViolation && *resultOr == BMCResult::Sat)
     return failure();
-  }
-  if (failOnViolation && result == 0)
-    return failure();
-
   return success();
 #else
   return failure();
