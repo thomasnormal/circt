@@ -16786,6 +16786,255 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_queue_rsort ----
+    // Signature: (queue: ptr) -> void
+    // Sorts queue elements in descending order.
+    if (calleeName == "__moore_queue_rsort") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        if (queueAddr != 0) {
+          if (queueAddr >= 0x10000000000ULL) {
+            auto *nativeQueue =
+                reinterpret_cast<MooreQueue *>(queueAddr);
+            if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
+              __moore_queue_rsort(nativeQueue, 8);
+            }
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  llvm.call: __moore_queue_rsort(native 0x"
+                       << llvm::format_hex(queueAddr, 16) << ")\n");
+          } else {
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t queueLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->data[queueOffset + 8 + i])
+                            << (i * 8);
+
+              if (queueLen > 1 && dataPtr != 0) {
+                if (dataPtr >= 0x10000000000ULL) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = queueLen;
+                  __moore_queue_rsort(&tmpQ, 8);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized &&
+                      dataBlock->data.size() > 0) {
+                    int64_t availableSize = static_cast<int64_t>(
+                        dataBlock->data.size() - dataOffset);
+                    int64_t elemSize = availableSize / queueLen;
+                    if (elemSize > 0) {
+                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      std::vector<std::vector<uint8_t>> elements(queueLen);
+                      for (int64_t i = 0; i < queueLen; ++i) {
+                        elements[i].assign(base + i * elemSize,
+                                           base + (i + 1) * elemSize);
+                      }
+                      // Sort descending
+                      std::sort(
+                          elements.begin(), elements.end(),
+                          [elemSize](const std::vector<uint8_t> &a,
+                                     const std::vector<uint8_t> &b) {
+                            for (int64_t j = elemSize - 1; j >= 0; --j) {
+                              if (a[j] != b[j])
+                                return a[j] > b[j];
+                            }
+                            return false;
+                          });
+                      for (int64_t i = 0; i < queueLen; ++i) {
+                        std::memcpy(base + i * elemSize, elements[i].data(),
+                                    elemSize);
+                      }
+                    }
+                  }
+                }
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_rsort(0x"
+                         << llvm::format_hex(queueAddr, 16)
+                         << ", len=" << queueLen << ")\n");
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_shuffle ----
+    // Signature: (queue: ptr) -> void
+    // Randomly shuffles queue elements using Fisher-Yates algorithm.
+    if (calleeName == "__moore_queue_shuffle") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        if (queueAddr != 0) {
+          if (queueAddr >= 0x10000000000ULL) {
+            auto *nativeQueue =
+                reinterpret_cast<MooreQueue *>(queueAddr);
+            if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
+              __moore_queue_shuffle(nativeQueue, 8);
+            }
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  llvm.call: __moore_queue_shuffle(native 0x"
+                       << llvm::format_hex(queueAddr, 16) << ")\n");
+          } else {
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t queueLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->data[queueOffset + 8 + i])
+                            << (i * 8);
+
+              if (queueLen > 1 && dataPtr != 0) {
+                if (dataPtr >= 0x10000000000ULL) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = queueLen;
+                  __moore_queue_shuffle(&tmpQ, 8);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized &&
+                      dataBlock->data.size() > 0) {
+                    int64_t availableSize = static_cast<int64_t>(
+                        dataBlock->data.size() - dataOffset);
+                    int64_t elemSize = availableSize / queueLen;
+                    if (elemSize > 0) {
+                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      // Fisher-Yates shuffle in-place
+                      std::vector<uint8_t> temp(elemSize);
+                      for (int64_t i = queueLen - 1; i > 0; --i) {
+                        int64_t j = std::rand() % (i + 1);
+                        if (i != j) {
+                          std::memcpy(temp.data(), base + i * elemSize,
+                                      elemSize);
+                          std::memcpy(base + i * elemSize,
+                                      base + j * elemSize, elemSize);
+                          std::memcpy(base + j * elemSize, temp.data(),
+                                      elemSize);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_shuffle(0x"
+                         << llvm::format_hex(queueAddr, 16)
+                         << ", len=" << queueLen << ")\n");
+            }
+          }
+        }
+      }
+      return success();
+    }
+
+    // ---- __moore_queue_reverse ----
+    // Signature: (queue: ptr) -> void
+    // Reverses queue elements in-place.
+    if (calleeName == "__moore_queue_reverse") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        if (queueAddr != 0) {
+          if (queueAddr >= 0x10000000000ULL) {
+            auto *nativeQueue =
+                reinterpret_cast<MooreQueue *>(queueAddr);
+            if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
+              __moore_queue_reverse(nativeQueue, 8);
+            }
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  llvm.call: __moore_queue_reverse(native 0x"
+                       << llvm::format_hex(queueAddr, 16) << ")\n");
+          } else {
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t queueLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->data[queueOffset + 8 + i])
+                            << (i * 8);
+
+              if (queueLen > 1 && dataPtr != 0) {
+                if (dataPtr >= 0x10000000000ULL) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = queueLen;
+                  __moore_queue_reverse(&tmpQ, 8);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized &&
+                      dataBlock->data.size() > 0) {
+                    int64_t availableSize = static_cast<int64_t>(
+                        dataBlock->data.size() - dataOffset);
+                    int64_t elemSize = availableSize / queueLen;
+                    if (elemSize > 0) {
+                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      std::vector<uint8_t> temp(elemSize);
+                      int64_t left = 0, right = queueLen - 1;
+                      while (left < right) {
+                        std::memcpy(temp.data(), base + left * elemSize,
+                                    elemSize);
+                        std::memcpy(base + left * elemSize,
+                                    base + right * elemSize, elemSize);
+                        std::memcpy(base + right * elemSize, temp.data(),
+                                    elemSize);
+                        ++left;
+                        --right;
+                      }
+                    }
+                  }
+                }
+              }
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_reverse(0x"
+                         << llvm::format_hex(queueAddr, 16)
+                         << ", len=" << queueLen << ")\n");
+            }
+          }
+        }
+      }
+      return success();
+    }
+
     // ---- __moore_queue_unique ----
     // Signature: (queue: ptr) -> struct<(ptr, i64)>
     if (calleeName == "__moore_queue_unique") {
