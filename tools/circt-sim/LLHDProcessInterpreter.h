@@ -1152,6 +1152,23 @@ private:
   /// The uvm_root instance being constructed (simulated address).
   uint64_t uvmRootBeingConstructed = 0;
 
+  //===--------------------------------------------------------------------===//
+  // RTTI Parent Table (for $cast hierarchy checking)
+  //===--------------------------------------------------------------------===//
+
+  /// Map from typeId -> parentTypeId. table[typeId] = parentTypeId; 0 = root.
+  llvm::SmallVector<int32_t> rttiParentTable;
+
+  /// Whether the RTTI parent table has been loaded from the module.
+  bool rttiTableLoaded = false;
+
+  /// Load the RTTI parent table from the module's circt.rtti_parent_table attr.
+  void loadRTTIParentTable();
+
+  /// Check if srcTypeId is the same as or derived from targetTypeId,
+  /// using the RTTI parent table to walk the class hierarchy.
+  bool checkRTTICast(int32_t srcTypeId, int32_t targetTypeId);
+
   /// Initialize LLVM global variables, especially vtables.
   mlir::LogicalResult initializeGlobals();
 
