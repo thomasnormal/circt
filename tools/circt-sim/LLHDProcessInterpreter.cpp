@@ -15384,7 +15384,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 ln |= static_cast<int64_t>(
                            qBlock->data[base + 8 + b])
                       << (b * 8);
-              srcs.push_back({reinterpret_cast<void *>(dp), ln});
+              // Only use dp as native pointer if it's in native memory range
+              if (dp >= 0x10000000000ULL)
+                srcs.push_back({reinterpret_cast<void *>(dp), ln});
+              else
+                srcs.push_back({nullptr, 0});
               totalLen += ln;
             }
           }
@@ -15604,7 +15608,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               queueLen |= static_cast<int64_t>(
                               qBlock->data[queueOffset + 8 + i])
                           << (i * 8);
-            if (dataPtr != 0) {
+            if (dataPtr != 0 && dataPtr >= 0x10000000000ULL) {
               MooreQueue q;
               q.data = reinterpret_cast<void *>(dataPtr);
               q.len = queueLen;
@@ -15746,7 +15750,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                         qBlock->data[qOff + 8 + i])
                     << (i * 8);
             int64_t sliceLen = std::min(end, ln) - start;
-            if (sliceLen > 0 && dp != 0) {
+            if (sliceLen > 0 && dp != 0 && dp >= 0x10000000000ULL) {
               result = __moore_dyn_array_new(
                   static_cast<int32_t>(sliceLen * elemSize));
               if (result.data) {
