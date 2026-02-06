@@ -82,6 +82,23 @@ struct EventControlVisitor {
       return clockEvent.visit(visitor);
     }
 
+    // If this is an event-typed assertion port, substitute the bound timing
+    // control directly (e.g., for $past/$rose explicit clocking arguments).
+    if (context.inAssertionExpr && symRef) {
+      if (auto *port = symRef->as_if<slang::ast::AssertionPortSymbol>()) {
+        if (auto *binding = context.lookupAssertionPortBinding(port)) {
+          if (binding->kind == AssertionPortBinding::Kind::TimingControl &&
+              binding->timingControl) {
+            auto nestedLoc = context.convertLocation(
+                binding->timingControl->sourceRange);
+            auto visitor = *this;
+            visitor.loc = nestedLoc;
+            return binding->timingControl->visit(visitor);
+          }
+        }
+      }
+    }
+
     // Check if the expression references a sequence or property.
     // Using a sequence/property as an event control (@seq) is an SVA feature
     // that waits for the sequence/property to match. This is not yet supported.
@@ -417,10 +434,17 @@ struct LTLClockControlVisitor {
       condition = context.convertToBool(condition, Domain::TwoValued);
       if (!condition)
         return Value{};
+      condition = context.convertToI1(condition);
+      if (!condition)
+        return Value{};
     }
     expr = context.convertToI1(expr);
     if (!expr)
       return Value{};
+    if (condition) {
+      seqOrPro = ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{condition, seqOrPro});
+    }
     return ltl::ClockOp::create(builder, loc, seqOrPro, edge, expr);
   }
 

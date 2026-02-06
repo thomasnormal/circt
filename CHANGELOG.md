@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 427 - February 6, 2026
+
+### Summary
+
+Iteration 427: Enabled timing-control assertion port substitution in event
+controls so explicit clocking arguments like `@(e)` resolve correctly.
+
+### Accomplishments
+
+1. **Assertion port timing controls** - Event controls now substitute
+   timing-control assertion ports with their bound timing controls, enabling
+   explicit clocking arguments in sampled-value functions.
+2. **Regression coverage** - Added `sva-event-arg-clocking.sv` to exercise
+   `$past` with an event-typed assertion port.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
+## Iteration 426 - February 6, 2026
+
+### Summary
+
+Iteration 426: Implemented `iff` gating for LTL clocking events and added
+regression coverage.
+
+### Accomplishments
+
+1. **Clocking iff semantics** - `@(posedge clk iff cond)` now gates the
+   clocked sequence/property input with `cond` before applying `ltl.clock`.
+2. **Regression coverage** - Added `sva-clock-iff.sv` to validate `iff`
+   clocking lowers through `ltl.and`.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
+## Iteration 425 - February 6, 2026
+
+### Summary
+
+Iteration 425: Added a concrete SVA formal feature roadmap to the project plan
+and SVA status tracking docs.
+
+### Accomplishments
+
+1. **Roadmap planning** - Documented phased SVA formal work (core semantics,
+   clocking/disable, bind/hierarchy, liveness, trace UX) in `PROJECT_PLAN.md`.
+2. **SVA status alignment** - Updated `PROJECT_SVA.md` with the same roadmap
+   and current date.
+
+### Verification (February 6, 2026)
+
+- Not run (documentation-only updates)
+
 ## Iteration 424 - February 6, 2026
 
 ### Summary
