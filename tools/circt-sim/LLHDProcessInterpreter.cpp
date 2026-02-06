@@ -5419,6 +5419,30 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       return success();
     }
 
+    // Recursive DFS cycle detection (same as func.call handler)
+    Operation *indFuncKey = funcOp.getOperation();
+    uint64_t indArg0Val = 0;
+    bool indHasArg0 = !args.empty() && !args[0].isX();
+    if (indHasArg0)
+      indArg0Val = args[0].getUInt64();
+    auto &indVisitedSet = callState.recursionVisited[indFuncKey];
+    if (indHasArg0 && callState.callDepth > 0 && !indVisitedSet.empty()) {
+      if (indVisitedSet.count(indArg0Val)) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: recursive revisit of '"
+                   << calleeName << "' with arg0=0x"
+                   << llvm::format_hex(indArg0Val, 16) << "\n");
+        for (Value result : callIndirectOp.getResults()) {
+          unsigned width = getTypeWidth(result.getType());
+          setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+        }
+        return success();
+      }
+    }
+    bool indAddedToVisited = false;
+    if (indHasArg0)
+      indAddedToVisited = indVisitedSet.insert(indArg0Val).second;
+
     // Call the function with depth tracking
     ++callState.callDepth;
     SmallVector<InterpretedValue, 2> results;
@@ -5426,6 +5450,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     LogicalResult funcResult =
         interpretFuncBody(procId, funcOp, args, results, callIndirectOp);
     --callState.callDepth;
+
+    // Remove from visited set after returning
+    if (indAddedToVisited)
+      processStates[procId].recursionVisited[indFuncKey].erase(indArg0Val);
 
     if (failed(funcResult))
       return failure();
@@ -8903,6 +8931,41 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Recursive DFS cycle detection: when a function calls itself (directly or
+  // via mutual recursion), track the arg0 (`this` pointer) to prevent
+  // exponential blowup from DFS traversal over graph diamonds. UVM's
+  // m_find_successor iterates successors and recurses without a visited set,
+  // causing O(2^N) revisits on diamond patterns in the phase DAG.
+  Operation *funcKey = funcOp.getOperation();
+  uint64_t arg0Val = 0;
+  bool hasArg0 = !args.empty() && !args[0].isX();
+  if (hasArg0)
+    arg0Val = args[0].getUInt64();
+
+  // Check if this is a recursive call with a previously visited arg0
+  auto &visitedSet = state.recursionVisited[funcKey];
+  [[maybe_unused]] bool isRecursiveRevisit = false;
+  if (hasArg0 && state.callDepth > 0 && !visitedSet.empty()) {
+    if (visitedSet.count(arg0Val)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call: recursive revisit of '"
+                 << funcOp.getName() << "' with arg0=0x"
+                 << llvm::format_hex(arg0Val, 16)
+                 << " at depth " << state.callDepth << ", returning zero\n");
+      for (Value result : callOp.getResults()) {
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      }
+      return success();
+    }
+  }
+
+  // Add arg0 to visited set before recursing
+  bool addedToVisited = false;
+  if (hasArg0) {
+    addedToVisited = visitedSet.insert(arg0Val).second;
+  }
+
   // Execute the function body with depth tracking
   ++state.callDepth;
   llvm::SmallVector<InterpretedValue, 4> returnValues;
@@ -8910,6 +8973,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LogicalResult funcResult =
       interpretFuncBody(procId, funcOp, args, returnValues, callOp);
   --state.callDepth;
+
+  // Remove arg0 from visited set after returning
+  if (addedToVisited)
+    processStates[procId].recursionVisited[funcKey].erase(arg0Val);
 
   if (failed(funcResult))
     return failure();
@@ -9085,8 +9152,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         if (stIt != processStates.end()) {
           ++stIt->second.totalSteps;
           ++stIt->second.funcBodySteps;
-          // Progress report every 1M func body steps
-          if (stIt->second.funcBodySteps % 1000000 == 0) {
+          // Progress report every 10M func body steps
+          if (stIt->second.funcBodySteps % 10000000 == 0) {
             llvm::errs() << "[circt-sim] func progress: process " << procId
                          << " funcBodySteps=" << stIt->second.funcBodySteps
                          << " totalSteps=" << stIt->second.totalSteps
@@ -15796,6 +15863,30 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     return success();
   }
 
+  // Recursive DFS cycle detection (same as func.call handler)
+  Operation *llvmFuncKey = funcOp.getOperation();
+  uint64_t llvmArg0Val = 0;
+  bool llvmHasArg0 = !args.empty() && !args[0].isX();
+  if (llvmHasArg0)
+    llvmArg0Val = args[0].getUInt64();
+  auto &llvmVisitedSet = state.recursionVisited[llvmFuncKey];
+  if (llvmHasArg0 && state.callDepth > 0 && !llvmVisitedSet.empty()) {
+    if (llvmVisitedSet.count(llvmArg0Val)) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: recursive revisit of '"
+                 << calleeName << "' with arg0=0x"
+                 << llvm::format_hex(llvmArg0Val, 16) << "\n");
+      for (Value result : callOp.getResults()) {
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      }
+      return success();
+    }
+  }
+  bool llvmAddedToVisited = false;
+  if (llvmHasArg0)
+    llvmAddedToVisited = llvmVisitedSet.insert(llvmArg0Val).second;
+
   // Increment call depth before entering function
   ++state.callDepth;
 
@@ -15806,6 +15897,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   // Decrement call depth after returning
   --state.callDepth;
+
+  // Remove from visited set after returning
+  if (llvmAddedToVisited)
+    processStates[procId].recursionVisited[llvmFuncKey].erase(llvmArg0Val);
 
   if (failed(funcResult))
     return failure();
@@ -15937,8 +16032,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         if (stIt != processStates.end()) {
           ++stIt->second.totalSteps;
           ++stIt->second.funcBodySteps;
-          // Progress report every 1M func body steps
-          if (stIt->second.funcBodySteps % 1000000 == 0) {
+          // Progress report every 10M func body steps
+          if (stIt->second.funcBodySteps % 10000000 == 0) {
             llvm::errs() << "[circt-sim] func progress: process " << procId
                          << " funcBodySteps=" << stIt->second.funcBodySteps
                          << " totalSteps=" << stIt->second.totalSteps
