@@ -1148,6 +1148,7 @@ private:
   /// Depth of m_uvm_get_root calls (0 = not in get_root, >1 = re-entrant).
   size_t uvmGetRootDepth = 0;
 
+
   /// The uvm_root instance being constructed (simulated address).
   uint64_t uvmRootBeingConstructed = 0;
 

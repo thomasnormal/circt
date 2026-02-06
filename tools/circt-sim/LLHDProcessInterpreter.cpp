@@ -5244,109 +5244,6 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
 
-      // Detailed tracing for first few vtable failures
-      static unsigned vtableTraceCount = 0;
-      if (vtableTraceCount < 3) {
-        ++vtableTraceCount;
-        // Trace back through the callee operand
-        // First check if callee comes from an unrealized_conversion_cast
-        Value traceValue = calleeValue;
-        if (auto castOp = traceValue.getDefiningOp<UnrealizedConversionCastOp>()) {
-          if (!castOp.getInputs().empty())
-            traceValue = castOp.getInputs()[0];
-        }
-
-        if (auto loadOp = traceValue.getDefiningOp<LLVM::LoadOp>()) {
-          InterpretedValue loadAddr = getValue(procId, loadOp.getAddr());
-          llvm::errs() << "[circt-sim] VTABLE TRACE #" << vtableTraceCount << ":\n";
-
-          // Print the current block to understand which branch was taken
-          auto &state = processStates[procId];
-          if (state.currentBlock) {
-            llvm::errs() << "  Current block: ";
-            state.currentBlock->printAsOperand(llvm::errs());
-            llvm::errs() << "\n";
-          }
-
-          llvm::errs() << "  Callee comes from llvm.load at addr: ";
-          if (loadAddr.isX()) {
-            llvm::errs() << "X (address is unknown)\n";
-            // Trace back further - why is the address X?
-            Value addrValue = loadOp.getAddr();
-            if (auto gepOp = addrValue.getDefiningOp<LLVM::GEPOp>()) {
-              InterpretedValue baseVal = getValue(procId, gepOp.getBase());
-              llvm::errs() << "  Address comes from GEP with base: ";
-              if (baseVal.isX())
-                llvm::errs() << "X\n";
-              else
-                llvm::errs() << "0x" << llvm::format_hex(baseVal.getUInt64(), 16) << "\n";
-
-              // If the base is also X, trace further
-              if (baseVal.isX()) {
-                Value baseValue = gepOp.getBase();
-                if (auto baseLoadOp = baseValue.getDefiningOp<LLVM::LoadOp>()) {
-                  InterpretedValue baseLoadAddr = getValue(procId, baseLoadOp.getAddr());
-                  llvm::errs() << "  GEP base comes from llvm.load at addr: ";
-                  if (baseLoadAddr.isX())
-                    llvm::errs() << "X\n";
-                  else
-                    llvm::errs() << "0x" << llvm::format_hex(baseLoadAddr.getUInt64(), 16) << "\n";
-                }
-              }
-            }
-          } else {
-            uint64_t addr = loadAddr.getUInt64();
-            llvm::errs() << "0x" << llvm::format_hex(addr, 16) << "\n";
-
-            // Check if this address is in global memory
-            bool foundInGlobal = false;
-            for (auto &entry : globalAddresses) {
-              StringRef globalName = entry.first();
-              uint64_t globalBaseAddr = entry.second;
-              auto blockIt = globalMemoryBlocks.find(globalName);
-              if (blockIt != globalMemoryBlocks.end()) {
-                uint64_t globalSize = blockIt->second.size;
-                if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-                  llvm::errs() << "  Address is in global '" << globalName
-                               << "' at offset " << (addr - globalBaseAddr) << "\n";
-                  llvm::errs() << "  Block initialized: " << blockIt->second.initialized
-                               << " size: " << blockIt->second.size << "\n";
-                  // Dump the bytes at this offset
-                  uint64_t offset = addr - globalBaseAddr;
-                  llvm::errs() << "  Bytes at offset " << offset << ": ";
-                  for (unsigned i = 0; i < 8 && (offset + i) < blockIt->second.data.size(); ++i)
-                    llvm::errs() << llvm::format_hex_no_prefix(blockIt->second.data[offset + i], 2) << " ";
-                  llvm::errs() << "\n";
-                  foundInGlobal = true;
-                  break;
-                }
-              }
-            }
-            if (!foundInGlobal) {
-              llvm::errs() << "  Address NOT found in any global memory block!\n";
-              // Check malloc blocks
-              bool foundInMalloc = false;
-              for (auto &entry : mallocBlocks) {
-                uint64_t mallocBaseAddr = entry.first;
-                uint64_t mallocSize = entry.second.size;
-                if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-                  llvm::errs() << "  Found in malloc block at 0x"
-                               << llvm::format_hex(mallocBaseAddr, 16)
-                               << " offset " << (addr - mallocBaseAddr) << "\n";
-                  foundInMalloc = true;
-                  break;
-                }
-              }
-              if (!foundInMalloc)
-                llvm::errs() << "  Also NOT found in malloc blocks!\n";
-            }
-          }
-        } else {
-          llvm::errs() << "[circt-sim] VTABLE TRACE #" << vtableTraceCount
-                       << ": Callee not from llvm.load\n";
-        }
-      }
-
       emitVtableWarning("function pointer is X (uninitialized)");
       // Return zero/null instead of X to prevent cascading X-propagation
       // in UVM code paths that check return values for null.
@@ -9214,6 +9111,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
       if (auto condBranchOp = dyn_cast<mlir::cf::CondBranchOp>(&op)) {
         InterpretedValue cond = getValue(procId, condBranchOp.getCondition());
+
         Block *dest;
         if (!cond.isX() && cond.getUInt64() != 0) {
           dest = condBranchOp.getTrueDest();
@@ -12981,15 +12879,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int32_t valueSize = static_cast<int32_t>(valueSizeVal.getUInt64());
 
         // Check if arrayAddr is null or not a valid associative array address.
-        // Valid addresses are either:
-        // 1. Tracked in validAssocArrayAddresses (from __moore_assoc_create)
-        // 2. A native C++ heap address (> 0x10000000000, ~1TB) which may have been
-        //    created in global constructors. Native heap addresses are typically in
-        //    high memory (0x5... or 0x7f... on Linux), while interpreter virtual
-        //    memory starts at 0x100000.
         constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL; // 1TB
         bool isValidNativeAddr = arrayAddr >= kNativeHeapThreshold;
-        if (arrayAddr == 0 || (!validAssocArrayAddresses.contains(arrayAddr) && !isValidNativeAddr)) {
+        bool isInValidSet = validAssocArrayAddresses.contains(arrayAddr);
+        if (arrayAddr == 0 || (!isInValidSet && !isValidNativeAddr)) {
           // Auto-create the associative array on first access (SystemVerilog semantics).
           int32_t keySize = 8; // default: 8-byte integer key
           if (auto allocaOp = callOp.getOperand(1).getDefiningOp<LLVM::AllocaOp>()) {
@@ -13181,6 +13074,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         int32_t result = __moore_assoc_exists(arrayPtr, keyPtr);
+
+        // Debug: trace assoc_exists calls with string keys to diagnose NOCHILD
+        if (arrayPtr) {
+          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
+          if (header->type == AssocArrayType_StringKey && !keyStorage.empty()) {
+            static unsigned assocExistsTraceCount = 0;
+            if (assocExistsTraceCount < 20 &&
+                (keyStorage == "uvm_test_top" ||
+                 keyStorage.find("test_top") != std::string::npos)) {
+              ++assocExistsTraceCount;
+              llvm::errs() << "[circt-sim] ASSOC_EXISTS(array=0x"
+                           << llvm::format_hex(arrayAddr, 16)
+                           << ", key=\"" << keyStorage << "\") = " << result;
+              if (auto parentFunc = callOp->getParentOfType<func::FuncOp>())
+                llvm::errs() << " [in " << parentFunc.getName() << "]";
+              llvm::errs() << "\n";
+            }
+          }
+        }
 
         setValue(procId, callOp.getResult(), InterpretedValue(static_cast<uint64_t>(result), 32));
 
