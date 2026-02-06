@@ -46,7 +46,7 @@ repository (1,036 tests across 15 IEEE chapters).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 144 | 143 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
+| circt-sim | 148 | 147 | 1 | XFail: `tlul-bfm-user-default.sv` (hw.bitcast for nested struct init) |
 
 ## UVM Simulation Feature Status
 
@@ -95,17 +95,17 @@ to commercial simulators like Cadence Xcelium.
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
 | Named events | PARTIAL | Basic `wait` / `trigger` works |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
-| Simulation performance | SLOW | Large UVM designs (APB AVIP) take >300s wall-clock |
+| Simulation performance | OK | All AVIPs complete within 60s wall-clock |
 
 ### AVIP Simulation Status
 
 | AVIP | HvlTop | HdlTop | Combined | Notes |
 |------|--------|--------|----------|-------|
-| APB | Runs (slow) | Runs | Runs | >300s wall-clock, simulation logic completes |
-| AHB | Runs (slow) | Runs | Runs | Similar to APB |
-| UART | Runs | Runs | Runs | Reaches ~559.7 us sim time |
-| I2S | Runs | - | - | `I2sBaseTest` starts, slow |
-| I3C | Error | - | - | `ase_test` not registered (test config, not sim bug) |
+| APB | Runs | Runs | Runs | `apb_base_test` completes at ~108 ns sim time |
+| AHB | Runs | Runs | Runs | `AhbBaseTest` completes at ~115 ns sim time |
+| UART | Runs | Runs | Runs | `UartBaseTest` completes at ~255 ns sim time |
+| I2S | Runs | - | - | `I2sBaseTest` completes at ~94 ns sim time |
+| I3C | Runs | - | - | `i3c_base_test` completes at ~112 ns sim time |
 
 ## Key Fixes History
 
@@ -127,3 +127,5 @@ to commercial simulators like Cadence Xcelium.
 | Semaphore support | Full pipeline: ImportVerilog method lowering, constructor keyCount, interpreter interceptors with blocking |
 | `$test$plusargs` | Runtime call via `__moore_test_plusargs`; traces through `IntToStringOp` to extract compile-time string; skips constant eval |
 | Queue sort/rsort/shuffle/reverse | Interpreter interceptors with element size inference from data block; handles native/interpreter/mixed memory |
+| Queue unique fix | Interpreter-managed queue support; native memory block registration for cross-operation data access |
+| Native memory threshold fix | Queue operations check `nativeMemoryBlocks` map instead of just address threshold; fixes systems with low malloc addresses |
