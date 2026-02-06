@@ -16727,13 +16727,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
-                if (dataPtr >= 0x10000000000ULL) {
+                // Check if data is in a tracked native memory block
+                // (from malloc in interceptors like queue_unique)
+                auto nmIt = nativeMemoryBlocks.find(dataPtr);
+                bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                    (nmIt != nativeMemoryBlocks.end());
+                if (isNativeData) {
                   // Data is in native memory but queue struct is interpreted
-                  // Wrap in a temporary MooreQueue and delegate
+                  // Infer element size from tracked native memory block
+                  int64_t nativeElemSize = 8; // default
+                  if (nmIt != nativeMemoryBlocks.end() && queueLen > 0) {
+                    nativeElemSize = static_cast<int64_t>(nmIt->second) /
+                                    queueLen;
+                    if (nativeElemSize <= 0)
+                      nativeElemSize = 8;
+                  }
                   MooreQueue tmpQ;
                   tmpQ.data = reinterpret_cast<void *>(dataPtr);
                   tmpQ.len = queueLen;
-                  __moore_queue_sort_inplace(&tmpQ, 8);
+                  __moore_queue_sort_inplace(&tmpQ, nativeElemSize);
                 } else {
                   // Both queue and data are in interpreter memory.
                   // Infer element size from data block size / queue length.
@@ -17045,6 +17057,86 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (queueAddr >= 0x10000000000ULL) {
           result = __moore_queue_unique(
               reinterpret_cast<MooreQueue *>(queueAddr));
+        } else if (queueAddr != 0) {
+          // Interpreter-managed queue: read struct {ptr, i64} from memory
+          uint64_t qOff = 0;
+          auto *qBlock = findMemoryBlockByAddress(queueAddr, procId, &qOff);
+          if (qBlock) {
+            uint64_t dataPtr = 0;
+            int64_t queueLen = 0;
+            if (qOff + 16 <= qBlock->data.size()) {
+              std::memcpy(&dataPtr, qBlock->data.data() + qOff, 8);
+              std::memcpy(&queueLen, qBlock->data.data() + qOff + 8, 8);
+            }
+            if (dataPtr != 0 && queueLen > 0) {
+              // Read element data
+              std::vector<uint8_t> elemData;
+              int64_t elemSize = 0;
+              if (dataPtr >= 0x10000000000ULL) {
+                // Native data pointer - need to figure out element size
+                // from the total allocation. Use a common heuristic:
+                // try to get malloc size, or default to 4 for int queues.
+                elemSize = 4; // common case for int queues
+                elemData.resize(queueLen * elemSize);
+                std::memcpy(elemData.data(),
+                            reinterpret_cast<void *>(dataPtr),
+                            queueLen * elemSize);
+              } else {
+                uint64_t dOff = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dOff);
+                if (dataBlock) {
+                  size_t available = dataBlock->data.size() - dOff;
+                  elemSize = (queueLen > 0)
+                                 ? static_cast<int64_t>(available / queueLen)
+                                 : 0;
+                  if (elemSize > 0) {
+                    elemData.resize(queueLen * elemSize);
+                    std::memcpy(elemData.data(),
+                                dataBlock->data.data() + dOff,
+                                queueLen * elemSize);
+                  }
+                }
+              }
+              if (elemSize > 0 && !elemData.empty()) {
+                // Deduplicate: for each element, check if already in result
+                std::vector<uint8_t> uniqueData;
+                int64_t uniqueLen = 0;
+                for (int64_t i = 0; i < queueLen; ++i) {
+                  uint8_t *elem = elemData.data() + i * elemSize;
+                  bool found = false;
+                  for (int64_t j = 0; j < uniqueLen; ++j) {
+                    if (std::memcmp(uniqueData.data() + j * elemSize, elem,
+                                    elemSize) == 0) {
+                      found = true;
+                      break;
+                    }
+                  }
+                  if (!found) {
+                    uniqueData.insert(uniqueData.end(), elem,
+                                      elem + elemSize);
+                    ++uniqueLen;
+                  }
+                }
+                // Allocate native memory for result
+                if (uniqueLen > 0) {
+                  void *nativeData =
+                      std::malloc(uniqueLen * elemSize);
+                  if (nativeData) {
+                    std::memcpy(nativeData, uniqueData.data(),
+                                uniqueLen * elemSize);
+                    result.data = nativeData;
+                    result.len = uniqueLen;
+                    // Register in nativeMemoryBlocks so loads can find it
+                    uint64_t nativeAddr =
+                        reinterpret_cast<uint64_t>(nativeData);
+                    nativeMemoryBlocks[nativeAddr] =
+                        uniqueLen * elemSize;
+                  }
+                }
+              }
+            }
+          }
         }
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
@@ -17054,7 +17146,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
         LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_queue_unique()\n");
+                   << "  llvm.call: __moore_queue_unique() -> len="
+                   << result.len << "\n");
       }
       return success();
     }
