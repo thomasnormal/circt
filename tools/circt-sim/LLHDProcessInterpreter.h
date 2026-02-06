@@ -1085,6 +1085,11 @@ private:
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
   llvm::DenseSet<uint64_t> validAssocArrayAddresses;
 
+  /// Tracks active function call depth for recursion detection.
+  /// Maps funcOp operation pointer to current call depth. Used to enable
+  /// save/restore of SSA values only for recursive calls (depth > 1).
+  llvm::DenseMap<mlir::Operation *, unsigned> funcCallDepth;
+
   /// Global address counter for malloc and cross-process memory.
   /// This ensures no address overlap between different processes.
   uint64_t globalNextAddress = 0x100000;

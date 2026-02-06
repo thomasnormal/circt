@@ -8962,15 +8962,40 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // and llhd.prb inside the function can resolve the signal ID.
   llvm::SmallVector<Value, 4> tempSignalMappings;
 
-  // Save current values of block arguments to restore on return.
-  // This is critical for recursive calls where the same func.func definition
-  // (and thus the same SSA Value objects) is used - without this, a recursive
-  // call's arguments overwrite the outer call's arguments in the shared value map.
-  llvm::SmallDenseMap<Value, InterpretedValue, 8> savedArgValues;
-  for (auto arg : entryBlock.getArguments()) {
-    auto it = processStates[procId].valueMap.find(arg);
-    if (it != processStates[procId].valueMap.end())
-      savedArgValues[arg] = it->second;
+  // Track recursion depth. When a function calls itself (directly or
+  // indirectly), the inner call's SSA values overwrite the outer call's in the
+  // shared valueMap/memoryBlocks (since same mlir::Value objects are reused).
+  // We only need to save/restore when depth > 1 (i.e., this is a recursive call).
+  // Use a local key to avoid dangling reference - DenseMap may rehash when
+  // a different function inserts into funcCallDepth during recursive calls.
+  Operation *funcKey = funcOp.getOperation();
+  unsigned currentDepth = ++funcCallDepth[funcKey];
+  bool isRecursive = (currentDepth > 1);
+
+  llvm::DenseMap<Value, InterpretedValue> savedFuncValues;
+  llvm::DenseMap<Value, MemoryBlock> savedFuncMemBlocks;
+  if (isRecursive) {
+    auto &state = processStates[procId];
+    for (Block &block : funcOp.getBody()) {
+      for (auto arg : block.getArguments()) {
+        auto it = state.valueMap.find(arg);
+        if (it != state.valueMap.end())
+          savedFuncValues[arg] = it->second;
+        auto mIt = state.memoryBlocks.find(arg);
+        if (mIt != state.memoryBlocks.end())
+          savedFuncMemBlocks[arg] = mIt->second;
+      }
+      for (Operation &op : block) {
+        for (auto result : op.getResults()) {
+          auto it = state.valueMap.find(result);
+          if (it != state.valueMap.end())
+            savedFuncValues[result] = it->second;
+          auto mIt = state.memoryBlocks.find(result);
+          if (mIt != state.memoryBlocks.end())
+            savedFuncMemBlocks[result] = mIt->second;
+        }
+      }
+    }
   }
 
   // Set function arguments (only if not resuming from a saved position)
@@ -9011,19 +9036,25 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     }
   }
 
-  // Helper to restore saved argument values before returning.
-  auto restoreSavedArgValues = [&]() {
-    for (const auto &[arg, val] : savedArgValues)
-      processStates[procId].valueMap[arg] = val;
+  // Helper to restore saved function values and decrement recursion depth.
+  auto restoreSavedFuncValues = [&]() {
+    --funcCallDepth[funcKey];
+    if (isRecursive) {
+      auto &state = processStates[procId];
+      for (const auto &[val, saved] : savedFuncValues)
+        state.valueMap[val] = saved;
+      for (auto &[val, saved] : savedFuncMemBlocks)
+        state.memoryBlocks[val] = saved;
+    }
   };
 
-  // Helper to clean up temporary signal mappings and restore arg values before
-  // returning. Restoring arg values is critical for recursive calls to the same
-  // function - without it, the inner call's arguments corrupt the outer call's.
+  // Helper to clean up temporary signal mappings and restore values before
+  // returning. Restoring values is critical for recursive calls to the same
+  // function - without it, the inner call's values corrupt the outer call's.
   auto cleanupTempMappings = [&]() {
     for (Value v : tempSignalMappings)
       valueToSignal.erase(v);
-    restoreSavedArgValues();
+    restoreSavedFuncValues();
   };
 
   // Execute operations until we hit a return
@@ -11150,7 +11181,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     }
   } else {
     if (offset + storeSize > nativeSize) {
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.store: native out of bounds access\n");
+      llvm::errs() << "[circt-sim] native store OOB: "
+                   << storeSize << " bytes at offset " << offset
+                   << " exceeds block size " << nativeSize
+                   << " (addr 0x" << llvm::format_hex(ptrVal.getUInt64(), 16) << ")\n";
       return success();
     }
   }
@@ -12941,11 +12975,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
         }
 
-        void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, valueSize);
+        // MooreToCore sometimes uses valueSize=4 for pointer-valued arrays
+        // (e.g., m_domains maps string -> uvm_domain handle). The actual stores
+        // are 8 bytes (pointer-sized), so we need at least 8 bytes to avoid
+        // the native store handler silently dropping the store due to bounds
+        // checking.
+        int32_t effectiveSize = std::max(valueSize, static_cast<int32_t>(8));
+        LLVM_DEBUG(if (effectiveSize != valueSize) {
+          llvm::dbgs() << "  assoc_get_ref: expanded valueSize from "
+                       << valueSize << " to " << effectiveSize << " for array 0x"
+                       << llvm::format_hex(arrayAddr, 16) << "\n";
+        });
+        void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, effectiveSize);
         uint64_t resultVal = reinterpret_cast<uint64_t>(resultPtr);
 
-        if (resultPtr && valueSize > 0) {
-          size_t size = static_cast<size_t>(valueSize);
+        if (resultPtr && effectiveSize > 0) {
+          size_t size = static_cast<size_t>(effectiveSize);
           auto it = nativeMemoryBlocks.find(resultVal);
           if (it == nativeMemoryBlocks.end() || it->second < size)
             nativeMemoryBlocks[resultVal] = size;
@@ -13154,6 +13199,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             size_t readSize = std::min<size_t>(8, availableBytes);
             std::memcpy(keyBuffer, keyRefBlock->data.data() + keyRefOffset, readSize);
           }
+
+          int64_t keyBefore = 0;
+          std::memcpy(&keyBefore, keyBuffer, 8);
 
           result = __moore_assoc_next(arrayPtr, keyBuffer);
 
@@ -15760,15 +15808,37 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   // Track signal mappings created for this call (to clean up later)
   SmallVector<Value, 4> tempSignalMappings;
 
-  // Save current values of block arguments to restore on return.
-  // This is critical for recursive calls where the same LLVM function definition
-  // (and thus the same SSA Value objects) is used - without this, a recursive
-  // call's arguments overwrite the outer call's arguments in the shared value map.
-  llvm::SmallDenseMap<Value, InterpretedValue, 8> savedArgValues;
-  for (auto arg : entryBlock.getArguments()) {
-    auto it = processStates[procId].valueMap.find(arg);
-    if (it != processStates[procId].valueMap.end())
-      savedArgValues[arg] = it->second;
+  // Track recursion depth for this function. Use a local key to avoid
+  // dangling reference - DenseMap may rehash during recursive calls.
+  Operation *funcKey = funcOp.getOperation();
+  unsigned currentDepth = ++funcCallDepth[funcKey];
+  bool isRecursive = (currentDepth > 1);
+
+  // Save ALL SSA values defined in this function when recursive.
+  llvm::DenseMap<Value, InterpretedValue> savedFuncValues;
+  llvm::DenseMap<Value, MemoryBlock> savedFuncMemBlocks;
+  if (isRecursive) {
+    auto &state = processStates[procId];
+    for (Block &block : funcOp.getBody()) {
+      for (auto arg : block.getArguments()) {
+        auto it = state.valueMap.find(arg);
+        if (it != state.valueMap.end())
+          savedFuncValues[arg] = it->second;
+        auto mIt = state.memoryBlocks.find(arg);
+        if (mIt != state.memoryBlocks.end())
+          savedFuncMemBlocks[arg] = mIt->second;
+      }
+      for (Operation &op : block) {
+        for (auto result : op.getResults()) {
+          auto it = state.valueMap.find(result);
+          if (it != state.valueMap.end())
+            savedFuncValues[result] = it->second;
+          auto mIt = state.memoryBlocks.find(result);
+          if (mIt != state.memoryBlocks.end())
+            savedFuncMemBlocks[result] = mIt->second;
+        }
+      }
+    }
   }
 
   for (auto [idx, blockArg] :
@@ -15790,18 +15860,24 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     }
   }
 
-  // Helper to restore saved argument values
-  auto restoreSavedArgValues = [&]() {
-    for (const auto &[arg, val] : savedArgValues)
-      processStates[procId].valueMap[arg] = val;
+  // Helper to restore saved function values and decrement recursion depth
+  auto restoreSavedFuncValues = [&]() {
+    --funcCallDepth[funcKey];
+    if (isRecursive) {
+      auto &state = processStates[procId];
+      for (const auto &[val, saved] : savedFuncValues)
+        state.valueMap[val] = saved;
+      for (auto &[val, saved] : savedFuncMemBlocks)
+        state.memoryBlocks[val] = saved;
+    }
   };
 
-  // Helper to clean up temporary signal mappings and restore arg values
+  // Helper to clean up temporary signal mappings and restore values
   auto cleanupTempMappings = [&]() {
     for (Value v : tempSignalMappings) {
       valueToSignal.erase(v);
     }
-    restoreSavedArgValues();
+    restoreSavedFuncValues();
   };
 
   // Execute the function body with operation limit to prevent infinite loops
