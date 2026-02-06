@@ -372,6 +372,49 @@ static void addUvmSupportIfAvailable() {
       opts.uvmPath = uvmHome;
   }
 
+  // Auto-discover bundled UVM library relative to the binary location.
+  // The bundled copy lives at lib/Runtime/uvm-core/src/ in the source tree,
+  // which is <binary_dir>/../../lib/Runtime/uvm-core/ relative to bin/.
+  if (opts.uvmPath.empty()) {
+    auto mainExe = llvm::sys::fs::getMainExecutable(
+        "circt-verilog", (void *)&addUvmSupportIfAvailable);
+    if (!mainExe.empty()) {
+      llvm::SmallString<256> binDir(mainExe);
+      llvm::sys::path::remove_filename(binDir); // remove binary name
+      // Try <bin>/../lib/Runtime/uvm-core/src/ (install layout)
+      llvm::SmallString<256> candidate(binDir);
+      llvm::sys::path::append(candidate, "..");
+      llvm::sys::path::append(candidate, "lib");
+      llvm::sys::path::append(candidate, "Runtime");
+      llvm::sys::path::append(candidate, "uvm-core");
+      llvm::sys::path::append(candidate, "src");
+      llvm::sys::path::append(candidate, "uvm_pkg.sv");
+      llvm::sys::fs::make_absolute(candidate);
+      if (llvm::sys::fs::exists(candidate)) {
+        candidate = binDir;
+        llvm::sys::path::append(candidate, "..");
+        llvm::sys::path::append(candidate, "lib");
+        llvm::sys::path::append(candidate, "Runtime");
+        llvm::sys::path::append(candidate, "uvm-core");
+        llvm::sys::fs::make_absolute(candidate);
+        opts.uvmPath = std::string(candidate);
+      }
+    }
+    // Also search ~/uvm-core as a fallback.
+    if (opts.uvmPath.empty()) {
+      const char *home = std::getenv("HOME");
+      if (home) {
+        llvm::SmallString<256> homeCandidate(home);
+        llvm::sys::path::append(homeCandidate, "uvm-core", "src",
+                                "uvm_pkg.sv");
+        if (llvm::sys::fs::exists(homeCandidate)) {
+          homeCandidate = std::string(home) + "/uvm-core";
+          opts.uvmPath = std::string(homeCandidate);
+        }
+      }
+    }
+  }
+
   std::string uvmPkgPath;
   std::string uvmMacrosPath;
   std::string uvmIncludeDir;
