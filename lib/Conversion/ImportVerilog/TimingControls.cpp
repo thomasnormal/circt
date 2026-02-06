@@ -374,6 +374,27 @@ struct LTLClockControlVisitor {
   Value seqOrPro;
 
   Value visit(const slang::ast::SignalEventControl &ctrl) {
+    // If the event expression is a timing-control assertion port, substitute
+    // the bound timing control directly.
+    if (context.inAssertionExpr) {
+      if (auto *symRef = ctrl.expr.getSymbolReference()) {
+        if (auto *port =
+                symRef->as_if<slang::ast::AssertionPortSymbol>()) {
+          if (auto *binding = context.lookupAssertionPortBinding(port)) {
+            if (binding->kind ==
+                    AssertionPortBinding::Kind::TimingControl &&
+                binding->timingControl) {
+              auto nestedLoc =
+                  context.convertLocation(binding->timingControl->sourceRange);
+              auto visitor = *this;
+              visitor.loc = nestedLoc;
+              return binding->timingControl->visit(visitor);
+            }
+          }
+        }
+      }
+    }
+
     // Check if the expression references a clocking block.
     // In that case, we need to convert the clocking block's clock event instead.
     auto symRef = ctrl.expr.getSymbolReference();
