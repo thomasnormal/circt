@@ -1,5 +1,69 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 383 - February 6, 2026
+
+### Summary
+
+Comprehensive sv-tests compliance audit. Tested all 1,036 sv-tests across
+parsing, elaboration, simulation, BMC, and LEC modes.
+
+### Accomplishments
+
+1. **Full sv-tests parsing audit** - 853/853 eligible tests parse successfully (100%).
+   183 tests skipped for legitimate reasons: 70 negative, 104 need UVM, 6 need includes, 3 need defines.
+2. **Full sv-tests elaboration audit** - 845/850 eligible tests elaborate (99.4%).
+   Only 5 failures: 2 real bugs (llhd.wait in function), 1 preprocessor edge case, 2 need -D flags.
+3. **Full sv-tests simulation pipeline** - 255/256 eligible simulation-tagged tests pass (99.6%).
+   The 1 failure is the same llhd.wait compile bug. 3 apparent sim failures were just wrong --top extraction.
+4. **Full BMC with Z3** - 26/26 pass (100%). The 3 smoke-mode xfails all pass with real Z3 solving.
+5. **Full LEC with Z3** - 23/23 pass (100%).
+6. **circt-sim unit tests** - 139 total (138 pass + 1 xfail). New test: randomize-with-ranges.
+7. **Updated FEATURES.md** - Comprehensive compliance table with per-mode results and remaining bugs list.
+
+### Remaining Bugs for 100% sv-tests
+
+- `9.3.3--event.sv` and `9.4.2.4--event_sequence.sv`: MooreToCore emits `llhd.wait` inside
+  `llvm.func` instead of `llhd.process` for event control in tasks/functions.
+- `22.5.1--define-expansion_26.sv`: Preprocessor macro concatenation edge case.
+- 2 tests need external `-D` flags from test harness metadata (not a tool bug).
+
+### Verification (February 6, 2026)
+
+- `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` → 139 total, 138 pass, 1 xfail
+- `bash utils/run_sv_tests_circt_bmc.sh ~/sv-tests` → 26/26 pass (full Z3)
+- `bash utils/run_sv_tests_circt_lec.sh ~/sv-tests` → 23/23 pass (full Z3)
+- Manual scan: all 850 eligible tests through `circt-verilog --ir-hw`
+- Manual scan: all 256 eligible sim-tagged tests through `circt-verilog --ir-hw` + `circt-sim`
+
+## Iterations 380-382 - February 6, 2026
+
+### Summary
+
+Implemented randomize interceptors, shutdown fix, and native memory fallback.
+
+### Accomplishments
+
+1. **`__moore_randomize_basic()`** - Fills object memory with random bytes via std::rand()
+2. **`__moore_randomize_with_dist()`** - Reads range/weight arrays from memory, weighted selection
+3. **Shutdown `_exit(0)`** - Placed in processInput() before SimulationContext destructor to skip
+   minutes-long DenseMap/StringMap cleanup for large UVM designs
+4. **Native store OOB fallback** - Falls through to findMemoryBlockByAddress when native block is stale
+
+## Iteration 379 - February 6, 2026
+
+### Summary
+
+Iteration 379: Fixed open-ended `nexttime`/`s_nexttime` ranges so `[min:$]` lowers to an unbounded delay instead of a fixed width.
+
+### Accomplishments
+
+1. **Open-ended nexttime ranges** - `nexttime [min:$]` and `s_nexttime [min:$]` now lower to `ltl.delay` without a length attribute, preserving unbounded range semantics.
+2. **Regression coverage** - Added ImportVerilog checks for open-ended nexttime ranges.
+
+### Verification (February 6, 2026)
+
+- Not run (lit coverage only)
+
 ## Iteration 378 - February 6, 2026
 
 ### Summary
