@@ -17,6 +17,5 @@ endmodule
 // CHECK: moore.procedure always
 // CHECK: moore.wait_event
 // CHECK-DAG: [[RESET:%[0-9]+]] = moore.read %reset
-// CHECK: [[ENABLE:%[0-9]+]] = moore.not [[RESET]] : l1
-// CHECK: moore.conditional [[ENABLE]] : l1 -> l1
+// CHECK: moore.conditional [[RESET]] : l1 -> l1
 // CHECK: moore.yield [[INIT]] : l1

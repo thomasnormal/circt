@@ -109,7 +109,8 @@ getSequenceLengthBounds(Value seq) {
 static Value lowerSampledValueFunctionWithClocking(
     Context &context, const slang::ast::Expression &valueExpr,
     const slang::ast::TimingControl &timingCtrl, StringRef funcName,
-    const slang::ast::Expression *enableExpr, bool invertEnable, Location loc) {
+    const slang::ast::Expression *enableExpr,
+    const slang::ast::Expression *disableExpr, Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
   if (!insertionBlock)
@@ -205,23 +206,63 @@ static Value lowerSampledValueFunctionWithClocking(
       enable = context.convertToBool(enable);
       if (!enable)
         return {};
-      if (invertEnable)
-        enable = moore::NotOp::create(builder, loc, enable).getResult();
       hasEnable = true;
     }
-    auto selectWithEnable = [&](Value onTrue, Value onFalse) -> Value {
-      if (!hasEnable)
-        return onTrue;
-      auto conditional =
-          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
+    Value disable;
+    bool hasDisable = false;
+    if (disableExpr) {
+      disable = context.convertRvalueExpression(*disableExpr);
+      if (!disable)
+        return {};
+      disable = context.convertToBool(disable);
+      if (!disable)
+        return {};
+      hasDisable = true;
+    }
+    auto selectWithControl = [&](Value onUpdate, Value onHold,
+                                 Value onReset) -> Value {
+      if (!hasEnable && !hasDisable)
+        return onUpdate;
+      if (hasDisable) {
+        auto conditional = moore::ConditionalOp::create(builder, loc,
+                                                        onUpdate.getType(),
+                                                        disable);
+        auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+        auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+        {
+          OpBuilder::InsertionGuard g(builder);
+          builder.setInsertionPointToStart(&trueBlock);
+          moore::YieldOp::create(builder, loc, onReset);
+          builder.setInsertionPointToStart(&falseBlock);
+          if (hasEnable) {
+            auto inner = moore::ConditionalOp::create(
+                builder, loc, onUpdate.getType(), enable);
+            auto &innerTrue = inner.getTrueRegion().emplaceBlock();
+            auto &innerFalse = inner.getFalseRegion().emplaceBlock();
+            {
+              OpBuilder::InsertionGuard innerGuard(builder);
+              builder.setInsertionPointToStart(&innerTrue);
+              moore::YieldOp::create(builder, loc, onUpdate);
+              builder.setInsertionPointToStart(&innerFalse);
+              moore::YieldOp::create(builder, loc, onHold);
+            }
+            moore::YieldOp::create(builder, loc, inner.getResult());
+          } else {
+            moore::YieldOp::create(builder, loc, onUpdate);
+          }
+        }
+        return conditional.getResult();
+      }
+      auto conditional = moore::ConditionalOp::create(
+          builder, loc, onUpdate.getType(), enable);
       auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
       auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
       {
         OpBuilder::InsertionGuard g(builder);
         builder.setInsertionPointToStart(&trueBlock);
-        moore::YieldOp::create(builder, loc, onTrue);
+        moore::YieldOp::create(builder, loc, onUpdate);
         builder.setInsertionPointToStart(&falseBlock);
-        moore::YieldOp::create(builder, loc, onFalse);
+        moore::YieldOp::create(builder, loc, onHold);
       }
       return conditional.getResult();
     };
@@ -250,10 +291,10 @@ static Value lowerSampledValueFunctionWithClocking(
     Value disabledValue = createUnknownOrZeroConstant(context, loc, resultType);
     if (!disabledValue)
       return {};
-    Value resultValue = selectWithEnable(result, disabledValue);
+    Value resultValue =
+        selectWithControl(result, disabledValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
-    Value prevReset = invertEnable ? prevInit : prev;
-    Value nextPrev = selectWithEnable(current, prevReset);
+    Value nextPrev = selectWithControl(current, prev, prevInit);
     moore::BlockingAssignOp::create(builder, loc, prevVar, nextPrev);
     moore::ReturnOp::create(builder, loc);
   }
@@ -266,7 +307,7 @@ static Value lowerPastWithClocking(Context &context,
                                    const slang::ast::TimingControl &timingCtrl,
                                    int64_t delay,
                                    const slang::ast::Expression *enableExpr,
-                                   bool invertEnable,
+                                   const slang::ast::Expression *disableExpr,
                                    Location loc) {
   auto &builder = context.builder;
   auto *insertionBlock = builder.getInsertionBlock();
@@ -356,24 +397,63 @@ static Value lowerPastWithClocking(Context &context,
       enable = context.convertToBool(enable);
       if (!enable)
         return {};
-      if (invertEnable)
-        enable = moore::NotOp::create(builder, loc, enable).getResult();
       hasEnable = true;
     }
-
-    auto selectWithEnable = [&](Value onTrue, Value onFalse) -> Value {
-      if (!hasEnable)
-        return onTrue;
-      auto conditional =
-          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
+    Value disable;
+    bool hasDisable = false;
+    if (disableExpr) {
+      disable = context.convertRvalueExpression(*disableExpr);
+      if (!disable)
+        return {};
+      disable = context.convertToBool(disable);
+      if (!disable)
+        return {};
+      hasDisable = true;
+    }
+    auto selectWithControl = [&](Value onUpdate, Value onHold,
+                                 Value onReset) -> Value {
+      if (!hasEnable && !hasDisable)
+        return onUpdate;
+      if (hasDisable) {
+        auto conditional = moore::ConditionalOp::create(builder, loc,
+                                                        onUpdate.getType(),
+                                                        disable);
+        auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+        auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+        {
+          OpBuilder::InsertionGuard g(builder);
+          builder.setInsertionPointToStart(&trueBlock);
+          moore::YieldOp::create(builder, loc, onReset);
+          builder.setInsertionPointToStart(&falseBlock);
+          if (hasEnable) {
+            auto inner = moore::ConditionalOp::create(
+                builder, loc, onUpdate.getType(), enable);
+            auto &innerTrue = inner.getTrueRegion().emplaceBlock();
+            auto &innerFalse = inner.getFalseRegion().emplaceBlock();
+            {
+              OpBuilder::InsertionGuard innerGuard(builder);
+              builder.setInsertionPointToStart(&innerTrue);
+              moore::YieldOp::create(builder, loc, onUpdate);
+              builder.setInsertionPointToStart(&innerFalse);
+              moore::YieldOp::create(builder, loc, onHold);
+            }
+            moore::YieldOp::create(builder, loc, inner.getResult());
+          } else {
+            moore::YieldOp::create(builder, loc, onUpdate);
+          }
+        }
+        return conditional.getResult();
+      }
+      auto conditional = moore::ConditionalOp::create(
+          builder, loc, onUpdate.getType(), enable);
       auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
       auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
       {
         OpBuilder::InsertionGuard g(builder);
         builder.setInsertionPointToStart(&trueBlock);
-        moore::YieldOp::create(builder, loc, onTrue);
+        moore::YieldOp::create(builder, loc, onUpdate);
         builder.setInsertionPointToStart(&falseBlock);
-        moore::YieldOp::create(builder, loc, onFalse);
+        moore::YieldOp::create(builder, loc, onHold);
       }
       return conditional.getResult();
     };
@@ -384,25 +464,12 @@ static Value lowerPastWithClocking(Context &context,
     Value disabledValue = createUnknownOrZeroConstant(context, loc, intType);
     if (!disabledValue)
       return {};
-    Value resultValue = selectWithEnable(pastValue, disabledValue);
+    Value resultValue =
+        selectWithControl(pastValue, disabledValue, disabledValue);
     moore::BlockingAssignOp::create(builder, loc, resultVar, resultValue);
 
     auto selectHistoryUpdate = [&](Value onTrue, Value onHold) -> Value {
-      if (!hasEnable)
-        return onTrue;
-      Value resetValue = invertEnable ? init : onHold;
-      auto conditional =
-          moore::ConditionalOp::create(builder, loc, onTrue.getType(), enable);
-      auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
-      auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
-      {
-        OpBuilder::InsertionGuard g(builder);
-        builder.setInsertionPointToStart(&trueBlock);
-        moore::YieldOp::create(builder, loc, onTrue);
-        builder.setInsertionPointToStart(&falseBlock);
-        moore::YieldOp::create(builder, loc, resetValue);
-      }
-      return conditional.getResult();
+      return selectWithControl(onTrue, onHold, init);
     };
 
     for (int64_t i = historyDepth - 1; i > 0; --i) {
@@ -1097,13 +1164,9 @@ Value Context::convertAssertionCallExpression(
     }
 
     const slang::ast::Expression *enableExpr = nullptr;
-    bool invertEnable = false;
-    if (inAssertionExpr && currentScope) {
-      if (auto *defaultDisable = compilation.getDefaultDisable(*currentScope)) {
-        enableExpr = defaultDisable;
-        invertEnable = true;
-      }
-    }
+    const slang::ast::Expression *disableExpr = nullptr;
+    if (inAssertionExpr && currentScope)
+      disableExpr = compilation.getDefaultDisable(*currentScope);
 
     if (inAssertionExpr && !clockingCtrl) {
       if (currentAssertionClock)
@@ -1122,13 +1185,14 @@ Value Context::convertAssertionCallExpression(
     if (clockingCtrl && inAssertionExpr) {
       return lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
-          invertEnable, loc);
+          disableExpr, loc);
     }
 
     if (hasClockingArg && !inAssertionExpr) {
       if (clockingCtrl) {
         return lowerSampledValueFunctionWithClocking(
-            *this, *args[0], *clockingCtrl, subroutine.name, nullptr, false, loc);
+            *this, *args[0], *clockingCtrl, subroutine.name, nullptr, nullptr,
+            loc);
       }
       auto resultType = moore::IntType::getInt(builder.getContext(), 1);
       mlir::emitWarning(loc)
@@ -1194,8 +1258,7 @@ Value Context::convertAssertionCallExpression(
     int64_t delay = 1;
     const slang::ast::TimingControl *clockingCtrl = nullptr;
     const slang::ast::Expression *enableExpr = nullptr;
-    const slang::ast::Expression *defaultDisableExpr = nullptr;
-    bool invertEnable = false;
+    const slang::ast::Expression *disableExpr = nullptr;
     if (args.size() > 1 &&
         args[1]->kind != slang::ast::ExpressionKind::EmptyArgument) {
       if (args[1]->kind == slang::ast::ExpressionKind::ClockingEvent) {
@@ -1254,16 +1317,14 @@ Value Context::convertAssertionCallExpression(
     if (inAssertionExpr) {
       if (!clockingCtrl)
         maybeSetImplicitClocking();
-      if (!enableExpr && currentScope)
-        defaultDisableExpr = compilation.getDefaultDisable(*currentScope);
-      if (!enableExpr && defaultDisableExpr && clockingCtrl) {
-        enableExpr = defaultDisableExpr;
-        invertEnable = true;
-      }
+      if (currentScope)
+        disableExpr = compilation.getDefaultDisable(*currentScope);
+      if (!clockingCtrl)
+        disableExpr = nullptr;
     }
     if (clockingCtrl)
       return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
-                                   enableExpr, invertEnable, loc);
+                                   enableExpr, disableExpr, loc);
     if (enableExpr) {
       mlir::emitError(loc)
           << "unsupported $past enable expression without explicit clocking";
