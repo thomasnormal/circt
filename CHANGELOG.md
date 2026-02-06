@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 420 - February 6, 2026
+
+### Summary
+
+Iteration 420: Extended LTLToCore sequence length bounds to handle `or`/`and`
+compositions and added a regression to exercise warmup shifts.
+
+### Accomplishments
+
+1. **Composite bounds in LTLToCore** - `getSequenceLengthBounds` now derives
+   bounds for `ltl.or` and `ltl.and` when operands are bounded, improving
+   warmup handling for composite sequences.
+2. **Regression coverage** - Added `sequence-bounds-or-and.mlir` to ensure
+   warmup shifting (`ltl_past`) appears for `not` of composite sequences.
+
+### Verification (February 6, 2026)
+
+- Not run (LTLToCore regression only)
+
 ## Iteration 419 - February 6, 2026
 
 ### Summary
