@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 6, 2026 (Iteration 373 - Function Pointer Args & Native Pointer Guards)
+## Current Status - February 6, 2026 (Iteration 374 - Assoc Array keySize Fix)
 
 ### Session Summary - Key Milestones
 
@@ -137,6 +137,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **Recursive DFS Cycle Detection** | ✅ **IMPLEMENTED** | Tracks `(funcOp, arg0/this)` pairs per recursion chain. Returns zero on cycle detection. Prevents infinite loops in UVM phase traversal (commit `95e1a304f`). |
 | **circt-sim Test Count** | ✅ **127 total** | 126 pass + 1 xfail (up from 125) |
 | **APB AVIP Full Sim** | ✅ **COMPLETES** | hvl_top: ~271us, hdl_top ordered: ~388ms. Full UVM sim lifecycle. |
+| **Assoc Array keySize Truncation** | ✅ **FIXED** | `intTy.getWidth()/8` truncated to 0 for sub-byte keys (i1-i7). Fixed to `(intTy.getWidth()+7)/8` at 4 sites. UVM severity_actions (i2 keys) now work correctly (commit `3e4676018`). |
+| **Debug Trace Cleanup (Iter 374)** | ✅ **DONE** | Removed ~435 lines of diagnostic traces from LLHDProcessInterpreter.cpp |
+| **UVM Factory $cast Issue** | ⚠️ **EXPOSED** | With keySize fix, UVM_FATAL FCTTYP correctly fires for uvm_report_handler factory failure. Was masked by colliding severity actions. |
 | **UVM Process Context Detection** | ⚠️ DIAGNOSED | UVM `run_test()` rejects call - circt-sim lacks SystemVerilog `$process` context |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
@@ -383,33 +386,32 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 | MooreToCore | - | **106/106 pass, 0 fail**, 1 xfail (107 total) | ✅ ALL CLEAN |
 | LTLToCore | - | **16/16 pass, 0 fail** | ✅ ALL CLEAN |
 
-### Current Workstreams (Iteration 369)
+### Current Workstreams (Iteration 374)
 
-**Verified (Feb 5, 2026)**: circt-sim 107 pass + 1 xfail. AVIP compile 9/9. UVM core state pre-init added. Vtable dispatch tracing added. $readmemh implementation in progress.
+**Verified (Feb 6, 2026)**: circt-sim 127 (126+1xfail). MooreToCore 122 (120+1xfail+1 pre-existing). sv-tests BMC 26 (23+3xfail), LEC 23 (all pass). APB AVIP recompiled with keySize fix.
 
 **Track A - UVM Simulation & Phase Execution** [TOP PRIORITY]:
-1. **UVM core state pre-initialization** - ✅ DONE (commit `5f45c43c0`). Pre-seeds `m_uvm_core_state` queue so `uvm_init()` creates the coreservice.
-2. **Remaining vtable-miss warnings (~32)** - INVESTIGATING. Likely parameterized UVM template specializations (`uvm_component_registry#(T)`) and abstract classes. Vtable tracing diagnostics added to identify root causes.
-3. **Recompile all AVIPs** with latest fixes and re-test. Requires >24GB RAM; schedule on a large-memory machine.
-4. **UVM phase execution** - Verify build/connect/run phases complete. Phase hopper vtable now populated in post-fix MLIR.
-5. **AVIP simulation depth** - Run with longer timeouts to verify transaction activity beyond UVM init.
+1. **Assoc array keySize truncation** - ✅ FIXED (commit `3e4676018`). Sub-byte integer keys (i1-i7) were creating StringKey arrays.
+2. **UVM factory $cast failure** - 🔴 NEXT. Factory returns null for `uvm_report_handler`. `$cast(create, obj)` fails. Was masked by keySize=0. Need to investigate: (a) Is the type properly registered? (b) Is the `dyn_cast_check` interceptor working? (c) Is the factory lookup finding the right type?
+3. **3 vtable warnings at addr 0x4** - Non-fatal but indicate a null class pointer. Likely uninitialized `uvm_coreservice_t::inst` pointer during early init.
+4. **Recompile AHB/UART AVIPs** with latest circt-verilog. Then re-test all AVIPs.
+5. **AVIP simulation depth** - Once factory $cast fixed, verify build/connect/run phases.
 
 **Track B - Formal Verification** (handled by codex agent - DO NOT WORK ON):
 1. OpenTitan AES S-Box, BMC, LEC - all handled by codex.
 
-**Track C - sv-tests & Regression** (non-BMC/LEC):
+**Track C - sv-tests & Regression**:
 1. **sv-tests parse rate** - Currently ~82.1%. Improve by fixing ImportVerilog gaps.
-2. **ImportVerilog lit tests** - 228/229 pass (1 timeout: four-state-constants.sv).
-3. **MooreToCore lit tests** - 115/116 pass (1 xfail).
-4. **circt-sim lit tests** - 107 pass + 1 xfail. Zero failures.
-5. **AVIP compilation regression** - Verify all 9 AVIPs still compile after changes.
+2. **MooreToCore system-call-ops.mlir** - Pre-existing crash, needs investigation.
+3. **circt-sim lit tests** - 127 total. Zero unexpected failures.
+4. **Test on ~/verilator-verification/ and ~/yosys/tests/** - Re-run parse benchmarks.
+5. **Test on ~/opentitan/** - Re-verify formal results (codex handles, we monitor).
 
 **Track D - circt-sim Runtime Features**:
-1. **`$readmemh`/`$readmemb` support** - IN PROGRESS. ImportVerilog done, MooreToCore stubs need real lowering, runtime handler needed. Priority: HIGH (blocks OpenTitan ROM/RAM tests).
+1. **`$cast` dynamic type checking** - Current `dyn_cast_check` interceptor may be too simplistic. UVM factory relies on it for registry `create()`. Priority: CRITICAL.
 2. **coverpoint `iff` lowering** - IR capture done, runtime sampling stubbed. Priority: MEDIUM.
-3. **`dist` constraint `$` upper bounds** - Slang limitation, workaround in runner. Priority: LOW.
-4. **Inline `randomize() with` outer-scope access** - Slang limitation, workaround in runner. Priority: LOW.
-5. **Simulation performance** - AVIP sims slow (SPI: 163ns in 60s). Priority: MEDIUM (after correctness).
+3. **Simulation performance** - AVIP sims slow. Priority: MEDIUM (after correctness).
+4. **`dist` constraint `$` upper bounds** - Slang limitation, workaround in runner. Priority: LOW.
 
 ### Previous Blocker: UVM Factory Registration (typedef specialization) - ✅ FIXED
 
