@@ -5244,12 +5244,142 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
 
-      emitVtableWarning("function pointer is X (uninitialized)");
-      // Return zero/null instead of X to prevent cascading X-propagation
-      // in UVM code paths that check return values for null.
-      for (Value result : callIndirectOp.getResults()) {
-        unsigned width = getTypeWidth(result.getType());
-        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      // Fallback: try to resolve the virtual method statically by tracing
+      // the SSA chain back to the vtable GEP pattern:
+      //   calleeValue = unrealized_conversion_cast(llvm.load(llvm.getelementptr(
+      //                     vtablePtr, [0, methodIndex])))
+      // where vtablePtr = llvm.load(llvm.getelementptr(objPtr, [0, ..., 1]))
+      // From the outer GEP's struct type we get the class name, construct
+      // "ClassName::__vtable__", and read the function address at methodIndex.
+      bool resolved = false;
+      do {
+        // Step 1: trace calleeValue -> unrealized_conversion_cast input
+        auto castOp =
+            calleeValue.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+        if (!castOp || castOp.getInputs().size() != 1)
+          break;
+        Value rawPtr = castOp.getInputs()[0];
+
+        // Step 2: rawPtr should come from llvm.load (loads func ptr from vtable)
+        auto funcPtrLoad = rawPtr.getDefiningOp<LLVM::LoadOp>();
+        if (!funcPtrLoad)
+          break;
+
+        // Step 3: the load address comes from a GEP into the vtable array
+        auto vtableGEP = funcPtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+        if (!vtableGEP)
+          break;
+
+        // Extract the method index from the GEP indices (last index)
+        auto vtableIndices = vtableGEP.getIndices();
+        if (vtableIndices.size() < 2)
+          break;
+        auto lastIdx = vtableIndices[vtableIndices.size() - 1];
+        int64_t methodIndex = -1;
+        if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(lastIdx))
+          methodIndex = intAttr.getInt();
+        else if (auto dynIdx = llvm::dyn_cast_if_present<Value>(lastIdx)) {
+          InterpretedValue dynVal = getValue(procId, dynIdx);
+          if (!dynVal.isX())
+            methodIndex = static_cast<int64_t>(dynVal.getUInt64());
+        }
+        if (methodIndex < 0)
+          break;
+
+        // Step 4: vtableGEP base = vtable pointer from llvm.load
+        auto vtablePtrLoad =
+            vtableGEP.getBase().getDefiningOp<LLVM::LoadOp>();
+        if (!vtablePtrLoad)
+          break;
+
+        // Step 5: the vtable pointer load address comes from GEP on the object
+        auto objGEP =
+            vtablePtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+        if (!objGEP)
+          break;
+
+        // Extract the struct type name from the outer GEP's element type
+        std::string vtableGlobalName;
+        if (auto structTy =
+                dyn_cast<LLVM::LLVMStructType>(objGEP.getElemType())) {
+          if (structTy.isIdentified()) {
+            vtableGlobalName = structTy.getName().str() + "::__vtable__";
+          }
+        }
+        if (vtableGlobalName.empty())
+          break;
+
+        // Step 6: find the vtable global and read the function address
+        auto globalIt = globalMemoryBlocks.find(vtableGlobalName);
+        if (globalIt == globalMemoryBlocks.end())
+          break;
+
+        auto &vtableBlock = globalIt->second;
+        unsigned slotOffset = methodIndex * 8;
+        if (slotOffset + 8 > vtableBlock.size)
+          break;
+
+        // Read 8-byte function address (little-endian) from vtable memory
+        uint64_t resolvedFuncAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          resolvedFuncAddr |=
+              static_cast<uint64_t>(vtableBlock.data[slotOffset + i]) << (i * 8);
+
+        if (resolvedFuncAddr == 0)
+          break; // Slot is empty (no function registered)
+
+        auto funcIt = addressToFunction.find(resolvedFuncAddr);
+        if (funcIt == addressToFunction.end())
+          break;
+
+        StringRef resolvedName = funcIt->second;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  func.call_indirect: fallback vtable resolution: "
+                   << vtableGlobalName << "[" << methodIndex << "] -> "
+                   << resolvedName << "\n");
+
+        // Look up the function
+        auto &state = processStates[procId];
+        Operation *parent = state.processOrInitialOp;
+        while (parent && !isa<ModuleOp>(parent))
+          parent = parent->getParentOp();
+        ModuleOp moduleOp = parent ? cast<ModuleOp>(parent) : rootModule;
+        auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(resolvedName);
+        if (!funcOp)
+          break;
+
+        // Gather arguments
+        SmallVector<InterpretedValue, 4> args;
+        for (Value arg : callIndirectOp.getArgOperands())
+          args.push_back(getValue(procId, arg));
+
+        // Dispatch the call
+        auto &callState = processStates[procId];
+        ++callState.callDepth;
+        SmallVector<InterpretedValue, 4> results;
+        auto callResult = interpretFuncBody(procId, funcOp, args, results,
+                                            callIndirectOp);
+        --callState.callDepth;
+
+        if (failed(callResult))
+          break;
+
+        // Set return values
+        for (auto [result, val] :
+             llvm::zip(callIndirectOp.getResults(), results))
+          setValue(procId, result, val);
+
+        resolved = true;
+      } while (false);
+
+      if (!resolved) {
+        emitVtableWarning("function pointer is X (uninitialized)");
+        // Return zero/null instead of X to prevent cascading X-propagation
+        // in UVM code paths that check return values for null.
+        for (Value result : callIndirectOp.getResults()) {
+          unsigned width = getTypeWidth(result.getType());
+          setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+        }
       }
       return success();
     }
@@ -9027,7 +9157,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
   // Execute operations until we hit a return
   Block *currentBlock = resumeBlock ? resumeBlock : &entryBlock;
-  size_t maxOps = 100000; // Prevent infinite loops
+  size_t maxOps = 1000000; // Prevent infinite loops (totalSteps is the real limit)
   size_t opCount = 0;
 
   // Track if we're starting from a resume point
@@ -15956,7 +16086,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
 
   // Execute the function body with operation limit to prevent infinite loops
   Block *currentBlock = &entryBlock;
-  constexpr size_t maxOps = 100000;
+  constexpr size_t maxOps = 1000000;
   size_t opCount = 0;
 
   while (currentBlock && opCount < maxOps) {
