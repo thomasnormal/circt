@@ -721,7 +721,7 @@ int main(int argc, char **argv) {
   // very large SystemVerilog designs should complete well within 10 minutes;
   // anything longer almost certainly indicates an infinite loop or combinational
   // explosion. RSS limits are handled by installResourceGuard()'s smart
-  // defaults (40% of system RAM, capped at 12 GB). Using overwrite=0 lets
+  // defaults (40% of system RAM, capped at 10 GB). Using overwrite=0 lets
   // explicit user settings (env vars or CLI flags) take precedence.
   ::setenv("CIRCT_MAX_WALL_MS", "600000", /*overwrite=*/0); // 10 min timeout
   circt::installResourceGuard();
