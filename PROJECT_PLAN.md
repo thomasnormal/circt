@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 6, 2026 (Iteration 372 - Global Step Counter & UVM Debug)
+## Current Status - February 6, 2026 (Iteration 373 - Function Pointer Args & Native Pointer Guards)
 
 ### Session Summary - Key Milestones
 
@@ -132,6 +132,11 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | **sv-tests Parsing Benchmark** | ✅ **COMPLETED** | 845/1036 pass (81.6%), 90.9% effective rate excluding UVM/includes. 2 lowering bugs (llhd.wait in initial), 3 genuine failures (macro expansion). |
 | **Verilator-Verification Benchmark** | ✅ **COMPLETED** | 122/154 pass (79.2%). Key gaps: net strength syntax (8), UVM no --uvm-path (11). |
 | **Yosys Tests Benchmark** | ✅ **COMPLETED** | 80/105 pass (76.2%). 2 lowering bugs (hw.bitcast, moore.net). |
+| **Function Ptr Arg Memory Fix** | ✅ **FIXED** | `findMemoryBlock` now handles `BlockArgument` in entry blocks via address-based fallback (commit `fac3c529e`). Fixes loads/stores through function pointer arguments. |
+| **Native Pointer Guards** | ✅ **FIXED** | `__moore_stream_concat_strings/bits`, `__moore_stream_pack`, queue slice guard against synthetic interpreter addresses (>= 0x10000000000 check). Prevents segfaults when interpreter addresses leak to native code (commit `2eb2762e0`). |
+| **Recursive DFS Cycle Detection** | ✅ **IMPLEMENTED** | Tracks `(funcOp, arg0/this)` pairs per recursion chain. Returns zero on cycle detection. Prevents infinite loops in UVM phase traversal (commit `95e1a304f`). |
+| **circt-sim Test Count** | ✅ **127 total** | 126 pass + 1 xfail (up from 125) |
+| **APB AVIP Full Sim** | ✅ **COMPLETES** | hvl_top: ~271us, hdl_top ordered: ~388ms. Full UVM sim lifecycle. |
 | **UVM Process Context Detection** | ⚠️ DIAGNOSED | UVM `run_test()` rejects call - circt-sim lacks SystemVerilog `$process` context |
 | Static associative arrays | ✅ VERIFIED | `global_ctors` calls `__moore_assoc_create` |
 | UVM phase creation | ✅ WORKING | `test_phase_new.sv` passes with uvm-core |
@@ -213,6 +218,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 - **OpenTitan AES S-Box LEC (full X-prop)**: still **NEQ** with the same counterexample after mul const handling.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
+
+### New Findings (2026-02-06, Iteration 373 - Function Pointer Args & Native Pointer Guards)
+- **findMemoryBlock SSA identity gap FIXED** (commit `fac3c529e`): `findMemoryBlock(ptr)` looks up memory blocks by SSA Value identity. When a pointer is passed through a function argument, the argument `%p` is a different SSA Value from the caller's alloca result `%ptr`. Fix: detect `BlockArgument` in entry blocks and do address-based fallback via `findMemoryBlockByAddress`. New test: `func-ptr-arg-memory.mlir`.
+- **Native pointer guard** (commit `2eb2762e0`): The interpreter assigns synthetic addresses via `globalNextAddress` (low range). Native heap pointers are at high addresses (>= 0x10000000000). Runtime functions like `__moore_stream_concat_strings` must NOT receive synthetic addresses. Added guard `dp >= 0x10000000000ULL` before calling native stream/pack/queue functions.
+- **Recursive DFS cycle detection** (commit `95e1a304f`): UVM phase traversal has cycles (A→B→A). The interpreter now tracks `(funcOp, arg0/this)` pairs per recursion chain. When the same pair reappears, returns zero instead of recursing infinitely. Test: `recursive-dfs-cycle-detection.mlir`.
+- **APB AVIP full simulation**: hvl_top completes at ~271us, hdl_top ordered at ~388ms. Full UVM lifecycle including init, build, run phases.
+- **I2S/I3C AVIP status**: No longer segfault (native pointer guard). Both hit UVM_FATAL "Cannot find test" - test configuration issue, not simulator bug.
+- **Test counts**: circt-sim 127 (126 pass + 1 xfail), sv-tests BMC 26 (23+3), LEC 23 (all pass).
+- **Commits**: `95e1a304f` (DFS cycle detection), `f01038ff3` (RSS 12→10GB), `fac3c529e` (findMemoryBlock fix), `2eb2762e0` (native pointer guards).
 
 ### New Findings (2026-02-06, Iteration 372 - Global Step Counter & UVM Debug)
 - **Global step counter** (commit `0262b6da2`): Process step limit (`--max-process-steps`) previously only counted process-body-level operations. Each `func.call` counted as 1 step, but nested function bodies could execute up to 100K ops internally. Now `totalSteps` and `funcBodySteps` are incremented inside BOTH `interpretFuncBody` versions (func.func and LLVM::LLVMFuncOp), giving accurate global step counting.

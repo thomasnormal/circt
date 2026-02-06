@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 373 - February 6, 2026
+
+### Summary
+
+Iteration 373: Fixed memory access through function pointer arguments, added recursive DFS cycle detection for UVM phase traversal, guarded native runtime functions against synthetic interpreter addresses. APB AVIP completes full simulation. I2S AVIP segfault fixed.
+
+### Accomplishments
+
+1. **Recursive DFS cycle detection** - UVM's `m_find_successor` traverses the phase successor graph without a visited set, causing O(2^N) exponential blowup on cycles. Added per-function `(funcOp, arg0)` visited set tracking in all 3 call handlers (func.call, func.call_indirect, llvm.call). APB AVIP now completes at ~377ns.
+2. **findMemoryBlock for function arguments** - `findMemoryBlock` used SSA Value identity to look up memory blocks, failing when a pointer was passed through a function argument (different SSA Value). Added block-argument address-based fallback in `findMemoryBlock` itself.
+3. **Native pointer guards** - Guarded `__moore_stream_concat_strings`, `__moore_stream_concat_bits`, `__moore_stream_pack`, and queue slice operations against dereferencing synthetic interpreter addresses. Check `addr >= 0x10000000000` before passing to native code.
+4. **New regression tests** - `func-ptr-arg-memory.mlir` (pointer through function arg) and `recursive-dfs-cycle-detection.mlir` (cyclic graph traversal).
+
+### Current Test Status
+
+| Suite | Pass | XFail | Unsupported | Fail |
+|-------|------|-------|-------------|------|
+| circt-sim lit | 126 | 1 | 0 | 0 |
+| sv-tests BMC | 23 | 3 | - | 0 |
+| sv-tests LEC | 23 | 0 | - | 0 |
+
+### AVIP Status
+
+| AVIP | Top | Result |
+|------|-----|--------|
+| APB (fresh) | hvl_top | PASS at ~271us |
+| APB (ordered) | hdl_top | PASS at ~388ms |
+| I2S | hvlTop | No crash, UVM_FATAL "test not found" (config) |
+| I3C | hvl_top | UVM_FATAL "test not found" (config) |
+
+### Commits
+
+- `95e1a304f` - [circt-sim] Add recursive DFS cycle detection for UVM phase traversal
+- `2daa4a886` - [circt-sim] Fix memory access through function pointer arguments
+- `fac3c529e` - [circt-sim] Fix memory access through function pointer arguments (v2)
+- `2eb2762e0` - [circt-sim] Guard stream/pack handlers against synthetic interpreter addresses
+
 ## Iteration 372 - February 6, 2026
 
 ### Summary
