@@ -1522,7 +1522,19 @@ static LogicalResult processInput(MLIRContext &context,
     simContext.printStatistics(llvm::outs());
   }
 
-  return success();
+  // Use _exit() here, before returning, to skip the expensive
+  // SimulationContext destructor.  For UVM designs with millions of
+  // operations, the destructor chain (DenseMap/StringMap/vector cleanup)
+  // can take minutes and provides no user-visible benefit after a
+  // successful simulation.  The _exit() must be here (not in main())
+  // because SimulationContext is stack-allocated and its destructor
+  // runs when this function returns.
+  llvm::outs() << "[circt-sim] Simulation finished successfully\n";
+  llvm::outs().flush();
+  llvm::errs().flush();
+  std::fflush(stdout);
+  std::fflush(stderr);
+  _exit(0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1615,15 +1627,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  llvm::outs() << "[circt-sim] Simulation finished successfully\n";
-
-  // Use _exit() to skip expensive cleanup of MLIR context and large
-  // interpreter data structures.  For UVM designs with millions of operations,
-  // the destructor chain (DenseMap/StringMap/vector cleanup) can take minutes
-  // and provides no user-visible benefit after a successful simulation.
-  llvm::outs().flush();
-  llvm::errs().flush();
-  std::fflush(stdout);
-  std::fflush(stderr);
-  _exit(0);
+  // processInput() calls _exit(0) on success, so this is unreachable.
+  return 0;
 }
