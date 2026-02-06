@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 412 - February 6, 2026
+
+### Summary
+
+Iteration 412: Added coverage for `$past` with explicit clocking plus default
+disable, ensuring both disable and enable gates are reflected in lowering.
+
+### Accomplishments
+
+1. **Explicit clocking + default disable** - Added regression for `$past` with
+   explicit clocking and enable under a default disable condition.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
+
 ## Iteration 411 - February 6, 2026
 
 ### Summary
