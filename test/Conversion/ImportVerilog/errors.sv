@@ -69,14 +69,14 @@ endmodule
 module Foo;
   logic a, b;
   // expected-error @below {{first_match requires a bounded sequence}}
-  assert property (first_match((a [=2]) and b));
+  assert property (first_match((a [=2]) and (b [=2])));
 endmodule
 
 // -----
 module Foo;
   logic a, b;
   // expected-error @below {{first_match requires a bounded sequence}}
-  assert property (first_match((a [=2]) or b));
+  assert property (first_match((a [=2]) or (b [=2])));
 endmodule
 
 // -----

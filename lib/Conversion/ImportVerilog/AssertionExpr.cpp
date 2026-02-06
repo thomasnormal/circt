@@ -117,10 +117,12 @@ getSequenceLengthBounds(Value seq) {
         continue;
       }
       result.min = std::min(result.min, bounds->min);
-      if (result.max && bounds->max)
+      if (result.max && bounds->max) {
         result.max = std::max(*result.max, *bounds->max);
-      else
+      } else if (!result.max || !bounds->max) {
+        // Any unbounded operand makes the OR unbounded.
         result.max.reset();
+      }
     }
     return result;
   }
@@ -137,10 +139,16 @@ getSequenceLengthBounds(Value seq) {
         continue;
       }
       result.min = std::max(result.min, bounds->min);
-      if (result.max && bounds->max)
+      if (result.max && bounds->max) {
         result.max = std::min(*result.max, *bounds->max);
-      else
+      } else if (!result.max && bounds->max) {
+        // Result was unbounded; cap it if this operand is bounded.
+        result.max = bounds->max;
+      } else if (result.max && !bounds->max) {
+        // Keep existing bound; other operand is unbounded.
+      } else {
         result.max.reset();
+      }
     }
     return result;
   }
@@ -157,10 +165,15 @@ getSequenceLengthBounds(Value seq) {
         continue;
       }
       result.min = std::max(result.min, bounds->min);
-      if (result.max && bounds->max)
+      if (result.max && bounds->max) {
         result.max = std::min(*result.max, *bounds->max);
-      else
+      } else if (!result.max && bounds->max) {
+        result.max = bounds->max;
+      } else if (result.max && !bounds->max) {
+        // Keep existing bound; other operand is unbounded.
+      } else {
         result.max.reset();
+      }
     }
     return result;
   }
