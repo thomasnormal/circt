@@ -8017,6 +8017,14 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                                        << "array locator method's 'with' clause";
                   return failure();
                 })
+          .Case("$get_initial_random_seed",
+                [&]() -> FailureOr<Value> {
+                  // $get_initial_random_seed is a Verilator-specific extension
+                  // that returns the initial random seed. Stub it to return 0.
+                  auto intTy = moore::IntType::getInt(getContext(), 32);
+                  return (Value)moore::ConstantOp::create(builder, loc, intTy,
+                                                          0);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {
