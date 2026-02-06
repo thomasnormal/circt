@@ -251,12 +251,14 @@ struct ProcessExecutionState {
   /// Used to prevent stack overflow from unbounded recursion.
   size_t callDepth = 0;
 
-  /// Visited set for recursive function calls. Tracks (funcOp, arg0) pairs
+  /// Recursion depth counter for function calls. Tracks (funcOp, arg0) pairs
   /// to prevent exponential blowup from DFS over diamond patterns in graphs
-  /// (e.g., UVM m_find_successor over the phase DAG). When a function calls
-  /// itself with a `this` pointer already in the current recursion chain, we
-  /// return zero immediately instead of re-traversing the subtree.
-  llvm::DenseMap<mlir::Operation *, llvm::DenseSet<uint64_t>> recursionVisited;
+  /// (e.g., UVM m_find_successor over the phase DAG). Uses a depth counter
+  /// instead of a set to allow legitimate nesting (e.g., UVM factory calls
+  /// where constructing one object triggers more factory calls via the same
+  /// singleton factory pointer).
+  llvm::DenseMap<mlir::Operation *, llvm::DenseMap<uint64_t, unsigned>>
+      recursionVisited;
 
   /// Last operation executed by this process (for diagnostics).
   mlir::Operation *lastOp = nullptr;

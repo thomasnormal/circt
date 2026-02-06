@@ -5273,10 +5273,6 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     }
 
     StringRef calleeName = it->second;
-    // Temporary debug: trace factory virtual dispatch
-    if (calleeName.contains("create_object") || calleeName.contains("find_override"))
-      llvm::errs() << "[vtable] dispatching " << calleeName << " (addr=0x"
-                   << llvm::format_hex(funcAddr, 16) << ")\n";
     LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
                             << llvm::format_hex(funcAddr, 16)
                             << " -> " << calleeName << "\n");
@@ -5320,18 +5316,20 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       return success();
     }
 
-    // Recursive DFS cycle detection (same as func.call handler)
+    // Recursive DFS depth detection (same as func.call handler)
     Operation *indFuncKey = funcOp.getOperation();
     uint64_t indArg0Val = 0;
     bool indHasArg0 = !args.empty() && !args[0].isX();
     if (indHasArg0)
       indArg0Val = args[0].getUInt64();
-    auto &indVisitedSet = callState.recursionVisited[indFuncKey];
-    if (indHasArg0 && callState.callDepth > 0 && !indVisitedSet.empty()) {
-      if (indVisitedSet.count(indArg0Val)) {
+    constexpr unsigned maxRecursionDepth = 20;
+    auto &indDepthMap = callState.recursionVisited[indFuncKey];
+    if (indHasArg0 && callState.callDepth > 0) {
+      unsigned &depth = indDepthMap[indArg0Val];
+      if (depth >= maxRecursionDepth) {
         LLVM_DEBUG(llvm::dbgs()
-                   << "  call_indirect: recursive revisit of '"
-                   << calleeName << "' with arg0=0x"
+                   << "  call_indirect: recursion depth " << depth
+                   << " exceeded for '" << calleeName << "' with arg0=0x"
                    << llvm::format_hex(indArg0Val, 16) << "\n");
         for (Value result : callIndirectOp.getResults()) {
           unsigned width = getTypeWidth(result.getType());
@@ -5340,9 +5338,9 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
         return success();
       }
     }
-    bool indAddedToVisited = false;
+    bool indAddedToVisited = indHasArg0;
     if (indHasArg0)
-      indAddedToVisited = indVisitedSet.insert(indArg0Val).second;
+      ++indDepthMap[indArg0Val];
 
     // Call the function with depth tracking
     ++callState.callDepth;
@@ -5352,9 +5350,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
         interpretFuncBody(procId, funcOp, args, results, callIndirectOp);
     --callState.callDepth;
 
-    // Remove from visited set after returning
-    if (indAddedToVisited)
-      processStates[procId].recursionVisited[indFuncKey].erase(indArg0Val);
+    // Decrement depth counter after returning
+    if (indAddedToVisited) {
+      auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
+      if (depthRef > 0)
+        --depthRef;
+    }
 
     if (failed(funcResult))
       return failure();
@@ -5371,12 +5372,6 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     // Set results
     for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
       setValue(procId, result, retVal);
-      // Temporary debug: trace create_object return values
-      if (calleeName.contains("create_object") || calleeName.contains("create_object_by_type")) {
-        llvm::errs() << "[vtable] " << calleeName << " returned: "
-                     << (retVal.isX() ? "X" : ("0x" + llvm::utohexstr(retVal.getUInt64())))
-                     << "\n";
-      }
     }
 
     return success();
@@ -8744,14 +8739,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
 
-  // Temporary debug: trace factory-related func.call
-  {
-    StringRef cn = callOp.getCallee();
-    if (cn.contains("create_by_type") || cn.contains("create_9") ||
-        cn.contains("create_object_by_type") || cn.contains("report_handler"))
-      llvm::errs() << "[func.call] " << cn << "\n";
-  }
-
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
   // so that re-entrant calls (via uvm_component::new -> get_root) can skip
@@ -8857,16 +8844,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (hasArg0)
     arg0Val = args[0].getUInt64();
 
-  // Check if this is a recursive call with a previously visited arg0
-  auto &visitedSet = state.recursionVisited[funcKey];
-  [[maybe_unused]] bool isRecursiveRevisit = false;
-  if (hasArg0 && state.callDepth > 0 && !visitedSet.empty()) {
-    if (visitedSet.count(arg0Val)) {
+  // Check if recursion depth exceeded for this (func, arg0) pair
+  constexpr unsigned maxRecursionDepth = 20;
+  auto &depthMap = state.recursionVisited[funcKey];
+  if (hasArg0 && state.callDepth > 0) {
+    unsigned &depth = depthMap[arg0Val];
+    if (depth >= maxRecursionDepth) {
       LLVM_DEBUG(llvm::dbgs()
-                 << "  func.call: recursive revisit of '"
-                 << funcOp.getName() << "' with arg0=0x"
+                 << "  func.call: recursion depth " << depth
+                 << " exceeded for '" << funcOp.getName() << "' with arg0=0x"
                  << llvm::format_hex(arg0Val, 16)
-                 << " at depth " << state.callDepth << ", returning zero\n");
+                 << " at callDepth " << state.callDepth << ", returning zero\n");
       for (Value result : callOp.getResults()) {
         unsigned width = getTypeWidth(result.getType());
         setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
@@ -8875,10 +8863,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  // Add arg0 to visited set before recursing
-  bool addedToVisited = false;
+  // Increment depth counter before recursing
+  bool addedToVisited = hasArg0;
   if (hasArg0) {
-    addedToVisited = visitedSet.insert(arg0Val).second;
+    ++depthMap[arg0Val];
   }
 
   // Execute the function body with depth tracking
@@ -8889,9 +8877,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       interpretFuncBody(procId, funcOp, args, returnValues, callOp);
   --state.callDepth;
 
-  // Remove arg0 from visited set after returning
-  if (addedToVisited)
-    processStates[procId].recursionVisited[funcKey].erase(arg0Val);
+  // Decrement depth counter after returning
+  if (addedToVisited) {
+    auto &depthRef = processStates[procId].recursionVisited[funcKey][arg0Val];
+    if (depthRef > 0)
+      --depthRef;
+  }
 
   if (failed(funcResult))
     return failure();
@@ -13094,24 +13085,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int32_t result = __moore_assoc_exists(arrayPtr, keyPtr);
 
         // Debug: trace assoc_exists calls with string keys to diagnose NOCHILD
-        if (arrayPtr) {
-          auto *header = static_cast<AssocArrayHeader *>(arrayPtr);
-          if (header->type == AssocArrayType_StringKey && !keyStorage.empty()) {
-            static unsigned assocExistsTraceCount = 0;
-            if (assocExistsTraceCount < 20 &&
-                (keyStorage == "uvm_test_top" ||
-                 keyStorage.find("test_top") != std::string::npos)) {
-              ++assocExistsTraceCount;
-              llvm::errs() << "[circt-sim] ASSOC_EXISTS(array=0x"
-                           << llvm::format_hex(arrayAddr, 16)
-                           << ", key=\"" << keyStorage << "\") = " << result;
-              if (auto parentFunc = callOp->getParentOfType<func::FuncOp>())
-                llvm::errs() << " [in " << parentFunc.getName() << "]";
-              llvm::errs() << "\n";
-            }
-          }
-        }
-
         setValue(procId, callOp.getResult(), InterpretedValue(static_cast<uint64_t>(result), 32));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists(0x"
@@ -15821,18 +15794,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     return success();
   }
 
-  // Recursive DFS cycle detection (same as func.call handler)
+  // Recursive DFS depth detection (same as func.call handler)
   Operation *llvmFuncKey = funcOp.getOperation();
   uint64_t llvmArg0Val = 0;
   bool llvmHasArg0 = !args.empty() && !args[0].isX();
   if (llvmHasArg0)
     llvmArg0Val = args[0].getUInt64();
-  auto &llvmVisitedSet = state.recursionVisited[llvmFuncKey];
-  if (llvmHasArg0 && state.callDepth > 0 && !llvmVisitedSet.empty()) {
-    if (llvmVisitedSet.count(llvmArg0Val)) {
+  constexpr unsigned maxRecursionDepthLLVM = 20;
+  auto &llvmDepthMap = state.recursionVisited[llvmFuncKey];
+  if (llvmHasArg0 && state.callDepth > 0) {
+    unsigned &depth = llvmDepthMap[llvmArg0Val];
+    if (depth >= maxRecursionDepthLLVM) {
       LLVM_DEBUG(llvm::dbgs()
-                 << "  llvm.call: recursive revisit of '"
-                 << calleeName << "' with arg0=0x"
+                 << "  llvm.call: recursion depth " << depth
+                 << " exceeded for '" << calleeName << "' with arg0=0x"
                  << llvm::format_hex(llvmArg0Val, 16) << "\n");
       for (Value result : callOp.getResults()) {
         unsigned width = getTypeWidth(result.getType());
@@ -15841,9 +15816,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
   }
-  bool llvmAddedToVisited = false;
+  bool llvmAddedToVisited = llvmHasArg0;
   if (llvmHasArg0)
-    llvmAddedToVisited = llvmVisitedSet.insert(llvmArg0Val).second;
+    ++llvmDepthMap[llvmArg0Val];
 
   // Increment call depth before entering function
   ++state.callDepth;
@@ -15856,9 +15831,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Decrement call depth after returning
   --state.callDepth;
 
-  // Remove from visited set after returning
-  if (llvmAddedToVisited)
-    processStates[procId].recursionVisited[llvmFuncKey].erase(llvmArg0Val);
+  // Decrement depth counter after returning
+  if (llvmAddedToVisited) {
+    auto &depthRef = processStates[procId].recursionVisited[llvmFuncKey][llvmArg0Val];
+    if (depthRef > 0)
+      --depthRef;
+  }
 
   if (failed(funcResult))
     return failure();

@@ -1,17 +1,17 @@
 // RUN: circt-sim %s --max-time 100000000 2>&1 | FileCheck %s
 // Test that recursive DFS cycle detection prevents infinite loops on cyclic
 // graphs. The traverse function walks a linked list via func.call with the
-// node pointer as arg0. When a cycle is detected (same function called with
-// same arg0 already in the recursion chain), it returns zero instead of
-// recursing infinitely.
+// node pointer as arg0. When the recursion depth limit (20) is reached for a
+// given (function, arg0) pair, it returns zero instead of recursing infinitely.
 //
 // Graph: nodeA (val=1) -> nodeB (val=2) -> nodeA (cycle!)
 //
 // Without cycle detection: infinite recursion, hits max call depth.
-// With cycle detection:
-//   traverse(A) = 1 + traverse(B) = 1 + (2 + traverse(A)[cycle=0]) = 3
+// With depth-20 counter: traverse(A) expands 20 times before being blocked.
+//   f(n) = 1 + g(n), g(n) = 2 + f(n+1), f(20) = 0
+//   f(n) = 3 + f(n+1), so f(0) = 3*20 = 60
 
-// CHECK: RESULT=3
+// CHECK: RESULT=60
 // CHECK: [circt-sim] Simulation completed
 
 module {
@@ -70,7 +70,7 @@ module {
           : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, ptr)>
       llvm.store %nodeA, %nB : !llvm.ptr, !llvm.ptr
 
-      // traverse(A) should return 1 + 2 + 0 = 3
+      // traverse(A) should return 3*20 = 60 (depth limit reached after 20 cycles)
       %result = func.call @traverse(%nodeA) : (!llvm.ptr) -> i32
 
       %lit = sim.fmt.literal "RESULT="
