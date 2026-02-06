@@ -1119,6 +1119,10 @@ private:
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
   llvm::DenseSet<uint64_t> validAssocArrayAddresses;
 
+  /// UVM config_db storage. Maps "{inst_name}.{field_name}" keys to
+  /// opaque value bytes. Used by config_db_implementation_t interceptors.
+  std::map<std::string, std::vector<uint8_t>> configDbEntries;
+
   /// Tracks active function call depth for recursion detection.
   /// Maps funcOp operation pointer to current call depth. Used to enable
   /// save/restore of SSA values only for recursive calls (depth > 1).
