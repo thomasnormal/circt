@@ -305,7 +305,11 @@ struct ExprVisitor {
       if (auto *instSym = elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
         if (instSym->getDefinition().definitionKind ==
             slang::ast::DefinitionKind::Interface) {
-          instRef = context.resolveInterfaceInstance(instSym, loc);
+          if (auto it = context.interfaceInstances.find(instSym);
+              it != context.interfaceInstances.end())
+            instRef = it->second;
+          else
+            instRef = context.resolveInterfaceInstance(instSym, loc);
           if (instRef) {
             baseIndex = i;
             break;
@@ -3108,9 +3112,22 @@ struct RvalueExprVisitor : public ExprVisitor {
   /// Handle calls.
   Value visit(const slang::ast::CallExpression &expr) {
     // Try to materialize constant values directly.
-    auto constant = context.evaluateConstant(expr);
-    if (auto value = context.materializeConstant(constant, *expr.type, loc))
-      return value;
+    // Skip constant evaluation for system calls that need runtime behavior
+    // ($test$plusargs, $value$plusargs) since slang returns nullptr for them
+    // and we want to emit runtime calls instead.
+    bool skipConstEval = false;
+    if (auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
+            &expr.subroutine)) {
+      if (sci->subroutine->name == "$test$plusargs" ||
+          sci->subroutine->name == "$value$plusargs")
+        skipConstEval = true;
+    }
+    if (!skipConstEval) {
+      auto constant = context.evaluateConstant(expr);
+      if (auto value =
+              context.materializeConstant(constant, *expr.type, loc))
+        return value;
+    }
 
     return std::visit(
         [&](auto &subroutine) { return visitCall(expr, subroutine); },
@@ -8389,13 +8406,80 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   return moore::BitstoshortrealBIOp::create(builder, loc,
                                                             value);
                 })
-          // Plusargs: stub to "not present" until command-line handling exists.
+          // $test$plusargs: emit runtime call to check command-line plusargs.
+          // IEEE 1800-2017 Section 21.6 "Command line input"
           .Case("$test$plusargs",
                 [&]() -> FailureOr<Value> {
-                  auto intTy = moore::IntType::getInt(getContext(), 32);
-                  // Treat as absent; return 0.
-                  return (Value)moore::ConstantOp::create(builder, loc, intTy,
-                                                          0);
+                  // Extract the plusarg string. The argument may be:
+                  // 1. ConstantStringOp directly (string literal as packed int)
+                  // 2. IntToStringOp wrapping a ConstantStringOp (implicit
+                  //    conversion from packed to string type)
+                  std::string plusargStr;
+                  if (auto constStrOp =
+                          value.getDefiningOp<moore::ConstantStringOp>()) {
+                    plusargStr = constStrOp.getValue().str();
+                  } else if (auto intToStr =
+                                 value.getDefiningOp<moore::IntToStringOp>()) {
+                    if (auto constStrOp = intToStr.getInput()
+                                              .getDefiningOp<
+                                                  moore::ConstantStringOp>()) {
+                      plusargStr = constStrOp.getValue().str();
+                    }
+                  }
+                  if (plusargStr.empty()) {
+                    // Can't determine string at compile time, fall back to 0
+                    auto intTy = moore::IntType::getInt(getContext(), 32);
+                    return (Value)moore::ConstantOp::create(builder, loc, intTy,
+                                                            0);
+                  }
+
+                  // Create LLVM global string constant at module level
+                  auto module = intoModuleOp;
+                  // Sanitize name for MLIR symbol
+                  std::string safeName;
+                  for (char c : plusargStr)
+                    safeName += (std::isalnum(c) || c == '_') ? c : '_';
+                  std::string globalName = "__plusarg_" + safeName;
+
+                  auto i8Ty = builder.getIntegerType(8);
+                  auto strLen = static_cast<int64_t>(plusargStr.size());
+                  auto arrayTy = mlir::LLVM::LLVMArrayType::get(
+                      i8Ty, strLen + 1); // null-terminated
+
+                  if (!module.lookupSymbol<mlir::LLVM::GlobalOp>(globalName)) {
+                    OpBuilder::InsertionGuard guard(builder);
+                    builder.setInsertionPointToStart(module.getBody());
+                    auto global = mlir::LLVM::GlobalOp::create(
+                        builder, loc, arrayTy, /*isConstant=*/true,
+                        mlir::LLVM::Linkage::Internal, globalName,
+                        builder.getStringAttr(plusargStr + '\0'));
+                    (void)global;
+                  }
+
+                  // Get pointer to global string
+                  auto ptrTy = mlir::LLVM::LLVMPointerType::get(getContext());
+                  auto addrOf = mlir::LLVM::AddressOfOp::create(
+                      builder, loc, ptrTy, globalName);
+
+                  // Call __moore_test_plusargs(ptr, len) -> i32
+                  auto i32Ty = builder.getIntegerType(32);
+                  auto lenConst = mlir::LLVM::ConstantOp::create(
+                      builder, loc, i32Ty,
+                      builder.getI32IntegerAttr(strLen));
+
+                  auto funcTy = mlir::LLVM::LLVMFunctionType::get(
+                      i32Ty, {ptrTy, i32Ty});
+                  auto func = getOrCreateRuntimeFunc(
+                      *this, "__moore_test_plusargs", funcTy);
+                  auto callResult = mlir::LLVM::CallOp::create(
+                      builder, loc, func, ValueRange{addrOf, lenConst});
+
+                  auto mooreIntTy =
+                      moore::IntType::getInt(getContext(), 32);
+                  return (Value)mlir::UnrealizedConversionCastOp::create(
+                             builder, loc, mooreIntTy,
+                             callResult.getResult())
+                      .getResult(0);
                 })
           // Bit vector system functions (IEEE 1800-2017 Section 20.9)
           .Case("$isunknown",

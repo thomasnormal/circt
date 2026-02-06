@@ -14437,6 +14437,61 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_test_plusargs ----
+    // Signature: (ptr_to_string: ptr, length: i32) -> i32
+    // Checks if any plusarg starts with the given string.
+    // IEEE 1800-2017 Section 21.6
+    if (calleeName == "__moore_test_plusargs") {
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 2) {
+        // Read the string from global memory
+        uint64_t strAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        int32_t strLen = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        std::string pattern;
+        if (strAddr != 0 && strLen > 0) {
+          uint64_t blockOffset = 0;
+          auto *block =
+              findMemoryBlockByAddress(strAddr, procId, &blockOffset);
+          if (block && block->initialized) {
+            for (int32_t i = 0; i < strLen; ++i) {
+              size_t idx = blockOffset + i;
+              if (idx < block->data.size()) {
+                char c = static_cast<char>(block->data[idx]);
+                if (c == '\0')
+                  break;
+                pattern += c;
+              }
+            }
+          }
+        }
+
+        // Check against CIRCT_UVM_ARGS environment variable
+        if (!pattern.empty()) {
+          const char *env = std::getenv("CIRCT_UVM_ARGS");
+          if (!env)
+            env = std::getenv("UVM_ARGS");
+          if (env) {
+            std::string args(env);
+            // Search for +pattern in the args
+            std::string searchFor = "+" + pattern;
+            if (args.find(searchFor) != std::string::npos)
+              result = 1;
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_test_plusargs(\"" << pattern
+                   << "\") = " << result << "\n");
+      }
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 32));
+      }
+      return success();
+    }
+
     // Handle __moore_int_to_string - convert i64 to string struct {ptr, i64}
     if (calleeName == "__moore_int_to_string" ||
         calleeName == "__moore_string_itoa") {

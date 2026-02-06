@@ -79,7 +79,8 @@ to commercial simulators like Cadence Xcelium.
 | Signal driving (`llhd.drv`) | WORKS | Blocking assignments via epsilon delay |
 | Signal probing (`llhd.prb`) | WORKS | Read signal values |
 | **Known Gaps** | | |
-| `+UVM_TESTNAME` plusarg | PARTIAL | Runtime parsing works (CIRCT_UVM_ARGS env var); `$test$plusargs`/`$value$plusargs` stubbed to 0 in ImportVerilog |
+| `$test$plusargs` | WORKS | Runtime `__moore_test_plusargs` checks `CIRCT_UVM_ARGS`/`UVM_ARGS` env var |
+| `$value$plusargs` | PARTIAL | Still stubbed to 0; UVM uses DPI-based fallback for `+UVM_TESTNAME` |
 | `$urandom` / `$random` | WORKS | mt19937-based RNG via `__moore_urandom()` interceptors |
 | `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
@@ -124,3 +125,4 @@ to commercial simulators like Cadence Xcelium.
 | `$finish` exit code | Propagates exit code; checks error count for UVM `die()` → `$finish` |
 | `%c` format | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
 | Semaphore support | Full pipeline: ImportVerilog method lowering, constructor keyCount, interpreter interceptors with blocking |
+| `$test$plusargs` | Runtime call via `__moore_test_plusargs`; traces through `IntToStringOp` to extract compile-time string; skips constant eval |
