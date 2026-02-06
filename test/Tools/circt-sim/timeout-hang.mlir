@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --max-process-steps=0 --timeout=1 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --max-process-steps=0 --timeout=1 2>&1 | FileCheck %s
 
 // CHECK: Wall-clock timeout reached
 

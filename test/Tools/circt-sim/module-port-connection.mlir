@@ -9,7 +9,7 @@
 // CHECK: [circt-sim] Starting simulation
 // CHECK: Clock toggled, child_clk value:
 // CHECK: Clock toggled, child_clk value:
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %true = hw.constant true

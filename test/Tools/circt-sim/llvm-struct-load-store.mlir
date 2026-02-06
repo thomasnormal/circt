@@ -10,7 +10,7 @@
 
 // CHECK: [circt-sim] Starting simulation
 // CHECK: String value: Hello
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 llvm.func @__moore_packed_string_to_string(i64) -> !llvm.struct<(ptr, i64)>
 

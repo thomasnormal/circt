@@ -1,7 +1,7 @@
 // RUN: circt-sim %s --max-time=1000 2>&1 | FileCheck %s
 // Test dynamic array element drive and probe via llhd.sig.array_get
 
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @top() {
   // Create a 4-element array signal with initial values [0, 0, 0, 0]

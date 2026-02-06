@@ -20,7 +20,7 @@
 // CHECK: Sub result: 1
 // CHECK: Mul result: 4
 // CHECK: Width normalization test: PASSED
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %eps = llhd.constant_time <0ns, 0d, 1e>

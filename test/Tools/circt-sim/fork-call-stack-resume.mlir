@@ -14,7 +14,7 @@
 
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time 1000000 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 module {
   // Global counter to track execution order

@@ -734,7 +734,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                            << (success ? "finished" : "failed") << " at time "
                            << scheduler.getCurrentTime().realTime << " fs\n";
             }
-            control.finish(success ? 0 : 1);
+            int code = success ? 0 : 1;
+            // UVM's die() calls bare $finish (success=true) even after
+            // UVM_FATAL.  Check the error count to catch this case.
+            if (code == 0 && control.getErrorCount() > 0)
+              code = 1;
+            control.finish(code);
           });
     }
 
@@ -1529,12 +1534,17 @@ static LogicalResult processInput(MLIRContext &context,
   // successful simulation.  The _exit() must be here (not in main())
   // because SimulationContext is stack-allocated and its destructor
   // runs when this function returns.
-  llvm::outs() << "[circt-sim] Simulation finished successfully\n";
+  int exitCode = simContext.getExitCode();
+  if (exitCode == 0)
+    llvm::outs() << "[circt-sim] Simulation completed\n";
+  else
+    llvm::outs() << "[circt-sim] Simulation finished with exit code "
+                 << exitCode << "\n";
   llvm::outs().flush();
   llvm::errs().flush();
   std::fflush(stdout);
   std::fflush(stderr);
-  _exit(0);
+  _exit(exitCode);
 }
 
 //===----------------------------------------------------------------------===//

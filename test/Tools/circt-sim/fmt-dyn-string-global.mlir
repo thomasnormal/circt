@@ -9,7 +9,7 @@
 
 // CHECK: [circt-sim] Starting simulation
 // CHECK: Global string: TestString
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 module {
   // Global string constant

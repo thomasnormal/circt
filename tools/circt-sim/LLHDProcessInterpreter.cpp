@@ -14939,6 +14939,84 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_randomize_with_ranges ----
+    // Signature: (ranges: ptr, numRanges: i64) -> i64
+    // Returns a uniformly random value from the union of [low,high] ranges.
+    // The ranges array contains pairs of i64: [low1, high1, low2, high2, ...].
+    if (calleeName == "__moore_randomize_with_ranges") {
+      int64_t result = 0;
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t rangesAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t numRanges = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+
+        // Helper to read i64 from interpreter memory at address
+        auto readI64 = [&](uint64_t addr) -> int64_t {
+          uint64_t off = 0;
+          auto *blk = findMemoryBlockByAddress(addr, procId, &off);
+          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+            return 0;
+          int64_t val = 0;
+          for (int i = 0; i < 8; ++i)
+            val |= static_cast<int64_t>(
+                       static_cast<uint64_t>(blk->data[off + i]) << (i * 8));
+          return val;
+        };
+
+        if (numRanges > 0 && rangesAddr != 0) {
+          // Read range pairs from interpreter memory
+          std::vector<int64_t> ranges(numRanges * 2);
+          for (int64_t i = 0; i < numRanges * 2; ++i)
+            ranges[i] = readI64(rangesAddr + i * 8);
+
+          // Calculate total size across all ranges
+          uint64_t totalSize = 0;
+          for (int64_t i = 0; i < numRanges; ++i) {
+            int64_t low = ranges[i * 2];
+            int64_t high = ranges[i * 2 + 1];
+            if (low > high)
+              std::swap(low, high);
+            totalSize += static_cast<uint64_t>(high - low) + 1;
+          }
+
+          if (totalSize > 0) {
+            // Generate random position in [0, totalSize - 1]
+            uint64_t randomVal = static_cast<uint64_t>(std::rand());
+            if (totalSize > UINT32_MAX)
+              randomVal = (static_cast<uint64_t>(std::rand()) << 32) |
+                          static_cast<uint64_t>(std::rand());
+            uint64_t position = randomVal % totalSize;
+
+            // Map position to a specific range and value
+            uint64_t accumulated = 0;
+            for (int64_t i = 0; i < numRanges; ++i) {
+              int64_t low = ranges[i * 2];
+              int64_t high = ranges[i * 2 + 1];
+              if (low > high)
+                std::swap(low, high);
+              uint64_t rangeSize = static_cast<uint64_t>(high - low) + 1;
+              if (position < accumulated + rangeSize) {
+                uint64_t offset = position - accumulated;
+                result = low + static_cast<int64_t>(offset);
+                break;
+              }
+              accumulated += rangeSize;
+            }
+          } else {
+            result = ranges[0];
+          }
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_randomize_with_ranges(nRanges="
+                   << numRanges << ") = " << result << "\n");
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
+      return success();
+    }
+
     // ---- Helper lambda: extract Moore string from struct pointer ----
     // (used by fopen, fwrite, fclose)
     auto extractMooreStringFromPtr = [&](Value operand) -> std::string {

@@ -5,7 +5,7 @@
 
 // CHECK: [circt-sim] Starting simulation
 // CHECK: Wide signal test passed
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test_wide_signal() {
   // Create a 128-bit constant for initialization

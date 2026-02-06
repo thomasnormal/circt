@@ -8,7 +8,7 @@
 // CHECK: Extract nested: 100
 // CHECK: Insert test: 99
 // CHECK: Array extract: 3
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test() {
   %c10000000_i64 = hw.constant 10000000 : i64
