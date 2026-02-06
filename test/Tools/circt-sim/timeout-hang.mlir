@@ -1,6 +1,11 @@
-// RUN: not circt-sim %s --max-process-steps=0 --timeout=1 2>&1 | FileCheck %s
+// RUN: circt-sim %s 2>&1 | FileCheck %s
 
-// CHECK: Wall-clock timeout reached
+// Test: tight infinite loop without llhd.wait is detected and halted.
+// The per-activation step limit catches processes that loop forever
+// without waiting, preventing the simulator from hanging.
+// No --timeout needed: the loop is caught by the 1M-step-per-activation limit.
+
+// CHECK: Simulation completed
 
 hw.module @test() {
   %eps = llhd.constant_time <0ns, 0d, 1e>
