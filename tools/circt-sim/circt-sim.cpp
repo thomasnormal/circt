@@ -1616,5 +1616,14 @@ int main(int argc, char **argv) {
   }
 
   llvm::outs() << "[circt-sim] Simulation finished successfully\n";
-  return 0;
+
+  // Use _exit() to skip expensive cleanup of MLIR context and large
+  // interpreter data structures.  For UVM designs with millions of operations,
+  // the destructor chain (DenseMap/StringMap/vector cleanup) can take minutes
+  // and provides no user-visible benefit after a successful simulation.
+  llvm::outs().flush();
+  llvm::errs().flush();
+  std::fflush(stdout);
+  std::fflush(stderr);
+  _exit(0);
 }
