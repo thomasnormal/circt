@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 398 - February 6, 2026
+
+### Summary
+
+Iteration 398: Added SMT-LIB-only k-induction mode to circt-bmc with base/step
+checks and regression coverage.
+
+### Accomplishments
+
+1. **k-induction mode** - Added `--k-induction` to run base and induction-step
+   checks via SMT-LIB, emitting `BMC_BASE`/`BMC_STEP` result lines.
+2. **Induction-aware VerifToSMT lowering** - Added `bmc-mode` support and
+   induction-step handling (symbolic init, last-step checks, guardrails).
+3. **BMC regressions** - Added k-induction unsat test and help text coverage.
+
+### Verification (February 6, 2026)
+
+- `ninja -C build circt-bmc`
+- `build/bin/circt-bmc --help | build/bin/FileCheck test/Tools/circt-bmc/commandline.mlir`
+- `build/bin/circt-bmc -b 1 --k-induction --run-smtlib --z3-path=test/Tools/circt-bmc/Inputs/fake-z3-unsat.sh --module top test/Tools/circt-bmc/bmc-k-induction-unsat.mlir | build/bin/FileCheck test/Tools/circt-bmc/bmc-k-induction-unsat.mlir`
+
 ## Iteration 397 - February 6, 2026
 
 ### Summary

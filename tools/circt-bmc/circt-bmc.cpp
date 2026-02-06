@@ -169,6 +169,12 @@ static cl::opt<bool> failOnViolation(
     cl::desc("Return failure when the bounded model check finds a violation"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> kInduction(
+    "k-induction",
+    cl::desc("Run k-induction (SMT-LIB only): base check at -b, then "
+             "induction step at -b+1"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to z3 binary for --run-smtlib (optional)"),
@@ -397,35 +403,24 @@ static LogicalResult insertGetModelBeforeReset(SmallString<128> smtPath) {
   return success();
 }
 
-/// This function initializes the various components of the tool and
-/// orchestrates the work to be done.
-static LogicalResult executeBMC(MLIRContext &context) {
-  // Create the timing manager we use to sample execution times.
-  DefaultTimingManager tm;
-  applyDefaultTimingManagerCLOptions(tm);
-  auto ts = tm.getRootScope();
-  bool wantSolverOutput = printSolverOutput || printCounterexample;
+enum class BMCResult { Unsat, Sat, Unknown };
 
-  circt::setResourceGuardPhase("parse");
-  OwningOpRef<ModuleOp> module;
-  {
-    auto parserTimer = ts.nest("Parse MLIR input");
-    // Parse the provided input files.
-    module = parseSourceFile<ModuleOp>(inputFilename, &context);
+static const char *toResultString(BMCResult result) {
+  switch (result) {
+  case BMCResult::Unsat:
+    return "UNSAT";
+  case BMCResult::Sat:
+    return "SAT";
+  case BMCResult::Unknown:
+    return "UNKNOWN";
   }
-  if (!module)
-    return failure();
+  return "UNKNOWN";
+}
 
-  // Create the output directory or output file depending on our mode.
-  std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
-  std::string errorMessage;
-  // Create an output file.
-  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
-  if (!outputFile.value()) {
-    llvm::errs() << errorMessage << "\n";
-    return failure();
-  }
-
+static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
+                                     TimingScope &ts,
+                                     ConvertVerifToSMTOptions convertOptions,
+                                     unsigned boundOverride) {
   PassManager pm(&context);
   pm.enableVerifier(verifyPasses);
   pm.enableTiming(ts);
@@ -445,7 +440,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(verif::createLowerTestsPass());
 
   bool hasLLHD = false;
-  module->walk([&](Operation *op) {
+  module.walk([&](Operation *op) {
     if (auto *dialect = op->getDialect())
       if (dialect->getNamespace() == "llhd")
         hasLLHD = true;
@@ -511,7 +506,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   externalizeOptions.allowMultiClock = allowMultiClock;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   LowerToBMCOptions lowerToBMCOptions;
-  lowerToBMCOptions.bound = clockBound;
+  lowerToBMCOptions.bound = boundOverride;
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;
   lowerToBMCOptions.topModule = moduleName;
   lowerToBMCOptions.risingClocksOnly = risingClocksOnly;
@@ -519,12 +514,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   pm.addPass(createLowerToBMC(lowerToBMCOptions));
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertCombToSMT());
-  ConvertVerifToSMTOptions convertVerifToSMTOptions;
-  convertVerifToSMTOptions.risingClocksOnly = risingClocksOnly;
-  convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
-  convertVerifToSMTOptions.forSMTLIBExport =
-      (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
-  pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
+  pm.addPass(createConvertVerifToSMT(convertOptions));
   pm.addPass(createBottomUpSimpleCanonicalizerPass());
   pm.addPass(createSMTDeadCodeEliminationPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
@@ -547,7 +537,350 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
 
   circt::setResourceGuardPhase("pass pipeline");
-  if (failed(pm.run(module.get())))
+  if (failed(pm.run(module)))
+    return failure();
+  return success();
+}
+
+static FailureOr<BMCResult>
+runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
+  if (!hasSMTSolver(module)) {
+    if (printResultLines)
+      llvm::outs()
+          << "BMC_RESULT=UNSAT\nBound reached with no violations!\n";
+    return BMCResult::Unsat;
+  }
+
+  std::optional<std::string> z3Program;
+  if (!z3PathOpt.empty()) {
+    if (!llvm::sys::fs::exists(z3PathOpt)) {
+      llvm::errs() << "z3 not found at '" << z3PathOpt << "'\n";
+      return failure();
+    }
+    z3Program = z3PathOpt;
+  } else {
+    auto z3Path = llvm::sys::findProgramByName("z3");
+    if (!z3Path) {
+      llvm::errs() << "z3 not found in PATH; cannot run SMT-LIB\n";
+      return failure();
+    }
+    z3Program = *z3Path;
+  }
+
+  SmallString<128> smtPath;
+  int smtFd = -1;
+  if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "smt2",
+                                                   smtFd, smtPath)) {
+    llvm::errs() << "failed to create temporary SMT file: " << ec.message()
+                 << "\n";
+    return failure();
+  }
+  llvm::FileRemover smtRemover(smtPath);
+  {
+    llvm::raw_fd_ostream smtStream(smtFd, true);
+    if (failed(smt::exportSMTLIB(module, smtStream)))
+      return failure();
+  }
+
+  SmallVector<std::string> declaredNames;
+  if (auto buffer = llvm::MemoryBuffer::getFile(smtPath)) {
+    StringRef data = buffer.get()->getBuffer();
+    for (StringRef line : llvm::split(data, '\n')) {
+      line = line.trim();
+      if (!line.starts_with("(declare-const "))
+        continue;
+      line = line.drop_front(StringRef("(declare-const ").size());
+      StringRef name = line.take_until([](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ')';
+      });
+      if (!name.empty())
+        declaredNames.push_back(name.str());
+    }
+  }
+
+  struct Z3Run {
+    int exitCode = 0;
+    std::string errMsg;
+    std::string combinedOutput;
+    std::optional<std::string> token;
+  };
+
+  auto runZ3 = [&](StringRef filePath, bool requestModel,
+                   Z3Run &run) -> LogicalResult {
+    SmallString<128> outPath;
+    int outFd = -1;
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "out", outFd,
+                                                     outPath)) {
+      llvm::errs() << "failed to create temporary output file: "
+                   << ec.message() << "\n";
+      return failure();
+    }
+    llvm::FileRemover outRemover(outPath);
+    llvm::sys::Process::SafelyCloseFileDescriptor(outFd);
+
+    SmallString<128> errPath;
+    int errFd = -1;
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "err", errFd,
+                                                     errPath)) {
+      llvm::errs() << "failed to create temporary error file: " << ec.message()
+                   << "\n";
+      return failure();
+    }
+    llvm::FileRemover errRemover(errPath);
+    llvm::sys::Process::SafelyCloseFileDescriptor(errFd);
+
+    SmallVector<StringRef, 4> args;
+    args.push_back(*z3Program);
+    if (requestModel)
+      args.push_back("-model");
+    args.push_back(filePath);
+    std::array<std::optional<StringRef>, 3> redirects = {
+        std::nullopt, outPath.str(), errPath.str()};
+    run.exitCode = llvm::sys::ExecuteAndWait(
+        *z3Program, args, std::nullopt, redirects, 0, 0, &run.errMsg);
+
+    auto outBuffer = llvm::MemoryBuffer::getFile(outPath);
+    if (!outBuffer) {
+      llvm::errs() << "failed to read z3 output\n";
+      return failure();
+    }
+    auto errBuffer = llvm::MemoryBuffer::getFile(errPath);
+    run.combinedOutput = outBuffer.get()->getBuffer().str();
+    if (errBuffer && !errBuffer.get()->getBuffer().empty()) {
+      run.combinedOutput.append("\n");
+      run.combinedOutput.append(errBuffer.get()->getBuffer().str());
+    }
+    run.token = findResultToken(run.combinedOutput);
+    return success();
+  };
+
+  Z3Run initialRun;
+  if (failed(runZ3(smtPath, wantSolverOutput, initialRun)))
+    return failure();
+  if (!initialRun.errMsg.empty()) {
+    llvm::errs() << "z3 invocation failed: " << initialRun.errMsg << "\n";
+    return failure();
+  }
+  const Z3Run *selectedRun = &initialRun;
+  std::optional<SmallString<128>> smtModelPath;
+  std::optional<llvm::FileRemover> smtModelRemover;
+  Z3Run modelRun;
+  if (wantSolverOutput &&
+      (!initialRun.token || *initialRun.token == "sat" ||
+       *initialRun.token == "unknown")) {
+    SmallString<128> smtPathWithModel;
+    int smtModelFd = -1;
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "smt2",
+                                                     smtModelFd,
+                                                     smtPathWithModel)) {
+      llvm::errs() << "failed to create temporary SMT file: " << ec.message()
+                   << "\n";
+      return failure();
+    }
+    llvm::FileRemover modelRemover(smtPathWithModel);
+    smtModelRemover.emplace(std::move(modelRemover));
+    llvm::sys::Process::SafelyCloseFileDescriptor(smtModelFd);
+    if (auto buffer = llvm::MemoryBuffer::getFile(smtPath)) {
+      std::error_code ec;
+      llvm::raw_fd_ostream os(smtPathWithModel, ec);
+      if (ec) {
+        llvm::errs() << "failed to write SMT file: " << ec.message() << "\n";
+        return failure();
+      }
+      os << buffer.get()->getBuffer();
+    }
+    if (failed(insertGetModelBeforeReset(smtPathWithModel)))
+      return failure();
+    if (failed(runZ3(smtPathWithModel, /*requestModel=*/true, modelRun)))
+      return failure();
+    if (!modelRun.errMsg.empty()) {
+      llvm::errs() << "z3 invocation failed: " << modelRun.errMsg << "\n";
+      return failure();
+    }
+    if (modelRun.token)
+      selectedRun = &modelRun;
+  }
+
+  if (wantSolverOutput)
+    llvm::errs() << "z3 output:\n" << selectedRun->combinedOutput << "\n";
+
+  if (!selectedRun->token) {
+    llvm::errs() << "unexpected z3 output: " << selectedRun->combinedOutput
+                 << "\n";
+    return failure();
+  }
+  StringRef token = *selectedRun->token;
+
+  if (printCounterexample && (token == "sat" || token == "unknown") &&
+      !declaredNames.empty()) {
+    auto modelValues = parseZ3Model(selectedRun->combinedOutput);
+    if (!modelValues.empty()) {
+      circt_smt_print_model_header();
+      for (const auto &name : declaredNames) {
+        auto it = modelValues.find(name);
+        if (it == modelValues.end())
+          continue;
+        llvm::errs() << "  " << name << " = " << it->second << "\n";
+      }
+    }
+  }
+
+  if (token == "unsat") {
+    if (printResultLines)
+      llvm::outs()
+          << "BMC_RESULT=UNSAT\nBound reached with no violations!\n";
+    return BMCResult::Unsat;
+  }
+  if (token == "sat") {
+    if (printResultLines)
+      llvm::outs() << "BMC_RESULT=SAT\nAssertion can be violated!\n";
+    return BMCResult::Sat;
+  }
+  if (token == "unknown") {
+    if (printResultLines)
+      llvm::outs() << "BMC_RESULT=UNKNOWN\nSolver returned unknown.\n";
+    return BMCResult::Unknown;
+  }
+  llvm::errs() << "unexpected z3 result: " << token << "\n";
+  return failure();
+}
+
+static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
+                                       TimingScope &ts,
+                                       ConvertVerifToSMTOptions convertOptions,
+                                       unsigned boundOverride,
+                                       bool wantSolverOutput,
+                                       bool printResultLines) {
+  if (failed(runPassPipeline(context, module, ts, convertOptions,
+                             boundOverride)))
+    return failure();
+  circt::setResourceGuardPhase("run z3");
+  auto timer = ts.nest("Run SMT-LIB via z3");
+  return runSMTLIBSolver(module, wantSolverOutput, printResultLines);
+}
+
+static LogicalResult executeBMCWithInduction(MLIRContext &context) {
+  if (outputFormat != OutputRunSMTLIB) {
+    llvm::errs() << "--k-induction requires --run-smtlib\n";
+    return failure();
+  }
+
+  // Create the timing manager we use to sample execution times.
+  DefaultTimingManager tm;
+  applyDefaultTimingManagerCLOptions(tm);
+  auto ts = tm.getRootScope();
+  bool wantSolverOutput = printSolverOutput || printCounterexample;
+
+  circt::setResourceGuardPhase("parse");
+  OwningOpRef<ModuleOp> module;
+  {
+    auto parserTimer = ts.nest("Parse MLIR input");
+    module = parseSourceFile<ModuleOp>(inputFilename, &context);
+  }
+  if (!module)
+    return failure();
+
+  std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
+  std::string errorMessage;
+  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
+  if (!outputFile.value()) {
+    llvm::errs() << errorMessage << "\n";
+    return failure();
+  }
+
+  ConvertVerifToSMTOptions baseOptions;
+  baseOptions.risingClocksOnly = risingClocksOnly;
+  baseOptions.assumeKnownInputs = assumeKnownInputs;
+  baseOptions.forSMTLIBExport = true;
+  baseOptions.bmcMode = "induction-base";
+
+  OwningOpRef<ModuleOp> baseModule(
+      llvm::cast<ModuleOp>(module->clone()));
+  auto baseResultOr =
+      runBMCOnce(context, *baseModule, ts, baseOptions, clockBound,
+                 wantSolverOutput, /*printResultLines=*/false);
+  if (failed(baseResultOr))
+    return failure();
+  BMCResult baseResult = *baseResultOr;
+  llvm::outs() << "BMC_BASE=" << toResultString(baseResult) << "\n";
+
+  if (baseResult != BMCResult::Unsat) {
+    llvm::outs() << "BMC_RESULT=" << toResultString(baseResult) << "\n";
+    if (baseResult == BMCResult::Sat)
+      llvm::outs() << "Assertion can be violated!\n";
+    else
+      llvm::outs() << "Solver returned unknown.\n";
+    outputFile.value()->keep();
+    if (failOnViolation)
+      return failure();
+    return success();
+  }
+
+  ConvertVerifToSMTOptions stepOptions = baseOptions;
+  stepOptions.bmcMode = "induction-step";
+  OwningOpRef<ModuleOp> stepModule(
+      llvm::cast<ModuleOp>(module->clone()));
+  auto stepResultOr =
+      runBMCOnce(context, *stepModule, ts, stepOptions, clockBound + 1,
+                 wantSolverOutput, /*printResultLines=*/false);
+  if (failed(stepResultOr))
+    return failure();
+  BMCResult stepResult = *stepResultOr;
+  llvm::outs() << "BMC_STEP=" << toResultString(stepResult) << "\n";
+
+  if (stepResult == BMCResult::Unsat) {
+    llvm::outs() << "BMC_RESULT=UNSAT\nInduction holds.\n";
+    outputFile.value()->keep();
+    return success();
+  }
+
+  llvm::outs() << "BMC_RESULT=UNKNOWN\nInduction step failed.\n";
+  outputFile.value()->keep();
+  if (failOnViolation)
+    return failure();
+  return success();
+}
+
+/// This function initializes the various components of the tool and
+/// orchestrates the work to be done.
+static LogicalResult executeBMC(MLIRContext &context) {
+  if (kInduction)
+    return executeBMCWithInduction(context);
+
+  // Create the timing manager we use to sample execution times.
+  DefaultTimingManager tm;
+  applyDefaultTimingManagerCLOptions(tm);
+  auto ts = tm.getRootScope();
+  bool wantSolverOutput = printSolverOutput || printCounterexample;
+
+  circt::setResourceGuardPhase("parse");
+  OwningOpRef<ModuleOp> module;
+  {
+    auto parserTimer = ts.nest("Parse MLIR input");
+    // Parse the provided input files.
+    module = parseSourceFile<ModuleOp>(inputFilename, &context);
+  }
+  if (!module)
+    return failure();
+
+  // Create the output directory or output file depending on our mode.
+  std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
+  std::string errorMessage;
+  // Create an output file.
+  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
+  if (!outputFile.value()) {
+    llvm::errs() << errorMessage << "\n";
+    return failure();
+  }
+
+  ConvertVerifToSMTOptions convertVerifToSMTOptions;
+  convertVerifToSMTOptions.risingClocksOnly = risingClocksOnly;
+  convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
+  convertVerifToSMTOptions.forSMTLIBExport =
+      (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
+  convertVerifToSMTOptions.bmcMode = "bounded";
+  if (failed(runPassPipeline(context, *module, ts, convertVerifToSMTOptions,
+                             clockBound)))
     return failure();
 
   if (outputFormat == OutputMLIR) {
@@ -579,209 +912,15 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
 
   if (outputFormat == OutputRunSMTLIB) {
-    circt::setResourceGuardPhase("run z3");
-    auto timer = ts.nest("Run SMT-LIB via z3");
-    if (!hasSMTSolver(*module)) {
-      llvm::outs()
-          << "BMC_RESULT=UNSAT\nBound reached with no violations!\n";
-      outputFile.value()->keep();
+    auto resultOr =
+        runSMTLIBSolver(*module, wantSolverOutput, /*printResultLines=*/true);
+    if (failed(resultOr))
+      return failure();
+    outputFile.value()->keep();
+    BMCResult result = *resultOr;
+    if (result == BMCResult::Unsat)
       return success();
-    }
-    std::optional<std::string> z3Program;
-    if (!z3PathOpt.empty()) {
-      if (!llvm::sys::fs::exists(z3PathOpt)) {
-        llvm::errs() << "z3 not found at '" << z3PathOpt << "'\n";
-        return failure();
-      }
-      z3Program = z3PathOpt;
-    } else {
-      auto z3Path = llvm::sys::findProgramByName("z3");
-      if (!z3Path) {
-        llvm::errs() << "z3 not found in PATH; cannot run SMT-LIB\n";
-        return failure();
-      }
-      z3Program = *z3Path;
-    }
-
-    SmallString<128> smtPath;
-    int smtFd = -1;
-    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "smt2",
-                                                     smtFd, smtPath)) {
-      llvm::errs() << "failed to create temporary SMT file: " << ec.message()
-                   << "\n";
-      return failure();
-    }
-    llvm::FileRemover smtRemover(smtPath);
-    {
-      llvm::raw_fd_ostream smtStream(smtFd, true);
-      if (failed(smt::exportSMTLIB(module.get(), smtStream)))
-        return failure();
-    }
-
-    SmallVector<std::string> declaredNames;
-    {
-      auto buffer = llvm::MemoryBuffer::getFile(smtPath);
-      if (buffer) {
-        StringRef data = buffer.get()->getBuffer();
-        for (StringRef line : llvm::split(data, '\n')) {
-          line = line.trim();
-          if (!line.starts_with("(declare-const "))
-            continue;
-          line = line.drop_front(StringRef("(declare-const ").size());
-          StringRef name = line.take_until([](char c) {
-            return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ')';
-          });
-          if (!name.empty())
-            declaredNames.push_back(name.str());
-        }
-      }
-    }
-
-    struct Z3Run {
-      int exitCode = 0;
-      std::string errMsg;
-      std::string combinedOutput;
-      std::optional<std::string> token;
-    };
-
-    auto runZ3 = [&](StringRef filePath, bool requestModel,
-                     Z3Run &run) -> LogicalResult {
-      SmallString<128> outPath;
-      int outFd = -1;
-      if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "out", outFd,
-                                                       outPath)) {
-        llvm::errs() << "failed to create temporary output file: "
-                     << ec.message() << "\n";
-        return failure();
-      }
-      llvm::FileRemover outRemover(outPath);
-      llvm::sys::Process::SafelyCloseFileDescriptor(outFd);
-
-      SmallString<128> errPath;
-      int errFd = -1;
-      if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "err", errFd,
-                                                       errPath)) {
-        llvm::errs() << "failed to create temporary error file: "
-                     << ec.message() << "\n";
-        return failure();
-      }
-      llvm::FileRemover errRemover(errPath);
-      llvm::sys::Process::SafelyCloseFileDescriptor(errFd);
-
-      SmallVector<StringRef, 4> args;
-      args.push_back(*z3Program);
-      if (requestModel)
-        args.push_back("-model");
-      args.push_back(filePath);
-      std::array<std::optional<StringRef>, 3> redirects = {
-          std::nullopt, outPath.str(), errPath.str()};
-      run.exitCode = llvm::sys::ExecuteAndWait(
-          *z3Program, args, std::nullopt, redirects, 0, 0, &run.errMsg);
-
-      auto outBuffer = llvm::MemoryBuffer::getFile(outPath);
-      if (!outBuffer) {
-        llvm::errs() << "failed to read z3 output\n";
-        return failure();
-      }
-      auto errBuffer = llvm::MemoryBuffer::getFile(errPath);
-      run.combinedOutput = outBuffer.get()->getBuffer().str();
-      if (errBuffer && !errBuffer.get()->getBuffer().empty()) {
-        run.combinedOutput.append("\n");
-        run.combinedOutput.append(errBuffer.get()->getBuffer().str());
-      }
-      run.token = findResultToken(run.combinedOutput);
-      return success();
-    };
-
-    Z3Run initialRun;
-    if (failed(runZ3(smtPath, wantSolverOutput, initialRun)))
-      return failure();
-    if (!initialRun.errMsg.empty()) {
-      llvm::errs() << "z3 invocation failed: " << initialRun.errMsg << "\n";
-      return failure();
-    }
-    const Z3Run *selectedRun = &initialRun;
-    std::optional<SmallString<128>> smtModelPath;
-    std::optional<llvm::FileRemover> smtModelRemover;
-    Z3Run modelRun;
-    if (wantSolverOutput &&
-        (!initialRun.token || *initialRun.token == "sat" ||
-         *initialRun.token == "unknown")) {
-      SmallString<128> smtPathWithModel;
-      int smtModelFd = -1;
-      if (auto ec = llvm::sys::fs::createTemporaryFile("circt-bmc", "smt2",
-                                                       smtModelFd,
-                                                       smtPathWithModel)) {
-        llvm::errs() << "failed to create temporary SMT file: " << ec.message()
-                     << "\n";
-        return failure();
-      }
-      llvm::FileRemover modelRemover(smtPathWithModel);
-      smtModelRemover.emplace(std::move(modelRemover));
-      llvm::sys::Process::SafelyCloseFileDescriptor(smtModelFd);
-      if (auto buffer = llvm::MemoryBuffer::getFile(smtPath)) {
-        std::error_code ec;
-        llvm::raw_fd_ostream os(smtPathWithModel, ec);
-        if (ec) {
-          llvm::errs() << "failed to write SMT file: " << ec.message() << "\n";
-          return failure();
-        }
-        os << buffer.get()->getBuffer();
-      }
-      if (failed(insertGetModelBeforeReset(smtPathWithModel)))
-        return failure();
-      if (failed(runZ3(smtPathWithModel, /*requestModel=*/true, modelRun)))
-        return failure();
-      if (!modelRun.errMsg.empty()) {
-        llvm::errs() << "z3 invocation failed: " << modelRun.errMsg << "\n";
-        return failure();
-      }
-      if (modelRun.token)
-        selectedRun = &modelRun;
-    }
-
-    if (wantSolverOutput)
-      llvm::errs() << "z3 output:\n" << selectedRun->combinedOutput << "\n";
-
-    if (!selectedRun->token) {
-      llvm::errs() << "unexpected z3 output: " << selectedRun->combinedOutput
-                   << "\n";
-      return failure();
-    }
-    StringRef token = *selectedRun->token;
-
-    if (printCounterexample && (token == "sat" || token == "unknown") &&
-        !declaredNames.empty()) {
-      auto modelValues = parseZ3Model(selectedRun->combinedOutput);
-      if (!modelValues.empty()) {
-        circt_smt_print_model_header();
-        for (const auto &name : declaredNames) {
-          auto it = modelValues.find(name);
-          if (it == modelValues.end())
-            continue;
-          llvm::errs() << "  " << name << " = " << it->second << "\n";
-        }
-      }
-    }
-
-    if (token == "unsat") {
-      llvm::outs()
-          << "BMC_RESULT=UNSAT\nBound reached with no violations!\n";
-      outputFile.value()->keep();
-      return success();
-    }
-    if (token == "sat") {
-      llvm::outs() << "BMC_RESULT=SAT\nAssertion can be violated!\n";
-      outputFile.value()->keep();
-      return failOnViolation ? failure() : success();
-    }
-    if (token == "unknown") {
-      llvm::outs() << "BMC_RESULT=UNKNOWN\nSolver returned unknown.\n";
-      outputFile.value()->keep();
-      return failOnViolation ? failure() : success();
-    }
-    llvm::errs() << "unexpected z3 result: " << token << "\n";
-    return failure();
+    return failOnViolation ? failure() : success();
   }
 
   if (outputFormat == OutputLLVM) {
