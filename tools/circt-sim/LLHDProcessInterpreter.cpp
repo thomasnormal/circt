@@ -1348,6 +1348,16 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   // Store the state
   state.currentBlock = &processOp.getBody().front();
   state.currentOp = state.currentBlock->begin();
+
+  // Initialize process results to 0. Process results (e.g., from
+  // `llhd.process -> i1`) represent signals whose initial value is 0.
+  // Without this, self-referential reads (e.g., `comb.xor %result, %true`)
+  // inside the process body would return X before the first halt/yield.
+  for (auto result : processOp.getResults()) {
+    unsigned width = getTypeWidth(result.getType());
+    state.valueMap[result] = InterpretedValue(APInt(width, 0));
+  }
+
   registerProcessState(procId, std::move(state));
   opToProcessId[processOp.getOperation()] = procId;
 
