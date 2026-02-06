@@ -226,8 +226,32 @@ struct HierPathValueExprVisitor
         }
       }
       if (ifaceInst && outermostInstBody) {
+        const slang::ast::InstanceSymbol *threadInst = ifaceInst;
+        size_t threadIndex = ifaceInstIndex;
         auto *ifaceParentBody =
             ifaceInst->getParentScope()->getContainingInstance();
+        if (ifaceParentBody &&
+            ifaceParentBody->getDefinition().definitionKind ==
+                slang::ast::DefinitionKind::Interface) {
+          for (size_t i = 0; i < ifaceInstIndex; ++i) {
+            auto *instSym =
+                expr.ref.path[i].symbol->as_if<slang::ast::InstanceSymbol>();
+            if (!instSym)
+              continue;
+            if (instSym->getDefinition().definitionKind !=
+                slang::ast::DefinitionKind::Interface)
+              continue;
+            auto *parentBody =
+                instSym->getParentScope()->getContainingInstance();
+            if (!parentBody ||
+                parentBody->getDefinition().definitionKind !=
+                    slang::ast::DefinitionKind::Interface) {
+              threadInst = instSym;
+              threadIndex = i;
+            }
+          }
+        }
+        ifaceInst = threadInst;
         if (ifaceParentBody && ifaceParentBody != outermostInstBody) {
           SmallString<64> ifaceName;
           for (size_t i = 0; i < expr.ref.path.size(); ++i) {
@@ -244,7 +268,7 @@ struct HierPathValueExprVisitor
                 ifaceName += ".";
               ifaceName += ifacePort->name;
             }
-            if (i == ifaceInstIndex)
+            if (i == threadIndex)
               break;
           }
           if (!ifaceName.empty()) {
