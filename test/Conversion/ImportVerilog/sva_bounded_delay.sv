@@ -47,6 +47,14 @@ module BoundedDelay(input logic clk, req, ack, data, valid);
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (larger_range);
 
+  // ##[2:$] unbounded range with minimum
+  property unbounded_min_delay;
+    @(posedge clk) data |-> ##[2:$] valid;
+  endproperty
+  // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 2 : i1
+  // CHECK: verif.{{(clocked_)?}}assert
+  assert property (unbounded_min_delay);
+
   // Chained bounded delays
   property chained_bounded;
     @(posedge clk) req ##[1:2] data ##[1:3] ack;

@@ -3824,13 +3824,17 @@ EmittedProperty PropertyEmitter::visitLTL(ltl::RepeatOp op) {
 
 EmittedProperty PropertyEmitter::visitLTL(ltl::GoToRepeatOp op) {
   emitNestedProperty(op.getInput(), PropertyPrecedence::Repeat);
-  // More always exists
   auto more = op.getMore();
   ps << "[->";
   ps.addAsString(op.getBase());
-  if (more != 0) {
+  if (more.has_value()) {
+    if (*more != 0) {
+      ps << ":";
+      ps.addAsString(op.getBase() + *more);
+    }
+  } else {
     ps << ":";
-    ps.addAsString(op.getBase() + more);
+    ps << "$";
   }
   ps << "]";
 
@@ -3839,13 +3843,17 @@ EmittedProperty PropertyEmitter::visitLTL(ltl::GoToRepeatOp op) {
 
 EmittedProperty PropertyEmitter::visitLTL(ltl::NonConsecutiveRepeatOp op) {
   emitNestedProperty(op.getInput(), PropertyPrecedence::Repeat);
-  // More always exists
   auto more = op.getMore();
   ps << "[=";
   ps.addAsString(op.getBase());
-  if (more != 0) {
+  if (more.has_value()) {
+    if (*more != 0) {
+      ps << ":";
+      ps.addAsString(op.getBase() + *more);
+    }
+  } else {
     ps << ":";
-    ps.addAsString(op.getBase() + more);
+    ps << "$";
   }
   ps << "]";
 

@@ -31,9 +31,13 @@ sva.seq.repeat %s, 2, 2 : !sva.sequence
 
 // CHECK: sva.seq.goto_repeat {{%.+}}, 2, 1 : !sva.sequence
 sva.seq.goto_repeat %s, 2, 1 : !sva.sequence
+// CHECK: sva.seq.goto_repeat {{%.+}}, 2 : !sva.sequence
+sva.seq.goto_repeat %s, 2 : !sva.sequence
 
 // CHECK: sva.seq.non_consecutive_repeat {{%.+}}, 2, 1 : !sva.sequence
 sva.seq.non_consecutive_repeat %s, 2, 1 : !sva.sequence
+// CHECK: sva.seq.non_consecutive_repeat {{%.+}}, 2 : !sva.sequence
+sva.seq.non_consecutive_repeat %s, 2 : !sva.sequence
 
 // CHECK: sva.seq.concat {{%.+}}, {{%.+}} : !sva.sequence, !sva.sequence
 sva.seq.concat %s, %s : !sva.sequence, !sva.sequence

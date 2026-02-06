@@ -1938,7 +1938,11 @@ expandGotoRepeatOpsInBMC(verif::BoundedModelCheckingOp bmcOp,
     rewriter.setInsertionPoint(op);
     Location loc = op.getLoc();
     uint64_t base = op.getBase();
-    uint64_t maxCount = base + op.getMore();
+    uint64_t maxCount = base;
+    if (auto more = op.getMore())
+      maxCount = base + *more;
+    else if (boundValue > base)
+      maxCount = boundValue;
 
     auto delayZero = rewriter.getI64IntegerAttr(0);
     Value input = op.getInput();

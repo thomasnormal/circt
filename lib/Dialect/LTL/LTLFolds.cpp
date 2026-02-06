@@ -135,11 +135,17 @@ OpFoldResult RepeatOp::fold(FoldAdaptor adaptor) {
 }
 
 OpFoldResult GoToRepeatOp::fold(FoldAdaptor adaptor) {
-  return RepeatLikeOp::fold(adaptor.getBase(), adaptor.getMore(), getInput());
+  auto more = adaptor.getMore();
+  if (more.has_value())
+    return RepeatLikeOp::fold(adaptor.getBase(), *more, getInput());
+  return {};
 }
 
 OpFoldResult NonConsecutiveRepeatOp::fold(FoldAdaptor adaptor) {
-  return RepeatLikeOp::fold(adaptor.getBase(), adaptor.getMore(), getInput());
+  auto more = adaptor.getMore();
+  if (more.has_value())
+    return RepeatLikeOp::fold(adaptor.getBase(), *more, getInput());
+  return {};
 }
 
 //===----------------------------------------------------------------------===//

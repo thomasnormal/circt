@@ -207,10 +207,10 @@ def GoToRepeatOp : LTLOp<"goto_repeat", [Pure]> {
   let arguments = (ins
     LTLAnySequenceType:$input,
     I64Attr:$base,
-    I64Attr:$more);
+    OptionalAttr<I64Attr>:$more);
   let results = (outs LTLSequenceType:$result);
   let assemblyFormat = [{
-    $input `,` $base `,` $more attr-dict `:` type($input)
+    $input `,` $base (`,` $more^)? attr-dict `:` type($input)
   }];
 
   let hasFolder = 1;
@@ -218,10 +218,11 @@ def GoToRepeatOp : LTLOp<"goto_repeat", [Pure]> {
   let summary = "`goto`-style non-consecutively repeating sequence.";
   let description = [{
     Non-consecutive repetition of the `$input` sequence. This must hold between `$base`
-    and `$base + $more` times in a finite number of evaluations. The final evaluation
-    in the sequence has to match. The `$base` must be greater than or equal to zero
-    and the range `$more` can't be omitted. For example, a !b b b !b !b b c represents
-    a matching observation of `ltl.goto_repeat %b, 1, 2`, but a !b b b !b !b b !b c doesn't.
+    and `$base + $more` times in a finite number of evaluations. If `$more` is omitted,
+    the repetition is unbounded but finite. The final evaluation in the sequence has
+    to match. The `$base` must be greater than or equal to zero. For example, a
+    !b b b !b !b b c represents a matching observation of
+    `ltl.goto_repeat %b, 1, 2`, but a !b b b !b !b b !b c doesn't.
   }];
 }
 
@@ -229,10 +230,10 @@ def NonConsecutiveRepeatOp : LTLOp<"non_consecutive_repeat", [Pure]> {
   let arguments = (ins
     LTLAnySequenceType:$input,
     I64Attr:$base,
-    I64Attr:$more);
+    OptionalAttr<I64Attr>:$more);
   let results = (outs LTLSequenceType:$result);
   let assemblyFormat = [{
-    $input `,` $base `,` $more attr-dict `:` type($input)
+    $input `,` $base (`,` $more^)? attr-dict `:` type($input)
   }];
 
   let hasFolder = 1;
@@ -240,10 +241,10 @@ def NonConsecutiveRepeatOp : LTLOp<"non_consecutive_repeat", [Pure]> {
   let summary = "`goto`-style non-consecutively repeating sequence.";
   let description = [{
     Non-consecutive repetition of the `$input` sequence. This must hold between `$base`
-    and `$base + $more` times in a finite number of evaluations. The final evaluation
-    in the sequence does not have to match. The `$base` must be greater than or equal to zero
-    and the range `$more` can't be omitted. For example, both a !b b b !b !b b c and
-    a !b b b !b !b b !b c represent matching observations of
+    and `$base + $more` times in a finite number of evaluations. If `$more` is omitted,
+    the repetition is unbounded but finite. The final evaluation in the sequence does
+    not have to match. The `$base` must be greater than or equal to zero. For example,
+    both a !b b b !b !b b c and a !b b b !b !b b !b c represent matching observations of
     `ltl.non_consecutive_repeat %b, 1, 2`.
   }];
 }
