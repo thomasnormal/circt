@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 423 - February 6, 2026
+
+### Summary
+
+Iteration 423: Added open-ended sequence delay regression coverage.
+
+### Accomplishments
+
+1. **Open-ended ##[1:$] coverage** - Added
+   `sva-open-ended-delay.sv` to ensure open-ended delay ranges lower to
+   unbounded `ltl.delay`.
+
+### Verification (February 6, 2026)
+
+- Not run (ImportVerilog regression only)
+
 ## Iteration 422 - February 6, 2026
 
 ### Summary
