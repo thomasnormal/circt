@@ -461,9 +461,9 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 4. **`dist` constraint `$` upper bounds** - Slang limitation, workaround in runner. Priority: LOW.
 
 **Track E - SVA Semantics & Bind/Hierarchy (sv-tests 100% + OpenTitan formal)**:
-1. **Sequence operator completeness** - `throughout/within/intersect/first_match`, open-ended ranges, and repetition operators (`[->]`, `[=]`) as first-class IR.
+1. **Sequence operator completeness** - `throughout/within/intersect/first_match`, open-ended ranges, and repetition operators (`[->]`, `[=]`) as first-class IR. Sequence event controls now handle `@seq` symbol references; property event controls remain unsupported.
 2. **Default clocking / disable semantics** - Ensure sampled value functions and `$past` honor default clocking and default disable iff.
-3. **Bind + hierarchy** - Thread hierarchical interface instance references in bind port connections (OpenTitan blocker).
+3. **Bind + hierarchy** - ✅ Landed sibling/LCA interface threading for bind port connections; still need param/genvar-heavy coverage and OpenTitan formal validation.
 4. **Liveness / k-induction** - Add liveness encoding and k-induction modes for unbounded properties in circt-bmc.
 5. **Trace UX** - Hierarchical mapping + clock-domain annotations for counterexamples.
 

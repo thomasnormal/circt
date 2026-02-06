@@ -18,6 +18,23 @@ across sibling/LCA hierarchies and added regression coverage.
 
 - `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/bind-interface-instance-sibling.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-instance-sibling.sv`
 
+## Iteration 401 - February 6, 2026
+
+### Summary
+
+Iteration 401: Sequenced event controls now resolve direct sequence symbol
+references by instantiating default assertion instances.
+
+### Accomplishments
+
+1. **Sequence event control resolution** - `@seq` now lowers via default
+   assertion instances when the sequence is referenced as a symbol, ensuring
+   sequence event controls work outside assertion expressions.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
+
 ## Iteration 399 - February 6, 2026
 
 ### Summary

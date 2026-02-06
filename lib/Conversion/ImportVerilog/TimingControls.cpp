@@ -220,7 +220,17 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
   auto waitOp = moore::WaitEventOp::create(builder, loc);
   Block &waitBlock = waitOp.getBody().emplaceBlock();
 
-  Value rootValue = context.convertRvalueExpression(expr);
+  const slang::ast::Expression *assertionExpr = &expr;
+  if (auto symRef = expr.getSymbolReference()) {
+    if (symRef->kind == slang::ast::SymbolKind::Sequence ||
+        symRef->kind == slang::ast::SymbolKind::Property ||
+        symRef->kind == slang::ast::SymbolKind::LetDecl) {
+      assertionExpr = &slang::ast::AssertionInstanceExpression::makeDefault(
+          *symRef);
+    }
+  }
+
+  Value rootValue = context.convertRvalueExpression(*assertionExpr);
   if (!rootValue)
     return failure();
   if (isa<ltl::PropertyType>(rootValue.getType()))
