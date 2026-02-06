@@ -106,6 +106,7 @@ to commercial simulators like Cadence Xcelium.
 | UART | Runs | Runs | Runs | `UartBaseTest` completes at ~255 ns sim time |
 | I2S | Runs | - | - | `I2sBaseTest` completes at ~94 ns sim time |
 | I3C | Runs | - | - | `i3c_base_test` completes at ~112 ns sim time |
+| SPI | Runs | Runs | Runs | `SpiBaseTest` completes at ~743 ns sim time |
 
 ## Key Fixes History
 
