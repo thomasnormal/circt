@@ -1,7 +1,7 @@
 // RUN: circt-sim %s --max-process-steps=10 2>&1 | FileCheck %s
 
 // CHECK: ERROR(PROCESS_STEP_OVERFLOW)
-// CHECK: opCount=
+// CHECK: totalSteps=
 
 hw.module @test() {
   %eps = llhd.constant_time <0ns, 0d, 1e>

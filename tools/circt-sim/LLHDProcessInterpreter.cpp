@@ -3787,14 +3787,12 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                           << procId << "\n");
 
   // Execute operations until we suspend or halt
-  size_t stepCount = 0;
-  size_t stepLimit = maxProcessSteps > 0 ? maxProcessSteps : 0;
-  constexpr size_t kOpCountStepLimitMultiplier = 8;
   constexpr size_t kAbortCheckInterval = 1000;
+  size_t localStepCount = 0;
   while (!state.halted && !state.waiting) {
-    ++stepCount;
+    ++localStepCount;
     // Periodically check for abort requests (e.g., from timeout watchdog)
-    if (stepCount % kAbortCheckInterval == 0 && isAbortRequested()) {
+    if (localStepCount % kAbortCheckInterval == 0 && isAbortRequested()) {
       LLVM_DEBUG(llvm::dbgs() << "  Abort requested, halting process\n");
       finalizeProcess(procId, /*killed=*/false);
       if (abortCallback)
@@ -3802,41 +3800,25 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       break;
     }
     LLVM_DEBUG({
-      if (stepCount <= 10 || stepCount % 1000 == 0) {
+      if (localStepCount <= 10 || localStepCount % 1000 == 0) {
         llvm::dbgs() << "[executeProcess] proc " << procId << " step "
-                     << stepCount;
+                     << localStepCount;
         if (state.currentOp != state.currentBlock->end())
           llvm::dbgs() << " op: " << state.currentOp->getName().getStringRef();
         llvm::dbgs() << "\n";
       }
     });
-    if (stepLimit > 0 && stepCount > stepLimit) {
-      if (state.opCount == 0) {
-        if (auto processOp = state.getProcessOp()) {
-          state.opCount = countRegionOps(processOp.getBody());
-        } else if (auto initialOp = state.getInitialOp()) {
-          state.opCount = countRegionOps(initialOp.getBody());
-        }
-        size_t scaledLimit =
-            std::max(stepLimit, state.opCount * kOpCountStepLimitMultiplier);
-        if (scaledLimit > stepLimit) {
-          stepLimit = scaledLimit;
-          continue;
-        }
-      }
-      if (state.opCount == 0) {
-        if (auto processOp = state.getProcessOp()) {
-          state.opCount = countRegionOps(processOp.getBody());
-        } else if (auto initialOp = state.getInitialOp()) {
-          state.opCount = countRegionOps(initialOp.getBody());
-        }
-      }
+    // Global step limit check (totalSteps includes func body ops)
+    if (maxProcessSteps > 0 && state.totalSteps > maxProcessSteps) {
       llvm::errs() << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW): process "
                    << procId;
       if (auto *proc = scheduler.getProcess(procId))
         llvm::errs() << " '" << proc->getName() << "'";
-      llvm::errs() << " exceeded " << stepLimit << " steps";
-      llvm::errs() << " (opCount=" << state.opCount << ")";
+      llvm::errs() << " exceeded " << maxProcessSteps << " total steps";
+      llvm::errs() << " (totalSteps=" << state.totalSteps
+                   << ", funcBodySteps=" << state.funcBodySteps << ")";
+      if (!state.currentFuncName.empty())
+        llvm::errs() << " [in " << state.currentFuncName << "]";
       if (state.lastOp)
         llvm::errs() << " (lastOp=" << state.lastOp->getName().getStringRef()
                      << ")";
@@ -5366,9 +5348,11 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       }
 
       emitVtableWarning("function pointer is X (uninitialized)");
+      // Return zero/null instead of X to prevent cascading X-propagation
+      // in UVM code paths that check return values for null.
       for (Value result : callIndirectOp.getResults()) {
-        setValue(procId, result,
-                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
       }
       return success();
     }
@@ -5383,9 +5367,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       std::string reason = "address " +
           llvm::utohexstr(funcAddr) + " not found in vtable map";
       emitVtableWarning(reason);
+      // Return zero/null instead of X to prevent cascading X-propagation.
       for (Value result : callIndirectOp.getResults()) {
-        setValue(procId, result,
-                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
       }
       return success();
     }
@@ -5422,13 +5407,14 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
     // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
     auto &callState = processStates[procId];
-    constexpr size_t maxCallDepth = 50;
+    constexpr size_t maxCallDepth = 200;
     if (callState.callDepth >= maxCallDepth) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: max call depth ("
-                              << maxCallDepth << ") exceeded, returning X\n");
+                              << maxCallDepth
+                              << ") exceeded, returning zero\n");
       for (Value result : callIndirectOp.getResults()) {
-        setValue(procId, result,
-                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
       }
       return success();
     }
@@ -8906,13 +8892,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
   auto &state = processStates[procId];
-  constexpr size_t maxCallDepth = 50;
+  constexpr size_t maxCallDepth = 200;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: max call depth (" << maxCallDepth
-                            << ") exceeded, returning X\n");
+                            << ") exceeded, returning zero\n");
     for (Value result : callOp.getResults()) {
-      setValue(procId, result,
-               InterpretedValue::makeX(getTypeWidth(result.getType())));
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
     }
     return success();
   }
@@ -9048,6 +9034,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     }
   };
 
+  // Set the current function name for progress reporting
+  auto &funcState = processStates[procId];
+  std::string prevFuncName = funcState.currentFuncName;
+  funcState.currentFuncName = funcOp.getName().str();
+
   // Helper to clean up temporary signal mappings and restore values before
   // returning. Restoring values is critical for recursive calls to the same
   // function - without it, the inner call's values corrupt the outer call's.
@@ -9055,6 +9046,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     for (Value v : tempSignalMappings)
       valueToSignal.erase(v);
     restoreSavedFuncValues();
+    // Restore previous function name for progress reporting
+    auto it = processStates.find(procId);
+    if (it != processStates.end())
+      it->second.currentFuncName = prevFuncName;
   };
 
   // Execute operations until we hit a return
@@ -9084,6 +9079,44 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
 
       ++opCount;
+      // Track func body steps in process state for global step limiting
+      {
+        auto stIt = processStates.find(procId);
+        if (stIt != processStates.end()) {
+          ++stIt->second.totalSteps;
+          ++stIt->second.funcBodySteps;
+          // Progress report every 1M func body steps
+          if (stIt->second.funcBodySteps % 1000000 == 0) {
+            llvm::errs() << "[circt-sim] func progress: process " << procId
+                         << " funcBodySteps=" << stIt->second.funcBodySteps
+                         << " totalSteps=" << stIt->second.totalSteps
+                         << " in '" << funcOp.getName() << "'"
+                         << " (callDepth=" << stIt->second.callDepth << ")"
+                         << " op=" << op.getName().getStringRef()
+                         << "\n";
+          }
+          // Enforce global process step limit inside function bodies
+          if (maxProcessSteps > 0 &&
+              stIt->second.totalSteps > (size_t)maxProcessSteps) {
+            llvm::errs()
+                << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
+                << procId << " exceeded " << maxProcessSteps
+                << " total steps in function '" << funcOp.getName() << "'"
+                << " (totalSteps=" << stIt->second.totalSteps << ")\n";
+            stIt->second.halted = true;
+            cleanupTempMappings();
+            return failure();
+          }
+          // Periodically check for abort (timeout watchdog)
+          if (stIt->second.funcBodySteps % 10000 == 0 && isAbortRequested()) {
+            stIt->second.halted = true;
+            cleanupTempMappings();
+            if (abortCallback)
+              abortCallback();
+            return failure();
+          }
+        }
+      }
       if (opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: Function reached max operations\n");
         cleanupTempMappings();
@@ -9652,11 +9685,12 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     // This path can recurse: getValue -> interpretLLVMCall -> interpretLLVMFuncBody
     // -> interpretOperation -> getValue
     auto &state = processStates[procId];
-    constexpr size_t maxCallDepth = 50;
+    constexpr size_t maxCallDepth = 200;
     if (state.callDepth >= maxCallDepth) {
       LLVM_DEBUG(llvm::dbgs() << "  getValue: max call depth (" << maxCallDepth
-                              << ") exceeded for LLVM call, returning X\n");
-      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+                              << ") exceeded for LLVM call, returning zero\n");
+      return InterpretedValue(
+          llvm::APInt(getTypeWidth(value.getType()), 0));
     }
 
     // Interpret the call to compute and cache its result with depth tracking
@@ -11457,7 +11491,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       // Check call depth
       auto &crossState = processStates[procId];
-      constexpr size_t maxCallDepth = 50;
+      constexpr size_t maxCallDepth = 200;
       if (crossState.callDepth >= maxCallDepth) {
         for (Value result : callOp.getResults()) {
           setValue(procId, result,
@@ -15750,14 +15784,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Using 100 as the limit since each recursive call uses significant C++ stack
   // space due to the deep call chain: interpretLLVMFuncBody -> interpretOperation
   // -> interpretLLVMCall -> interpretLLVMFuncBody.
-  constexpr size_t maxCallDepth = 50;
+  constexpr size_t maxCallDepth = 200;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: max call depth (" << maxCallDepth
                             << ") exceeded for '" << calleeName << "'\n");
-    // Return X values for results instead of failing hard
+    // Return zero values for results instead of X to prevent cascading issues
     for (Value result : callOp.getResults()) {
-      setValue(procId, result,
-               InterpretedValue::makeX(getTypeWidth(result.getType())));
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
     }
     return success();
   }
@@ -15872,12 +15906,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     }
   };
 
+  // Set current function name for progress reporting and save previous
+  auto &funcState = processStates[procId];
+  std::string prevFuncName = funcState.currentFuncName;
+  funcState.currentFuncName = funcOp.getName().str();
+
   // Helper to clean up temporary signal mappings and restore values
   auto cleanupTempMappings = [&]() {
     for (Value v : tempSignalMappings) {
       valueToSignal.erase(v);
     }
     restoreSavedFuncValues();
+    // Restore previous function name
+    auto it = processStates.find(procId);
+    if (it != processStates.end())
+      it->second.currentFuncName = prevFuncName;
   };
 
   // Execute the function body with operation limit to prevent infinite loops
@@ -15888,6 +15931,44 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   while (currentBlock && opCount < maxOps) {
     for (Operation &op : *currentBlock) {
       ++opCount;
+      // Track func body steps in process state for global step limiting
+      {
+        auto stIt = processStates.find(procId);
+        if (stIt != processStates.end()) {
+          ++stIt->second.totalSteps;
+          ++stIt->second.funcBodySteps;
+          // Progress report every 1M func body steps
+          if (stIt->second.funcBodySteps % 1000000 == 0) {
+            llvm::errs() << "[circt-sim] func progress: process " << procId
+                         << " funcBodySteps=" << stIt->second.funcBodySteps
+                         << " totalSteps=" << stIt->second.totalSteps
+                         << " in '" << funcOp.getName() << "'"
+                         << " (callDepth=" << stIt->second.callDepth << ")"
+                         << " op=" << op.getName().getStringRef()
+                         << "\n";
+          }
+          // Enforce global process step limit inside function bodies
+          if (maxProcessSteps > 0 &&
+              stIt->second.totalSteps > (size_t)maxProcessSteps) {
+            llvm::errs()
+                << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
+                << procId << " exceeded " << maxProcessSteps
+                << " total steps in LLVM function '" << funcOp.getName() << "'"
+                << " (totalSteps=" << stIt->second.totalSteps << ")\n";
+            stIt->second.halted = true;
+            cleanupTempMappings();
+            return failure();
+          }
+          // Periodically check for abort (timeout watchdog)
+          if (stIt->second.funcBodySteps % 10000 == 0 && isAbortRequested()) {
+            stIt->second.halted = true;
+            cleanupTempMappings();
+            if (abortCallback)
+              abortCallback();
+            return failure();
+          }
+        }
+      }
       if (opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: LLVM function '"
                                 << funcOp.getName()
