@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 850 | 847 | 3 | **99.6%** | 1 preprocessor edge case, 2 need external defines |
-| Simulation | 256 | 256 | 0 | **100%** | 91 skipped: 50 negative, 37 UVM, 4 both |
+| Simulation (full) | 489 | 471 | 11 | **96.3%** | 717 total, 555 compile, 66 ch18 class-only (no top), 7 UNEXPECTED_PASS |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -26,6 +26,22 @@ repository (1,036 tests across 15 IEEE chapters).
 | `22.5.1--define-expansion_26.sv` | Elaboration | Macro concatenation (`` ` `` `` ` ``) edge case | Preprocessor token pasting |
 | `5.6.4--*-macro_0.sv` | Elaboration | Needs `-DTEST_VAR` | Test harness metadata not applied |
 | `5.6.4--*-macro_1.sv` | Elaboration | Needs `-DVAR_1=2 -DVAR_2=5` | Test harness metadata not applied |
+
+### Simulation Timeouts (11 tests)
+
+| Test | Category | Root Cause |
+|------|----------|------------|
+| `12.7.4--while.sv` | String comparison | String array comparison in while condition |
+| `12.7.5--dowhile.sv` | String comparison | String array comparison in do-while condition |
+| `16.2--assume0.sv` | SVA | `assume property` not simulated |
+| `16.2--assume-final.sv` | SVA | `assume property` not simulated |
+| `16.2--cover0.sv` | SVA | `cover property` not simulated |
+| `16.2--cover-final.sv` | SVA | `cover property` not simulated |
+| `9.2.2.1--always.sv` | Process | Combinational always block loops forever |
+| `9.4.3--event_sequence_controls.sv` | Events | Sequence event control not supported |
+| `9.7--process_cls_await.sv` | Process class | `process::await()` not implemented |
+| `9.7--process_cls_kill.sv` | Process class | `process::kill()` not implemented |
+| `9.7--process_cls_suspend_resume.sv` | Process class | `process::suspend()/resume()` not implemented |
 
 ### What's Needed for True 100%
 
