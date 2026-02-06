@@ -91,7 +91,7 @@ to commercial simulators like Cadence Xcelium.
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed |
-| Semaphores | MISSING | No runtime interceptors; used in AXI4 AVIP (6 calls) |
+| Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
 | Named events | PARTIAL | Basic `wait` / `trigger` works |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
 | Simulation performance | SLOW | Large UVM designs (APB AVIP) take >300s wall-clock |
@@ -122,3 +122,5 @@ to commercial simulators like Cadence Xcelium.
 | `randomize_with_dist` | Weighted distribution constraints with range/weight arrays |
 | `randomize_with_ranges` | Uniform random within range pairs for constrained random |
 | `$finish` exit code | Propagates exit code; checks error count for UVM `die()` → `$finish` |
+| `%c` format | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
+| Semaphore support | Full pipeline: ImportVerilog method lowering, constructor keyCount, interpreter interceptors with blocking |

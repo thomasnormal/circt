@@ -3911,6 +3911,128 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle semaphore built-in method calls (get, put, try_get).
+    // IEEE 1800-2017 Section 15.3 "Semaphores"
+    // Semaphore is a built-in class. Its methods have the BuiltIn flag
+    // and the parent scope is a ClassType named "semaphore".
+    if ((subroutine->flags & slang::ast::MethodFlags::BuiltIn) &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name == "semaphore") {
+        // Get the semaphore instance (the 'this' object)
+        Value semInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          semInstance = context.convertRvalueExpression(*recvExpr);
+          if (!semInstance)
+            return {};
+        }
+
+        if (!semInstance) {
+          mlir::emitError(loc)
+              << "semaphore method call requires semaphore instance";
+          return {};
+        }
+
+        auto i64Ty = builder.getIntegerType(64);
+        auto i32Ty = builder.getIntegerType(32);
+        auto i1Ty = builder.getIntegerType(1);
+        auto voidTy = mlir::LLVM::LLVMVoidType::get(context.getContext());
+
+        // Convert the semaphore handle to an i64 semaphore ID
+        Value semId = mlir::UnrealizedConversionCastOp::create(
+                          builder, loc, i64Ty, semInstance)
+                          .getResult(0);
+
+        // Handle blocking get: sem.get(keyCount = 1)
+        if (subroutine->name == "get") {
+          Value keyCount;
+          if (expr.arguments().size() >= 1) {
+            keyCount = context.convertRvalueExpression(*expr.arguments()[0]);
+            if (!keyCount)
+              return {};
+            keyCount = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, i32Ty, keyCount)
+                           .getResult(0);
+          } else {
+            keyCount = builder.create<mlir::LLVM::ConstantOp>(
+                loc, i32Ty, builder.getI32IntegerAttr(1));
+          }
+
+          auto getFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(voidTy, {i64Ty, i32Ty});
+          auto getFunc = getOrCreateRuntimeFunc(
+              context, "__moore_semaphore_get", getFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, getFunc,
+                                     ValueRange{semId, keyCount});
+
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Handle put: sem.put(keyCount = 1)
+        if (subroutine->name == "put") {
+          Value keyCount;
+          if (expr.arguments().size() >= 1) {
+            keyCount = context.convertRvalueExpression(*expr.arguments()[0]);
+            if (!keyCount)
+              return {};
+            keyCount = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, i32Ty, keyCount)
+                           .getResult(0);
+          } else {
+            keyCount = builder.create<mlir::LLVM::ConstantOp>(
+                loc, i32Ty, builder.getI32IntegerAttr(1));
+          }
+
+          auto putFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(voidTy, {i64Ty, i32Ty});
+          auto putFunc = getOrCreateRuntimeFunc(
+              context, "__moore_semaphore_put", putFuncTy);
+          mlir::LLVM::CallOp::create(builder, loc, putFunc,
+                                     ValueRange{semId, keyCount});
+
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, moore::VoidType::get(context.getContext()),
+                     ValueRange{})
+              .getResult(0);
+        }
+
+        // Handle non-blocking try_get: sem.try_get(keyCount = 1)
+        if (subroutine->name == "try_get") {
+          Value keyCount;
+          if (expr.arguments().size() >= 1) {
+            keyCount = context.convertRvalueExpression(*expr.arguments()[0]);
+            if (!keyCount)
+              return {};
+            keyCount = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, i32Ty, keyCount)
+                           .getResult(0);
+          } else {
+            keyCount = builder.create<mlir::LLVM::ConstantOp>(
+                loc, i32Ty, builder.getI32IntegerAttr(1));
+          }
+
+          auto tryGetFuncTy =
+              mlir::LLVM::LLVMFunctionType::get(i1Ty, {i64Ty, i32Ty});
+          auto tryGetFunc = getOrCreateRuntimeFunc(
+              context, "__moore_semaphore_try_get", tryGetFuncTy);
+          auto callResult = mlir::LLVM::CallOp::create(
+              builder, loc, tryGetFunc, ValueRange{semId, keyCount});
+
+          auto resultType = context.convertType(*expr.type);
+          return mlir::UnrealizedConversionCastOp::create(
+                     builder, loc, resultType, callResult.getResult())
+              .getResult(0);
+        }
+
+        // Fall through for unhandled semaphore methods
+        mlir::emitWarning(loc) << "semaphore method '" << subroutine->name
+                               << "' is not yet implemented";
+      }
+    }
+
     // Check if this is an interface method call (task/function defined inside
     // an interface). Interface methods have an implicit first argument for the
     // interface instance, similar to class methods with 'this'.
@@ -6538,11 +6660,48 @@ struct RvalueExprVisitor : public ExprVisitor {
                   &callConstructor->subroutine)) {
         // Built-in class constructors (e.g., semaphore, mailbox) don't have a
         // thisVar because they're created programmatically, not from source.
-        // For these, we skip the constructor call - the runtime handles
-        // initialization. Just return the allocated object.
+        // For these, emit runtime create calls to pass constructor arguments.
         if ((*subroutine)->flags & slang::ast::MethodFlags::BuiltIn) {
-          // TODO: Pass constructor arguments to runtime for initialization
-          // (e.g., semaphore keyCount, mailbox bound)
+          const auto &parentScope =
+              (*subroutine)->getParentScope()->asSymbol();
+          if (const auto *ct =
+                  parentScope.as_if<slang::ast::ClassType>()) {
+            if (ct->name == "semaphore") {
+              // Emit __moore_semaphore_create(semAddr, keyCount)
+              auto i64Ty = builder.getIntegerType(64);
+              auto i32Ty = builder.getIntegerType(32);
+              auto voidTy =
+                  mlir::LLVM::LLVMVoidType::get(context.getContext());
+
+              // Convert object handle to i64 address
+              Value semAddr =
+                  mlir::UnrealizedConversionCastOp::create(builder, loc,
+                                                           i64Ty, newObj)
+                      .getResult(0);
+
+              // Get keyCount argument (default 0 per IEEE 1800-2017)
+              Value keyCount;
+              if (callConstructor->arguments().size() >= 1) {
+                keyCount = context.convertRvalueExpression(
+                    *callConstructor->arguments()[0]);
+                if (!keyCount)
+                  return {};
+                keyCount = mlir::UnrealizedConversionCastOp::create(
+                               builder, loc, i32Ty, keyCount)
+                               .getResult(0);
+              } else {
+                keyCount = builder.create<mlir::LLVM::ConstantOp>(
+                    loc, i32Ty, builder.getI32IntegerAttr(0));
+              }
+
+              auto createFuncTy = mlir::LLVM::LLVMFunctionType::get(
+                  voidTy, {i64Ty, i32Ty});
+              auto createFunc = getOrCreateRuntimeFunc(
+                  context, "__moore_semaphore_create", createFuncTy);
+              mlir::LLVM::CallOp::create(builder, loc, createFunc,
+                                         ValueRange{semAddr, keyCount});
+            }
+          }
           return newObj;
         }
         // For user-defined classes, verify that the constructor has a thisVar.
