@@ -2333,6 +2333,58 @@ struct WaitEventOpConversion : public OpConversionPattern<WaitEventOp> {
   LogicalResult
   matchAndRewrite(WaitEventOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // If we're inside a fork branch (moore.fork or sim.fork), we cannot use
+    // llhd.wait because it requires llhd.process as its immediate parent.
+    // Fork branches become sim.fork regions. In this case, fall back to
+    // __moore_wait_event runtime calls, mirroring WaitDelayOpConversion.
+    bool insideFork = op->getParentOfType<ForkOp>() ||
+                      op->getParentOfType<sim::SimForkOp>();
+    if (insideFork) {
+      auto loc = op.getLoc();
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+      auto voidTy = LLVM::LLVMVoidType::get(ctx);
+      auto i32Ty = IntegerType::get(ctx, 32);
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+      // __moore_wait_event(i32 edgeKind, ptr valuePtr)
+      // edgeKind: 0=AnyChange, 1=PosEdge, 2=NegEdge, 3=BothEdges
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {i32Ty, ptrTy});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_wait_event", fnTy);
+
+      // For each detect_event op, emit a __moore_wait_event call.
+      for (auto detectOp : op.getBody().getOps<DetectEventOp>()) {
+        rewriter.setInsertionPoint(op);
+        int32_t edgeKind = 0;
+        switch (detectOp.getEdge()) {
+        case Edge::AnyChange:
+          edgeKind = 0;
+          break;
+        case Edge::PosEdge:
+          edgeKind = 1;
+          break;
+        case Edge::NegEdge:
+          edgeKind = 2;
+          break;
+        case Edge::BothEdges:
+          edgeKind = 3;
+          break;
+        }
+        Value edgeVal = LLVM::ConstantOp::create(
+            rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(edgeKind));
+        // Pass a null pointer - the interpreter will use SSA tracing to find
+        // the signal from the call context.
+        Value nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                             SymbolRefAttr::get(fn),
+                             ValueRange{edgeVal, nullPtr});
+      }
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     // In order to convert the `wait_event` op we need to create three separate
     // blocks at the location of the op:
     //
