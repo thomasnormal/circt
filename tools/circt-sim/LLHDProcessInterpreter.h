@@ -858,6 +858,15 @@ private:
   mlir::LogicalResult interpretLLVMCall(ProcessId procId,
                                          mlir::LLVM::CallOp callOp);
 
+  /// Intercept a DPI function call (func.func with no body).
+  /// Returns success if the function was intercepted, failure otherwise.
+  mlir::LogicalResult interceptDPIFunc(ProcessId procId,
+                                        llvm::StringRef calleeName,
+                                        mlir::LLVM::CallOp callOp);
+  mlir::LogicalResult interceptDPIFunc(ProcessId procId,
+                                        llvm::StringRef calleeName,
+                                        mlir::func::CallOp callOp);
+
   /// Interpret an LLVM function body.
   /// If callOperands is provided, signal mappings are created for BlockArguments
   /// when the corresponding call operand resolves to a signal ID.
