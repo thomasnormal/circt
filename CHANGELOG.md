@@ -19674,3 +19674,36 @@ CIRCT/slang correctly enforces LRM restrictions.
   - Passed: 103
   - XFAIL: 10
   - Unsupported: 123
+
+---
+
+## Iteration 456 - February 7, 2026
+
+### Slang Library Resolution Coverage: `-L` and `--defaultLibName`
+
+- Added two new regression tests to lock down library resolution semantics:
+  - `test/circt-verilog/library-order.sv`
+  - `test/circt-verilog/default-lib-name.sv`
+- `library-order.sv` verifies `-L` ordering determines which library module
+  definition is selected for elaboration.
+- `default-lib-name.sv` verifies `--defaultLibName` correctly renames the
+  unnamed/default library and participates in `-L` priority resolution.
+
+### Validation
+
+- `llvm-lit` targeted:
+  - `test/circt-verilog/library-order.sv` PASS
+  - `test/circt-verilog/default-lib-name.sv` PASS
+- `llvm-lit` combined focused Slang-option suite:
+  - `library-files.sv` PASS
+  - `suppress-warnings.sv` PASS
+  - `libmap-files.sv` PASS
+  - `suppress-macro-warnings.sv` PASS
+  - `library-order.sv` PASS
+  - `default-lib-name.sv` PASS
+- External smoke reruns:
+  - AVIP (`apb_avip` compile flow): PASS
+  - `sv-tests` BMC smoke (`16.12--property`): PASS
+  - `verilator-verification` BMC smoke (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC smoke (`basic00`): PASS (pass/fail variants)
+  - OpenTitan LEC smoke (`aes_sbox_canright`): PASS
