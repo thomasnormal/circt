@@ -129,6 +129,7 @@ getSequenceLengthBounds(Value seq) {
   if (auto andOp = seq.getDefiningOp<ltl::AndOp>()) {
     SequenceLengthBounds result;
     bool initialized = false;
+    bool sawUnbounded = false;
     for (auto input : andOp.getInputs()) {
       auto bounds = getSequenceLengthBounds(input);
       if (!bounds)
@@ -136,25 +137,24 @@ getSequenceLengthBounds(Value seq) {
       if (!initialized) {
         result = *bounds;
         initialized = true;
+        if (!bounds->max)
+          sawUnbounded = true;
         continue;
       }
       result.min = std::max(result.min, bounds->min);
-      if (result.max && bounds->max) {
+      if (!bounds->max)
+        sawUnbounded = true;
+      if (!sawUnbounded && result.max && bounds->max)
         result.max = std::min(*result.max, *bounds->max);
-      } else if (!result.max && bounds->max) {
-        // Result was unbounded; cap it if this operand is bounded.
-        result.max = bounds->max;
-      } else if (result.max && !bounds->max) {
-        // Keep existing bound; other operand is unbounded.
-      } else {
-        result.max.reset();
-      }
     }
+    if (sawUnbounded)
+      result.max.reset();
     return result;
   }
   if (auto intersectOp = seq.getDefiningOp<ltl::IntersectOp>()) {
     SequenceLengthBounds result;
     bool initialized = false;
+    bool sawUnbounded = false;
     for (auto input : intersectOp.getInputs()) {
       auto bounds = getSequenceLengthBounds(input);
       if (!bounds)
@@ -162,19 +162,18 @@ getSequenceLengthBounds(Value seq) {
       if (!initialized) {
         result = *bounds;
         initialized = true;
+        if (!bounds->max)
+          sawUnbounded = true;
         continue;
       }
       result.min = std::max(result.min, bounds->min);
-      if (result.max && bounds->max) {
+      if (!bounds->max)
+        sawUnbounded = true;
+      if (!sawUnbounded && result.max && bounds->max)
         result.max = std::min(*result.max, *bounds->max);
-      } else if (!result.max && bounds->max) {
-        result.max = bounds->max;
-      } else if (result.max && !bounds->max) {
-        // Keep existing bound; other operand is unbounded.
-      } else {
-        result.max.reset();
-      }
     }
+    if (sawUnbounded)
+      result.max.reset();
     return result;
   }
   if (auto gotoRepeatOp = seq.getDefiningOp<ltl::GoToRepeatOp>()) {
