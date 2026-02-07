@@ -412,6 +412,34 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
           slang::ast::CompilationFlags::AllowUnnamedGenerate, true);
     }
   }
+
+  auto applyCompilationFlagOverride =
+      [&](slang::ast::CompilationFlags flag, std::optional<bool> value) {
+        if (!value.has_value())
+          return;
+        driver.options.compilationFlags[flag] = *value;
+      };
+  applyCompilationFlagOverride(slang::ast::CompilationFlags::AllowHierarchicalConst,
+                               options.allowHierarchicalConst);
+  applyCompilationFlagOverride(slang::ast::CompilationFlags::RelaxEnumConversions,
+                               options.relaxEnumConversions);
+  applyCompilationFlagOverride(slang::ast::CompilationFlags::RelaxStringConversions,
+                               options.relaxStringConversions);
+  applyCompilationFlagOverride(
+      slang::ast::CompilationFlags::AllowRecursiveImplicitCall,
+      options.allowRecursiveImplicitCall);
+  applyCompilationFlagOverride(
+      slang::ast::CompilationFlags::AllowBareValParamAssignment,
+      options.allowBareValParamAssignment);
+  applyCompilationFlagOverride(
+      slang::ast::CompilationFlags::AllowSelfDeterminedStreamConcat,
+      options.allowSelfDeterminedStreamConcat);
+  applyCompilationFlagOverride(slang::ast::CompilationFlags::AllowMergingAnsiPorts,
+                               options.allowMergingAnsiPorts);
+  applyCompilationFlagOverride(
+      slang::ast::CompilationFlags::AllowTopLevelIfacePorts,
+      options.allowTopLevelIfacePorts);
+
   // Explicit flag for virtual interface with override
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride,

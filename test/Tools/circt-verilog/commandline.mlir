@@ -16,3 +16,11 @@
 // CHECK-DAG: --map-keyword-version
 // CHECK-DAG: --translate-off-format
 // CHECK-DAG: --timing
+// CHECK-DAG: --allow-hierarchical-const
+// CHECK-DAG: --relax-enum-conversions
+// CHECK-DAG: --relax-string-conversions
+// CHECK-DAG: --allow-recursive-implicit-call
+// CHECK-DAG: --allow-bare-value-param-assignment
+// CHECK-DAG: --allow-self-determined-stream-concat
+// CHECK-DAG: --allow-merging-ansi-ports
+// CHECK-DAG: --allow-top-level-iface-ports

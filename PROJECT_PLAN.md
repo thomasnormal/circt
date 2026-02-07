@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 464)
+## Current Status - February 7, 2026 (Iteration 465)
 
 ### Test Results
 
@@ -46,6 +46,55 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 465
+
+1. **Direct Slang compatibility flag exposure**
+   - Added explicit `circt-verilog` controls for key VCS-style compatibility
+     flags:
+     `allow-hierarchical-const`, `relax-enum-conversions`,
+     `relax-string-conversions`, `allow-recursive-implicit-call`,
+     `allow-bare-value-param-assignment`,
+     `allow-self-determined-stream-concat`, `allow-merging-ansi-ports`,
+     `allow-top-level-iface-ports`.
+   - Wired these as direct overrides of Slang compilation flags so workflows
+     can enable only the needed semantics instead of broad `--compat` modes.
+
+2. **Regression coverage**
+   - Added `test/Conversion/ImportVerilog/relax-enum-conversions.sv` to lock
+     behavior for one representative flag (default failure vs enabled success).
+   - Updated `test/Conversion/ImportVerilog/compat-vcs.sv` to verify equivalent
+     behavior using individual flags.
+   - Updated `test/Tools/circt-verilog/commandline.mlir` for new option
+     visibility.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+     - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+     - `test/Conversion/ImportVerilog/relax-enum-conversions.sv`: PASS
+     - `test/Tools/circt-verilog/map-keyword-version.test`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Multi-clock prune integration remains the highest BMC pipeline gap:
+     `--prune-bmc-registers` is still guarded with `--allow-multi-clock`.
+   - OpenTitan LEC still depends on `XPROP_ONLY` acceptance in key cases;
+     stronger 4-state/X initialization correlation is still needed.
+   - Some external BMC flows still rely on known-input assumptions.
+   - Next Slang/CIRCT import targets:
+     expose UDP coverage-note limits and add focused behavioral regressions for
+     top-level interface compatibility controls.
 
 ### Session Summary - Iteration 464
 

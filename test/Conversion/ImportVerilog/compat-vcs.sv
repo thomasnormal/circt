@@ -1,4 +1,13 @@
 // RUN: circt-verilog --no-uvm-auto-include --compat vcs --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore \
+// RUN:   --allow-hierarchical-const \
+// RUN:   --relax-enum-conversions \
+// RUN:   --relax-string-conversions \
+// RUN:   --allow-recursive-implicit-call \
+// RUN:   --allow-bare-value-param-assignment \
+// RUN:   --allow-self-determined-stream-concat \
+// RUN:   --allow-merging-ansi-ports \
+// RUN:   %s | FileCheck %s
 // REQUIRES: slang
 
 //===----------------------------------------------------------------------===//

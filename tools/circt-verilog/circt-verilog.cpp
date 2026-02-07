@@ -325,6 +325,46 @@ struct CLOptions {
                "compatibility options."),
       cl::value_desc("tool"), cl::cat(cat)};
 
+  cl::opt<bool> allowHierarchicalConst{
+      "allow-hierarchical-const",
+      cl::desc("Allow hierarchical references in constant expressions"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> relaxEnumConversions{
+      "relax-enum-conversions",
+      cl::desc("Allow implicit integral-to-enum conversions"), cl::init(false),
+      cl::cat(cat)};
+
+  cl::opt<bool> relaxStringConversions{
+      "relax-string-conversions",
+      cl::desc("Allow relaxed implicit string conversions"), cl::init(false),
+      cl::cat(cat)};
+
+  cl::opt<bool> allowRecursiveImplicitCall{
+      "allow-recursive-implicit-call",
+      cl::desc("Allow recursive implicit call expressions"), cl::init(false),
+      cl::cat(cat)};
+
+  cl::opt<bool> allowBareValParamAssignment{
+      "allow-bare-value-param-assignment",
+      cl::desc("Allow bare-value parameter assignments"), cl::init(false),
+      cl::cat(cat)};
+
+  cl::opt<bool> allowSelfDeterminedStreamConcat{
+      "allow-self-determined-stream-concat",
+      cl::desc("Allow self-determined streaming concatenation"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> allowMergingAnsiPorts{
+      "allow-merging-ansi-ports",
+      cl::desc("Allow ANSI port declaration merging behavior"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> allowTopLevelIfacePorts{
+      "allow-top-level-iface-ports",
+      cl::desc("Allow top-level modules with interface ports"),
+      cl::init(false), cl::cat(cat)};
+
   cl::opt<bool> allowVirtualIfaceWithOverride{
       "allow-virtual-iface-with-override",
       cl::desc("Allow interface instances that are bind/defparam targets to "
@@ -659,6 +699,23 @@ static LogicalResult executeWithSources(MLIRContext *context,
   options.ignoreUnknownModules = opts.ignoreUnknownModules;
   if (opts.compat.getNumOccurrences() > 0)
     options.compat = opts.compat;
+  if (opts.allowHierarchicalConst.getNumOccurrences() > 0)
+    options.allowHierarchicalConst = opts.allowHierarchicalConst;
+  if (opts.relaxEnumConversions.getNumOccurrences() > 0)
+    options.relaxEnumConversions = opts.relaxEnumConversions;
+  if (opts.relaxStringConversions.getNumOccurrences() > 0)
+    options.relaxStringConversions = opts.relaxStringConversions;
+  if (opts.allowRecursiveImplicitCall.getNumOccurrences() > 0)
+    options.allowRecursiveImplicitCall = opts.allowRecursiveImplicitCall;
+  if (opts.allowBareValParamAssignment.getNumOccurrences() > 0)
+    options.allowBareValParamAssignment = opts.allowBareValParamAssignment;
+  if (opts.allowSelfDeterminedStreamConcat.getNumOccurrences() > 0)
+    options.allowSelfDeterminedStreamConcat =
+        opts.allowSelfDeterminedStreamConcat;
+  if (opts.allowMergingAnsiPorts.getNumOccurrences() > 0)
+    options.allowMergingAnsiPorts = opts.allowMergingAnsiPorts;
+  if (opts.allowTopLevelIfacePorts.getNumOccurrences() > 0)
+    options.allowTopLevelIfacePorts = opts.allowTopLevelIfacePorts;
   options.allowVirtualIfaceWithOverride = opts.allowVirtualIfaceWithOverride;
   options.ignoreTimingControls = opts.ignoreTimingControls;
   options.allowNonProceduralDynamic = opts.allowNonProceduralDynamic;

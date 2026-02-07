@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 465 - February 7, 2026
+
+### Summary
+
+Added direct per-flag compatibility controls for Slang/CIRCT import, reducing
+reliance on coarse `--compat` presets and enabling targeted long-term tuning.
+
+### Fixes
+
+1. **Direct compatibility flag controls**
+   - Added `circt-verilog` options and pass-through support for:
+     - `--allow-hierarchical-const`
+     - `--relax-enum-conversions`
+     - `--relax-string-conversions`
+     - `--allow-recursive-implicit-call`
+     - `--allow-bare-value-param-assignment`
+     - `--allow-self-determined-stream-concat`
+     - `--allow-merging-ansi-ports`
+     - `--allow-top-level-iface-ports`
+   - These now map directly to Slang compilation flags and can override compat
+     presets where specified.
+
+2. **New/updated regression coverage**
+   - Added `test/Conversion/ImportVerilog/relax-enum-conversions.sv`:
+     verifies default failure and success with
+     `--relax-enum-conversions`.
+   - Updated `test/Conversion/ImportVerilog/compat-vcs.sv`:
+     added a run line that uses individual flags instead of `--compat vcs`.
+   - Updated `test/Tools/circt-verilog/commandline.mlir` to include the new
+     options.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+  - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+  - `test/Conversion/ImportVerilog/relax-enum-conversions.sv`: PASS
+  - `test/Tools/circt-verilog/map-keyword-version.test`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 464 - February 7, 2026
 
 ### Summary
