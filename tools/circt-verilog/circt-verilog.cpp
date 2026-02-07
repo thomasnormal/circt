@@ -205,6 +205,11 @@ struct CLOptions {
   cl::alias undefinesLong{"undefine-macro", cl::desc("Alias for -U"),
                           cl::aliasopt(undefines), cl::NotHidden, cl::cat(cat)};
 
+  cl::list<std::string> ignoreDirectives{
+      "ignore-directive",
+      cl::desc("Ignore one or more preprocessor directive names"),
+      cl::value_desc("directive"), cl::cat(cat)};
+
   cl::opt<uint32_t> maxIncludeDepth{
       "max-include-depth",
       cl::desc("Maximum depth of nested include files allowed"),
@@ -666,6 +671,7 @@ static LogicalResult executeWithSources(MLIRContext *context,
 
   options.defines = opts.defines;
   options.undefines = opts.undefines;
+  options.ignoreDirectives = opts.ignoreDirectives;
   if (opts.maxIncludeDepth.getNumOccurrences() > 0)
     options.maxIncludeDepth = opts.maxIncludeDepth;
   options.librariesInheritMacros = opts.librariesInheritMacros;

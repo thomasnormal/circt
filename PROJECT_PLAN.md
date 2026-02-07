@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 467)
+## Current Status - February 7, 2026 (Iteration 468)
 
 ### Test Results
 
@@ -46,6 +46,54 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 468
+
+1. **New Slang directive compatibility passthrough**
+   - Added `circt-verilog --ignore-directive <name>` to expose Slang's
+     preprocessor directive-ignore mechanism.
+   - Wired directly to `ImportVerilogOptions::ignoreDirectives` /
+     `Driver::Options::ignoreDirectives`.
+   - This unblocks parsing/preprocessing flows that contain vendor-specific
+     directives not otherwise understood by Slang.
+
+2. **Behavioral regression coverage**
+   - Added `test/Tools/circt-verilog/ignore-directive.test` with dedicated
+     input under
+     `test/Tools/circt-verilog/Inputs/ignore-directive/main.sv`.
+   - The test locks:
+     - default failure on unknown directive
+     - successful preprocessing with `--ignore-directive vendor_directive`
+     - support for multiple `--ignore-directive` flags.
+   - Updated `test/Tools/circt-verilog/commandline.mlir` with help coverage.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-verilog/ignore-directive.test`: PASS
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+     - `test/Conversion/ImportVerilog/generic-interface-port-top.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Top-level generic interface compatibility currently lowers unresolved
+     interfaces as opaque symbols; we still need structural/member/modport
+     inference to reduce semantic loss in downstream analyses.
+   - Multi-clock prune remains the largest BMC pipeline gap:
+     `--prune-bmc-registers` is still guarded with `--allow-multi-clock`.
+   - OpenTitan LEC still depends on `XPROP_ONLY` acceptance in key flows;
+     improving 4-state/X initialization equivalence remains a high-value target.
+   - Some BMC flows still require known-input assumptions
+     (`BMC_ASSUME_KNOWN_INPUTS=1`) and should be made robust without this knob.
 
 ### Session Summary - Iteration 467
 

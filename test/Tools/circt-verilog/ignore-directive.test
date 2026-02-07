@@ -1,0 +1,6 @@
+// RUN: not circt-verilog --no-uvm-auto-include -E %S/Inputs/ignore-directive/main.sv 2>&1 | FileCheck %s --check-prefix=ERR
+// RUN: circt-verilog --no-uvm-auto-include --ignore-directive vendor_directive -E %S/Inputs/ignore-directive/main.sv | FileCheck %s --check-prefix=OK
+// RUN: circt-verilog --no-uvm-auto-include --ignore-directive vendor_directive --ignore-directive another_directive -E %S/Inputs/ignore-directive/main.sv | FileCheck %s --check-prefix=OK
+
+// ERR: unknown macro or compiler directive '`vendor_directive
+// OK: module top;

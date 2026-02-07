@@ -14,6 +14,7 @@
 // CHECK-DAG: --max-udp-coverage-notes
 // CHECK-DAG: --disable-local-includes
 // CHECK-DAG: --enable-legacy-protect
+// CHECK-DAG: --ignore-directive
 // CHECK-DAG: --map-keyword-version
 // CHECK-DAG: --translate-off-format
 // CHECK-DAG: --timing
