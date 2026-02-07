@@ -7,17 +7,20 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 434 - Generic Interface Ports)
+## Current Status - February 7, 2026 (Iteration 435 - Nested Interface Ports)
 
-### Session Summary - Iteration 434
+### Session Summary - Iteration 435
 
-1. **Fixed generic interface ports** (IEEE 1800-2017 §25.5): `InterfacePortSymbol::interfaceDef`
-   is null for generic `interface` port declarations. Now resolved from the connection site
-   via `port.getConnection()` to find the concrete interface instance. Two lit tests added.
-   Commit: `[ImportVerilog] Resolve generic interface ports from connection site`
+1. **Fixed nested interface port instances**: Sub-interfaces inside interfaces
+   (e.g., `ChildIf child` inside `ParentIf`) have shared `InstanceSymbol` pointers
+   and were not cached in `interfaceInstances`. Added scope-hierarchy fallback in
+   `resolveInterfaceInstance` that navigates through parent interface values via
+   `VirtualInterfaceSignalRefOp`. Fixed chain-walk cycle detection (`break` instead
+   of `return {}`) so fallback executes. Test `nested-interface-port-instance.sv`
+   now passes (XFAIL count: 7→6).
 
-2. **Continued from iteration 433**: Cumulative `__moore_delay` timing bug fixed.
-   All 47 circt-sim unit tests pass (0 xfail).
+2. **Continued from iteration 434**: Generic interface ports and cumulative
+   `__moore_delay` timing bug fixed.
 
 | Mode | Eligible | Pass | Rate |
 |------|----------|------|------|
@@ -26,7 +29,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Simulation (full) | 775 | 714 | **99.2%** |
 | BMC (full Z3) | 26 | 26 | **100%** |
 | LEC (full Z3) | 23 | 23 | **100%** |
-| ImportVerilog lit | 259 | 252+7xf | **100%** |
+| ImportVerilog lit | 261 | 255+6xf | **100%** |
 | circt-sim lit | 47 | 47 | **100%** |
 
 0 simulation failures, 0 timeouts.
@@ -36,10 +39,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
-| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Baseline confirmed (714 pass, 0 fail); triage 9 non-UVM compile failures |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Agent running combined HdlTop+HvlTop for I2S/I3C; update AVIP table |
+| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Baseline confirmed (714 pass, 0 fail); 9 non-UVM compile failures are external (BSG/3rd-party) |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Agent testing combined HdlTop+HvlTop for I2S/I3C |
 | **C: External Tests** | verilator/yosys/opentitan | Agent running | Agent establishing verilator/yosys/opentitan baselines |
-| **D: Missing Features** | Named events, coverage, etc | Interface ports DONE | Next: named events NBA, non-UVM compile failures |
+| **D: Missing Features** | Named events, coverage, etc | Nested iface ports DONE | Next: named events NBA gap (minor), remaining 6 XFAIL tests |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
 | **F: Formal (BMC/LEC)** | k-induction + liveness | In progress | Codex handles |
 

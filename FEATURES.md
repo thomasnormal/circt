@@ -149,3 +149,4 @@ to commercial simulators like Cadence Xcelium.
 | process suspend/resume | ImportVerilog lowering + interpreter `__moore_process_suspend/resume` handlers |
 | Generic interface ports | Resolve `InterfacePortSymbol::interfaceDef` via `getConnection()` for generic `interface` port declarations |
 | Cumulative `__moore_delay` | Save `CallStackFrame` for LLVM function bodies on suspend; enables sequential delays in class methods/fork branches |
+| Nested interface ports | Scope-hierarchy fallback in `resolveInterfaceInstance` for sub-interfaces inside interfaces; navigates through parent interface value |
