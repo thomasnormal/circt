@@ -7,24 +7,37 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 442 - Interpreter Speedup + Failure Analysis)
+## Current Status - February 7, 2026 (Iteration 443 - 33x Interpreter Speedup)
 
-### Session Summary - Iteration 442
+### Session Summary - Iteration 443
+
+1. **33x interpreter speedup** committed (dc3cd1dec): Replaced all 14 O(n) linear scans
+   through 6,577 global addresses and malloc blocks with O(log n) sorted interval map
+   (`std::map<uint64_t, AddrRangeEntry>` with `upper_bound` binary search). Every non-local
+   load, store, GEP, and string resolution was iterating through all globals — with ~260K
+   loads and ~39K stores per simulation run, this dominated runtime.
+   - APB AVIP: ~4 ns/s → ~132 ns/s (10us sim in 76s wall-clock)
+   - Also fixed `interpretFuncBody` hot loop to use cached `activeProcessState` instead of
+     per-op `processStates.find()` O(log n) lookups
+   - Added op stats collection to both `interpretLLVMFuncBody` and `interpretFuncBody`
+   - All 47 circt-sim lit tests pass, 0 regressions
+
+2. **Op distribution analysis** (APB 30s run): llvm.call 19.4%, llvm.load 15.9%,
+   comb.icmp 12.8%, llvm.extractvalue 12.7%, arith.trunci 12.7%, cf.cond_br 7.4%,
+   llvm.zext 6.2%, llvm.store 2.8%. ~1.5M total ops in 30s = ~50K ops/s (before opt).
+   After opt: ~1.45M steps/s = 29x throughput improvement.
+
+### Previous Iteration 442 Summary
 
 1. **2.8x interpreter speedup** committed (a63fd88b2): Added `funcLookupCache` to cache
    `moduleOp.lookupSymbol` results in `interpretLLVMCall`. Also uses `activeProcessState`
-   to avoid redundant `processStates.find()` lookups. Op stats showed `llvm.call` at 64.7%
-   of all interpreted ops with 131 interceptor string comparisons per call. Function lookup
-   cache eliminates repeated symbol table lookups. APB: 119.7 ns in 30s (was 54.1 ns) = ~4.0 ns/s.
+   to avoid redundant `processStates.find()` lookups. APB: ~4.0 ns/s.
 
-2. **Yosys failure analysis complete**: All 9 non-svinterface failures categorized:
-   - 7 SLANG_STRICT: `(type) var;` declarations, `...` in port lists, `$size()` on scalars,
-     `rand` at module scope, `1'bf` binary/hex mixup, unpacked-in-packed struct, untyped localparam
-   - 2 NEGATIVE_TEST: `reg_wire_error.sv` and `wire_and_var.sv` intentionally test error detection
-   - 0 fixable CIRCT bugs. 61/77 is the ceiling without implementing non-standard extensions.
+2. **Yosys failure analysis complete**: All 9 non-svinterface failures categorized.
+   0 fixable CIRCT bugs. 61/77 is the ceiling without implementing non-standard extensions.
 
 3. **All lit tests pass**: 384 ImportVerilog+MooreToCore (382 pass, 2 XFAIL), 162 circt-sim
-   (162 pass). 0 regressions after function lookup cache optimization.
+   (162 pass). 0 regressions.
 
 ### Previous Iteration 441 Summary
 
@@ -85,7 +98,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
 | **A: sv-tests** | IEEE 1800 compliance | **99.2%** | 0 genuine non-UVM compile failures |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | Interpreter optimized (~993 ns/s APB); more opts possible |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | 33x speedup (~132 ns/s APB); O(log n) address index + func body caching |
 | **C: External Tests** | verilator/yosys/opentitan | Yosys .sv 61/77, VV 120/140 | Remaining yosys: 5 svinterfaces, 2 multi-file, 9 misc |
 | **D: Missing Features** | Named events, coverage, etc | **0 XFAIL** | All ImportVerilog tests pass |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
