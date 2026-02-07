@@ -91,7 +91,7 @@ to commercial simulators like Cadence Xcelium.
 | `randomize()` (basic) | WORKS | `__moore_randomize_basic()` fills object memory with random bytes |
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
 | `randomize()` (with ranges) | WORKS | `__moore_randomize_with_ranges()` generates uniform random within range pairs |
-| Interface ports | MISSING | Required by AXI-VIP and similar verification IPs |
+| Interface ports | WORKS | Generic interface ports resolved from connection site (IEEE 1800-2017 §25.5) |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | WORKS | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
 | Coverage collection | MISSING | Functional and code coverage not implemented |
@@ -101,7 +101,7 @@ to commercial simulators like Cadence Xcelium.
 | `config_db` | WORKS | `config_db_implementation_t::set/get/exists` intercepted with in-memory key-value store |
 | `process::suspend/resume` | WORKS | Lowered in ImportVerilog; interpreter suspends process execution and resumes on `resume()` call |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
-| Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; gap: `->>` NBA scheduling, event clearing between time slots |
+| Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; `->>` integer-type NBA works via NonBlockingAssign; gap: native EventType NBA, event clearing between time slots |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
 | Simulation performance | OK | All AVIPs complete within 60s wall-clock |
 
@@ -147,3 +147,5 @@ to commercial simulators like Cadence Xcelium.
 | String array initializer | `ArrayCreateOpConversion` handles LLVM array types; `VariableOpConversion` stores initial values for LLVM arrays |
 | config_db runtime | `config_db_implementation_t::set/get/exists` intercepted with key-value store |
 | process suspend/resume | ImportVerilog lowering + interpreter `__moore_process_suspend/resume` handlers |
+| Generic interface ports | Resolve `InterfacePortSymbol::interfaceDef` via `getConnection()` for generic `interface` port declarations |
+| Cumulative `__moore_delay` | Save `CallStackFrame` for LLVM function bodies on suspend; enables sequential delays in class methods/fork branches |

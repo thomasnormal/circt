@@ -7,14 +7,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 433 - Fix __moore_delay)
+## Current Status - February 7, 2026 (Iteration 434 - Generic Interface Ports)
 
-### Session Summary - Iteration 433
+### Session Summary - Iteration 434
 
-Fixed the cumulative `__moore_delay` timing bug: sequential delays inside LLVM
-function bodies now properly suspend/resume via `CallStackFrame`, advancing
-simulation time for each delay individually. All 306 tests pass with 0 xfail
-on circt-sim.
+1. **Fixed generic interface ports** (IEEE 1800-2017 §25.5): `InterfacePortSymbol::interfaceDef`
+   is null for generic `interface` port declarations. Now resolved from the connection site
+   via `port.getConnection()` to find the concrete interface instance. Two lit tests added.
+   Commit: `[ImportVerilog] Resolve generic interface ports from connection site`
+
+2. **Continued from iteration 433**: Cumulative `__moore_delay` timing bug fixed.
+   All 47 circt-sim unit tests pass (0 xfail).
 
 | Mode | Eligible | Pass | Rate |
 |------|----------|------|------|
@@ -33,12 +36,12 @@ on circt-sim.
 
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
-| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Fix 72 non-UVM compile failures (ch18 randomization, ch8 classes) |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Test config_db with recompiled AVIPs; push combined HdlTop+HvlTop depth |
-| **C: External Tests** | yosys/verilator/opentitan | Not started | Run verilator-verification, yosys sim tests |
-| **D: Missing Features** | Interface ports, coverage, etc | In progress | Interface ports (HIGH, unblocks AXI-VIP) |
-| **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | OpenTitan formal verification (Codex handles) |
-| **F: Formal (BMC)** | k-induction + liveness | In progress | JIT k-induction landed; Codex handles remaining |
+| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Baseline confirmed (714 pass, 0 fail); triage 9 non-UVM compile failures |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Agent running combined HdlTop+HvlTop for I2S/I3C; update AVIP table |
+| **C: External Tests** | verilator/yosys/opentitan | Agent running | Agent establishing verilator/yosys/opentitan baselines |
+| **D: Missing Features** | Named events, coverage, etc | Interface ports DONE | Next: named events NBA, non-UVM compile failures |
+| **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
+| **F: Formal (BMC/LEC)** | k-induction + liveness | In progress | Codex handles |
 
 ### SVA Formal Feature Roadmap (February 6, 2026)
 
@@ -78,18 +81,41 @@ keeping memory growth controlled.
 - Full SVA front-end parity (clocking/disable/sequence args).
 ### Remaining Feature Gaps for Xcelium Parity
 
-| Feature | Priority | Effort | Impact |
-|---------|----------|--------|--------|
-| Interface ports (generic) | HIGH | Large | Unblocks AXI-VIP generic interface params |
-| Non-UVM compile failures | MEDIUM | Medium | 72 ch18/generated tests; mostly need constraint solver |
-| Coverage collection | LOW | Large | Functional/code coverage |
-| SVA runtime checking | LOW | Large | Full assertion evaluation |
-| ClockVar support | LOW | Medium | Some testbenches need it |
-| DPI-C full support | LOW | Large | Most stubbed currently |
+| Feature | Priority | Effort | Impact | Details |
+|---------|----------|--------|--------|---------|
+| Interface ports (modport) | MEDIUM | Medium | Full AXI-VIP patterns | Generic ports resolved; may still need modport-qualified interface ports |
+| Nested interface ports | MEDIUM | Medium | Nested sub-interfaces | `missing hierarchical interface value` for `p.child` patterns (Structure.cpp) |
+| Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path already uses NBA; only native EventType path lacks it; event clearing needs time-slot tracking |
+| Non-UVM compile failures | NOT-ACTIONABLE | N/A | 9 tests | 6 BSG preprocessor extension, 2 missing submodules, 1 runner heuristic |
+| Coverage collection | LOW | Large | Functional/code coverage | Not implemented |
+| SVA runtime checking | LOW | Large | Full assertion evaluation | Formal only; no simulation-time checking |
+| ClockVar support | LOW | Medium | Some testbenches | Not implemented |
+| DPI-C full support | LOW | Large | Most stubbed | Some intercepted, most return 0 |
 
 **Resolved gaps:**
 - `process::await/kill/suspend` — FIXED (all sv-test timeouts resolved via `--max-time`)
 - SVA assume/cover simulation — FIXED (0 simulation failures)
+- Cumulative `__moore_delay` in LLVM function bodies — FIXED (iteration 433)
+- Generic interface ports — FIXED (iteration 434, `getConnection()` resolution)
+
+### Interface Ports Implementation Plan (PARTIALLY DONE)
+
+Generic interface ports resolved in iteration 434. Remaining: modport-qualified patterns.
+
+**Root cause (fixed):** In `Structure.cpp:2335`, `InterfacePortSymbol::interfaceDef` is null
+when the interface is parameterized (e.g., `axi_if#(.ID_WIDTH(16), ...)`).
+
+**Implementation stages:**
+1. **Resolve generic interface ports** - Traverse slang AST to find the parameterized
+   interface definition, resolve parameters, create specialized interface declarations
+2. **Handle parameterized instantiation** - Create separate `moore.interface` for each
+   unique parameter combination (similar to class specialization at Structure.cpp:377)
+3. **Type system updates** - Extend `moore.virtual_interface<@iface>` for parameterized variants
+4. **MooreToCore updates** - `resolveInterfaceStructBody` should mostly work; may need
+   dynamic width handling
+
+**Key files:** Structure.cpp:2335 (error), Structure.cpp:377 (class pattern),
+HierarchicalNames.cpp:38-240 (threading), MooreToCore.cpp:1790-1834 (struct resolution)
 
 ---
 
