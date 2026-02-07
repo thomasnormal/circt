@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 455 - February 7, 2026
+
+### Summary
+
+Unblocked UVM-heavy formal flows by making HWToSMT robust for non-HW/opaque
+array element types and singleton arrays.
+
+### Accomplishments
+
+1. **HWToSMT: direct support for opaque LLVM-typed HW arrays**
+   - Added a fallback type conversion from LLVM dialect value types to
+     `!smt.sort<...>` so arrays like `!hw.array<4x!llvm.struct<...>>` can be
+     represented as SMT arrays.
+   - This removes legalization failures in `convert-hw-to-smt` on
+     `hw.array_create` in UVM-heavy designs.
+
+2. **HWToSMT: array index width hardening**
+   - Introduced a shared array-domain-width rule that enforces SMT index width
+     `>= 1`, including singleton arrays (`!hw.array<1xT>`).
+   - Updated conversions in:
+     - array type lowering
+     - `hw.array_create`
+     - `hw.array_get`
+     - `hw.array_inject`
+     - aggregate array constant materialization
+
+3. **Regression tests**
+   - Added HWToSMT coverage for:
+     - singleton array access lowering
+     - opaque LLVM struct element array lowering through `!smt.sort`
+   - Updated in `test/Conversion/HWToSMT/hw-to-smt.mlir`.
+
+### Verification
+
+- `./build/bin/llvm-lit -sv test/Conversion/HWToSMT/hw-to-smt.mlir` (pass)
+- `./build/bin/llvm-lit -sv test/Tools/circt-bmc/sva-assert-final-e2e.sv test/Tools/circt-bmc/sva-expect-e2e.sv` (pass)
+- UVM-inclusive (no `--no-uvm-auto-include`) pipelines now succeed:
+  - `sva_assert_final` BMC emit-mlir: `EXIT:0`
+  - `sva_expect` BMC emit-mlir: `EXIT:0`
+- External smoke rerun:
+  - sv-tests BMC (`TEST_FILTER=16.12--property`): `total=5 pass=5 fail=0`
+  - verilator-verification BMC (`TEST_FILTER=assert_rose`): `total=1 pass=1 fail=0`
+  - yosys/tests/sva BMC (`TEST_FILTER=basic00`): pass/fail variants both pass
+  - OpenTitan LEC (`canright`, `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP compile smoke (`apb_avip`): pass
+
 ## Iteration 454 - February 7, 2026
 
 ### Summary
