@@ -19643,3 +19643,34 @@ CIRCT/slang correctly enforces LRM restrictions.
   - `verilator-verification` BMC smoke (`assert_rose`): PASS
   - `yosys/tests/sva` BMC smoke (`basic00`): PASS (pass/fail variants)
   - OpenTitan LEC smoke (`aes_sbox_canright`): PASS
+
+---
+
+## Iteration 455 - February 7, 2026
+
+### BMC E2E Test Unblock: `assert final` and `expect`
+
+- Unblocked two stale `XFAIL` tests in `test/Tools/circt-bmc/` by disabling
+  implicit UVM auto-include for these focused SVA tests:
+  - `sva-assert-final-e2e.sv`
+  - `sva-expect-e2e.sv`
+- Updated FileCheck patterns to match current `circt-bmc --emit-mlir` output
+  (SMT-level checks) instead of older `verif.*` IR expectations.
+
+### Why This Matters
+
+- The previous failures were not due to missing `assert final` / `expect`
+  lowering, but due to unrelated UVM auto-include bringing in unsupported
+  constructs for this specific pipeline configuration.
+- These tests now cover real end-to-end lowering behavior again and can catch
+  regressions in BMC translation.
+
+### Validation
+
+- `llvm-lit` targeted:
+  - `test/Tools/circt-bmc/sva-assert-final-e2e.sv` PASS
+  - `test/Tools/circt-bmc/sva-expect-e2e.sv` PASS
+- `llvm-lit` full `test/Tools/circt-bmc` sweep:
+  - Passed: 103
+  - XFAIL: 10
+  - Unsupported: 123
