@@ -2881,15 +2881,6 @@ struct VerifBoundedModelCheckingOpConversion
           return failure();
         }
       }
-      bool hasLiveness = false;
-      circuitBlock.walk([&](Operation *ltlOp) {
-        if (isa<ltl::EventuallyOp, ltl::UntilOp>(ltlOp))
-          hasLiveness = true;
-      });
-      if (hasLiveness) {
-        op.emitError("k-induction does not support liveness operators yet");
-        return failure();
-      }
     }
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());

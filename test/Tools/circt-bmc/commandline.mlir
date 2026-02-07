@@ -7,6 +7,7 @@
 // CHECK-DAG: --assume-known-inputs
 // CHECK-DAG: --fail-on-violation
 // CHECK-DAG: --flatten-modules
+// CHECK-DAG: --induction
 // CHECK-DAG: --k-induction
 // CHECK-DAG: --liveness
 // CHECK-DAG: --print-solver-output

@@ -172,6 +172,12 @@ static cl::opt<bool> failOnViolation(
 static cl::opt<bool> kInduction(
     "k-induction",
     cl::desc("Run k-induction (SMT-LIB only): base check at -b, then "
+             "induction step at -b+1 (deprecated alias for --induction)"),
+    cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool> induction(
+    "induction",
+    cl::desc("Run k-induction (SMT-LIB only): base check at -b, then "
              "induction step at -b+1"),
     cl::init(false), cl::cat(mainCategory));
 
@@ -957,7 +963,7 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
 /// This function initializes the various components of the tool and
 /// orchestrates the work to be done.
 static LogicalResult executeBMC(MLIRContext &context) {
-  if (kInduction)
+  if (kInduction || induction)
     return executeBMCWithInduction(context);
 
   // Create the timing manager we use to sample execution times.

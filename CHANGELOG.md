@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 449 - February 7, 2026
+
+### Summary
+
+Added first-class `--induction` workflow support in `circt-bmc` and extended
+induction regression coverage to include liveness-style source properties.
+
+### Accomplishments
+
+1. **First-class induction CLI**
+   - Added `circt-bmc --induction` as the primary induction flag.
+   - Kept `--k-induction` as a backward-compatible alias (marked deprecated in help).
+   - Updated command-line help regression accordingly.
+
+2. **Induction + liveness-flow unblocking**
+   - Removed the explicit induction-time rejection for raw liveness ops in
+     VerifToSMT (`ltl.eventually` / `ltl.until`) so end-to-end flows that
+     lower liveness to final checks are not artificially blocked.
+
+3. **Regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir` (`--induction` path).
+   - Added `test/Tools/circt-bmc/bmc-k-induction-eventually-unsat.mlir`
+     (liveness-style source property through induction flow).
+   - Updated `test/Tools/circt-bmc/commandline.mlir`.
+
+4. **Verification**
+   - Targeted lit (induction/liveness set): 10/10 pass.
+   - External smoke rerun:
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
 ## Iteration 448 - February 7, 2026
 
 ### Summary
