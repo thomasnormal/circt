@@ -512,6 +512,10 @@ struct Context {
   /// has not been converted yet.
   std::queue<const slang::ast::InstanceBodySymbol *> interfaceWorklist;
 
+  /// Counter used to generate unique names for synthesized opaque interface
+  /// declarations when generic interface ports are allowed at top level.
+  uint64_t synthesizedGenericInterfaceCount = 0;
+
   /// Covergroups that have already been converted.
   DenseMap<const slang::ast::CovergroupType *,
            std::unique_ptr<CovergroupLowering>>
