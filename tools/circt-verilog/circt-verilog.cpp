@@ -528,7 +528,8 @@ static LogicalResult executeWithSources(MLIRContext *context,
 
   if (opts.timeScale.getNumOccurrences() > 0)
     options.timeScale = opts.timeScale;
-  options.allowUseBeforeDeclare = opts.allowUseBeforeDeclare;
+  if (opts.allowUseBeforeDeclare.getNumOccurrences() > 0)
+    options.allowUseBeforeDeclare = opts.allowUseBeforeDeclare;
   options.ignoreUnknownModules = opts.ignoreUnknownModules;
   if (opts.compat.getNumOccurrences() > 0)
     options.compat = opts.compat;
