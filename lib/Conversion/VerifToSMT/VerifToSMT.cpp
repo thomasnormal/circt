@@ -4570,6 +4570,7 @@ struct VerifBoundedModelCheckingOpConversion
       SmallVector<Value> iterArgs = inputDecls;
       SmallVector<SmallVector<Value>> lassoStateHistory;
       SmallVector<SmallVector<Value>> lassoFinalCheckSampleHistory;
+      SmallVector<SmallVector<Value>> lassoFinalCheckSampledTrueHistory;
       auto captureStateSnapshot = [&](ValueRange values) {
         if (!livenessLassoMode)
           return;
@@ -5124,8 +5125,11 @@ struct VerifBoundedModelCheckingOpConversion
             numFinalChecks == 0 ? ValueRange{}
                                 : iterRange.drop_back(1).take_back(numFinalChecks);
         SmallVector<Value> finalCheckSamplesThisIter;
+        SmallVector<Value> finalCheckSampledTrueThisIter;
         if (livenessLassoMode && numFinalChecks > 0)
           finalCheckSamplesThisIter.reserve(numFinalChecks);
+        if (livenessLassoMode && numFinalChecks > 0)
+          finalCheckSampledTrueThisIter.reserve(numFinalChecks);
         auto getCheckGate =
             [&](size_t checkIdx, ArrayRef<std::optional<unsigned>> clockPoses,
                 ArrayRef<NonFinalCheckInfo> infos) -> Value {
@@ -5168,8 +5172,19 @@ struct VerifBoundedModelCheckingOpConversion
         };
         for (auto [idx, finalVal] : llvm::enumerate(finalCheckOutputs)) {
           Value gate = getCheckGate(idx, finalCheckClockPos, finalCheckInfos);
-          if (livenessLassoMode)
-            finalCheckSamplesThisIter.push_back(gate ? gate : constTrue);
+          Value sampled = gate ? gate : constTrue;
+          if (livenessLassoMode) {
+            finalCheckSamplesThisIter.push_back(sampled);
+            Value isTrue;
+            if (isa<smt::BoolType>(finalVal.getType())) {
+              isTrue = finalVal;
+            } else {
+              auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+              isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
+            }
+            finalCheckSampledTrueThisIter.push_back(
+                smt::AndOp::create(rewriter, loc, sampled, isTrue));
+          }
           if (gate && idx < finalCheckStates.size()) {
             newDecls.push_back(smt::IteOp::create(rewriter, loc, gate, finalVal,
                                                  finalCheckStates[idx]));
@@ -5180,8 +5195,11 @@ struct VerifBoundedModelCheckingOpConversion
         newDecls.push_back(violated);
         iterArgs = std::move(newDecls);
         captureStateSnapshot(ValueRange(iterArgs));
-        if (livenessLassoMode)
+        if (livenessLassoMode) {
           lassoFinalCheckSampleHistory.push_back(std::move(finalCheckSamplesThisIter));
+          lassoFinalCheckSampledTrueHistory.push_back(
+              std::move(finalCheckSampledTrueThisIter));
+        }
       }
 
       if (livenessLassoMode) {
@@ -5192,6 +5210,11 @@ struct VerifBoundedModelCheckingOpConversion
         if (lassoFinalCheckSampleHistory.size() != boundValue) {
           op.emitError("internal error while building liveness-lasso "
                        "fairness history");
+          return failure();
+        }
+        if (lassoFinalCheckSampledTrueHistory.size() != boundValue) {
+          op.emitError("internal error while building liveness-lasso "
+                       "sampled-true fairness history");
           return failure();
         }
         Value hasLassoLoop;
@@ -5220,19 +5243,36 @@ struct VerifBoundedModelCheckingOpConversion
             Value samplingFairness;
             for (size_t checkIdx = 0; checkIdx < numFinalChecks; ++checkIdx) {
               Value sampledOnLoop;
+              Value sampledTrueOnLoop;
               for (size_t iterIdx = candidateIndex; iterIdx < boundValue;
                    ++iterIdx) {
                 ArrayRef<Value> iterSamples = lassoFinalCheckSampleHistory[iterIdx];
+                ArrayRef<Value> iterSampledTrue =
+                    lassoFinalCheckSampledTrueHistory[iterIdx];
                 if (checkIdx >= iterSamples.size()) {
                   op.emitError("internal error while building liveness-lasso "
                                "sampling constraints");
                   return failure();
                 }
+                if (checkIdx >= iterSampledTrue.size()) {
+                  op.emitError("internal error while building liveness-lasso "
+                               "sampled-true constraints");
+                  return failure();
+                }
                 sampledOnLoop = combineOr(sampledOnLoop, iterSamples[checkIdx]);
+                sampledTrueOnLoop =
+                    combineOr(sampledTrueOnLoop, iterSampledTrue[checkIdx]);
               }
               if (!sampledOnLoop)
                 sampledOnLoop = constFalse;
               samplingFairness = combineAnd(samplingFairness, sampledOnLoop);
+              if (!finalCheckIsCover[checkIdx]) {
+                if (!sampledTrueOnLoop)
+                  sampledTrueOnLoop = constFalse;
+                Value noSampledTrue =
+                    smt::NotOp::create(rewriter, loc, sampledTrueOnLoop);
+                samplingFairness = combineAnd(samplingFairness, noSampledTrue);
+              }
             }
             if (samplingFairness)
               candidateLoop = combineAnd(candidateLoop, samplingFairness);
