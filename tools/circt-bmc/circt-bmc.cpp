@@ -217,6 +217,12 @@ static cl::opt<bool> pruneUnreachableSymbols(
     cl::desc("Prune symbols not reachable from the entry module"),
     cl::init(true), cl::cat(mainCategory));
 
+static cl::opt<bool> pruneBMCRegisters(
+    "prune-bmc-registers",
+    cl::desc("Prune BMC state, inputs, and combinational logic that do not "
+             "affect properties"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<bool> flattenModules(
     "flatten-modules",
     cl::desc("Flatten all module instances before processing (which will "
@@ -530,6 +536,8 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   ExternalizeRegistersOptions externalizeOptions;
   externalizeOptions.allowMultiClock = allowMultiClock;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
+  if (pruneBMCRegisters)
+    pm.addPass(createPruneBMCRegisters());
   LowerToBMCOptions lowerToBMCOptions;
   lowerToBMCOptions.bound = boundOverride;
   lowerToBMCOptions.ignoreAssertionsUntil = ignoreAssertionsUntil;
@@ -894,6 +902,11 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
     return failure();
   }
 #endif
+  if (pruneBMCRegisters && allowMultiClock) {
+    llvm::errs() << "--prune-bmc-registers is currently incompatible with "
+                    "--allow-multi-clock\n";
+    return failure();
+  }
 
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
@@ -991,6 +1004,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
       outputFormat != OutputRunSMTLIB) {
     llvm::errs()
         << "--liveness-lasso requires --emit-smtlib or --run-smtlib\n";
+    return failure();
+  }
+  if (pruneBMCRegisters && allowMultiClock) {
+    llvm::errs() << "--prune-bmc-registers is currently incompatible with "
+                    "--allow-multi-clock\n";
     return failure();
   }
 

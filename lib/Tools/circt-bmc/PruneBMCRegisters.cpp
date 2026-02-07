@@ -8,6 +8,7 @@
 
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Tools/circt-bmc/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
@@ -258,6 +259,20 @@ struct PruneBMCRegistersPass
             liveInputs.set(it->second);
         }
       }
+      if (auto regClockSourcesAttr =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        for (auto clockSourceAttr : regClockSourcesAttr) {
+          auto sourceDict = dyn_cast<DictionaryAttr>(clockSourceAttr);
+          if (!sourceDict)
+            continue;
+          auto argIndexAttr = sourceDict.getAs<IntegerAttr>("arg_index");
+          if (!argIndexAttr)
+            continue;
+          uint64_t argIndex = argIndexAttr.getValue().getZExtValue();
+          if (argIndex < baseInputIndex)
+            liveInputs.set(static_cast<unsigned>(argIndex));
+        }
+      }
       for (Value root : propertyRoots)
         liveRegs |= collectRegDeps(root);
       for (Value root : propertyRoots)
@@ -296,6 +311,14 @@ struct PruneBMCRegistersPass
         if (liveRegs.test(idx))
           addLiveSlice(regNextValues[idx]);
       }
+      // Preserve explicit clock-conversion scaffolding. LowerToBMC discovers
+      // non-seq.clock clock inputs by scanning seq.to_clock operations.
+      // Pruning these ops can leave verif.bmc with clock args but empty
+      // init/loop clock yields.
+      hwModule.walk([&](seq::ToClockOp toClockOp) {
+        liveOps.insert(toClockOp);
+        addLiveSlice(toClockOp.getInput());
+      });
       hwModule.walk([&](Operation *op) {
         if (isa<AssertOp, AssumeOp, CoverOp, ClockedAssertOp, ClockedAssumeOp,
                 ClockedCoverOp>(op))
@@ -414,6 +437,13 @@ struct PruneBMCRegistersPass
       BitVector eraseOutputSet(numOutputs);
       for (unsigned idx : eraseOutputs)
         eraseOutputSet.set(idx);
+      SmallVector<int64_t> remappedInputIndex(numInputs, -1);
+      unsigned nextInputIndex = 0;
+      for (unsigned idx = 0; idx < numInputs; ++idx) {
+        if (eraseInputSet.test(idx))
+          continue;
+        remappedInputIndex[idx] = static_cast<int64_t>(nextInputIndex++);
+      }
 
       hwModule.erasePorts(eraseInputs, eraseOutputs);
       bodyBlock->eraseArguments(eraseInputSet);
@@ -456,6 +486,44 @@ struct PruneBMCRegistersPass
         }
         hwModule->setAttr("bmc_reg_clocks",
                           ArrayAttr::get(ctx, newRegClocks));
+      }
+      if (auto regClockSourcesAttr =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        if (regClockSourcesAttr.size() != numRegs) {
+          hwModule.emitError(
+              "bmc_reg_clock_sources size does not match num_regs");
+          signalPassFailure();
+          return;
+        }
+        SmallVector<Attribute> newRegClockSources;
+        newRegClockSources.reserve(newNumRegs);
+        for (unsigned idx = 0; idx < numRegs; ++idx) {
+          if (!liveRegs.test(idx))
+            continue;
+          auto sourceDict =
+              dyn_cast<DictionaryAttr>(regClockSourcesAttr[idx]);
+          if (!sourceDict) {
+            newRegClockSources.push_back(regClockSourcesAttr[idx]);
+            continue;
+          }
+          NamedAttrList attrs(sourceDict);
+          if (auto argIndexAttr = sourceDict.getAs<IntegerAttr>("arg_index")) {
+            uint64_t oldArgIndex = argIndexAttr.getValue().getZExtValue();
+            if (oldArgIndex >= remappedInputIndex.size() ||
+                remappedInputIndex[oldArgIndex] < 0) {
+              hwModule.emitError("bmc_reg_clock_sources arg_index references "
+                                 "a pruned input port");
+              signalPassFailure();
+              return;
+            }
+            auto remapped = static_cast<uint64_t>(remappedInputIndex[oldArgIndex]);
+            attrs.set("arg_index",
+                      IntegerAttr::get(argIndexAttr.getType(), remapped));
+          }
+          newRegClockSources.push_back(DictionaryAttr::get(ctx, attrs));
+        }
+        hwModule->setAttr("bmc_reg_clock_sources",
+                          ArrayAttr::get(ctx, newRegClockSources));
       }
     }
   }

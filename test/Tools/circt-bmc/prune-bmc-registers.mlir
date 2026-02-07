@@ -9,7 +9,7 @@ hw.module @top(in %clk: !seq.clock, in %in: i1) {
   hw.output
 }
 
-// CHECK: hw.module @top(in %clk : !seq.clock, in %in : i1, in %keep_reg_state : i1, out keep_reg_next : i1) attributes {bmc_reg_clock_sources = [{arg_index = 0 : i32, invert = false}, {arg_index = 0 : i32, invert = false}], bmc_reg_clocks = ["clk"], initial_values = [unit], num_regs = 1 : i32} {
+// CHECK: hw.module @top(in %clk : !seq.clock, in %in : i1, in %keep_reg_state : i1, out keep_reg_next : i1) attributes {bmc_reg_clock_sources = [{arg_index = 0 : i32, invert = false}], bmc_reg_clocks = ["clk"], initial_values = [unit], num_regs = 1 : i32} {
 // CHECK: [[NEXT:%.+]] = comb.xor %in, %in
 // CHECK: hw.output [[NEXT]]
 // CHECK-NOT: drop_reg_state
