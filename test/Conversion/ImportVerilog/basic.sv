@@ -3312,6 +3312,27 @@ module ContinuousAssignment;
   // CHECK-NEXT: [[TIME:%.+]] = moore.constant_time 1000000 fs
   // CHECK-NEXT: moore.delayed_assign [[A]], [[NOTB]], [[TIME]]
   assign #1ns a = ~b;
+
+endmodule
+
+// Test rise/fall and rise/fall/turnoff delays on net continuous assignments.
+// CHECK-LABEL: moore.module @ContinuousAssignDelay3
+module ContinuousAssignDelay3;
+  // CHECK-NEXT: [[A:%.+]] = moore.net wire
+  // CHECK-NEXT: [[B:%.+]] = moore.net wire
+  wire a, b;
+
+  // Rise/fall delay: use the rise (first) delay value.
+  // CHECK-NEXT: [[TMP:%.+]] = moore.read [[B]]
+  // CHECK-NEXT: [[TIME:%.+]] = moore.constant_time 2000000 fs
+  // CHECK-NEXT: moore.delayed_assign [[A]], [[TMP]], [[TIME]]
+  assign #(2ns, 3ns) a = b;
+
+  // Rise/fall/turnoff delay: use the rise (first) delay value.
+  // CHECK-NEXT: [[TMP:%.+]] = moore.read [[B]]
+  // CHECK-NEXT: [[TIME:%.+]] = moore.constant_time 4000000 fs
+  // CHECK-NEXT: moore.delayed_assign [[A]], [[TMP]], [[TIME]]
+  assign #(4ns, 5ns, 6ns) a = b;
 endmodule
 
 // CHECK-LABEL: func.func private @BlockingAssignment(
