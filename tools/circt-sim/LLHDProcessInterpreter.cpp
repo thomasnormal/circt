@@ -3730,6 +3730,19 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
     // Note: we don't clear waitConditionRestartBlock here - it will be
     // cleared by __moore_wait_condition when the condition becomes true.
+
+    // When wait_condition is inside a function called via vtable dispatch
+    // (e.g., uvm_phase_hopper::get), call stack frames are saved with their
+    // resume position AFTER the wait_condition call. This is wrong for
+    // wait_condition because the condition needs to be RE-EVALUATED on each
+    // poll, not skipped. Fix: override the innermost frame's resume position
+    // to the restart point (before the condition computation, e.g., before
+    // __moore_queue_size). This way, each poll re-executes the condition
+    // check from scratch.
+    if (!state.callStack.empty()) {
+      auto &innermostFrame = state.callStack.front();
+      innermostFrame.resumeOp = state.waitConditionRestartOp;
+    }
   }
 
   // Handle call stack frames: if we have saved call frames from a wait inside
@@ -9677,6 +9690,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
+  // Intercept uvm_wait_for_nba_region: this UVM synchronization primitive
+  // increments a counter and waits for it to change. In our interpreter,
+  // the memory event watcher never fires because no other process writes
+  // to the counter. Replace with a single delta cycle delay (schedule the
+  // process to resume in the next Active region at the same simulation time).
+  if (calleeName == "uvm_pkg::uvm_wait_for_nba_region") {
+    // Schedule the process to run in the next delta cycle
+    scheduler.scheduleProcess(procId, SchedulingRegion::Reactive);
+    return success();
+  }
+
   auto &state = processStates[procId];
   constexpr size_t maxCallDepth = 200;
   if (state.callDepth >= maxCallDepth) {
@@ -10919,7 +10943,6 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
                           << forkOp.getBranches().size() << " branches, join_type="
                           << forkOp.getJoinType() << "\n");
 
-
   // Parse the join type
   ForkJoinType joinType = parseForkJoinType(forkOp.getJoinType());
 
@@ -11171,6 +11194,30 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     LLVM_DEBUG(llvm::dbgs() << "    Empty wait_event body - halting process\n");
     finalizeProcess(procId, /*killed=*/false);
     return success();
+  }
+
+  // Pre-execute the wait_event body operations to populate the value map.
+  // This is necessary when the body contains operations like llvm.call
+  // (e.g., @__moore_assoc_get_ref for UVM events stored in associative arrays)
+  // whose results are needed to resolve memory addresses for event polling.
+  // Without this, getValue() returns X for call results, and the memory event
+  // watcher is never set up, causing wait_for_objection to return immediately.
+  {
+    Block &bodyBlock = waitEventOp.getBody().front();
+    for (Operation &op : bodyBlock) {
+      // Skip detect_event ops - they are handled below by the signal/memory
+      // tracing walks and have no handler in interpretOperation.
+      if (isa<moore::DetectEventOp>(op))
+        continue;
+
+      if (failed(interpretOperation(procId, &op))) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Warning: Failed to pre-execute wait_event body op: ");
+        LLVM_DEBUG(op.print(llvm::dbgs(), OpPrintingFlags().printGenericOpForm()));
+        LLVM_DEBUG(llvm::dbgs() << "\n");
+        // Continue anyway - the signal/memory walks may still work via SSA tracing
+      }
+    }
   }
 
   // Collect signals to observe from detect_event ops
@@ -13308,7 +13355,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         //
         // This avoids re-executing side-effecting operations like sim.fork.
         state.waitConditionValuesToInvalidate.clear();
-        state.waitConditionRestartBlock = state.currentBlock;
+        // Use the call operation's parent block as the restart block.
+        // This is critical when wait_condition is called inside a function
+        // (e.g., uvm_phase_hopper::get called via vtable dispatch).
+        // state.currentBlock is the PROCESS body's block, but we need
+        // the FUNCTION body's block where the condition is computed.
+        Block *condBlock = callOp->getBlock();
+        state.waitConditionRestartBlock = condBlock;
 
         // Find the earliest load/probe in the condition computation chain
         Value condValue = callOp.getOperand(0);
@@ -13325,11 +13378,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           // If the value has a defining operation in this block, process it
           if (Operation *defOp = v.getDefiningOp()) {
-            if (defOp->getBlock() == state.currentBlock) {
+            if (defOp->getBlock() == condBlock) {
               // Check if this is a load or probe operation - these read values that may change
-              if (isa<LLVM::LoadOp, llhd::ProbeOp>(defOp)) {
+              if (isa<LLVM::LoadOp, llhd::ProbeOp, LLVM::CallOp>(defOp)) {
                 state.waitConditionValuesToInvalidate.push_back(v);
-                // Track the earliest load/probe operation
+                // Track the earliest load/probe/call operation
                 if (!earliestLoadOp || defOp->isBeforeInBlock(earliestLoadOp))
                   earliestLoadOp = defOp;
               }
@@ -13342,14 +13395,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                  isa<comb::AddOp, comb::SubOp, comb::AndOp>(defOp) ||
                                  isa<comb::OrOp, comb::XorOp>(defOp) ||
                                  isa<comb::ExtractOp, LLVM::ExtractValueOp>(defOp) ||
+                                 isa<arith::TruncIOp, arith::ExtSIOp, arith::ExtUIOp>(defOp) ||
+                                 isa<arith::CmpIOp, arith::AddIOp, arith::SubIOp>(defOp) ||
                                  isa<LLVM::LoadOp>(defOp) ||
-                                 isa<llhd::ProbeOp>(defOp);
+                                 isa<llhd::ProbeOp>(defOp) ||
+                                 isa<LLVM::CallOp>(defOp);
               if (shouldTrace) {
                 state.waitConditionValuesToInvalidate.push_back(v);
                 for (Value operand : defOp->getOperands()) {
                   if (!isa<BlockArgument>(operand) &&
                       operand.getDefiningOp() &&
-                      operand.getDefiningOp()->getBlock() == state.currentBlock) {
+                      operand.getDefiningOp()->getBlock() == condBlock) {
                     worklist.push_back(operand);
                   }
                 }
