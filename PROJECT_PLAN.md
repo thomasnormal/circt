@@ -171,6 +171,9 @@ keeping memory growth controlled.
   - Progress (Feb 7, 2026): k-induction now accepts final-only assertion sets
     (removed hard rejection of `bmc.final` in induction-step mode), with tool
     regressions for SAT/UNSAT final-only induction runs.
+  - Progress (Feb 7, 2026): first-class `circt-bmc --induction` landed
+    (`--k-induction` retained as compatibility alias), with dedicated CLI + flow
+    regressions including an `ltl.eventually`-sourced induction test.
 
 **Phase 5: Trace UX**
 - Counterexample signal mapping to hierarchy + clock domain annotations.
