@@ -164,6 +164,10 @@ keeping memory growth controlled.
 - Enable liveness operators and final checks in k-induction flows.
 - Add first-class `--liveness` / `--induction` workflows in `circt-bmc`
   with test coverage (bounded and induction step).
+  - Progress (Feb 7, 2026): `circt-bmc --liveness` landed for bounded
+    liveness checks (final-only obligations, requires `bmc.final`, and rejects
+    `--liveness` + `--k-induction`). Remaining work is true induction/liveness
+    proof support (fairness/loop constraints) for unbounded properties.
 
 **Phase 5: Trace UX**
 - Counterexample signal mapping to hierarchy + clock domain annotations.

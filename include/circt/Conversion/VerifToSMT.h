@@ -20,7 +20,7 @@ class Pass;
 namespace circt {
 class Namespace;
 
-enum class BMCCheckMode { Bounded, InductionBase, InductionStep };
+enum class BMCCheckMode { Bounded, Liveness, InductionBase, InductionStep };
 
 #define GEN_PASS_DECL_LOWERCLOCKEDASSERTLIKE
 #define GEN_PASS_DECL_CONVERTVERIFTOSMT

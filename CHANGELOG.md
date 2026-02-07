@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 447 - February 7, 2026
+
+### Summary
+
+Added a first-class bounded liveness workflow for BMC and landed coverage for
+mode validation and CLI behavior.
+
+### Accomplishments
+
+1. **BMC liveness mode** — Added `--liveness` to `circt-bmc` and corresponding
+   VerifToSMT mode plumbing:
+   - New VerifToSMT mode: `bmc-mode=liveness`.
+   - In liveness mode, only `bmc.final` properties are treated as violations.
+   - Liveness mode now errors when no `bmc.final` property is present.
+   - `--liveness` is explicitly rejected with `--k-induction`.
+
+2. **Formal tests added/updated**
+   - Added `test/Conversion/VerifToSMT/bmc-liveness-requires-final.mlir`.
+   - Added `test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir`.
+   - Added `test/Tools/circt-bmc/bmc-liveness-induction-conflict.mlir`.
+   - Updated `test/Tools/circt-bmc/commandline.mlir` to include `--liveness`.
+   - Removed stale `XFAIL` from
+     `test/Conversion/VerifToSMT/bmc-final-checks-smtlib.mlir` (now passing).
+
+3. **Verification**
+   - Targeted lit tests: 7/7 pass (new liveness tests + updated final-check tests).
+   - External smoke runs:
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC smoke: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC smoke: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
+## Iteration 446 - February 7, 2026
+
+### Summary
+
+Fixed BMC final-check violation semantics for multiple `bmc.final` assertions.
+Final assertion failure now triggers when **any** final assertion is false
+(previously required all final assertions to fail simultaneously).
+
+### Accomplishments
+
+1. **BMC final-check OR semantics** — Updated VerifToSMT final-assert handling
+   in both SMT-LIB export and non-SMT solver paths:
+   - SMT-LIB path now combines final assertion failures with OR.
+   - Non-SMT path now checks a single OR-combined final-failure condition under
+     `smt.push`/`smt.pop`.
+2. **Regression coverage**
+   - Added `test/Conversion/VerifToSMT/bmc-final-checks-any-violation.mlir`
+     (non-SMT conversion path).
+   - Added `test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir`
+     (circt-bmc SMT-LIB emission path).
+   - Updated expected semantics in
+     `test/Conversion/VerifToSMT/bmc-final-checks-smtlib.mlir`.
+
 ## Iteration 442 - February 7, 2026
 
 ### Summary
