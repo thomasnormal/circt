@@ -103,7 +103,7 @@ to commercial simulators like Cadence Xcelium.
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
 | Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; `->>` integer-type NBA works via NonBlockingAssign; gap: native EventType NBA, event clearing between time slots |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
-| Simulation performance | GOOD | ~132 ns/s APB (33x speedup from O(log n) address index); 10us sim in 76s wall-clock |
+| Simulation performance | GOOD | ~171 ns/s APB (30% from dialect dispatch + interceptor cache, 33x from O(log n) address index); 10us sim in 59s wall-clock |
 
 ### AVIP Simulation Status
 
@@ -152,3 +152,5 @@ to commercial simulators like Cadence Xcelium.
 | Nested interface ports | Scope-hierarchy fallback in `resolveInterfaceInstance` for sub-interfaces inside interfaces; navigates through parent interface value |
 | O(log n) address index | Replaced 14 O(n) linear scans through 6,577 globals with sorted interval map (`addrRangeIndex`); 33x speedup (~4 ns/s → ~132 ns/s) |
 | `interpretFuncBody` caching | Fixed per-op `processStates.find()` in func body loop to use cached `activeProcessState` pointer |
+| Dialect fast dispatch | `interpretOperation` goto-based dialect namespace check skips 20+ irrelevant dyn_casts for 93% of ops (LLVM/comb/arith) |
+| Interceptor dispatch cache | `nonInterceptedExternals` DenseSet skips 128-entry string chain; `__moore_delay` moved to position #1; ~132 → ~171 ns/s |

@@ -7,25 +7,30 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 443 - 33x Interpreter Speedup)
+## Current Status - February 7, 2026 (Iteration 444 - Interpreter Dispatch Optimizations)
 
-### Session Summary - Iteration 443
+### Session Summary - Iteration 444
 
-1. **33x interpreter speedup** committed (dc3cd1dec): Replaced all 14 O(n) linear scans
-   through 6,577 global addresses and malloc blocks with O(log n) sorted interval map
-   (`std::map<uint64_t, AddrRangeEntry>` with `upper_bound` binary search). Every non-local
-   load, store, GEP, and string resolution was iterating through all globals — with ~260K
-   loads and ~39K stores per simulation run, this dominated runtime.
-   - APB AVIP: ~4 ns/s → ~132 ns/s (10us sim in 76s wall-clock)
-   - Also fixed `interpretFuncBody` hot loop to use cached `activeProcessState` instead of
-     per-op `processStates.find()` O(log n) lookups
-   - Added op stats collection to both `interpretLLVMFuncBody` and `interpretFuncBody`
-   - All 47 circt-sim lit tests pass, 0 regressions
+1. **Interceptor dispatch optimization** committed (35e07a00e): Two improvements to
+   `interpretLLVMCall` for external function handling:
+   - `nonInterceptedExternals` DenseSet caches external functions with no matching handler,
+     skipping the 128-entry string comparison chain on subsequent calls
+   - `__moore_delay` moved to position #1 in the chain (was #22), saving 21 string
+     comparisons per delta cycle (~10M times in a 10us simulation)
+   - APB AVIP: ~132 ns/s → ~171 ns/s (10us sim in 59s wall-clock, 30% improvement)
+   - Investigated and rejected countdown counter optimization (compiler already optimizes
+     modulo operations well; countdown showed 4% regression)
+   - All 47 circt-sim lit tests and 261 ImportVerilog tests pass, 0 regressions
 
-2. **Op distribution analysis** (APB 30s run): llvm.call 19.4%, llvm.load 15.9%,
-   comb.icmp 12.8%, llvm.extractvalue 12.7%, arith.trunci 12.7%, cf.cond_br 7.4%,
-   llvm.zext 6.2%, llvm.store 2.8%. ~1.5M total ops in 30s = ~50K ops/s (before opt).
-   After opt: ~1.45M steps/s = 29x throughput improvement.
+2. **Op distribution analysis update** (APB 4us/28s run): llvm.call 22.1%, llvm.load 14.8%,
+   comb.icmp 14.7%, llvm.extractvalue 14.7%, arith.trunci 14.7%, cf.cond_br 7.4%,
+   llvm.zext 7.4%. Total ~52M ops in 28s = ~1.86M ops/s.
+
+### Previous Iteration 443 Summary
+
+1. **33x interpreter speedup** committed (dc3cd1dec): O(log n) address range index
+   replaced 14 O(n) linear scans through 6,577 globals. APB: ~4 ns/s → ~132 ns/s.
+   Dialect-based fast dispatch (d6248d0a6) skips 20+ irrelevant dyn_casts for 93% of ops.
 
 ### Previous Iteration 442 Summary
 
@@ -98,7 +103,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
 | **A: sv-tests** | IEEE 1800 compliance | **99.2%** | 0 genuine non-UVM compile failures |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | 33x speedup (~132 ns/s APB); O(log n) address index + func body caching |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | ~171 ns/s APB (30% from dispatch opts, 33x from O(log n) index); 10us in 59s |
 | **C: External Tests** | verilator/yosys/opentitan | Yosys .sv 61/77, VV 120/140 | Remaining yosys: 5 svinterfaces, 2 multi-file, 9 misc |
 | **D: Missing Features** | Named events, coverage, etc | **0 XFAIL** | All ImportVerilog tests pass |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
