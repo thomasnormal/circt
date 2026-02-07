@@ -197,10 +197,11 @@ moore.module @test_fread(out bytes: !moore.i32) {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_readmemb
-// CHECK-NOT: readmemb
+// CHECK: llvm.call @__moore_readmemb
+// CHECK-NOT: moore.builtin.readmemb
 func.func @test_readmemb(%filename: !moore.string) {
-  %mem = moore.variable : <array<8 x i8>>
-  moore.builtin.readmemb %filename, %mem : <array<8 x i8>>
+  %mem = moore.variable : <uarray<8 x i8>>
+  moore.builtin.readmemb %filename, %mem : <uarray<8 x i8>>
   return
 }
 
@@ -209,10 +210,11 @@ func.func @test_readmemb(%filename: !moore.string) {
 //===----------------------------------------------------------------------===//
 
 // CHECK-LABEL: func.func @test_readmemh
-// CHECK-NOT: readmemh
+// CHECK: llvm.call @__moore_readmemh
+// CHECK-NOT: moore.builtin.readmemh
 func.func @test_readmemh(%filename: !moore.string) {
-  %mem = moore.variable : <array<8 x i8>>
-  moore.builtin.readmemh %filename, %mem : <array<8 x i8>>
+  %mem = moore.variable : <uarray<8 x i8>>
+  moore.builtin.readmemh %filename, %mem : <uarray<8 x i8>>
   return
 }
 
