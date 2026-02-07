@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 450 - February 7, 2026
+
+### Summary
+
+Strengthened induction semantics for final-only properties by adding
+prefix-window assumptions for `bmc.final` checks in induction-step mode, and
+extended k-induction to support `ignore-asserts-until` warmup windows.
+
+### Accomplishments
+
+1. **Final-check prefix assumptions in induction-step**
+   - In SMT-LIB induction-step lowering, `bmc.final` checks are now required to
+     hold on prefix iterations (`0..k-1`) before checking the final step.
+   - This makes final-only induction less vacuous and moves the flow closer to
+     full liveness-proof semantics.
+
+2. **Induction warmup support**
+   - Removed the induction-step rejection for non-zero
+     `ignore_asserts_until`.
+   - Final-check prefix assumptions now honor `ignore_asserts_until` so warmup
+     cycles are skipped consistently for both non-final and final obligations.
+
+3. **Regression coverage**
+   - Added `test/Conversion/VerifToSMT/bmc-induction-final-prefix-assume.mlir`
+     to ensure prefix assumptions are materialized.
+   - Added `test/Conversion/VerifToSMT/bmc-induction-final-prefix-ignore.mlir`
+     to ensure final-prefix assumptions are skipped during induction warmup.
+   - Added `test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir` to
+     cover end-to-end `--induction --ignore-asserts-until`.
+   - Existing induction/liveness/final tests remain green.
+
+4. **Verification**
+   - Targeted lit set: 10/10 pass.
+   - Broader lit sweep:
+     - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 344 total,
+       207 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
+   - External smoke rerun:
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
 ## Iteration 449 - February 7, 2026
 
 ### Summary

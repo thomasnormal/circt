@@ -174,6 +174,9 @@ keeping memory growth controlled.
   - Progress (Feb 7, 2026): first-class `circt-bmc --induction` landed
     (`--k-induction` retained as compatibility alias), with dedicated CLI + flow
     regressions including an `ltl.eventually`-sourced induction test.
+  - Progress (Feb 7, 2026): k-induction now supports non-zero
+    `ignore-asserts-until` warmup windows, including prefix assumptions for
+    final-only checks.
 
 **Phase 5: Trace UX**
 - Counterexample signal mapping to hierarchy + clock domain annotations.

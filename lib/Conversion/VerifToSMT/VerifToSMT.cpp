@@ -2874,13 +2874,6 @@ struct VerifBoundedModelCheckingOpConversion
         op.emitError("k-induction requires at least one assertion");
         return failure();
       }
-      if (auto ignoreAttr =
-              op->getAttrOfType<IntegerAttr>("ignore_asserts_until")) {
-        if (ignoreAttr.getValue().getZExtValue() != 0) {
-          op.emitError("k-induction does not support ignore-asserts-until");
-          return failure();
-        }
-      }
     }
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
@@ -4901,6 +4894,82 @@ struct VerifBoundedModelCheckingOpConversion
                 violated = smt::OrOp::create(rewriter, loc, violated,
                                              combinedCheckCond);
               }
+            }
+          }
+        }
+
+        if (inductionStep && numFinalChecks > 0 && iter + 1 < boundValue) {
+          bool skipChecks = ignoreAssertionsUntilValue &&
+                            iter < *ignoreAssertionsUntilValue;
+          if (!skipChecks) {
+            Value combinedFinalCond;
+            for (auto [checkIdx, checkVal] : llvm::enumerate(finalCheckOutputs)) {
+              Value isTrue;
+              if (isa<smt::BoolType>(checkVal.getType())) {
+                isTrue = checkVal;
+              } else {
+                auto trueBV = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+                isTrue = smt::EqOp::create(rewriter, loc, checkVal, trueBV);
+              }
+
+              bool isFinalCover = checkIdx < finalCheckIsCover.size() &&
+                                  finalCheckIsCover[checkIdx];
+              Value term = isFinalCover
+                               ? isTrue
+                               : smt::NotOp::create(rewriter, loc, isTrue);
+              Value gate;
+              if (!risingClocksOnly && !clockIndexes.empty() &&
+                  checkIdx < finalCheckInfos.size()) {
+                auto edge =
+                    finalCheckInfos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
+                auto clockPos =
+                    checkIdx < finalCheckClockPos.size()
+                        ? finalCheckClockPos[checkIdx]
+                        : std::optional<unsigned>{};
+                if (clockPos) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    if (clockIndexes.size() == 1)
+                      gate = isPosedge;
+                    else if (*clockPos < posedges.size())
+                      gate = posedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Neg) {
+                    if (clockIndexes.size() == 1)
+                      gate = isNegedge;
+                    else if (*clockPos < negedges.size())
+                      gate = negedges[*clockPos];
+                  } else if (edge == ltl::ClockEdge::Both) {
+                    if (clockIndexes.size() == 1)
+                      gate = smt::OrOp::create(rewriter, loc, isPosedge,
+                                               isNegedge);
+                    else if (*clockPos < posedges.size())
+                      gate = smt::OrOp::create(rewriter, loc, posedges[*clockPos],
+                                               negedges[*clockPos]);
+                  }
+                }
+                if (!gate && anyPosedge) {
+                  if (edge == ltl::ClockEdge::Pos) {
+                    gate = anyPosedge;
+                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                    gate = anyNegedge;
+                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                    gate =
+                        smt::OrOp::create(rewriter, loc, anyPosedge, anyNegedge);
+                  }
+                }
+              }
+
+              if (gate)
+                term = smt::AndOp::create(rewriter, loc, gate, term);
+              if (!combinedFinalCond)
+                combinedFinalCond = term;
+              else
+                combinedFinalCond =
+                    smt::OrOp::create(rewriter, loc, combinedFinalCond, term);
+            }
+            if (combinedFinalCond) {
+              Value mustHold =
+                  smt::NotOp::create(rewriter, loc, combinedFinalCond);
+              smt::AssertOp::create(rewriter, loc, mustHold);
             }
           }
         }
