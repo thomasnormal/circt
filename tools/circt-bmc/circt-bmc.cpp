@@ -902,12 +902,6 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
     return failure();
   }
 #endif
-  if (pruneBMCRegisters && allowMultiClock) {
-    llvm::errs() << "--prune-bmc-registers is currently incompatible with "
-                    "--allow-multi-clock\n";
-    return failure();
-  }
-
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
   applyDefaultTimingManagerCLOptions(tm);
@@ -1006,12 +1000,6 @@ static LogicalResult executeBMC(MLIRContext &context) {
         << "--liveness-lasso requires --emit-smtlib or --run-smtlib\n";
     return failure();
   }
-  if (pruneBMCRegisters && allowMultiClock) {
-    llvm::errs() << "--prune-bmc-registers is currently incompatible with "
-                    "--allow-multi-clock\n";
-    return failure();
-  }
-
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
   applyDefaultTimingManagerCLOptions(tm);

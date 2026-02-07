@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 468)
+## Current Status - February 7, 2026 (Iteration 469)
 
 ### Test Results
 
@@ -46,6 +46,56 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 469
+
+1. **Enabled multi-clock register pruning in `circt-bmc`**
+   - Removed stale front-end option guards that rejected
+     `--prune-bmc-registers` together with `--allow-multi-clock`.
+   - This now allows the existing multi-clock-aware pruning and lowering path
+     to run end-to-end in both bounded and induction entrypoints.
+
+2. **Regression coverage**
+   - Converted
+     `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`
+     from a failure expectation into a positive regression that checks
+     multi-clock BMC artifacts are produced with pruning enabled.
+   - Added
+     `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`
+     to lock acceptance of the same flag combination on the induction path.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`: PASS
+     - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`: PASS
+     - `test/Tools/circt-bmc/circt-bmc-prune-bmc-registers-pipeline.mlir`: PASS
+     - `test/Tools/circt-bmc/prune-bmc-registers-clock-input-deps.mlir`: PASS
+     - `test/Tools/circt-bmc/lower-to-bmc-multiclock.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - We still depend on `BMC_ASSUME_KNOWN_INPUTS=1` in some external BMC cases;
+     the next long-term step is to improve default 4-state input handling so
+     these tests pass without assumptions.
+   - OpenTitan LEC still requires `XPROP_ONLY` acceptance; reducing this
+     dependency with stronger 4-state/X initialization equivalence is still the
+     top LEC correctness target.
+   - Top-level generic interface compatibility currently uses opaque fallback
+     interfaces; richer structural/modport inference remains the next high-value
+     frontend improvement.
+   - There is still a large divergence from upstream main, and we should plan a
+     dedicated sync window to reduce merge risk while concurrent agents modify
+     neighboring subsystems.
 
 ### Session Summary - Iteration 468
 
