@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 469)
+## Current Status - February 7, 2026 (Iteration 470)
 
 ### Test Results
 
@@ -18,7 +18,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Simulation (full) | 776 | 715 | 0 | **99.2%** |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** |
-| circt-sim lit | 162 | 162 | 0 | **100%** |
+| circt-sim lit | 166 | 166 | 0 | **100%** |
 | ImportVerilog lit | 384 | 384 | 0 | **100%** |
 
 ### AVIP Status
@@ -46,6 +46,19 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 470
+
+1. **Functional coverage collection (covergroup/coverpoint)**
+   - Added `CovergroupSampleOpConversion` in MooreToCore with 4-state value
+     extraction for coverpoint expressions.
+   - Module-level LLVM op handling for covergroup handle propagation.
+   - Interpreter sampling + end-of-simulation coverage reporting.
+   - New test: `test/Tools/circt-sim/covergroup-basic.sv`.
+
+2. **Validation**
+   - Lit:
+     - `test/Tools/circt-sim/covergroup-basic.sv`: PASS
 
 ### Session Summary - Iteration 469
 
@@ -882,7 +895,7 @@ keeping memory growth controlled.
 | Queue ops LLVM type mismatch | MEDIUM | Low | 3 sv-tests | `UnpackedArrayType` produces `!llhd.ref` where `!llvm.ptr` expected |
 | Slang AnalysisManager | BLOCKED | — | 2 sv-tests | SIGSEGV on frozen BumpAllocator; awaiting upstream fix |
 | Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path works; native EventType path needs time-slot tracking |
-| Coverage collection | LOW | Large | Functional/code coverage | Not implemented |
+| ~~Coverage collection~~ | ~~LOW~~ | ~~Large~~ | ~~Functional/code coverage~~ | **DONE** (iteration 470): `CovergroupSampleOpConversion` + 4-state extraction + module-level handle propagation + interpreter sampling/reporting |
 | SVA runtime checking | LOW | Large | Full assertion evaluation | Formal only; no simulation-time checking |
 | ClockVar support | LOW | Medium | Some testbenches | Not implemented |
 | DPI-C full support | LOW | Large | Most stubbed | Some intercepted, most return 0 |
@@ -898,6 +911,7 @@ keeping memory growth controlled.
 - Queue/array ops for fixed arrays — FIXED MooreToCore patterns (iteration 453)
 - 7 runtime interceptors — FIXED reduce/min/unique_index (iteration 453)
 - get_adjacent_successor_nodes — FIXED native UVM phase graph traversal (iteration 453)
+- Coverage collection — DONE (iteration 470): covergroup/coverpoint sampling + reporting via MooreRuntime
 - config_db runtime — FIXED set/get/exists interceptors (iteration 405)
 - Semaphores — FIXED create/get/put/try_get with blocking (iteration 385)
 - $value$plusargs / $test$plusargs — FIXED runtime interceptors (iterations 386, 389)

@@ -55,7 +55,7 @@ that unexpectedly pass (not a tool bug).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 162 | 162 | 0 | All tests pass; includes queue/array ops, config_db, semaphores, vtable dispatch, string methods |
+| circt-sim | 166 | 166 | 0 | All tests pass; includes queue/array ops, config_db, semaphores, vtable dispatch, string methods, coverage |
 
 ## UVM Simulation Feature Status
 
@@ -97,7 +97,7 @@ to commercial simulators like Cadence Xcelium.
 | Interface ports | WORKS | Generic interface ports resolved from connection site (IEEE 1800-2017 §25.5) |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | WORKS | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
-| Coverage collection | MISSING | Functional and code coverage not implemented |
+| Coverage collection | WORKS | Covergroup/coverpoint sampling + reporting via MooreRuntime; implicit sample() evaluates coverpoint expressions; 4-state value extraction |
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed |
@@ -157,6 +157,7 @@ to commercial simulators like Cadence Xcelium.
 | `interpretFuncBody` caching | Fixed per-op `processStates.find()` in func body loop to use cached `activeProcessState` pointer |
 | Dialect fast dispatch | `interpretOperation` goto-based dialect namespace check skips 20+ irrelevant dyn_casts for 93% of ops (LLVM/comb/arith) |
 | Interceptor dispatch cache | `nonInterceptedExternals` DenseSet skips 128-entry string chain; `__moore_delay` moved to position #1; ~132 → ~171 ns/s |
+| Coverage collection | Real MooreRuntime calls replace stubs; implicit sample() evaluates coverpoint expressions; 4-state struct value extraction; module-level LLVM op signal init propagation |
 | `wait_condition` in functions | condBlock = callOp->getBlock() for function-body restart; frame resume override; arith ops in shouldTrace for complete condition chain |
 | `wait_event` body pre-exec | Pre-execute body ops (e.g., llvm.call for assoc_get_ref) before signal/memory tracing walks |
 | `uvm_wait_for_nba_region` | Intercepted as single delta cycle delay (scheduleProcess to Reactive region) |
