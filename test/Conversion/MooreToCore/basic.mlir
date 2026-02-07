@@ -387,6 +387,20 @@ moore.module @Net() {
   // CHECK: llhd.drv %a,
   moore.assign %a, %3 : i32
 
+  // Tri nets lower identically to wire nets
+  // CHECK: %tri_net = llhd.sig
+  %tri_net = moore.net name "tri_net" tri : !moore.ref<i32>
+  %4 = moore.constant 42 : i32
+  // CHECK: llhd.drv %tri_net,
+  moore.assign %tri_net, %4 : i32
+
+  // UWire nets lower identically to wire nets
+  // CHECK: %uwire_net = llhd.sig
+  %uwire_net = moore.net name "uwire_net" uwire : !moore.ref<i32>
+  %5 = moore.constant 7 : i32
+  // CHECK: llhd.drv %uwire_net,
+  moore.assign %uwire_net, %5 : i32
+
   // Test supply0 net (always driven to 0)
   // Note: unused supply nets are removed by DCE
   %supply0_net = moore.net name "supply0_net" supply0 : !moore.ref<i8>
