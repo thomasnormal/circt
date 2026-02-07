@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 448 - February 7, 2026
+
+### Summary
+
+Extended k-induction to support final-only assertion flows, which is a key
+step toward full liveness + induction support in formal Track F.
+
+### Accomplishments
+
+1. **k-induction final-check support**
+   - Removed the hard rejection of `bmc.final` assertions in induction-step
+     mode.
+   - Relaxed induction precondition from “at least one non-final assertion” to
+     “at least one assertion” (non-final or final).
+   - This enables induction runs on designs where obligations are expressed as
+     final-only checks.
+
+2. **Regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir`.
+   - Added `test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir`.
+   - Existing k-induction tests still pass.
+
+3. **Verification**
+   - Targeted lit: k-induction/liveness/final-check set passes
+     (`7 pass`, `1 unsupported` for JIT-guarded test).
+   - External smoke rerun:
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
 ## Iteration 447 - February 7, 2026
 
 ### Summary

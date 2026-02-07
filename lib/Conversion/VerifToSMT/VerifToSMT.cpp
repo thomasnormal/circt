@@ -2870,12 +2870,8 @@ struct VerifBoundedModelCheckingOpConversion
         op.emitError("k-induction does not support cover properties yet");
         return failure();
       }
-      if (numNonFinalChecks == 0) {
-        op.emitError("k-induction requires at least one non-final assertion");
-        return failure();
-      }
-      if (numFinalChecks > 0) {
-        op.emitError("k-induction does not support final checks yet");
+      if (numNonFinalChecks == 0 && numFinalChecks == 0) {
+        op.emitError("k-induction requires at least one assertion");
         return failure();
       }
       if (auto ignoreAttr =
