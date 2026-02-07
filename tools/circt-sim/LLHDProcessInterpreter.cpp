@@ -12469,6 +12469,41 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
   // Check if function has a body
   if (funcOp.isExternal()) {
+    // Fast-path: skip the 128-entry interceptor chain for external functions
+    // that we've already determined have no matching handler.
+    if (nonInterceptedExternals.contains(funcOp.getOperation())) {
+      for (Value result : callOp.getResults())
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      return success();
+    }
+
+    // Most frequently called interceptor first: __moore_delay is called once
+    // per delta cycle (~4M times in a typical simulation).
+    if (calleeName == "__moore_delay") {
+      if (callOp.getNumOperands() >= 1) {
+        InterpretedValue delayArg = getValue(procId, callOp.getOperand(0));
+        int64_t delayFs =
+            delayArg.isX() ? 0 : static_cast<int64_t>(delayArg.getUInt64());
+
+        if (delayFs > 0) {
+          auto &delayState = processStates[procId];
+          delayState.pendingDelayFs += delayFs;
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_delay(" << delayFs
+                     << " fs) accumulated, total pending = "
+                     << delayState.pendingDelayFs << " fs\n");
+
+          delayState.waiting = true;
+        } else {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_delay(0) - no delay\n");
+        }
+      }
+      return success();
+    }
+
     // Handle known runtime library functions
     if (calleeName == "__moore_packed_string_to_string") {
       // Get the integer argument (packed string value)
@@ -12933,42 +12968,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_merge() -> 0 (stub)\n");
-      return success();
-    }
-
-    // Handle __moore_delay - delay in class method context or fork branches.
-    // This is called when a #delay statement appears in a class task/method
-    // or inside a fork branch. We accumulate the delay in pendingDelayFs and
-    // mark the process as waiting. Multiple sequential __moore_delay calls
-    // within the same function will accumulate their delays before the process
-    // actually suspends.
-    if (calleeName == "__moore_delay") {
-      if (callOp.getNumOperands() >= 1) {
-        InterpretedValue delayArg = getValue(procId, callOp.getOperand(0));
-        int64_t delayFs = delayArg.isX() ? 0 : static_cast<int64_t>(delayArg.getUInt64());
-
-        if (delayFs > 0) {
-          auto &state = processStates[procId];
-
-          // Accumulate the delay. Multiple __moore_delay calls in sequence
-          // (e.g., #10; #20; #30;) should result in a total delay of 60.
-          state.pendingDelayFs += delayFs;
-
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(" << delayFs
-                                  << " fs) accumulated, total pending = "
-                                  << state.pendingDelayFs << " fs\n");
-
-          // Mark the process as waiting. This will cause the executeProcess
-          // loop to exit after this step, yielding control to the scheduler.
-          // The actual scheduling of the resumption event happens in
-          // executeProcess when it detects state.waiting is true and
-          // state.pendingDelayFs > 0.
-          state.waiting = true;
-
-        } else {
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_delay(0) - no delay\n");
-        }
-      }
       return success();
     }
 
@@ -17752,8 +17751,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Cache this function as non-intercepted so we skip the entire 128-entry
+    // string comparison chain on subsequent calls.
+    nonInterceptedExternals.insert(funcOp.getOperation());
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
-                            << "' is external (no body)\n");
+                            << "' is external (no body, cached)\n");
     for (Value result : callOp.getResults()) {
       setValue(procId, result,
                InterpretedValue::makeX(getTypeWidth(result.getType())));
