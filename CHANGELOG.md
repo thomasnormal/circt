@@ -72,6 +72,7 @@ circt-sim 162/162 (100%), ImportVerilog 262/262 (100%).
 
 ### Validation
 
+- Implementation landed in commit `05c27206f`.
 - `ninja -C build check-circt-conversion-veriftosmt`: PASS
 - `ninja -C build check-circt-tools-circt-bmc`: PASS
 - External smoke:
