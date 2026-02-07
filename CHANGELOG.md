@@ -47,7 +47,10 @@ for fixed-size arrays and 7 new runtime interceptors.
 ### Verification
 
 - circt-sim: 162/162 pass (100%)
-- sv-tests elaboration: pending final count (expect ~1016-1018/1021)
+- sv-tests elaboration: 1011/1028 pass (98.3%)
+  - 15 failures: 7 UVM testbenches (moore.stream_unpack not lowered),
+    6 chapter tests (tagged unions, SVA assertions, random constraints),
+    2 assignment conflict detection (AnalysisManager integration deferred)
 
 ## Iteration 452 - February 7, 2026
 

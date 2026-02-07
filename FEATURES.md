@@ -14,7 +14,7 @@ repository (1,036 tests across 15 IEEE chapters).
 | Mode | Eligible | Pass | Fail | Rate | Notes |
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
-| Elaboration | 850 | 847 | 3 | **99.6%** | 1 preprocessor edge case, 2 need external defines |
+| Elaboration | 1028 | 1011 | 17 | **98.3%** | 7 UVM stream_unpack, 6 chapter (tagged union/SVA/randc), 2 multi-assign detection, 2 need external defines |
 | Simulation (full) | 775 | 714 | 0 | **99.2%** | 884 total, 109 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
@@ -52,7 +52,7 @@ as 100 UVM-dependent tests (need `import uvm_pkg`) and 9 non-UVM (6 Black Parrot
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 48 | 48 | 0 | All tests pass including wait_condition inside function calls |
+| circt-sim | 162 | 162 | 0 | All tests pass; includes queue/array ops, config_db, semaphores, vtable dispatch, string methods |
 
 ## UVM Simulation Feature Status
 
