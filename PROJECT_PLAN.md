@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 455)
+## Current Status - February 7, 2026 (Iteration 456)
 
 ### Test Results
 
@@ -91,6 +91,34 @@ All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
      and initialization modeling in BMC/LEC lowering.
    - Land an in-tree fallback assignment-conflict analysis until Slang
      `AnalysisManager` becomes stable for this workflow.
+
+### Session Summary - Iteration 456
+
+1. **Early formal pruning in BMC/LEC**
+   - `circt-bmc` now prunes unreachable symbols before major lowering passes
+     (in addition to the existing late prune).
+   - `circt-lec` now supports `--prune-unreachable-symbols` (default on) and
+     prunes from both selected entry modules (`-c1`, `-c2`) before lowering.
+   - `strip-unreachable-symbols` now supports a second entry symbol.
+
+2. **Why this matters long-term**
+   - Dead, unsupported HW symbol scopes can no longer derail the formal flow.
+   - We reduce wasted conversion work on non-design/irrelevant symbols early.
+   - This creates a stable base for a future aggressive formal-cleanup pass.
+
+3. **Current key limitations (still open)**
+   - UVM-heavy formal still includes substantial non-property runtime noise
+     (DPI/reporting/class-runtime stubs) that bloats IR and solver load.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in some cases.
+   - Slang `AnalysisManager` crash still blocks robust assignment conflict
+     diagnostics from upstream analysis.
+
+4. **Highest-value next features**
+   - Build a dedicated formal COI cleanup/abstraction pass before SMT lowering
+     to drop non-property UVM behavior while preserving assertion semantics.
+   - Improve 4-state/X modeling to reduce `XPROP_ONLY` dependence in LEC.
+   - Add an in-tree assignment-conflict fallback analysis until Slang analysis
+     APIs are stable for this workflow.
 
 ### Previous Session Summary - Iteration 445
 

@@ -1,4 +1,5 @@
 // RUN: circt-opt --strip-unreachable-symbols="entry-symbol=top" %s | FileCheck %s --check-prefix=PRUNE
+// RUN: circt-opt --strip-unreachable-symbols="entry-symbol=top second-entry-symbol=unused_a" %s | FileCheck %s --check-prefix=TWO
 // RUN: circt-opt --strip-unreachable-symbols %s | FileCheck %s --check-prefix=KEEP
 
 module {
@@ -28,6 +29,11 @@ module {
 // PRUNE-NOT: @unused_b
 // PRUNE-NOT: llvm.func @init
 // PRUNE-NOT: llvm.mlir.global_ctors
+// TWO-DAG: hw.module @top
+// TWO-DAG: func.func @unused_a
+// TWO-DAG: func.func @unused_b
+// TWO-NOT: llvm.func @init
+// TWO-NOT: llvm.mlir.global_ctors
 // KEEP: @unused_a
 // KEEP: @unused_b
 // KEEP: llvm.func @init

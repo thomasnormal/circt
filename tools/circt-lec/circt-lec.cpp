@@ -171,6 +171,11 @@ static cl::opt<bool> flattenHWModules(
     cl::desc("Inline private hw.modules before equivalence checking"),
     cl::init(true), cl::cat(mainCategory));
 
+static cl::opt<bool> pruneUnreachableSymbols(
+    "prune-unreachable-symbols",
+    cl::desc("Prune symbols not reachable from the selected LEC circuits"),
+    cl::init(true), cl::cat(mainCategory));
+
 static cl::opt<bool>
     strictLLHD("strict-llhd",
                cl::desc("Fail when LLHD lowering would require abstraction"),
@@ -663,6 +668,12 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
+  if (pruneUnreachableSymbols) {
+    StripUnreachableSymbolsOptions pruneOptions;
+    pruneOptions.entrySymbol = firstModuleName;
+    pruneOptions.secondEntrySymbol = secondModuleName;
+    pm.addPass(createStripUnreachableSymbols(pruneOptions));
+  }
   {
     sv::HWEliminateInOutPortsOptions inoutOpts;
     inoutOpts.allowMultipleWritersSameValue = true;
