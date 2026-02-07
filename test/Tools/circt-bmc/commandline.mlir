@@ -10,5 +10,6 @@
 // CHECK-DAG: --induction
 // CHECK-DAG: --k-induction
 // CHECK-DAG: --liveness
+// CHECK-DAG: --liveness-lasso
 // CHECK-DAG: --print-solver-output
 // CHECK-DAG: --emit-smtlib

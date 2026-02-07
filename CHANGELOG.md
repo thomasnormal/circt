@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 451 - February 7, 2026
+
+### Summary
+
+Added a first lasso-based liveness mode in `circt-bmc` (`--liveness-lasso`)
+to constrain liveness counterexamples to looped state trajectories, and wired
+it through VerifToSMT mode handling and CLI diagnostics.
+
+### Accomplishments
+
+1. **Liveness-lasso mode**
+   - Added VerifToSMT BMC mode `liveness-lasso`.
+   - Added `circt-bmc --liveness-lasso` (requires `--liveness` and SMT-LIB
+     execution/export mode).
+   - Implemented loop-closure constraints over BMC state snapshots in SMT-LIB
+     lowering for liveness-lasso mode.
+
+2. **Validation and diagnostics**
+   - Added explicit validation that liveness-lasso currently requires
+     SMT-LIB export.
+   - Updated induction conflict diagnostics to cover
+     `--liveness/--liveness-lasso`.
+   - Updated pass option docs/help text to include `liveness-lasso`.
+
+3. **Regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-liveness-lasso-flag-validation.mlir`.
+   - Added `test/Tools/circt-bmc/bmc-liveness-lasso-smtlib.mlir`.
+   - Added `test/Conversion/VerifToSMT/bmc-liveness-lasso-requires-smtlib.mlir`.
+   - Updated `test/Tools/circt-bmc/bmc-liveness-induction-conflict.mlir`.
+   - Updated `test/Tools/circt-bmc/commandline.mlir`.
+
+4. **Verification**
+   - Targeted new/updated liveness tests: 7/7 pass.
+   - Broad lit sweep:
+     - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 347 total,
+       210 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
+   - External smoke rerun:
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
 ## Iteration 450 - February 7, 2026
 
 ### Summary

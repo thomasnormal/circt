@@ -177,6 +177,12 @@ keeping memory growth controlled.
   - Progress (Feb 7, 2026): k-induction now supports non-zero
     `ignore-asserts-until` warmup windows, including prefix assumptions for
     final-only checks.
+  - Progress (Feb 7, 2026): `circt-bmc --liveness-lasso` landed (SMT-LIB
+    path), adding loop-closure constraints over BMC state snapshots to search
+    for lasso-style liveness counterexamples.
+  - Remaining (Feb 7, 2026): full unbounded liveness proofs still need
+    fairness acceptance constraints (beyond simple loop closure) and integration
+    with induction workflows.
 
 **Phase 5: Trace UX**
 - Counterexample signal mapping to hierarchy + clock domain annotations.
