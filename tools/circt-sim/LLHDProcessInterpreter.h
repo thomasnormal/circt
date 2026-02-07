@@ -1194,6 +1194,24 @@ private:
   /// Next available address for global memory allocation.
   uint64_t nextGlobalAddress = 0x10000000;
 
+  /// Address range index for O(log n) global/malloc address lookups.
+  /// Maps base address to (endAddr, globalName). Populated lazily after
+  /// global initialization, replaces O(n) linear scans through globalAddresses.
+  struct AddrRangeEntry {
+    uint64_t endAddr;
+    llvm::StringRef globalName; // empty for malloc blocks
+    bool isMalloc;
+  };
+  std::map<uint64_t, AddrRangeEntry> addrRangeIndex;
+  bool addrRangeIndexDirty = true;
+
+  /// Rebuild the address range index from globalAddresses and mallocBlocks.
+  void rebuildAddrRangeIndex();
+
+  /// Find a global or malloc memory block by address using the range index.
+  /// Returns the MemoryBlock pointer and sets offset, or nullptr if not found.
+  MemoryBlock *findBlockByAddress(uint64_t addr, uint64_t &offset);
+
   //===--------------------------------------------------------------------===//
   // UVM Root Re-entrancy Support
   //===--------------------------------------------------------------------===//

@@ -162,6 +162,51 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os.flush();
 }
 
+void LLHDProcessInterpreter::rebuildAddrRangeIndex() {
+  addrRangeIndex.clear();
+  // Add global variable ranges
+  for (auto &entry : globalAddresses) {
+    StringRef globalName = entry.getKey();
+    uint64_t baseAddr = entry.getValue();
+    auto blockIt = globalMemoryBlocks.find(globalName);
+    if (blockIt != globalMemoryBlocks.end()) {
+      uint64_t endAddr = baseAddr + blockIt->second.size;
+      addrRangeIndex[baseAddr] = {endAddr, globalName, false};
+    }
+  }
+  // Add malloc block ranges
+  for (auto &entry : mallocBlocks) {
+    uint64_t baseAddr = entry.first;
+    uint64_t endAddr = baseAddr + entry.second.size;
+    addrRangeIndex[baseAddr] = {endAddr, {}, true};
+  }
+  addrRangeIndexDirty = false;
+}
+
+MemoryBlock *LLHDProcessInterpreter::findBlockByAddress(uint64_t addr,
+                                                        uint64_t &offset) {
+  if (addrRangeIndexDirty)
+    rebuildAddrRangeIndex();
+
+  // Binary search: find the last entry with baseAddr <= addr
+  auto it = addrRangeIndex.upper_bound(addr);
+  if (it == addrRangeIndex.begin())
+    return nullptr;
+  --it;
+
+  if (addr < it->second.endAddr) {
+    offset = addr - it->first;
+    if (it->second.isMalloc) {
+      auto blockIt = mallocBlocks.find(it->first);
+      return (blockIt != mallocBlocks.end()) ? &blockIt->second : nullptr;
+    } else {
+      auto blockIt = globalMemoryBlocks.find(it->second.globalName);
+      return (blockIt != globalMemoryBlocks.end()) ? &blockIt->second : nullptr;
+    }
+  }
+  return nullptr;
+}
+
 void LLHDProcessInterpreter::dumpOpStats(llvm::raw_ostream &os,
                                          size_t topN) const {
   if (opStats.empty())
@@ -194,6 +239,7 @@ void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
   struct ProcEntry {
     ProcessId id;
     uint64_t steps;
+    uint64_t funcBodySteps;
     size_t opCount;
     uint64_t cacheSkips;
     uint64_t sensCacheHits;
@@ -216,8 +262,8 @@ void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
         opCount = countRegionOps(initialOp.getBody());
       }
     }
-    entries.push_back({procId, state.totalSteps, opCount, state.cacheSkips,
-                       state.waitSensitivityCacheHits, name});
+    entries.push_back({procId, state.totalSteps, state.funcBodySteps, opCount,
+                       state.cacheSkips, state.waitSensitivityCacheHits, name});
   }
 
   llvm::sort(entries, [](const ProcEntry &lhs, const ProcEntry &rhs) {
@@ -232,7 +278,9 @@ void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
     os << "proc " << entries[i].id;
     if (!entries[i].name.empty())
       os << " '" << entries[i].name << "'";
-    os << " steps=" << entries[i].steps << " ops=" << entries[i].opCount
+    os << " steps=" << entries[i].steps
+       << " funcSteps=" << entries[i].funcBodySteps
+       << " ops=" << entries[i].opCount
        << " skips=" << entries[i].cacheSkips
        << " sens_cache=" << entries[i].sensCacheHits << "\n";
   }
@@ -3410,34 +3458,11 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
       }
     }
 
-    // Check malloc blocks
+    // Check global and malloc blocks via O(log n) range index
     if (!block) {
-      for (auto &entry : mallocBlocks) {
-        uint64_t mallocBaseAddr = entry.first;
-        uint64_t mallocSize = entry.second.size;
-        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-          block = &entry.second;
-          offset = addr - mallocBaseAddr;
-          break;
-        }
-      }
-    }
-
-    // Check global memory blocks
-    if (!block) {
-      for (auto &entry : globalAddresses) {
-        StringRef globalName = entry.first();
-        uint64_t globalBaseAddr = entry.second;
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          uint64_t globalSize = blockIt->second.size;
-          if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-            block = &blockIt->second;
-            offset = addr - globalBaseAddr;
-            break;
-          }
-        }
-      }
+      uint64_t rangeOffset = 0;
+      block = findBlockByAddress(addr, rangeOffset);
+      if (block) offset = rangeOffset;
     }
 
     // Also check process-local memory blocks
@@ -3560,34 +3585,11 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
     }
 
-    // Check malloc blocks
+    // Check global and malloc blocks via O(log n) range index
     if (!block) {
-      for (auto &entry : mallocBlocks) {
-        uint64_t mallocBaseAddr = entry.first;
-        uint64_t mallocSize = entry.second.size;
-        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-          block = &entry.second;
-          offset = addr - mallocBaseAddr;
-          break;
-        }
-      }
-    }
-
-    // Check global memory blocks
-    if (!block) {
-      for (auto &entry : globalAddresses) {
-        StringRef globalName = entry.first();
-        uint64_t globalBaseAddr = entry.second;
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          uint64_t globalSize = blockIt->second.size;
-          if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-            block = &blockIt->second;
-            offset = addr - globalBaseAddr;
-            break;
-          }
-        }
-      }
+      uint64_t rangeOffset = 0;
+      block = findBlockByAddress(addr, rangeOffset);
+      if (block) offset = rangeOffset;
     }
 
     // Also check process-local memory blocks
@@ -7030,41 +7032,11 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
               offset = ptrVal.getUInt64() - baseVal.getUInt64();
             }
           } else {
-            // Check global and malloc memory by address
+            // Check global and malloc memory via O(log n) range index
             uint64_t addr = ptrVal.getUInt64();
-
-            // Check globals
-            for (auto &entry : globalAddresses) {
-              StringRef globalName = entry.first();
-              uint64_t globalBaseAddr = entry.second;
-              auto blockIt = globalMemoryBlocks.find(globalName);
-              if (blockIt != globalMemoryBlocks.end()) {
-                uint64_t globalSize = blockIt->second.size;
-                if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-                  block = &blockIt->second;
-                  offset = addr - globalBaseAddr;
-                  LLVM_DEBUG(llvm::dbgs() << "  Probe: found global '" << globalName
-                                          << "' at offset " << offset << "\n");
-                  break;
-                }
-              }
-            }
-
-            // Check malloc blocks
-            if (!block) {
-              for (auto &entry : mallocBlocks) {
-                uint64_t mallocBaseAddr = entry.first;
-                uint64_t mallocSize = entry.second.size;
-                if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-                  block = &entry.second;
-                  offset = addr - mallocBaseAddr;
-                  LLVM_DEBUG(llvm::dbgs() << "  Probe: found malloc block at 0x"
-                                          << llvm::format_hex(mallocBaseAddr, 16)
-                                          << " offset " << offset << "\n");
-                  break;
-                }
-              }
-            }
+            block = findBlockByAddress(addr, offset);
+            LLVM_DEBUG(if (block) llvm::dbgs()
+                       << "  Probe: found block at offset " << offset << "\n");
           }
 
           if (!block) {
@@ -7848,34 +7820,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             if (!baseVal.isX())
               offset = addr - baseVal.getUInt64();
           } else {
-            // Check globals
-            for (auto &entry : globalAddresses) {
-              StringRef globalName = entry.first();
-              uint64_t globalBaseAddr = entry.second;
-              auto blockIt = globalMemoryBlocks.find(globalName);
-              if (blockIt != globalMemoryBlocks.end()) {
-                uint64_t globalSize = blockIt->second.size;
-                if (addr >= globalBaseAddr &&
-                    addr < globalBaseAddr + globalSize) {
-                  block = &blockIt->second;
-                  offset = addr - globalBaseAddr;
-                  break;
-                }
-              }
-            }
-            // Check malloc blocks
-            if (!block) {
-              for (auto &entry : mallocBlocks) {
-                uint64_t mallocBaseAddr = entry.first;
-                uint64_t mallocSize = entry.second.size;
-                if (addr >= mallocBaseAddr &&
-                    addr < mallocBaseAddr + mallocSize) {
-                  block = &entry.second;
-                  offset = addr - mallocBaseAddr;
-                  break;
-                }
-              }
-            }
+            // Check global and malloc memory via O(log n) range index
+            block = findBlockByAddress(addr, offset);
           }
 
           if (block && offset + storeSize <= block->size) {
@@ -8394,37 +8340,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               MemoryBlock *block = nullptr;
               uint64_t baseOffset = 0;
 
-              // Check malloc blocks first
-              for (auto &entry : mallocBlocks) {
-                uint64_t mallocBaseAddr = entry.first;
-                uint64_t mallocSize = entry.second.size;
-                if (baseAddr >= mallocBaseAddr && baseAddr < mallocBaseAddr + mallocSize) {
-                  block = &entry.second;
-                  baseOffset = baseAddr - mallocBaseAddr;
-                  LLVM_DEBUG(llvm::dbgs() << "  Array drive: found malloc block at 0x"
-                                          << llvm::format_hex(mallocBaseAddr, 16) << "\n");
-                  break;
-                }
-              }
-
-              // Check global blocks
-              if (!block) {
-                for (auto &entry : globalAddresses) {
-                  StringRef globalName = entry.first();
-                  uint64_t globalBaseAddr = entry.second;
-                  auto blockIt = globalMemoryBlocks.find(globalName);
-                  if (blockIt != globalMemoryBlocks.end()) {
-                    uint64_t globalSize = blockIt->second.size;
-                    if (baseAddr >= globalBaseAddr && baseAddr < globalBaseAddr + globalSize) {
-                      block = &blockIt->second;
-                      baseOffset = baseAddr - globalBaseAddr;
-                      LLVM_DEBUG(llvm::dbgs() << "  Array drive: found global '" << globalName
-                                              << "'\n");
-                      break;
-                    }
-                  }
-                }
-              }
+              // Check global and malloc blocks via O(log n) range index
+              block = findBlockByAddress(baseAddr, baseOffset);
 
               if (block) {
                 // Calculate byte offset for the element
@@ -9563,20 +9480,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                     static_cast<size_t>(dynIt->second.second)));
       }
 
-      // Try global memory
-      for (auto &[globalName, globalAddr] : globalAddresses) {
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          MemoryBlock &gBlock = blockIt->second;
-          if (strPtr >= globalAddr && strPtr < globalAddr + gBlock.size) {
-            uint64_t off = strPtr - globalAddr;
-            size_t avail = std::min(static_cast<size_t>(strLen),
-                                    gBlock.data.size() - static_cast<size_t>(off));
-            if (avail > 0 && gBlock.initialized)
-              return std::string(
-                  reinterpret_cast<const char *>(gBlock.data.data() + off),
-                  avail);
-          }
+      // Try global/malloc memory via O(log n) range index
+      {
+        uint64_t off = 0;
+        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+        if (gBlock && gBlock->initialized) {
+          size_t avail = std::min(static_cast<size_t>(strLen),
+                                  gBlock->data.size() - static_cast<size_t>(off));
+          if (avail > 0)
+            return std::string(
+                reinterpret_cast<const char *>(gBlock->data.data() + off),
+                avail);
         }
       }
 
@@ -9984,41 +9898,45 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
       ++opCount;
       // Track func body steps in process state for global step limiting
+      // Use cached active process state to avoid std::map lookup per op.
       {
-        auto stIt = processStates.find(procId);
-        if (stIt != processStates.end()) {
-          ++stIt->second.totalSteps;
-          ++stIt->second.funcBodySteps;
-          // Progress report every 10M func body steps
-          if (stIt->second.funcBodySteps % 10000000 == 0) {
-            llvm::errs() << "[circt-sim] func progress: process " << procId
-                         << " funcBodySteps=" << stIt->second.funcBodySteps
-                         << " totalSteps=" << stIt->second.totalSteps
-                         << " in '" << funcOp.getName() << "'"
-                         << " (callDepth=" << stIt->second.callDepth << ")"
-                         << " op=" << op.getName().getStringRef()
-                         << "\n";
-          }
-          // Enforce global process step limit inside function bodies
-          if (maxProcessSteps > 0 &&
-              stIt->second.totalSteps > (size_t)maxProcessSteps) {
-            llvm::errs()
-                << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
-                << procId << " exceeded " << maxProcessSteps
-                << " total steps in function '" << funcOp.getName() << "'"
-                << " (totalSteps=" << stIt->second.totalSteps << ")\n";
-            stIt->second.halted = true;
-            cleanupTempMappings();
-            return failure();
-          }
-          // Periodically check for abort (timeout watchdog)
-          if (stIt->second.funcBodySteps % 10000 == 0 && isAbortRequested()) {
-            stIt->second.halted = true;
-            cleanupTempMappings();
-            if (abortCallback)
-              abortCallback();
-            return failure();
-          }
+        ProcessExecutionState *statePtr =
+            (procId == activeProcessId && activeProcessState)
+                ? activeProcessState
+                : &processStates[procId];
+        ++statePtr->totalSteps;
+        ++statePtr->funcBodySteps;
+        if (collectOpStats)
+          ++opStats[op.getName().getStringRef()];
+        // Progress report every 10M func body steps
+        if (statePtr->funcBodySteps % 10000000 == 0) {
+          llvm::errs() << "[circt-sim] func progress: process " << procId
+                       << " funcBodySteps=" << statePtr->funcBodySteps
+                       << " totalSteps=" << statePtr->totalSteps
+                       << " in '" << funcOp.getName() << "'"
+                       << " (callDepth=" << statePtr->callDepth << ")"
+                       << " op=" << op.getName().getStringRef()
+                       << "\n";
+        }
+        // Enforce global process step limit inside function bodies
+        if (maxProcessSteps > 0 &&
+            statePtr->totalSteps > (size_t)maxProcessSteps) {
+          llvm::errs()
+              << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
+              << procId << " exceeded " << maxProcessSteps
+              << " total steps in function '" << funcOp.getName() << "'"
+              << " (totalSteps=" << statePtr->totalSteps << ")\n";
+          statePtr->halted = true;
+          cleanupTempMappings();
+          return failure();
+        }
+        // Periodically check for abort (timeout watchdog)
+        if (statePtr->funcBodySteps % 10000 == 0 && isAbortRequested()) {
+          statePtr->halted = true;
+          cleanupTempMappings();
+          if (abortCallback)
+            abortCallback();
+          return failure();
         }
       }
       if (opCount >= maxOps) {
@@ -10028,13 +9946,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
 
       // Check if the process was suspended (e.g., by process::suspend() on self)
+      // Use cached active process state to avoid repeated std::map lookups.
       {
-        auto stIt2 = processStates.find(procId);
-        if (stIt2 != processStates.end() && stIt2->second.waiting) {
+        ProcessExecutionState *suspCheckState =
+            (procId == activeProcessId && activeProcessState)
+                ? activeProcessState
+                : &processStates[procId];
+        if (suspCheckState->waiting) {
           // Save the current position for resumption
-          stIt2->second.currentOp = std::next(opIt);
-          stIt2->second.currentBlock = currentBlock;
-          stIt2->second.resumeAtCurrentOp = true;
+          suspCheckState->currentOp = std::next(opIt);
+          suspCheckState->currentBlock = currentBlock;
+          suspCheckState->resumeAtCurrentOp = true;
           cleanupTempMappings();
           return success();
         }
@@ -10102,14 +10024,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       // This is critical for UVM where wait_for_objection() contains event
       // waits that must suspend execution, and run_test() forks phase
       // execution.
-      auto it = processStates.find(procId);
-      if (it != processStates.end() && (it->second.halted || it->second.waiting)) {
+      // Use cached active process state to avoid repeated std::map lookups.
+      {
+      ProcessExecutionState *haltCheckState =
+          (procId == activeProcessId && activeProcessState)
+              ? activeProcessState
+              : &processStates[procId];
+      if (haltCheckState->halted || haltCheckState->waiting) {
         LLVM_DEBUG(llvm::dbgs() << "  Process halted/waiting during function body '"
                                 << funcOp.getName() << "' - saving call stack frame\n");
 
         // If waiting (not halted), save the call stack frame so we can resume
         // from the NEXT operation after the one that caused the wait.
-        if (it->second.waiting && callOp) {
+        if (haltCheckState->waiting && callOp) {
           // Compute the next operation iterator
           auto nextOpIt = opIt;
           ++nextOpIt;
@@ -10119,7 +10046,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               currentBlock != &entryBlock) {
             CallStackFrame frame(funcOp, currentBlock, nextOpIt, callOp);
             frame.args.assign(args.begin(), args.end());
-            it->second.callStack.push_back(std::move(frame));
+            haltCheckState->callStack.push_back(std::move(frame));
             LLVM_DEBUG(llvm::dbgs()
                        << "    Saved call frame for function '"
                        << funcOp.getName() << "' with " << args.size()
@@ -10129,6 +10056,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
         cleanupTempMappings();
         return success();
+      }
       }
     }
     // If we finished the block without a branch, we're done with this block
@@ -10522,33 +10450,8 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     MemoryBlock *block = nullptr;
     uint64_t offset = 0;
 
-    // Check global memory blocks
-    for (auto &entry : globalAddresses) {
-      StringRef globalName = entry.first();
-      uint64_t globalBaseAddr = entry.second;
-      auto blockIt = globalMemoryBlocks.find(globalName);
-      if (blockIt != globalMemoryBlocks.end()) {
-        uint64_t globalSize = blockIt->second.size;
-        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-          block = &blockIt->second;
-          offset = addr - globalBaseAddr;
-          break;
-        }
-      }
-    }
-
-    // Check malloc blocks
-    if (!block) {
-      for (auto &entry : mallocBlocks) {
-        uint64_t mallocBaseAddr = entry.first;
-        uint64_t mallocSize = entry.second.size;
-        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-          block = &entry.second;
-          offset = addr - mallocBaseAddr;
-          break;
-        }
-      }
-    }
+    // Check global and malloc memory blocks via O(log n) range index
+    block = findBlockByAddress(addr, offset);
 
     // Check module-level allocas
     if (!block) {
@@ -11426,34 +11329,11 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
         }
       }
 
-      // Check malloc blocks
+      // Check global and malloc blocks via O(log n) range index
       if (!block) {
-        for (auto &entry : mallocBlocks) {
-          uint64_t mallocBaseAddr = entry.first;
-          uint64_t mallocSize = entry.second.size;
-          if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-            block = &entry.second;
-            offset = addr - mallocBaseAddr;
-            break;
-          }
-        }
-      }
-
-      // Check global memory blocks
-      if (!block) {
-        for (auto &entry : globalAddresses) {
-          StringRef globalName = entry.first();
-          uint64_t globalBaseAddr = entry.second;
-          auto blockIt = globalMemoryBlocks.find(globalName);
-          if (blockIt != globalMemoryBlocks.end()) {
-            uint64_t globalSize = blockIt->second.size;
-            if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-              block = &blockIt->second;
-              offset = addr - globalBaseAddr;
-              break;
-            }
-          }
-        }
+        uint64_t rangeOffset = 0;
+        block = findBlockByAddress(addr, rangeOffset);
+        if (block) offset = rangeOffset;
       }
 
       // Also check process-local memory blocks
@@ -11698,22 +11578,13 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
       }
     }
   }
-  // Check malloc'd blocks
-  for (auto &[blockAddr, block] : mallocBlocks) {
-    if (addr >= blockAddr && addr < blockAddr + block.size) {
-      if (outOffset) *outOffset = addr - blockAddr;
-      return &block;
-    }
-  }
-  // Check global memory blocks
-  for (auto &[globalName, globalAddr] : globalAddresses) {
-    auto blockIt = globalMemoryBlocks.find(globalName);
-    if (blockIt != globalMemoryBlocks.end()) {
-      MemoryBlock &block = blockIt->second;
-      if (addr >= globalAddr && addr < globalAddr + block.size) {
-        if (outOffset) *outOffset = addr - globalAddr;
-        return &block;
-      }
+  // Check global and malloc blocks via O(log n) range index
+  {
+    uint64_t rangeOffset = 0;
+    MemoryBlock *rangeBlock = findBlockByAddress(addr, rangeOffset);
+    if (rangeBlock) {
+      if (outOffset) *outOffset = rangeOffset;
+      return rangeBlock;
     }
   }
   if (outOffset) *outOffset = 0;
@@ -11914,38 +11785,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMLoad(ProcessId procId,
     // Check if this is a global memory access
     uint64_t addr = ptrVal.getUInt64();
 
-    // Find which global this address belongs to
-    for (auto &entry : globalAddresses) {
-      StringRef globalName = entry.first();
-      uint64_t globalBaseAddr = entry.second;
-      auto blockIt = globalMemoryBlocks.find(globalName);
-      if (blockIt != globalMemoryBlocks.end()) {
-        uint64_t globalSize = blockIt->second.size;
-        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-          block = &blockIt->second;
-          offset = addr - globalBaseAddr;
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.load: found global '" << globalName
-                                  << "' at offset " << offset << "\n");
-          break;
-        }
-      }
-    }
-
-    // Check if this is a malloc'd memory access
-    if (!block) {
-      for (auto &entry : mallocBlocks) {
-        uint64_t mallocBaseAddr = entry.first;
-        uint64_t mallocSize = entry.second.size;
-        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-          block = &entry.second;
-          offset = addr - mallocBaseAddr;
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.load: found malloc block at 0x"
-                                  << llvm::format_hex(mallocBaseAddr, 16)
-                                  << " offset " << offset << "\n");
-          break;
-        }
-      }
-    }
+    // Find which global or malloc block this address belongs to.
+    // Uses O(log n) binary search via the address range index instead of
+    // O(n) linear scan through all 6000+ globals.
+    block = findBlockByAddress(addr, offset);
+    LLVM_DEBUG(if (block) llvm::dbgs()
+               << "  llvm.load: found block at offset " << offset << "\n");
     if (!block) {
       if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
         useNative = true;
@@ -12127,38 +11972,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     // Check if this is a global memory access
     uint64_t addr = ptrVal.getUInt64();
 
-    // Find which global this address belongs to
-    for (auto &entry : globalAddresses) {
-      StringRef globalName = entry.first();
-      uint64_t globalBaseAddr = entry.second;
-      auto blockIt = globalMemoryBlocks.find(globalName);
-      if (blockIt != globalMemoryBlocks.end()) {
-        uint64_t globalSize = blockIt->second.size;
-        if (addr >= globalBaseAddr && addr < globalBaseAddr + globalSize) {
-          block = &blockIt->second;
-          offset = addr - globalBaseAddr;
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found global '" << globalName
-                                  << "' at offset " << offset << "\n");
-          break;
-        }
-      }
-    }
-
-    // Check if this is a malloc'd memory access
-    if (!block) {
-      for (auto &entry : mallocBlocks) {
-        uint64_t mallocBaseAddr = entry.first;
-        uint64_t mallocSize = entry.second.size;
-        if (addr >= mallocBaseAddr && addr < mallocBaseAddr + mallocSize) {
-          block = &entry.second;
-          offset = addr - mallocBaseAddr;
-          LLVM_DEBUG(llvm::dbgs() << "  llvm.store: found malloc block at 0x"
-                                  << llvm::format_hex(mallocBaseAddr, 16)
-                                  << " offset " << offset << "\n");
-          break;
-        }
-      }
-    }
+    // Find which global or malloc block this address belongs to.
+    // Uses O(log n) binary search via the address range index.
+    block = findBlockByAddress(addr, offset);
+    LLVM_DEBUG(if (block) llvm::dbgs()
+               << "  llvm.store: found block at offset " << offset << "\n");
 
     // Check module-level allocas by address. This is needed when the store
     // address is computed via a GEP on a pointer loaded from memory (e.g.,
@@ -12817,6 +12635,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // Store the block - use the address as a key
         // We need to track malloc'd blocks separately so findMemoryBlock can find them
         mallocBlocks[addr] = std::move(block);
+        addrRangeIndexDirty = true;
 
         setValue(procId, callOp.getResult(), InterpretedValue(addr, 64));
 
@@ -12838,32 +12657,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         size_t effectiveLen = std::min(static_cast<size_t>(len), static_cast<size_t>(dynIt->second.second));
         return std::string(dynIt->second.first, effectiveLen);
       }
-      // Search through global memory blocks for this address
-      for (auto &[globalName, globalAddr] : globalAddresses) {
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          MemoryBlock &block = blockIt->second;
-          uint64_t globalSize = block.size;
-          if (addr >= globalAddr && addr < globalAddr + globalSize) {
-            uint64_t offset = addr - globalAddr;
-            size_t availableLen = std::min(static_cast<size_t>(len),
-                                           block.data.size() - static_cast<size_t>(offset));
-            if (availableLen > 0 && block.initialized) {
-              return std::string(reinterpret_cast<const char*>(block.data.data() + offset),
-                                 availableLen);
-            }
-          }
-        }
-      }
-
-      // Check malloc'd blocks
-      for (auto &[blockAddr, block] : mallocBlocks) {
-        if (addr >= blockAddr && addr < blockAddr + block.size) {
-          uint64_t offset = addr - blockAddr;
+      // Search via O(log n) range index (globals + malloc blocks)
+      {
+        uint64_t offset = 0;
+        MemoryBlock *blk = findBlockByAddress(addr, offset);
+        if (blk) {
           size_t availableLen = std::min(static_cast<size_t>(len),
-                                         block.data.size() - static_cast<size_t>(offset));
+                                         blk->data.size() - static_cast<size_t>(offset));
           if (availableLen > 0) {
-            return std::string(reinterpret_cast<const char*>(block.data.data() + offset),
+            return std::string(reinterpret_cast<const char*>(blk->data.data() + offset),
                                availableLen);
           }
         }
@@ -13762,6 +13564,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
+            addrRangeIndexDirty = true;
 
             // Update queue struct with new ptr and len (at the correct offset)
             for (int i = 0; i < 8; ++i)
@@ -13982,6 +13785,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
+            addrRangeIndexDirty = true;
 
             // Update queue struct (at the correct offset)
             for (int i = 0; i < 8; ++i)
@@ -15518,20 +15322,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                         static_cast<size_t>(dynIt->second.second)));
           }
 
-          // Try global memory lookup (for string literals)
-          for (auto &[globalName, globalAddr] : globalAddresses) {
-            auto blockIt = globalMemoryBlocks.find(globalName);
-            if (blockIt != globalMemoryBlocks.end()) {
-              MemoryBlock &gBlock = blockIt->second;
-              if (strPtr >= globalAddr && strPtr < globalAddr + gBlock.size) {
-                uint64_t off = strPtr - globalAddr;
-                size_t avail = std::min(static_cast<size_t>(strLen),
-                                        gBlock.data.size() - static_cast<size_t>(off));
-                if (avail > 0 && gBlock.initialized)
-                  return std::string(reinterpret_cast<const char *>(
-                                         gBlock.data.data() + off),
-                                     avail);
-              }
+          // Try global/malloc memory via O(log n) range index
+          {
+            uint64_t off = 0;
+            MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+            if (gBlock && gBlock->initialized) {
+              size_t avail = std::min(static_cast<size_t>(strLen),
+                                      gBlock->data.size() - static_cast<size_t>(off));
+              if (avail > 0)
+                return std::string(reinterpret_cast<const char *>(
+                                       gBlock->data.data() + off),
+                                   avail);
             }
           }
 
@@ -15910,22 +15711,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                      static_cast<size_t>(dynIt->second.second)));
       }
 
-      // Try global memory lookup (for string literals)
-      for (auto &[globalName, globalAddr] : globalAddresses) {
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          MemoryBlock &gBlock = blockIt->second;
-          if (strPtr >= globalAddr &&
-              strPtr < globalAddr + gBlock.size) {
-            uint64_t off = strPtr - globalAddr;
-            size_t avail = std::min(
-                static_cast<size_t>(strLen),
-                gBlock.data.size() - static_cast<size_t>(off));
-            if (avail > 0 && gBlock.initialized)
-              return std::string(
-                  reinterpret_cast<const char *>(gBlock.data.data() + off),
-                  avail);
-          }
+      // Try global/malloc memory via O(log n) range index
+      {
+        uint64_t off = 0;
+        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+        if (gBlock && gBlock->initialized) {
+          size_t avail = std::min(
+              static_cast<size_t>(strLen),
+              gBlock->data.size() - static_cast<size_t>(off));
+          if (avail > 0)
+            return std::string(
+                reinterpret_cast<const char *>(gBlock->data.data() + off),
+                avail);
         }
       }
 
@@ -16054,20 +15851,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                     static_cast<size_t>(dynIt->second.second)));
       }
 
-      // Try global memory lookup (for string literals)
-      for (auto &[globalName, globalAddr] : globalAddresses) {
-        auto blockIt = globalMemoryBlocks.find(globalName);
-        if (blockIt != globalMemoryBlocks.end()) {
-          MemoryBlock &gBlock = blockIt->second;
-          if (strPtr >= globalAddr && strPtr < globalAddr + gBlock.size) {
-            uint64_t off = strPtr - globalAddr;
-            size_t avail = std::min(static_cast<size_t>(strLen),
-                                    gBlock.data.size() - static_cast<size_t>(off));
-            if (avail > 0 && gBlock.initialized)
-              return std::string(reinterpret_cast<const char *>(
-                                     gBlock.data.data() + off),
-                                 avail);
-          }
+      // Try global/malloc memory via O(log n) range index
+      {
+        uint64_t off = 0;
+        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+        if (gBlock && gBlock->initialized) {
+          size_t avail = std::min(static_cast<size_t>(strLen),
+                                  gBlock->data.size() - static_cast<size_t>(off));
+          if (avail > 0)
+            return std::string(reinterpret_cast<const char *>(
+                                   gBlock->data.data() + off),
+                               avail);
         }
       }
 
@@ -16505,6 +16299,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 }
 
                 mallocBlocks[newDataAddr] = std::move(newBlock);
+                addrRangeIndexDirty = true;
 
                 // Update queue struct
                 for (int i = 0; i < 8; ++i)
@@ -16597,6 +16392,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
+            addrRangeIndexDirty = true;
 
             // Update queue struct
             for (int i = 0; i < 8; ++i)
@@ -18162,6 +17958,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       {
           ++cachedState->totalSteps;
           ++cachedState->funcBodySteps;
+          if (collectOpStats)
+            ++opStats[op.getName().getStringRef()];
           // Progress report every 10M func body steps
           if (cachedState->funcBodySteps % 10000000 == 0) {
             llvm::errs() << "[circt-sim] func progress: process " << procId
@@ -18387,6 +18185,7 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
     nextGlobalAddress += ((size + 7) / 8) * 8; // Align to 8 bytes
 
     globalAddresses[globalName] = addr;
+    addrRangeIndexDirty = true;
 
     // Also populate the reverse map for address-to-global lookup
     addressToGlobal[addr] = globalName.str();
