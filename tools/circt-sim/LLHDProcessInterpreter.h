@@ -1128,6 +1128,12 @@ private:
   };
   llvm::StringMap<CachedFuncLookup> funcLookupCache;
 
+  /// Cache for external functions that are NOT intercepted: when we've already
+  /// determined that an external function has no matching __moore_* handler,
+  /// cache that fact to skip the 128-entry string comparison chain on
+  /// subsequent calls. Maps external LLVMFuncOp Operation* -> true (always).
+  llvm::DenseSet<mlir::Operation *> nonInterceptedExternals;
+
   /// Map of dynamic string pointers to their content (for runtime string
   /// handling). Key is the pointer value, value is {data, len}.
   llvm::DenseMap<int64_t, std::pair<const char *, int64_t>> dynamicStrings;
