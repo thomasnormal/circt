@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 469 - February 7, 2026
+
+### Summary
+
+Enabled `circt-bmc` to run register pruning in multi-clock mode by removing
+stale option-level incompatibility checks and adding regression coverage.
+
+### Fixes
+
+1. **Multi-clock prune option compatibility**
+   - Removed early validation failures in `circt-bmc` that rejected
+     `--prune-bmc-registers` together with `--allow-multi-clock`.
+   - The existing pipeline now executes for this option combination in both
+     bounded and induction modes.
+
+2. **Updated and new regression tests**
+   - Updated
+     `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`
+     to check successful multi-clock lowering with pruning enabled.
+   - Added
+     `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`
+     to verify induction-path acceptance for the same flags.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`: PASS
+  - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`: PASS
+  - `test/Tools/circt-bmc/circt-bmc-prune-bmc-registers-pipeline.mlir`: PASS
+  - `test/Tools/circt-bmc/prune-bmc-registers-clock-input-deps.mlir`: PASS
+  - `test/Tools/circt-bmc/lower-to-bmc-multiclock.mlir`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 468 - February 7, 2026
 
 ### Summary
