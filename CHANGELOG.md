@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 438 - February 7, 2026
+
+### Summary
+
+Iteration 438: Fixed last 2 SVA XFAIL tests — ImportVerilog XFAIL count is now 0.
+Both tests had invalid SystemVerilog syntax that slang correctly rejected:
+`throughout` requires a simple expression on LHS (not a sequence), and `disable iff`
+can only appear at property_spec level (not nested in parentheses). Corrected test
+syntax to use valid IEEE 1800-2017 patterns while preserving the same assertion
+lowering coverage.
+
+### Accomplishments
+
+1. **Fix sva-within-throughout-intersect.sv** - Changed `s1 throughout s2` to
+   `a throughout s2` per IEEE 1800-2017 §16.9.9 (LHS must be expression, not
+   sequence). The underlying `within`/`throughout`/`intersect` lowering to
+   `ltl.intersect` already works correctly.
+
+2. **Fix sva-disable-iff-nested.sv** - Changed nested `disable iff` in parens to
+   use `default disable iff (rst_inner)` combined with explicit
+   `disable iff (rst_outer)` per IEEE 1800-2017 §16.12 (`disable iff` is only
+   valid at property_spec level). Both disable conditions produce `ltl.or` with
+   `{sva.disable_iff}` attribute as expected.
+
+3. **ImportVerilog XFAIL count: 0** - All 261 ImportVerilog tests pass cleanly
+   (259 pass + 0 xfail + 2 unsupported). All 13 bind+SVA tests verified.
+
 ## Iteration 437 - February 7, 2026
 
 ### Summary

@@ -7,24 +7,19 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 437 - Bind Scope Complete)
+## Current Status - February 7, 2026 (Iteration 438 - Zero XFAIL)
 
-### Session Summary - Iteration 437
+### Session Summary - Iteration 438
 
-1. **Completed bind scope resolution**: All 11 bind tests pass (0 XFAIL). Fixed
-   scope resolution order to use target scope first with bind scope fallback.
-   This handles both cross-module signals (bind-parent-port) and same-module
-   signals (UART `baudClk`/`rx`). XFAIL count 6→2 (only SVA tests remain).
+1. **Fixed last 2 SVA XFAIL tests**: Both had invalid SV syntax — `throughout`
+   needs a simple expression on LHS (not a sequence), and `disable iff` can only
+   appear at property_spec level. Corrected to valid IEEE 1800-2017 patterns.
 
-2. **Fixed cross-hierarchy interface bind**: `bind top.b.t Monitor mon(.bus(top.a.bus))`
-   now works by skipping redundant syntax re-binding in
-   `collectBindDirectiveHierarchicalValues`.
+2. **ImportVerilog XFAIL count: 0**: All 261 ImportVerilog tests pass cleanly.
+   All 13 bind+SVA tests verified.
 
-3. **UART AVIP compiles clean**: The bind scope fix resolves UART/SPI definition-level
-   bind assertions. All AVIP MLIRs being recompiled from source.
-
-4. **I3C AVIP recompiled**: String `i3c_base_test` now properly i104, fixing the
-   truncation that caused test name mismatch at runtime.
+3. **AVIP MLIRs recompiled**: All 5 AVIPs (APB, AHB, UART, SPI, I3C) freshly
+   compiled with bind scope fix. Running combined-mode simulation tests.
 
 | Mode | Eligible | Pass | Rate |
 |------|----------|------|------|
@@ -33,10 +28,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Simulation (full) | 775 | 714 | **99.2%** |
 | BMC (full Z3) | 26 | 26 | **100%** |
 | LEC (full Z3) | 23 | 23 | **100%** |
-| ImportVerilog lit | 261 | 259+2xf | **100%** |
+| ImportVerilog lit | 261 | 261 | **100%** |
 | circt-sim lit | 47 | 47 | **100%** |
 
-0 simulation failures, 0 timeouts.
+0 simulation failures, 0 timeouts. 0 XFAIL.
 109 compile failures (100 UVM-dependent, 9 non-UVM).
 
 ### Workstream Status
@@ -44,9 +39,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
 | **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Running fresh baseline |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Recompiling all AVIPs with bind fix |
-| **C: External Tests** | verilator/yosys/opentitan | Agent running | Agent establishing verilator/yosys/opentitan baselines |
-| **D: Missing Features** | Named events, coverage, etc | Bind scope DONE | Only 2 SVA XFAIL tests remain |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Testing with fresh bind-fixed MLIRs |
+| **C: External Tests** | verilator/yosys/opentitan | Agent running | Agent establishing fresh baselines |
+| **D: Missing Features** | Named events, coverage, etc | **0 XFAIL** | All ImportVerilog tests pass |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
 | **F: Formal (BMC/LEC)** | k-induction + liveness | In progress | Codex handles |
 
