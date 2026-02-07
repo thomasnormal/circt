@@ -163,6 +163,30 @@ struct ImportVerilogOptions {
   /// options.
   std::optional<std::string> compat;
 
+  /// If true, allow hierarchical references in constant expressions.
+  std::optional<bool> allowHierarchicalConst;
+
+  /// If true, allow implicit integral-to-enum conversions.
+  std::optional<bool> relaxEnumConversions;
+
+  /// If true, allow relaxed implicit string conversions.
+  std::optional<bool> relaxStringConversions;
+
+  /// If true, allow recursive implicit call expressions.
+  std::optional<bool> allowRecursiveImplicitCall;
+
+  /// If true, allow bare-value parameter assignments.
+  std::optional<bool> allowBareValParamAssignment;
+
+  /// If true, allow self-determined streaming concatenation.
+  std::optional<bool> allowSelfDeterminedStreamConcat;
+
+  /// If true, allow ANSI port declaration merging behavior.
+  std::optional<bool> allowMergingAnsiPorts;
+
+  /// If true, allow top-level modules with interface ports.
+  std::optional<bool> allowTopLevelIfacePorts;
+
   /// If true, allow interface instances that are bind/defparam targets to be
   /// assigned to virtual interfaces. This violates IEEE 1800-2017 but matches
   /// behavior of commercial tools like Cadence Xcelium.
