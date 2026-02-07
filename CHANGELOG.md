@@ -1,5 +1,90 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 461 - February 7, 2026
+
+### Summary
+
+Fixed queue/array operations on fixed-size arrays and parameterized interface
+deduplication. sv-tests elaboration now 99.3%+ (1021/1028, 7 remaining).
+circt-sim 162/162 (100%), ImportVerilog 262/262 (100%).
+
+### Fixes
+
+1. **Queue ops on fixed-size arrays** (c52eee8a9)
+   - Added `UnpackedArrayType` handling to 5 MooreToCore queue conversion patterns:
+     QueueUniqueIndex, QueueReduce, QueueRSort, QueueShuffle, QueueReverse
+   - For fixed-size arrays, probe `!llhd.ref<!hw.array>`, copy to temp alloca,
+     wrap in queue struct, call runtime, then drive modified data back
+   - Fixes 3 sv-tests elaboration failures (18.14, 18.5.8.*)
+
+2. **Parameterized interface deduplication** (b4890f308)
+   - `convertInterfaceHeader()` now uses `hasSameType()` to compare
+     parameterizations instead of deduplicating by `DefinitionSymbol*`
+   - Different parameterizations (e.g., WIDTH=16 vs WIDTH=32) get separate
+     MLIR interface declarations with numeric suffixes
+   - New test: `param-interface-dedup.sv`
+
+### Test Results
+
+| Suite | Total | Pass | Rate |
+|-------|-------|------|------|
+| circt-sim | 162 | 162 | **100%** |
+| ImportVerilog | 262 | 262 | **100%** |
+| sv-tests elaboration | 1028 | 1021+ | **99.3%+** |
+| sv-tests simulation | 776 | 715+ | **99.2%+** |
+
+### Remaining sv-tests Elaboration Failures (7)
+
+- Assignment conflict detection (2): Slang AnalysisManager SIGSEGV (upstream)
+- Tagged union (1): Crash/timeout
+- SVA negative tests (4): Crash/timeout
+
+## Iteration 460 - February 7, 2026
+
+### BMC Register/Input COI Pruning (Tool Integration + Hardening)
+
+- Integrated `prune-bmc-registers` into `circt-bmc` as a new opt-in tool flag:
+  `--prune-bmc-registers` (default `false` for now).
+- The pass now runs in the BMC pipeline immediately after register
+  externalization when enabled.
+- Added explicit guardrail: `--prune-bmc-registers` is currently incompatible
+  with `--allow-multi-clock`.
+
+### Robustness Fixes in `PruneBMCRegisters`
+
+- Preserve `seq.to_clock` ops and their backward slices so `LowerToBMC` can
+  still discover clock inputs and build valid init/loop regions.
+- Correctly propagate and rewrite `bmc_reg_clock_sources` metadata when
+  registers and ports are pruned.
+- Remap `bmc_reg_clock_sources[*].arg_index` after input-port erasure to keep
+  clock-source references valid.
+- Align `bmc_reg_clock_sources` length with pruned `num_regs`.
+
+### New/Updated Tests
+
+- Added: `test/Tools/circt-bmc/circt-bmc-prune-bmc-registers-pipeline.mlir`
+  - Verifies opt-in tool pipeline pruning removes dead BMC input/state logic.
+- Updated: `test/Tools/circt-bmc/commandline.mlir`
+  - Checks `--prune-bmc-registers` appears in `circt-bmc --help`.
+- Updated existing pass regressions to reflect corrected clock-source metadata:
+  - `test/Tools/circt-bmc/prune-bmc-registers.mlir`
+  - `test/Tools/circt-bmc/prune-bmc-registers-transitive.mlir`
+
+### Validation
+
+- `ninja -C build check-circt-conversion-veriftosmt`: PASS
+- `ninja -C build check-circt-tools-circt-bmc`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`) with `--prune-bmc-registers=true`: PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `--prune-bmc-registers=true --assume-known-inputs`: PASS
+  - `yosys/tests/sva` BMC (`basic00`) with `--prune-bmc-registers=true`: PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 458 - February 7, 2026
 
 ### Summary
