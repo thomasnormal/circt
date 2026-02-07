@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 465)
+## Current Status - February 7, 2026 (Iteration 466)
 
 ### Test Results
 
@@ -46,6 +46,49 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 466
+
+1. **UDP coverage-note tuning support**
+   - Added `circt-verilog --max-udp-coverage-notes=<count>` and wired it
+     through `ImportVerilogOptions` to Slang compilation options.
+   - This provides deterministic control over warning-note verbosity for large
+     UDP coverage diagnostics.
+
+2. **Behavioral regression coverage**
+   - Added `test/Conversion/ImportVerilog/udp-coverage-note-limit.sv`.
+   - The test locks both default UDP coverage warning note behavior and
+     truncation behavior when `--max-udp-coverage-notes=2`.
+   - Updated `test/Tools/circt-verilog/commandline.mlir` to include the new
+     option.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+     - `test/Conversion/ImportVerilog/udp-coverage-note-limit.sv`: PASS
+     - `test/Conversion/ImportVerilog/relax-enum-conversions.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Multi-clock prune remains the highest BMC pipeline gap:
+     `--prune-bmc-registers` is still guarded with `--allow-multi-clock`.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in key flows.
+   - Verilator BMC still benefits from known-input assumptions for some tests.
+   - Next highest-value features:
+     - Resolve multiclock prune integration robustness.
+     - Reduce LEC `XPROP_ONLY` dependence with stronger X/4-state correlation.
+     - Add behavioral regression coverage around top-level interface compatibility
+       controls to validate real import-path impact.
 
 ### Session Summary - Iteration 465
 
