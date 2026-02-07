@@ -12,4 +12,5 @@
 // CHECK-DAG: --liveness
 // CHECK-DAG: --liveness-lasso
 // CHECK-DAG: --print-solver-output
+// CHECK-DAG: --prune-bmc-registers
 // CHECK-DAG: --emit-smtlib

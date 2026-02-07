@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 459)
+## Current Status - February 7, 2026 (Iteration 460)
 
 ### Test Results
 
@@ -212,6 +212,49 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
      leverage cleanup.
    - Slang `AnalysisManager` instability still blocks robust assignment-conflict
      diagnostics; an in-tree fallback analysis remains a key long-term target.
+
+### Session Summary - Iteration 460
+
+1. **BMC prune pass integrated into tool flow (opt-in)**
+   - Wired `--prune-bmc-registers` into `circt-bmc` after register
+     externalization.
+   - Kept the new optimization opt-in (`false` by default) while hardening.
+   - Added tool-level regression:
+     `test/Tools/circt-bmc/circt-bmc-prune-bmc-registers-pipeline.mlir`.
+
+2. **Derived-clock and metadata hardening in prune pass**
+   - Preserved `seq.to_clock` scaffolding and its backward slice so `LowerToBMC`
+     can still discover clock inputs.
+   - Correctly tracks and rewrites `bmc_reg_clock_sources` when ports/registers
+     are pruned, including `arg_index` remapping after input-port erasure.
+   - Updated existing prune regressions to match corrected
+     `bmc_reg_clock_sources` filtering.
+
+3. **Validation**
+   - `check-circt-conversion-veriftosmt`: PASS
+   - `check-circt-tools-circt-bmc`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`) with
+       `--prune-bmc-registers=true`: PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `--prune-bmc-registers=true --assume-known-inputs`: PASS
+     - `yosys/tests/sva` BMC (`basic00`) with
+       `--prune-bmc-registers=true`: PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - `--prune-bmc-registers` is still opt-in; we need broader hardening and
+     perf/robustness data before making it default-on.
+   - `--prune-bmc-registers` is currently incompatible with
+     `--allow-multi-clock`; multi-clock-safe pruning is still pending.
+   - OpenTitan still needs `XPROP_ONLY` acceptance in some LEC paths, so
+     stronger 4-state/X initialization semantics remain high priority.
+   - We still need a dedicated formal COI abstraction pass to strip UVM
+     runtime/reporting noise before SMT lowering.
 
 ### Previous Session Summary - Iteration 445
 
