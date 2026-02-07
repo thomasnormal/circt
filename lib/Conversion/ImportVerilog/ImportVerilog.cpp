@@ -240,9 +240,16 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.librariesInheritMacros = options.librariesInheritMacros;
 
   driver.options.timeScale = options.timeScale;
+  // Enable AllowUseBeforeDeclare by default — forward references are
+  // ubiquitous in real SV code and accepted by VCS/Xcelium.  The explicit
+  // CLI flag can still override this.
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::AllowUseBeforeDeclare,
-      options.allowUseBeforeDeclare);
+      options.allowUseBeforeDeclare.value_or(true));
+  // Enable AllowUnnamedGenerate by default — references to implicit genblk
+  // names are accepted by all major tools.
+  driver.options.compilationFlags.emplace(
+      slang::ast::CompilationFlags::AllowUnnamedGenerate, true);
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::IgnoreUnknownModules,
       options.ignoreUnknownModules);
@@ -306,6 +313,14 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   if (options.allowNonProceduralDynamic.value_or(false))
     driver.diagEngine.setSeverity(slang::diag::DynamicNotProcedural,
                                   slang::DiagnosticSeverity::Warning);
+
+  // Downgrade out-of-bounds index/range accesses from error to warning by
+  // default. Most tools (VCS, Xcelium, yosys) accept these and handle them
+  // at runtime, while slang treats them as hard errors.
+  driver.diagEngine.setSeverity(slang::diag::IndexOOB,
+                                slang::DiagnosticSeverity::Warning);
+  driver.diagEngine.setSeverity(slang::diag::RangeOOB,
+                                slang::DiagnosticSeverity::Warning);
 
   return success();
 }
