@@ -14726,13 +14726,46 @@ struct QueueUniqueIndexOpConversion
 
     auto one =
         LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
-    auto inputAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
 
     auto elemType = typeConverter->convertType(elementType);
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    Value inputAlloca;
+    if (auto fixedArrayType =
+            dyn_cast<moore::UnpackedArrayType>(inputType)) {
+      // For fixed-size arrays, the adapted value is !hw.array<N x T>.
+      // Store it into an !llvm.array alloca and wrap in a queue struct.
+      int64_t numElements = fixedArrayType.getSize();
+      Type llvmArrayType = convertToLLVMType(adaptor.getArray().getType());
+
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType,
+                           adaptor.getArray())
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      inputAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             inputAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         inputAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+    } else {
+      inputAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+    }
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
@@ -14796,13 +14829,54 @@ struct QueueReduceOpConversion
     auto queueTy = getQueueStructType(ctx);
     auto one =
         LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
-    auto inputAlloca =
-        LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
 
     auto elemType = typeConverter->convertType(elementType);
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
+
+    Value inputAlloca;
+    if (auto fixedArrayType =
+            dyn_cast<moore::UnpackedArrayType>(inputType)) {
+      // For fixed-size arrays, the adapted value is !hw.array<N x T>.
+      // We need to store it into an !llvm.array alloca and then wrap it
+      // in a queue struct {ptr, len} for the runtime.
+      int64_t numElements = fixedArrayType.getSize();
+      Type llvmArrayType = convertToLLVMType(adaptor.getArray().getType());
+
+      // Alloca for the array data
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      // Cast the hw.array value to llvm.array for store
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType,
+                           adaptor.getArray())
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      // Create queue struct {data_ptr, num_elements} on the stack
+      inputAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      // Store pointer to array data
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             inputAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      // Store element count
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         inputAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+    } else {
+      // For queues and dynamic arrays, the adapted value is already a
+      // queue struct {ptr, i64}. Store it directly.
+      inputAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getArray(), inputAlloca);
+    }
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i64Ty},
                                      SymbolRefAttr::get(fn),
@@ -14891,8 +14965,60 @@ struct QueueRSortOpConversion : public RuntimeCallConversionBase<QueueRSortOp> {
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
 
-    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{adaptor.getQueue(), elemSize});
+    if (auto fixedArrayType =
+            dyn_cast<moore::UnpackedArrayType>(nestedType)) {
+      // For fixed-size arrays, adaptor.getQueue() is !llhd.ref<!hw.array<N x T>>.
+      // Probe the ref, copy data to temp alloca, create queue struct, call rsort,
+      // then drive modified data back.
+      int64_t numElements = fixedArrayType.getSize();
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      Value probedVal =
+          llhd::ProbeOp::create(rewriter, loc, adaptor.getQueue());
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType,
+                           probedVal)
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      auto queueTy = getQueueStructType(ctx);
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             queueAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         queueAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, elemSize});
+
+      Value modifiedVal =
+          LLVM::LoadOp::create(rewriter, loc, llvmArrayType, arrayAlloca);
+      Value hwArrayVal = UnrealizedConversionCastOp::create(
+                             rewriter, loc, convertedInnerType,
+                             modifiedVal)
+                             .getResult(0);
+      auto timeAttr = llhd::TimeAttr::get(ctx, 0U, StringRef("ns"), 0, 1);
+      auto timeVal = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, adaptor.getQueue(), hwArrayVal,
+                          timeVal.getResult(), Value{});
+    } else {
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{adaptor.getQueue(), elemSize});
+    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -15493,8 +15619,70 @@ struct QueueShuffleOpConversion
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
 
-    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{adaptor.getQueue(), elemSize});
+    if (auto fixedArrayType =
+            dyn_cast<moore::UnpackedArrayType>(nestedType)) {
+      // For fixed-size arrays, adaptor.getQueue() is !llhd.ref<!hw.array<N x T>>.
+      // We need to probe the ref, copy data to a temp alloca, create a queue
+      // struct, call shuffle, then drive the modified data back.
+      int64_t numElements = fixedArrayType.getSize();
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+
+      // Probe the ref to get the current array value
+      Value probedVal =
+          llhd::ProbeOp::create(rewriter, loc, adaptor.getQueue());
+
+      // Convert hw.array to llvm.array and store to alloca
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType,
+                           probedVal)
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      // Create queue struct {data_ptr, num_elements}
+      auto queueTy = getQueueStructType(ctx);
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             queueAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         queueAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+
+      // Call shuffle (modifies array data in-place via the alloca)
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, elemSize});
+
+      // Load modified data from alloca and drive back to the ref
+      Value modifiedVal =
+          LLVM::LoadOp::create(rewriter, loc, llvmArrayType, arrayAlloca);
+      Value hwArrayVal = UnrealizedConversionCastOp::create(
+                             rewriter, loc, convertedInnerType,
+                             modifiedVal)
+                             .getResult(0);
+      // Drive with epsilon delay (blocking assignment)
+      auto timeAttr = llhd::TimeAttr::get(ctx, 0U, StringRef("ns"), 0, 1);
+      auto timeVal = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, adaptor.getQueue(), hwArrayVal,
+                          timeVal.getResult(), Value{});
+    } else {
+      // For queues and dynamic arrays, adaptor.getQueue() is already a ptr
+      // to the queue struct. Pass it directly.
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{adaptor.getQueue(), elemSize});
+    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -15538,8 +15726,60 @@ struct QueueReverseOpConversion
     auto elemSize = LLVM::ConstantOp::create(
         rewriter, loc, rewriter.getI64IntegerAttr(getTypeSizeInBytes(elemType)));
 
-    LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
-                         ValueRange{adaptor.getQueue(), elemSize});
+    if (auto fixedArrayType =
+            dyn_cast<moore::UnpackedArrayType>(nestedType)) {
+      // For fixed-size arrays, adaptor.getQueue() is !llhd.ref<!hw.array<N x T>>.
+      // Probe the ref, copy data to temp alloca, create queue struct, call
+      // reverse, then drive modified data back.
+      int64_t numElements = fixedArrayType.getSize();
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      Value probedVal =
+          llhd::ProbeOp::create(rewriter, loc, adaptor.getQueue());
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType,
+                           probedVal)
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      auto queueTy = getQueueStructType(ctx);
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             queueAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         queueAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{queueAlloca, elemSize});
+
+      Value modifiedVal =
+          LLVM::LoadOp::create(rewriter, loc, llvmArrayType, arrayAlloca);
+      Value hwArrayVal = UnrealizedConversionCastOp::create(
+                             rewriter, loc, convertedInnerType,
+                             modifiedVal)
+                             .getResult(0);
+      auto timeAttr = llhd::TimeAttr::get(ctx, 0U, StringRef("ns"), 0, 1);
+      auto timeVal = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, adaptor.getQueue(), hwArrayVal,
+                          timeVal.getResult(), Value{});
+    } else {
+      LLVM::CallOp::create(rewriter, loc, TypeRange{}, SymbolRefAttr::get(fn),
+                           ValueRange{adaptor.getQueue(), elemSize});
+    }
     rewriter.eraseOp(op);
     return success();
   }
