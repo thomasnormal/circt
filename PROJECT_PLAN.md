@@ -7,9 +7,36 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 444 - Interpreter Dispatch Optimizations)
+## Current Status - February 7, 2026 (Iteration 445 - wait_condition + wait_event Fixes)
 
-### Session Summary - Iteration 444
+### Session Summary - Iteration 445
+
+1. **wait_condition inside function calls** committed (d4dbfb000): Three interconnected fixes
+   for `__moore_wait_condition` when called from inside a function (e.g.,
+   `uvm_phase_hopper::get` via vtable dispatch):
+   - `condBlock = callOp->getBlock()` for correct function-body restart block (was using
+     process body block, missing the condition computation ops)
+   - Innermost call stack frame resume position overridden to restart point (frames were
+     saving position AFTER wait_condition, skipping condition re-evaluation)
+   - arith ops (TruncIOp, ExtSIOp, ExtUIOp, CmpIOp, AddIOp, SubIOp) and LLVM::CallOp
+     added to shouldTrace set (condition chain: load → extractvalue → trunci → icmp → zext
+     → wait_condition was broken at trunci)
+
+2. **wait_event body pre-execution**: Pre-execute body ops like llvm.call (for
+   `__moore_assoc_get_ref`) before signal/memory tracing walks. Without this, getValue()
+   returns X for call results, and memory event watchers aren't set up.
+
+3. **uvm_wait_for_nba_region interception**: Replaced with single delta cycle delay
+   (scheduleProcess to Reactive region). The original UVM implementation uses a counter
+   increment + wait, which stalls in our interpreter.
+
+4. **Unit test**: `llhd-process-wait-condition-func.mlir` tests wait_condition called from
+   inside a function with load → trunci → icmp → zext condition chain.
+
+5. **All 48 circt-sim lit tests pass** (47 existing + 1 new), 261 ImportVerilog tests pass.
+   APB and AHB AVIP simulations complete cleanly with "Running test..." messages.
+
+### Previous Iteration 444 Summary
 
 1. **Interceptor dispatch optimization** committed (35e07a00e): Two improvements to
    `interpretLLVMCall` for external function handling:
