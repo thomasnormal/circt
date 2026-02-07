@@ -7,7 +7,44 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 453 - sv-tests Fix + Queue/Array Ops)
+## Current Status - February 7, 2026 (Iteration 454)
+
+### Test Results
+
+| Mode | Eligible | Pass | Fail | Rate |
+|------|----------|------|------|------|
+| Parsing | 853 | 853 | 0 | **100%** |
+| Elaboration | 1028 | 1011 | 17 | **98.3%** |
+| Simulation (full) | 775 | 714 | 0 | **99.2%** |
+| BMC (full Z3) | 26 | 26 | 0 | **100%** |
+| LEC (full Z3) | 23 | 23 | 0 | **100%** |
+| circt-sim lit | 162 | 162 | 0 | **100%** |
+| ImportVerilog lit | 384 | 384 | 0 | **100%** |
+
+### AVIP Status
+
+All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
+
+| AVIP | Status | Notes |
+|------|--------|-------|
+| APB | WORKS | apb_base_test, 453ns sim time |
+| AHB | WORKS | AhbBaseTest, 381ns sim time |
+| UART | WORKS | UartBaseTest, 746ns sim time |
+| I2S | WORKS | I2sBaseTest, 418ns sim time |
+| I3C | WORKS | i3c_base_test, 466ns sim time |
+| SPI | WORKS | SpiBaseTest, 434ns sim time |
+| JTAG | FAIL | Verilog source type errors |
+| AXI4 | FAIL | Parameterized interface ports not yet supported |
+
+### Remaining sv-tests Elaboration Failures (17)
+
+| Category | Count | Root Cause | Fixable? |
+|----------|-------|-----------|----------|
+| UVM `stream_unpack` | 7 | Streaming ops fail in UVM context — conversion exists but UVM patterns trip it | YES (medium effort) |
+| Queue ops on fixed arrays | 3 | `!llhd.ref`/`!hw.array` type mismatch in LLVM lowering | YES (low effort) |
+| Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
+| Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
+| SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
 
 ### Session Summary - Iteration 453
 
@@ -22,7 +59,9 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 3. **7 new runtime interceptors**: reduce_sum/product/and/or/xor, array_min,
    unique_index. Plus get_adjacent_successor_nodes for UVM phase graph traversal.
 
-4. **All tests pass**: circt-sim 162/162 (100%), sv-tests regression pending.
+4. **Slang AnalysisManager investigation**: Attempted to integrate Slang's driver
+   tracking for assignment conflict detection (IEEE §6.5). All approaches crash —
+   `analyze()` triggers lazy AST allocation on frozen BumpAllocator. Deferred.
 
 ### Previous Session Summary - Iteration 445
 
@@ -140,16 +179,48 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 0 simulation failures, 0 timeouts. 0 XFAIL.
 106 compile failures (100 UVM-dependent, 6 BSG preprocessor extension).
 
-### Workstream Status
+### Workstream Status & 4-Agent Plan
 
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
-| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | 0 genuine non-UVM compile failures |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | ~171 ns/s APB (30% from dispatch opts, 33x from O(log n) index); 10us in 59s |
-| **C: External Tests** | verilator/yosys/opentitan | Yosys .sv 61/77, VV 120/140 | Remaining yosys: 5 svinterfaces, 2 multi-file, 9 misc |
-| **D: Missing Features** | Named events, coverage, etc | **0 XFAIL** | All ImportVerilog tests pass |
+| **A: sv-tests** | IEEE 1800 compliance | **98.3% elab, 99.2% sim** | Fix `stream_unpack` UVM failures (7), queue type mismatch (3) |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 compile+sim** | Parameterized iface ports (AXI4); perf: batch drv/prb or JIT hot loops |
+| **C: External Tests** | verilator/yosys/opentitan | Yosys 61/77, VV 120/140 | Refresh baselines; remaining yosys: 5 svinterfaces, 9 misc |
+| **D: Slang Integration** | Upstream analysis features | BLOCKED | AnalysisManager SIGSEGV; track Slang releases; prototype fallback |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
 | **F: Formal (BMC/LEC)** | k-induction + liveness | In progress | Codex handles |
+
+#### Agent Assignment Plan (4 agents)
+
+**Agent 1 — sv-tests Compliance (Track A)**
+- P1: Fix 7 `moore.stream_unpack` UVM failures. Conversion pattern EXISTS in
+  MooreToCore (~line 15926) but fails on UVM streaming with `open_uarray<i1>`.
+  Investigate what specific UVM code triggers the failure. Fix type handling.
+- P2: Fix 3 queue ops on fixed arrays. `UnpackedArrayType` handling added to
+  5 patterns (iter 453), but LLVM lowering still produces `!llhd.ref` instead of
+  `!llvm.ptr`. Debug the type converter path.
+- P3: Add unit tests for queue reduce/shuffle/min on fixed-size arrays.
+
+**Agent 2 — AVIP Quality & Performance (Track B)**
+- P1: Parameterized interface ports for AXI4/AXI4Lite. Root cause:
+  `InterfacePortSymbol::interfaceDef` is null for `axi_if#(.ID_WIDTH(16))`.
+  Pattern: traverse slang AST → specialized declarations (cf. Structure.cpp:377).
+- P2: Performance — 22.1% of ops are `llvm.call` (interceptors). Options:
+  batch epsilon-delay operations, inline hot interceptors, explore LLVM JIT.
+- P3: Run all 6 AVIP combined-mode regressions after any change.
+
+**Agent 3 — Slang Analysis Research (Track D)**
+- P1: Monitor Slang upstream for BumpAllocator freeze/unfreeze fixes.
+  Bug: `AnalysisManager::analyze()` triggers lazy AST ops on frozen allocator.
+- P2: Identify other Slang features to integrate: DriverTracker (assignment
+  conflicts), ClockInference, DataFlowAnalysis. All require `analyze()`.
+- P3: If Slang fix takes too long, prototype lightweight assignment conflict
+  checker in ImportVerilog (only 2 tests affected).
+
+**Agent 4 — Documentation & External Tests (Track C)**
+- P1: Refresh external test baselines (yosys, verilator) after recent changes.
+- P2: Keep FEATURES.md, CHANGELOG.md, PROJECT_PLAN.md up to date.
+- P3: Run full sv-tests simulation regression to verify 99.2% still holds.
 
 ### SVA Formal Feature Roadmap (February 6, 2026)
 
@@ -213,14 +284,16 @@ keeping memory growth controlled.
 
 | Feature | Priority | Effort | Impact | Details |
 |---------|----------|--------|--------|---------|
-| Interface ports (modport) | MEDIUM | Medium | Full AXI-VIP patterns | Generic ports resolved; may still need modport-qualified interface ports |
-| Bind scope resolution | DONE | Medium | I2S/UART/SPI combined | Fixed in iteration 436: slang patch + CIRCT signal threading; 1 cross-module interface bind remains XFAIL |
-| Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path already uses NBA; only native EventType path lacks it; event clearing needs time-slot tracking |
-| Non-UVM compile failures | NOT-ACTIONABLE | N/A | 6 tests | 6 BSG preprocessor extension (vendor-specific `ifdef inside `define); 0 genuine |
+| `moore.stream_unpack` lowering | HIGH | Medium | 7 sv-tests UVM | Conversion pattern exists but fails on `open_uarray<i1>` in UVM context |
+| Parameterized interface ports | HIGH | Medium | AXI4/AXI4Lite AVIPs | `InterfacePortSymbol::interfaceDef` null for parameterized interfaces |
+| Queue ops LLVM type mismatch | MEDIUM | Low | 3 sv-tests | `UnpackedArrayType` produces `!llhd.ref` where `!llvm.ptr` expected |
+| Slang AnalysisManager | BLOCKED | — | 2 sv-tests | SIGSEGV on frozen BumpAllocator; awaiting upstream fix |
+| Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path works; native EventType path needs time-slot tracking |
 | Coverage collection | LOW | Large | Functional/code coverage | Not implemented |
 | SVA runtime checking | LOW | Large | Full assertion evaluation | Formal only; no simulation-time checking |
 | ClockVar support | LOW | Medium | Some testbenches | Not implemented |
 | DPI-C full support | LOW | Large | Most stubbed | Some intercepted, most return 0 |
+| Simulation performance | MEDIUM | Large | Real workloads | ~171 ns/s; 22.1% ops are llvm.call; batch/JIT opportunities |
 
 **Resolved gaps:**
 - `process::await/kill/suspend` — FIXED (all sv-test timeouts resolved via `--max-time`)
@@ -228,7 +301,13 @@ keeping memory growth controlled.
 - Cumulative `__moore_delay` in LLVM function bodies — FIXED (iteration 433)
 - Generic interface ports — FIXED (iteration 434, `getConnection()` resolution)
 - Nested interface ports — FIXED (iteration 435, scope-hierarchy fallback)
-- Bind scope resolution — FIXED (iteration 436, slang patch fix + CIRCT signal threading)
+- Bind scope resolution — FIXED (iteration 436, slang patch + CIRCT signal threading)
+- Queue/array ops for fixed arrays — FIXED MooreToCore patterns (iteration 453)
+- 7 runtime interceptors — FIXED reduce/min/unique_index (iteration 453)
+- get_adjacent_successor_nodes — FIXED native UVM phase graph traversal (iteration 453)
+- config_db runtime — FIXED set/get/exists interceptors (iteration 405)
+- Semaphores — FIXED create/get/put/try_get with blocking (iteration 385)
+- $value$plusargs / $test$plusargs — FIXED runtime interceptors (iterations 386, 389)
 
 ### External Test Suite Baselines (February 7, 2026 — Iteration 439)
 

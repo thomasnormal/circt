@@ -14,39 +14,42 @@ repository (1,036 tests across 15 IEEE chapters).
 | Mode | Eligible | Pass | Fail | Rate | Notes |
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
-| Elaboration | 1028 | 1011 | 17 | **98.3%** | 7 UVM stream_unpack, 6 chapter (tagged union/SVA/randc), 2 multi-assign detection, 2 need external defines |
+| Elaboration | 1028 | 1011 | 17 | **98.3%** | 7 UVM `stream_unpack`, 3 queue ops on fixed arrays, 2 multi-assign detection, 5 crash/timeout (tagged union, SVA) |
 | Simulation (full) | 775 | 714 | 0 | **99.2%** | 884 total, 109 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
-### Remaining Bugs for 100%
+### Remaining Failures (17 tests)
 
-| Test | Mode | Bug | Root Cause |
-|------|------|-----|------------|
-| `22.5.1--define-expansion_26.sv` | Elaboration | Macro concatenation (`` ` `` `` ` ``) edge case | Preprocessor token pasting |
-| `5.6.4--*-macro_0.sv` | Elaboration | Needs `-DTEST_VAR` | Test harness metadata not applied |
-| `5.6.4--*-macro_1.sv` | Elaboration | Needs `-DVAR_1=2 -DVAR_2=5` | Test harness metadata not applied |
+| Category | Count | Tests | Root Cause |
+|----------|-------|-------|------------|
+| UVM `stream_unpack` | 7 | `testbenches/uvm_*` | `moore.stream_unpack` not legalized in MooreToCore |
+| Queue ops on fixed arrays | 3 | `18.14`, `18.5.8.*` | Fixed-size arrays produce `!llhd.ref`/`!hw.array` types instead of `!llvm.ptr` |
+| Assignment conflict detection | 2 | `6.5--variable_*` | Slang's `AnalysisManager` crashes with SIGSEGV — needs upstream fix |
+| Tagged union | 1 | `11.9--tagged_union_*` | Crash/timeout (empty log) |
+| SVA negative tests | 4 | `16.10--*`, `16.15--*` | Crash/timeout (empty log) |
 
 ### Simulation: 0 Failures, 0 Timeouts
 
 All former timeout tests now pass with `--max-time=10us` (runner script:
 `utils/run_sv_tests_circt_sim.sh`). The 6 XPASS tests are should-fail tests
-that unexpectedly pass (not a tool bug). The 109 compile failures break down
-as 100 UVM-dependent tests (need `import uvm_pkg`) and 9 non-UVM (6 Black Parrot,
-3 other).
+that unexpectedly pass (not a tool bug).
 
 ### What's Needed for True 100%
 
-1. **Apply test `:defines:` metadata** (2 elaboration tests): The runner script
-   needs to extract `:defines:` from test metadata and pass them as `-D` flags.
-   Not a real tool bug.
+1. **`moore.stream_unpack` legalization** (7 tests): The UVM testbenches use
+   streaming operators that lower to `moore.stream_unpack`, which has no
+   conversion pattern in MooreToCore yet.
 
-2. **Preprocessor macro concatenation** (1 elaboration test): Edge case in
-   `` `define `` with token pasting (`` ` `` `` ` ``). Low priority.
+2. **Queue ops on fixed-size arrays** (3 tests): `shuffle`/`reduce` on
+   `UnpackedArrayType` produce `!llhd.ref` operands where `!llvm.ptr` is
+   expected. Needs type converter work in MooreToCore.
 
-3. **Compile failures** (109 tests): 101 UVM-dependent (need `import uvm_pkg`),
-   7 Black Parrot (need BSG macros), 1 genuine bug (`$printtimescale` hierarchical
-   path resolution).
+3. **Assignment conflict detection** (2 tests): Slang's `AnalysisManager`
+   crashes when invoked from CIRCT. Needs upstream Slang investigation.
+
+4. **Tagged union / SVA crashes** (5 tests): Empty logs suggest OOM or crash
+   during compilation. Low priority.
 
 ### circt-sim Unit Tests
 
@@ -157,3 +160,6 @@ to commercial simulators like Cadence Xcelium.
 | `wait_condition` in functions | condBlock = callOp->getBlock() for function-body restart; frame resume override; arith ops in shouldTrace for complete condition chain |
 | `wait_event` body pre-exec | Pre-execute body ops (e.g., llvm.call for assoc_get_ref) before signal/memory tracing walks |
 | `uvm_wait_for_nba_region` | Intercepted as single delta cycle delay (scheduleProcess to Reactive region) |
+| Queue/array ops on fixed arrays | Added `UnpackedArrayType` handling to 5 MooreToCore patterns (unique_index, reduce, rsort, shuffle, reverse) |
+| Array reduce/min/unique_index interceptors | 7 new interpreter interceptors: `reduce_sum/product/and/or/xor`, `array_min`, `unique_index` |
+| `get_adjacent_successor_nodes` | Interceptor for UVM phase graph traversal via `__moore_get_adjacent_successor_nodes` |

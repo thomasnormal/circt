@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 454 - February 7, 2026
+
+### Summary
+
+Project plan assessment and 4-agent work planning for Xcelium parity push.
+
+### Status Assessment
+
+- **circt-sim**: 162/162 (100%)
+- **sv-tests elaboration**: 1011/1028 (98.3%) — 17 remaining failures categorized
+- **sv-tests simulation**: 714/775 (99.2%) — 0 failures, 0 timeouts
+- **AVIPs**: 6/6 running (APB, AHB, UART, I2S, I3C, SPI)
+- **Performance**: ~171 ns/s (APB 10us in 59s wall-clock)
+
+### Key Findings
+
+1. `moore.stream_unpack` conversion pattern exists in MooreToCore (~line 15926)
+   but fails specifically on UVM streaming with `open_uarray<i1>` type. This is
+   a type matching issue, not a missing pattern.
+
+2. Slang `AnalysisManager` integration is blocked — `analyze()` crashes with
+   SIGSEGV due to lazy AST allocation on frozen BumpAllocator. Only 2 tests
+   affected (assignment conflict detection, IEEE §6.5).
+
+3. AXI4/AXI4Lite AVIPs need parameterized interface port support
+   (`InterfacePortSymbol::interfaceDef` null for `axi_if#(.ID_WIDTH(16))`).
+
+4. Updated PROJECT_PLAN.md with 4-agent assignment plan and feature gap table.
+
 ## Iteration 453 - February 7, 2026
 
 ### Summary
@@ -48,9 +77,10 @@ for fixed-size arrays and 7 new runtime interceptors.
 
 - circt-sim: 162/162 pass (100%)
 - sv-tests elaboration: 1011/1028 pass (98.3%)
-  - 15 failures: 7 UVM testbenches (moore.stream_unpack not lowered),
-    6 chapter tests (tagged unions, SVA assertions, random constraints),
-    2 assignment conflict detection (AnalysisManager integration deferred)
+  - 17 failures: 7 UVM testbenches (`moore.stream_unpack` not lowered),
+    3 queue ops on fixed arrays (`!llhd.ref`/`!hw.array` type mismatch),
+    2 assignment conflict detection (Slang `AnalysisManager` crashes),
+    5 crash/timeout (1 tagged union, 4 SVA negative tests)
 
 ## Iteration 452 - February 7, 2026
 
