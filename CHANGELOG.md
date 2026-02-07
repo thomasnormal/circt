@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 452 - February 7, 2026
+
+### Summary
+
+Strengthened `--liveness-lasso` with fairness-style loop acceptance by
+requiring each final check to be sampled at least once on the selected loop
+segment.
+
+### Accomplishments
+
+1. **Liveness-lasso fairness sampling**
+   - Extended SMT-LIB lasso encoding in VerifToSMT to track per-iteration
+     final-check sampling gates.
+   - For each candidate loop, added a fairness-style acceptance condition:
+     every final check must be sampled at least once in the loop window.
+   - This rejects vacuous lasso witnesses where loop closure exists but
+     final obligations are never sampled due to clock-edge gating.
+
+2. **Regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir`
+     (negedge-only final check, bound=1, expected unsat stub in SMT-LIB).
+   - Existing liveness-lasso regressions remain green.
+
+3. **Verification**
+   - Targeted liveness-lasso tests: 5/5 pass.
+   - Broad lit sweep:
+     - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 349 total,
+       212 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
+   - External smoke rerun (sequential):
+     - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
+     - sv-tests LEC: total=23 pass=23 fail=0 error=0
+     - verilator-verification BMC: total=17 pass=17 fail=0 error=0
+     - verilator-verification LEC: total=17 pass=17 fail=0 error=0
+     - yosys/tests/sva BMC: 14 tests, failures=0, skipped=2
+     - yosys/tests/sva LEC: total=14 pass=14 fail=0 error=0 skip=2
+     - OpenTitan AES S-Box LEC (`canright`, assume-known): OK
+     - AVIP compile smoke: `apb_avip` and `ahb_avip` compile successfully
+
 ## Iteration 451 - February 7, 2026
 
 ### Summary
