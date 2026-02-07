@@ -27,15 +27,16 @@ it through VerifToSMT mode handling and CLI diagnostics.
 3. **Regression coverage**
    - Added `test/Tools/circt-bmc/bmc-liveness-lasso-flag-validation.mlir`.
    - Added `test/Tools/circt-bmc/bmc-liveness-lasso-smtlib.mlir`.
+   - Added `test/Tools/circt-bmc/bmc-liveness-lasso-run-smtlib.mlir`.
    - Added `test/Conversion/VerifToSMT/bmc-liveness-lasso-requires-smtlib.mlir`.
    - Updated `test/Tools/circt-bmc/bmc-liveness-induction-conflict.mlir`.
    - Updated `test/Tools/circt-bmc/commandline.mlir`.
 
 4. **Verification**
-   - Targeted new/updated liveness tests: 7/7 pass.
+   - Targeted new/updated liveness tests: 8/8 pass.
    - Broad lit sweep:
-     - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 347 total,
-       210 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
+     - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 348 total,
+       211 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
    - External smoke rerun:
      - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
      - sv-tests LEC: total=23 pass=23 fail=0 error=0
