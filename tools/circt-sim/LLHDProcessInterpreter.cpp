@@ -3718,6 +3718,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                             << "(invalidating " << state.waitConditionValuesToInvalidate.size()
                             << " cached values)\n");
 
+    // Save the process body's position BEFORE overwriting with the function
+    // body's restart point. Only save on the FIRST overwrite (when
+    // waitConditionSavedBlock is null). On subsequent polls (when the condition
+    // is still false), the saved position is already correct.
+    if (!state.waitConditionSavedBlock) {
+      state.waitConditionSavedBlock = state.currentBlock;
+      state.waitConditionSavedOp = state.currentOp;
+    }
+
     // Set the current block and operation to the restart point
     state.currentBlock = state.waitConditionRestartBlock;
     state.currentOp = state.waitConditionRestartOp;
@@ -3835,7 +3844,16 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                  << "' completed, continuing\n");
     }
 
-    // All call stack frames processed, continue with normal process execution
+    // All call stack frames processed — the function completed successfully.
+    // Restore the process body's block/op so the main execution loop continues
+    // from the operation AFTER the function call (e.g., the sim.fork after
+    // the get() call_indirect in the daemon loop). Without this, the process
+    // would try to execute function body ops as process body ops.
+    if (state.waitConditionSavedBlock) {
+      state.currentBlock = state.waitConditionSavedBlock;
+      state.currentOp = state.waitConditionSavedOp;
+      state.waitConditionSavedBlock = nullptr;
+    }
     LLVM_DEBUG(llvm::dbgs()
                << "  Call stack frames exhausted, continuing process\n");
   }
@@ -5643,6 +5661,10 @@ arith_dispatch:
       }
       return success();
     }
+
+    // Phase lifecycle debug traces (disabled for performance)
+    // Uncomment for debugging UVM phase progression:
+    // if (calleeName.contains("phase_hopper")) { ... }
 
     // Gather argument values (use getArgOperands to get just the arguments, not callee)
     SmallVector<InterpretedValue, 4> args;
@@ -13329,7 +13351,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         if (conditionTrue) {
           // Condition is already true, continue immediately.
-          // Clear the restart block since we're done waiting.
+          // Clear the restart block and delta poll counter since we're done.
           auto &state = processStates[procId];
           state.waitConditionRestartBlock = nullptr;
           return success();
@@ -13426,14 +13448,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                 << "re-evaluation (" << state.waitConditionValuesToInvalidate.size()
                                 << " values to invalidate)\n");
 
-        // For wait(condition), always use polling instead of signal-based waiting.
-        // The condition may depend on class member variables stored in heap memory
-        // that isn't tracked via LLHD signals. Even if we find signals in the
-        // process, they may not be the ones that affect the condition.
-        //
-        // TODO: For better performance, we could track which memory locations
-        // the condition depends on and only poll when those change.
-        constexpr int64_t kPollDelayFs = 1000000; // 1 ps (1000000 fs) polling interval
+        // For wait(condition), use polling to re-evaluate.
+        // The condition may depend on class member variables in heap memory
+        // that aren't tracked via LLHD signals.
+        constexpr int64_t kPollDelayFs = 1000000; // 1 ps polling interval
         SimTime currentTime = scheduler.getCurrentTime();
         SimTime targetTime = currentTime.advanceTime(kPollDelayFs);
 
@@ -13444,8 +13462,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         scheduler.getEventScheduler().schedule(
             targetTime, SchedulingRegion::Active,
             Event([this, procId]() {
-              // Resume the process - it will restart from the wait_condition
-              // restart point and re-evaluate the condition
               auto &st = processStates[procId];
               st.waiting = false;
               scheduler.scheduleProcess(procId, SchedulingRegion::Active);

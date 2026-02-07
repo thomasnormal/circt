@@ -350,6 +350,14 @@ struct ProcessExecutionState {
   /// recomputed when the condition is re-checked.
   llvm::SmallVector<mlir::Value, 8> waitConditionValuesToInvalidate;
 
+  /// Saved process body position for wait_condition inside function calls.
+  /// When wait_condition is inside a function (e.g., phase_hopper::get()),
+  /// the process body's currentBlock/currentOp are overwritten with the
+  /// function body's restart point. These fields save the process body
+  /// position so it can be restored after the function completes.
+  mlir::Block *waitConditionSavedBlock = nullptr;
+  mlir::Block::iterator waitConditionSavedOp;
+
   /// Call stack for resuming execution after a wait inside a function.
   /// When a wait (e.g., sim.fork with blocking join) occurs inside a nested
   /// function call, we push the function's context onto this stack so that
