@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 435 - February 7, 2026
+
+### Summary
+
+Iteration 435: Resolved nested interface port instances (e.g., `ParentIf`
+containing `ChildIf child`, where a module accesses `p.child`). The fix adds a
+scope-hierarchy fallback in `resolveInterfaceInstance` to navigate through
+parent interface values when sub-interface InstanceSymbols are not directly
+cached (shared bodies). This reduces XFAIL count from 7 to 6.
+
+### Accomplishments
+
+1. **Fix nested interface port resolution** - Sub-interface instances inside
+   interfaces (e.g., `ChildIf child` inside `ParentIf`) have shared
+   `InstanceSymbol` pointers and are not cached in `interfaceInstances`.
+   Added a fallback in `resolveInterfaceInstance` that:
+   - Walks up through `getParentScope()` to find the containing interface body
+   - Finds the parent interface instance in `interfaceInstances` by body match
+   - Creates `VirtualInterfaceSignalRefOp` to navigate to the sub-interface
+   Also fixed the chain-walk cycle detection to `break` instead of `return {}`
+   so the fallback can execute.
+2. **Updated test** - `nested-interface-port-instance.sv` removed XFAIL,
+   added comprehensive CHECK lines for Producer module and top module.
+
+### Verification (February 7, 2026)
+
+- ImportVerilog: 255 pass, 6 xfail, 0 fail (261 total)
+- circt-sim: 47 pass, 0 xfail, 0 fail (47 total)
+- Combined: 302 pass, 6 xfail, 0 fail (308 total)
+
 ## Iteration 434 - February 7, 2026
 
 ### Summary
