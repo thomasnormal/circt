@@ -12467,22 +12467,86 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
   });
 
-  // Look up the function in the module
-  // Safe access: check if process state exists before accessing
-  auto stateIt = processStates.find(procId);
-  if (stateIt == processStates.end()) {
-    LLVM_DEBUG(llvm::dbgs() << "  llvm.call: process state not found for "
-                            << "procId=" << procId << ", using rootModule\n");
-    // Create a temporary entry to avoid issues
-    processStates[procId] = ProcessExecutionState();
-    stateIt = processStates.find(procId);
+  // Look up the function - use cached active process state to avoid
+  // redundant std::map lookups (activeProcessState is set by executeProcess).
+  ProcessExecutionState *statePtr;
+  if (procId == activeProcessId && activeProcessState) {
+    statePtr = activeProcessState;
+  } else {
+    auto stateIt = processStates.find(procId);
+    if (stateIt == processStates.end()) {
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: process state not found for "
+                              << "procId=" << procId << ", using rootModule\n");
+      processStates[procId] = ProcessExecutionState();
+      stateIt = processStates.find(procId);
+    }
+    statePtr = &stateIt->second;
   }
-  auto &state = stateIt->second;
+  auto &state = *statePtr;
+
+  // Use function lookup cache to avoid repeated moduleOp.lookupSymbol calls.
+  // This turns O(n) symbol table lookups into O(1) hash map lookups for
+  // repeated calls to the same function (which dominate UVM testbenches).
+  auto cacheIt = funcLookupCache.find(calleeName);
+  if (cacheIt != funcLookupCache.end()) {
+    auto &cached = cacheIt->second;
+    if (cached.kind == 1) {
+      // Cached as func::FuncOp
+      auto mlirFuncOp = cast<func::FuncOp>(cached.op);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
+                              << "' as func.func (cached)\n");
+      SmallVector<InterpretedValue, 4> args;
+      SmallVector<Value, 4> callOperands;
+      for (Value arg : callOp.getOperands()) {
+        args.push_back(getValue(procId, arg));
+        callOperands.push_back(arg);
+      }
+
+      constexpr size_t maxCallDepth = 200;
+      if (state.callDepth >= maxCallDepth) {
+        for (Value result : callOp.getResults()) {
+          setValue(procId, result,
+                   InterpretedValue::makeX(getTypeWidth(result.getType())));
+        }
+        return success();
+      }
+
+      ++state.callDepth;
+      SmallVector<InterpretedValue, 2> results;
+      LogicalResult funcResult =
+          interpretFuncBody(procId, mlirFuncOp, args, results,
+                            callOp.getOperation());
+      --state.callDepth;
+
+      if (failed(funcResult))
+        return failure();
+
+      if (state.waiting)
+        return success();
+
+      for (auto [result, retVal] : llvm::zip(callOp.getResults(), results)) {
+        setValue(procId, result, retVal);
+      }
+      return success();
+    }
+    if (cached.kind == 2) {
+      // Cached as not found
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
+                              << "' not found (cached)\n");
+      for (Value result : callOp.getResults()) {
+        setValue(procId, result,
+                 InterpretedValue::makeX(getTypeWidth(result.getType())));
+      }
+      return success();
+    }
+    // kind == 0: cached as LLVM::LLVMFuncOp, fall through to handle below
+  }
+
+  // Cache miss or LLVM func - do the full lookup
   Operation *parent = state.processOrInitialOp;
   while (parent && !isa<ModuleOp>(parent))
     parent = parent->getParentOp();
 
-  // If parent is null (e.g., during module-level init), use rootModule
   if (!parent && rootModule)
     parent = rootModule.getOperation();
 
@@ -12496,15 +12560,24 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   }
 
   auto moduleOp = cast<ModuleOp>(parent);
-  auto funcOp = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(calleeName);
+  LLVM::LLVMFuncOp funcOp;
+
+  // Check cache for LLVM func
+  if (cacheIt != funcLookupCache.end() && cacheIt->second.kind == 0) {
+    funcOp = cast<LLVM::LLVMFuncOp>(cacheIt->second.op);
+  } else {
+    funcOp = moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(calleeName);
+  }
+
   if (!funcOp) {
-    // Fallback: try looking up as func::FuncOp (common in UVM where
-    // LLVM global constructors call func.func methods)
+    // Fallback: try looking up as func::FuncOp
     auto mlirFuncOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
     if (mlirFuncOp) {
+      // Cache the result
+      funcLookupCache[calleeName] = {mlirFuncOp.getOperation(), 1};
+
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
                               << "' as func.func (cross-dialect call)\n");
-      // Gather arguments
       SmallVector<InterpretedValue, 4> args;
       SmallVector<Value, 4> callOperands;
       for (Value arg : callOp.getOperands()) {
@@ -12512,10 +12585,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         callOperands.push_back(arg);
       }
 
-      // Check call depth
-      auto &crossState = processStates[procId];
       constexpr size_t maxCallDepth = 200;
-      if (crossState.callDepth >= maxCallDepth) {
+      if (state.callDepth >= maxCallDepth) {
         for (Value result : callOp.getResults()) {
           setValue(procId, result,
                    InterpretedValue::makeX(getTypeWidth(result.getType())));
@@ -12523,26 +12594,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         return success();
       }
 
-      ++crossState.callDepth;
+      ++state.callDepth;
       SmallVector<InterpretedValue, 2> results;
       LogicalResult funcResult =
           interpretFuncBody(procId, mlirFuncOp, args, results,
                             callOp.getOperation());
-      --processStates[procId].callDepth;
+      --state.callDepth;
 
       if (failed(funcResult))
         return failure();
 
-      // Check if process suspended
-      if (processStates[procId].waiting)
+      if (state.waiting)
         return success();
 
-      // Set return values
       for (auto [result, retVal] : llvm::zip(callOp.getResults(), results)) {
         setValue(procId, result, retVal);
       }
       return success();
     }
+
+    // Cache negative result
+    funcLookupCache[calleeName] = {nullptr, 2};
 
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: function '" << calleeName
                             << "' not found as llvm.func or func.func\n");
@@ -12551,6 +12623,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                InterpretedValue::makeX(getTypeWidth(result.getType())));
     }
     return success();
+  }
+
+  // Cache the LLVM func lookup
+  if (cacheIt == funcLookupCache.end()) {
+    funcLookupCache[calleeName] = {funcOp.getOperation(), 0};
   }
 
   // Check if function has a body
