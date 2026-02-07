@@ -52,7 +52,7 @@ as 100 UVM-dependent tests (need `import uvm_pkg`) and 9 non-UVM (6 Black Parrot
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 47 | 47 | 0 | All tests pass including cumulative __moore_delay |
+| circt-sim | 48 | 48 | 0 | All tests pass including wait_condition inside function calls |
 
 ## UVM Simulation Feature Status
 
@@ -154,3 +154,6 @@ to commercial simulators like Cadence Xcelium.
 | `interpretFuncBody` caching | Fixed per-op `processStates.find()` in func body loop to use cached `activeProcessState` pointer |
 | Dialect fast dispatch | `interpretOperation` goto-based dialect namespace check skips 20+ irrelevant dyn_casts for 93% of ops (LLVM/comb/arith) |
 | Interceptor dispatch cache | `nonInterceptedExternals` DenseSet skips 128-entry string chain; `__moore_delay` moved to position #1; ~132 → ~171 ns/s |
+| `wait_condition` in functions | condBlock = callOp->getBlock() for function-body restart; frame resume override; arith ops in shouldTrace for complete condition chain |
+| `wait_event` body pre-exec | Pre-execute body ops (e.g., llvm.call for assoc_get_ref) before signal/memory tracing walks |
+| `uvm_wait_for_nba_region` | Intercepted as single delta cycle delay (scheduleProcess to Reactive region) |
