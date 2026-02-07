@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 470 - February 7, 2026
+
+### Summary
+
+Implemented functional coverage collection: covergroup/coverpoint sampling with
+reporting via MooreRuntime, 4-state type handling in CovergroupSampleOpConversion,
+and module-level LLVM op handling for covergroup handle propagation.
+
+### Fixes
+
+1. **Functional coverage collection (covergroup/coverpoint)**
+   - Added `CovergroupSampleOpConversion` in MooreToCore with 4-state value
+     extraction for coverpoint expressions.
+   - Module-level LLVM op handling for covergroup handle propagation ensures
+     covergroup instances are correctly threaded through the hierarchy.
+   - Interpreter intercepts `sample()` calls to evaluate coverpoint expressions
+     and accumulate bin hits at runtime.
+   - End-of-simulation reporting prints coverage percentages per covergroup.
+
+2. **New regression test**
+   - Added `test/Tools/circt-sim/covergroup-basic.sv` covering basic
+     covergroup/coverpoint declaration, implicit `sample()` invocation, and
+     coverage result reporting.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-sim/covergroup-basic.sv`: PASS
+
 ## Iteration 469 - February 7, 2026
 
 ### Summary
