@@ -2330,14 +2330,30 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
 
     auto handleInterfacePort = [&](const InterfacePortSymbol &port) {
       auto portLoc = convertLocation(port.location);
-      if (!port.interfaceDef) {
+      const slang::ast::DefinitionSymbol *ifaceDef = port.interfaceDef;
+
+      // For generic interface ports (e.g., `module foo(interface bus)`),
+      // resolve the concrete interface type from the connection site.
+      if (!ifaceDef && port.isGeneric) {
+        auto [ifaceConn, modportSym] = port.getConnection();
+        if (auto *instSym =
+                ifaceConn ? ifaceConn->as_if<slang::ast::InstanceSymbol>()
+                          : nullptr) {
+          ifaceDef = &instSym->getDefinition();
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Resolved generic interface port `" << port.name
+                     << "` to " << ifaceDef->name << "\n");
+        }
+      }
+
+      if (!ifaceDef) {
         mlir::emitError(portLoc)
             << "unsupported generic interface port `" << port.name << "`";
         return failure();
       }
 
       auto &ifaceBody = slang::ast::InstanceBodySymbol::fromDefinition(
-          compilation, *port.interfaceDef, port.location,
+          compilation, *ifaceDef, port.location,
           slang::ast::InstanceFlags::None, nullptr, nullptr, nullptr);
       auto *ifaceLowering = convertInterfaceHeader(&ifaceBody);
       if (!ifaceLowering)
