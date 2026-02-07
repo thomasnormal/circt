@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 466)
+## Current Status - February 7, 2026 (Iteration 467)
 
 ### Test Results
 
@@ -46,6 +46,53 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 467
+
+1. **Top-level generic interface port compatibility lowering**
+   - Extended `ImportVerilog` handling for unresolved generic interface ports
+     when `--allow-top-level-iface-ports` is enabled.
+   - Instead of erroring in this mode, CIRCT now synthesizes an opaque
+     `moore.interface` symbol and lowers the port as
+     `!moore.ref<virtual_interface<@__generic_interface_N>>`.
+   - Default behavior remains strict when the flag is not enabled.
+
+2. **Behavioral regression coverage**
+   - Added `test/Conversion/ImportVerilog/generic-interface-port-top.sv`.
+   - The test locks:
+     - default front-end failure for unconnected top-level interface ports
+     - successful import with `--allow-top-level-iface-ports`
+     - synthesized opaque interface typing in the lowered module port.
+
+3. **Validation**
+   - Lit:
+     - `test/Conversion/ImportVerilog/generic-interface-port-top.sv`: PASS
+     - `test/Conversion/ImportVerilog/generic-interface-port.sv`: PASS
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - `--allow-top-level-iface-ports` currently lowers unresolved interfaces as
+     opaque symbols; we still need richer structural recovery for member/modport
+     semantics where usage context allows inference.
+   - We still do not expose all useful Slang controls through `circt-verilog`;
+     highest-value remaining gap is pass-through for ignored preprocessor
+     directives (`Driver::Options::ignoreDirectives`) to unblock vendor-specific
+     directive-heavy codebases without source patching.
+   - Multi-clock prune remains the highest BMC pipeline gap:
+     `--prune-bmc-registers` is still guarded with `--allow-multi-clock`.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in key flows.
+   - Verilator BMC still benefits from known-input assumptions in some tests.
 
 ### Session Summary - Iteration 466
 

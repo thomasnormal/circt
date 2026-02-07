@@ -2360,9 +2360,38 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
       }
 
       if (!ifaceDef) {
-        mlir::emitError(portLoc)
-            << "unsupported generic interface port `" << port.name << "`";
-        return failure();
+        if (!options.allowTopLevelIfacePorts.value_or(false)) {
+          mlir::emitError(portLoc)
+              << "unsupported generic interface port `" << port.name << "`";
+          return failure();
+        }
+
+        // If top-level generic interface ports are explicitly allowed, model
+        // unresolved generic ports with a synthesized opaque interface type.
+        auto it = orderedRootOps.upper_bound(port.location);
+        if (it == orderedRootOps.end())
+          builder.setInsertionPointToEnd(intoModuleOp.getBody());
+        else
+          builder.setInsertionPoint(it->second);
+        std::string opaqueIfaceName = "__generic_interface_" +
+                                      std::to_string(
+                                          synthesizedGenericInterfaceCount++);
+        auto opaqueIfaceOp =
+            moore::InterfaceDeclOp::create(builder, portLoc, opaqueIfaceName);
+        opaqueIfaceOp.getBody().emplaceBlock();
+        orderedRootOps.insert(it, {port.location, opaqueIfaceOp});
+        symbolTable.insert(opaqueIfaceOp);
+
+        auto ifaceRef =
+            mlir::FlatSymbolRefAttr::get(getContext(), opaqueIfaceOp.getSymName());
+        auto vifType = moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+        auto portType = moore::RefType::get(vifType);
+        auto portName = builder.getStringAttr(port.name);
+        modulePorts.push_back({portName, portType, hw::ModulePort::Input});
+        auto arg = block->addArgument(portType, portLoc);
+        lowering.ports.push_back({&port, portLoc, arg});
+        inputIdx++;
+        return success();
       }
 
       auto &ifaceBody = slang::ast::InstanceBodySymbol::fromDefinition(

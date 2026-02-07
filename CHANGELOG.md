@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 467 - February 7, 2026
+
+### Summary
+
+Extended generic interface import support by allowing unresolved top-level
+generic interface ports to lower through an opaque synthesized interface when
+explicitly enabled.
+
+### Fixes
+
+1. **Top-level generic interface compatibility path**
+   - Updated `ImportVerilog` module header lowering so unresolved generic
+     interface ports can lower when `--allow-top-level-iface-ports` is set.
+   - In this mode, CIRCT synthesizes a unique opaque
+     `moore.interface @__generic_interface_<N>` declaration and lowers the
+     corresponding port as
+     `!moore.ref<virtual_interface<@__generic_interface_<N>>>`.
+   - Strict default behavior remains unchanged when the flag is not enabled.
+
+2. **Behavioral regression coverage**
+   - Added `test/Conversion/ImportVerilog/generic-interface-port-top.sv`.
+   - Verifies default failure for unconnected top-level interface ports and
+     successful lowering with `--allow-top-level-iface-ports`.
+   - Locks synthesized opaque interface typing in the imported IR.
+
+### Validation
+
+- Lit:
+  - `test/Conversion/ImportVerilog/generic-interface-port-top.sv`: PASS
+  - `test/Conversion/ImportVerilog/generic-interface-port.sv`: PASS
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 466 - February 7, 2026
 
 ### Summary
