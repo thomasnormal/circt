@@ -22,7 +22,7 @@ module plusargs_test;
 endmodule
 
 // CHECK: moore.module @plusargs_test
-// $value$plusargs still stubbed to constant 0
-// CHECK: moore.constant 0 : i32
+// $value$plusargs emits runtime call
+// CHECK: llvm.call @__moore_value_plusargs
 // $test$plusargs emits runtime call
 // CHECK: llvm.call @__moore_test_plusargs

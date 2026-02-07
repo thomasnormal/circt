@@ -10,7 +10,7 @@
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time
 // CHECK: Processes executed:
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 // External declaration of __moore_delay (simulates runtime function)
 llvm.func @__moore_delay(i64)

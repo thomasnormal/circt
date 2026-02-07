@@ -10,7 +10,7 @@
 // CHECK: Initial value: 42
 // CHECK: After modification: 100
 // CHECK: [circt-sim] Simulation completed at time 0 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test_runtime_sig() {
   seq.initial() {

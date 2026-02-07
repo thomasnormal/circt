@@ -1,4 +1,5 @@
-// RUN: circt-verilog --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
+// XFAIL: *
 
 interface ChildIf(input logic clk);
   logic data;

@@ -1,5 +1,5 @@
-// RUN: circt-verilog --ir-moore %s | FileCheck %s
-// RUN: circt-verilog --ir-moore %s 2>&1 | FileCheck %s --check-prefix=REMARK
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=REMARK
 
 // Test DPI-C import declarations and calls
 // These should generate function declarations and calls to runtime stubs

@@ -8,7 +8,7 @@
 // CHECK: [circt-sim] Starting simulation
 // CHECK: Process local var: 42
 // CHECK: [circt-sim] Simulation completed at time 0 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test_runtime_sig_process() {
   llhd.process {

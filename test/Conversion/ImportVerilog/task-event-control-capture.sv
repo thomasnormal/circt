@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --ir-hw 2>&1 | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include %s --ir-hw 2>&1 | FileCheck %s
 // Test that event controls inside tasks properly capture module-level signals.
 // This ensures that @(posedge clk) inside a task correctly captures the
 // module-level clock signal as a function capture argument.

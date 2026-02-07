@@ -1,4 +1,4 @@
-// RUN: circt-verilog --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 // Test basic UVM DPI-C imports
 // Verify that DPI functions are declared and called properly
