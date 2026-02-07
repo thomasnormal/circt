@@ -9510,6 +9510,200 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+  // Intercept get_adjacent_successor_nodes to avoid the 1M ops limit.
+  // The interpreted version runs a fixed-point loop that can exceed the op limit
+  // on complex phase graphs. We reimplement it directly using native assoc array
+  // operations, which is both faster and avoids the convergence issue.
+  //
+  // Algorithm: starting from phase->m_successors (field [11]), collect all
+  // terminal nodes (phase_type == 1 = UVM_PHASE_NODE). Non-terminal nodes
+  // are replaced with their own successors recursively until only terminals
+  // remain. Result is stored as a dynamic array in %arg1.
+  if (calleeName.contains("get_adjacent_successor_nodes")) {
+    // Read %arg0 (phase pointer) and %arg1 (output dyn_array pointer)
+    InterpretedValue arg0Val = args[0];
+    InterpretedValue arg1Val = args[1];
+    if (arg0Val.isX() || arg1Val.isX())
+      return success();
+
+    uint64_t phaseAddr = arg0Val.getUInt64();
+    uint64_t outAddr = arg1Val.getUInt64();
+
+    // Helper: read the m_successors assoc array pointer (field [11]) from a phase
+    auto getSuccessorsArray = [&](uint64_t phasePtr) -> void * {
+      // Field [11] offset: compute via GEP semantics.
+      // The struct is uvm_pkg::uvm_phase with fields:
+      // [0] uvm_object (40 bytes: uvm_void(8+8) + string(16) + i32(4) + pad(4))
+      // Actually, the offset depends on struct layout. Let the interpreter
+      // compute it by reading the pointer at the right offset.
+      // Field [11] is a ptr. We need to find its byte offset in the struct.
+      // From the MLIR: getelementptr %arg0[0, 11] with the uvm_phase struct type.
+      // Let's compute: look up the address via interpreter memory.
+      uint64_t field11Offset = 0;
+      // Use the MLIR struct layout. The struct has these fields:
+      // 0: uvm_object (nested), 1: i32, 2: ptr, 3: ptr, 4: i32, 5: i32,
+      // 6: ptr, 7: ptr, 8: i32, 9: i32, 10: ptr, 11: ptr (m_successors)
+      // On 64-bit with natural alignment:
+      // uvm_object = uvm_void(i32+ptr=16) + string(ptr+i64=16) + i32(+pad) = ~40 bytes
+      // Then: i32(4)+pad(4) + ptr(8) + ptr(8) + i32(4)+pad(4) + i32(4)+pad(4)
+      //       + ptr(8) + ptr(8) + i32(4)+pad(4) + i32(4)+pad(4) + ptr(8) + ptr(8)=field11
+      // This is fragile. Instead, read the memory block and find the pointer.
+      // Better: use the same approach as the interpreter - find the memory block
+      // and read at the computed offset.
+
+      // Actually, let's just read from interpreter memory. The GEP for field [11]
+      // produces an address. Let's compute it by walking the struct.
+      // For the uvm_phase struct:
+      //   struct uvm_void { i32, ptr } -> 16 bytes (4 + 4pad + 8)
+      //   struct uvm_object { uvm_void, struct{ptr,i64}, i32 } -> 16 + 16 + 4 = 36, padded to 40
+      //   uvm_phase fields after uvm_object base:
+      //     [1] i32 -> offset 40, size 4
+      //     [2] ptr -> offset 48, size 8
+      //     [3] ptr -> offset 56, size 8
+      //     [4] i32 -> offset 64, size 4
+      //     [5] i32 -> offset 68, size 4
+      //     [6] ptr -> offset 72, size 8
+      //     [7] ptr -> offset 80, size 8
+      //     [8] i32 -> offset 88, size 4
+      //     [9] i32 -> offset 92, size 4
+      //     [10] ptr -> offset 96, size 8
+      //     [11] ptr -> offset 104, size 8 (m_successors)
+      field11Offset = 104;
+
+      uint64_t ptrAddr = phasePtr + field11Offset;
+      uint64_t blockOff = 0;
+      MemoryBlock *block = findMemoryBlockByAddress(ptrAddr, procId, &blockOff);
+      if (!block || !block->initialized || blockOff + 8 > block->data.size())
+        return nullptr;
+      uint64_t arrayAddr = 0;
+      std::memcpy(&arrayAddr, block->data.data() + blockOff, 8);
+      if (arrayAddr == 0)
+        return nullptr;
+      // Validate it's a real assoc array
+      constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+      if (!validAssocArrayAddresses.contains(arrayAddr) &&
+          arrayAddr < kNativeHeapThreshold)
+        return nullptr;
+      return reinterpret_cast<void *>(arrayAddr);
+    };
+
+    // Helper: read phase_type (field [1]) from a phase pointer
+    auto getPhaseType = [&](uint64_t phasePtr) -> int32_t {
+      // Field [1] is at offset 40 (after uvm_object base class)
+      uint64_t field1Addr = phasePtr + 40;
+      uint64_t blockOff = 0;
+      MemoryBlock *block = findMemoryBlockByAddress(field1Addr, procId, &blockOff);
+      if (!block || !block->initialized || blockOff + 4 > block->data.size())
+        return -1; // Unknown
+      int32_t phaseType = 0;
+      std::memcpy(&phaseType, block->data.data() + blockOff, 4);
+      return phaseType;
+    };
+
+    // Collect all successor phase pointers from m_successors
+    void *succArray = getSuccessorsArray(phaseAddr);
+    if (!succArray) {
+      // No successors - store empty dynamic array
+      uint64_t outOff = 0;
+      MemoryBlock *outBlock = findMemoryBlockByAddress(outAddr, procId, &outOff);
+      if (outBlock && outBlock->initialized && outOff + 16 <= outBlock->data.size()) {
+        std::memset(outBlock->data.data() + outOff, 0, 16);
+      }
+      return success();
+    }
+
+    // Fixed-point: collect terminal nodes (phase_type == 1).
+    // Use a set to track visited nodes and avoid cycles.
+    std::set<uint64_t> terminalNodes;
+    std::set<uint64_t> visited;
+    std::vector<uint64_t> worklist;
+
+    // Initialize worklist from m_successors
+    {
+      uint8_t keyBuf[8] = {0};
+      if (__moore_assoc_first(succArray, keyBuf)) {
+        uint64_t key = 0;
+        std::memcpy(&key, keyBuf, 8);
+        worklist.push_back(key);
+        while (__moore_assoc_next(succArray, keyBuf)) {
+          std::memcpy(&key, keyBuf, 8);
+          worklist.push_back(key);
+        }
+      }
+    }
+
+    // Process worklist: replace non-terminals with their successors
+    constexpr int kMaxIterations = 10000;
+    int iterations = 0;
+    while (!worklist.empty() && iterations < kMaxIterations) {
+      ++iterations;
+      uint64_t nodeAddr = worklist.back();
+      worklist.pop_back();
+
+      if (visited.count(nodeAddr))
+        continue;
+      visited.insert(nodeAddr);
+
+      int32_t phaseType = getPhaseType(nodeAddr);
+      if (phaseType == 1) {
+        // Terminal node (UVM_PHASE_NODE) - keep it
+        terminalNodes.insert(nodeAddr);
+      } else {
+        // Non-terminal - add its successors to worklist
+        void *nodeSuccArray = getSuccessorsArray(nodeAddr);
+        if (nodeSuccArray) {
+          uint8_t keyBuf[8] = {0};
+          if (__moore_assoc_first(nodeSuccArray, keyBuf)) {
+            uint64_t key = 0;
+            std::memcpy(&key, keyBuf, 8);
+            if (!visited.count(key))
+              worklist.push_back(key);
+            while (__moore_assoc_next(nodeSuccArray, keyBuf)) {
+              std::memcpy(&key, keyBuf, 8);
+              if (!visited.count(key))
+                worklist.push_back(key);
+            }
+          }
+        }
+      }
+    }
+
+    LLVM_DEBUG(llvm::dbgs() << "  get_adjacent_successor_nodes: "
+                            << terminalNodes.size() << " terminals from "
+                            << visited.size() << " visited in "
+                            << iterations << " iterations\n");
+
+    // Build the output dynamic array
+    int32_t count = static_cast<int32_t>(terminalNodes.size());
+    int32_t byteCount = count * 8; // array of pointers
+    auto dynArray = __moore_dyn_array_new(byteCount);
+    // dynArray is struct { ptr, i64 }
+    uint8_t *arrayData = reinterpret_cast<uint8_t *>(dynArray.data);
+
+    int idx = 0;
+    for (uint64_t nodeAddr : terminalNodes) {
+      std::memcpy(arrayData + idx * 8, &nodeAddr, 8);
+      ++idx;
+    }
+
+    // Store the dyn array struct into %arg1
+    uint64_t outOff = 0;
+    MemoryBlock *outBlock = findMemoryBlockByAddress(outAddr, procId, &outOff);
+    if (outBlock && outOff + 16 <= outBlock->data.size()) {
+      uint64_t dataPtr = reinterpret_cast<uint64_t>(dynArray.data);
+      int64_t length = static_cast<int64_t>(count);
+      std::memcpy(outBlock->data.data() + outOff, &dataPtr, 8);
+      std::memcpy(outBlock->data.data() + outOff + 8, &length, 8);
+      outBlock->initialized = true;
+      // Register the native memory block for the array data
+      if (dataPtr && byteCount > 0) {
+        nativeMemoryBlocks[dataPtr] = static_cast<size_t>(byteCount);
+      }
+    }
+
+    return success();
+  }
+
   // Intercept UVM config_db_implementation_t::set/get/exists methods.
   // These are stub methods generated by MooreToCore for the UVM config_db class.
   // We replace them with a real key-value store so config_db actually works.
@@ -10009,11 +10203,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         }
       }
       if (opCount >= maxOps) {
-        LLVM_DEBUG(llvm::dbgs() << "  Warning: Function reached max operations\n");
+        llvm::errs() << "circt-sim: Function '" << funcOp.getName()
+                     << "' exceeded " << maxOps << " operations for process "
+                     << procId << "\n";
+        llvm::errs() << "  Last op: ";
+        op.print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
+        llvm::errs() << "\n";
         cleanupTempMappings();
         return failure();
       }
-
       // Check if the process was suspended (e.g., by process::suspend() on self)
       // Use cached active process state to avoid repeated std::map lookups.
       {

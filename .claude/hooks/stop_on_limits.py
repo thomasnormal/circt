@@ -15,8 +15,10 @@ Advice:
 - What limitations do we still have? What features should we build?
 - Check the status of each Track/Workstream. What task should they each do next?
 - We should have four agents running at any one time.
+- Don't worry about BMC and LEC, the Codex agent is working on those.
 - Keep testing on ~/mbit/*avip* and ~/sv-tests/ and ~/verilator-verification/ and ~/yosys/tests/ and ~/opentitan/ for real world feedback.
 - Make unit tests for every bug you fix or new feature you implement
+- Keep lots of notes as you work, and a table of what features are still missing
 - Commit regularly and merge with upstream main, so the workers stay in sync.
 Continue!
 """.strip()
