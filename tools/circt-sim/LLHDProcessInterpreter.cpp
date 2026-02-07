@@ -4102,6 +4102,24 @@ SimTime LLHDProcessInterpreter::convertTimeValue(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
                                                           Operation *op) {
+  // Fast-path: check dialect namespace to skip irrelevant dyn_cast chains.
+  // 93%+ of ops in LLVM function bodies are LLVM/comb/arith dialect, but
+  // without this check they'd fail 20+ LLHD/sim/seq/moore dyn_casts first.
+  // A single pointer comparison routes to the correct section immediately.
+  mlir::Dialect *dialect = op->getDialect();
+  if (dialect) {
+    llvm::StringRef dialectNS = dialect->getNamespace();
+    // LLVM ops (22% call + 15% load + 15% extractvalue + 7% zext + ...)
+    if (dialectNS == "llvm")
+      goto llvm_dispatch;
+    // comb ops (15% icmp + ...)
+    if (dialectNS == "comb")
+      goto comb_dispatch;
+    // arith ops (15% trunci + ...)
+    if (dialectNS == "arith")
+      goto arith_dispatch;
+  }
+
   // Dispatch to specific handlers based on operation type
 
   // LLHD operations
@@ -4300,6 +4318,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   // Arithmetic/comb operations - basic support
+comb_dispatch:
   if (auto icmpOp = dyn_cast<comb::ICmpOp>(op)) {
     InterpretedValue lhs = getValue(procId, icmpOp.getLhs());
     InterpretedValue rhs = getValue(procId, icmpOp.getRhs());
@@ -4895,7 +4914,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   //===--------------------------------------------------------------------===//
   // Arith Dialect Operations
   //===--------------------------------------------------------------------===//
-
+arith_dispatch:
   if (auto arithConstOp = dyn_cast<mlir::arith::ConstantOp>(op)) {
     if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
       setValue(procId, arithConstOp.getResult(),
@@ -6141,7 +6160,7 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   //===--------------------------------------------------------------------===//
   // LLVM Dialect Operations
   //===--------------------------------------------------------------------===//
-
+llvm_dispatch:
   // LLVM constant operation (llvm.mlir.constant)
   if (auto llvmConstOp = dyn_cast<LLVM::ConstantOp>(op)) {
     if (auto intAttr = dyn_cast<IntegerAttr>(llvmConstOp.getValue())) {
@@ -18037,6 +18056,40 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
                         condBrOp.getFalseDestOperands())) {
             cachedState->valueMap[blockArg] = getValue(procId, operand);
           }
+        }
+        tookBranch = true;
+        break;
+      }
+
+      // Fast-path: handle cf dialect branch ops inline (7.4% of ops)
+      // to avoid falling through the full interpretOperation dispatch chain.
+      if (auto cfCondBrOp = dyn_cast<mlir::cf::CondBranchOp>(&op)) {
+        InterpretedValue cond = getValue(procId, cfCondBrOp.getCondition());
+        if (!cond.isX() && cond.getUInt64() != 0) {
+          currentBlock = cfCondBrOp.getTrueDest();
+          for (auto [blockArg, operand] :
+               llvm::zip(currentBlock->getArguments(),
+                        cfCondBrOp.getTrueDestOperands())) {
+            cachedState->valueMap[blockArg] = getValue(procId, operand);
+          }
+        } else {
+          currentBlock = cfCondBrOp.getFalseDest();
+          for (auto [blockArg, operand] :
+               llvm::zip(currentBlock->getArguments(),
+                        cfCondBrOp.getFalseDestOperands())) {
+            cachedState->valueMap[blockArg] = getValue(procId, operand);
+          }
+        }
+        tookBranch = true;
+        break;
+      }
+
+      if (auto cfBrOp = dyn_cast<mlir::cf::BranchOp>(&op)) {
+        currentBlock = cfBrOp.getDest();
+        for (auto [blockArg, operand] :
+             llvm::zip(currentBlock->getArguments(),
+                      cfBrOp.getDestOperands())) {
+          cachedState->valueMap[blockArg] = getValue(procId, operand);
         }
         tookBranch = true;
         break;
