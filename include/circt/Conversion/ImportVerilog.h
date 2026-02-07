@@ -95,6 +95,17 @@ struct ImportVerilogOptions {
   /// files.
   std::optional<bool> librariesInheritMacros;
 
+  /// If true, local include lookup is disabled; includes no longer search
+  /// relative to the including file first.
+  std::optional<bool> disableLocalIncludes;
+
+  /// If true, support legacy protected envelope directives.
+  std::optional<bool> enableLegacyProtect;
+
+  /// Custom translate-off comment directive formats, as
+  /// `<common>,<start>,<end>`.
+  std::vector<std::string> translateOffOptions;
+
   //===--------------------------------------------------------------------===//
   // Compilation
   //===--------------------------------------------------------------------===//

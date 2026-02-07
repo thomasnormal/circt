@@ -286,6 +286,9 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.defines = options.defines;
   driver.options.undefines = options.undefines;
   driver.options.librariesInheritMacros = options.librariesInheritMacros;
+  driver.options.disableLocalIncludes = options.disableLocalIncludes;
+  driver.options.enableLegacyProtect = options.enableLegacyProtect;
+  driver.options.translateOffOptions = options.translateOffOptions;
 
   driver.options.languageVersion = options.languageVersion;
   driver.options.maxParseDepth = options.maxParseDepth;

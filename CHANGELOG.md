@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 463 - February 7, 2026
+
+### Summary
+
+Expanded Slang preprocessing controls in `circt-verilog` with real behavioral
+coverage for include-resolution semantics.
+
+### Fixes
+
+1. **New Slang preprocessing controls exposed**
+   - Added CLI options and pass-through support for:
+     - `--disable-local-includes`
+     - `--enable-legacy-protect`
+     - `--translate-off-format`
+   - Wired these through `ImportVerilogOptions` into Slang `Driver::Options`.
+
+2. **Behavioral regression for local include lookup**
+   - Added `test/Tools/circt-verilog/disable-local-includes.test` with input
+     corpus under `test/Tools/circt-verilog/Inputs/disable-local-includes/`.
+   - Locks default behavior (`"local include first"`) vs
+     `--disable-local-includes` behavior (`"search include dirs first"`).
+
+3. **Updated command-line coverage**
+   - Extended `test/Tools/circt-verilog/commandline.mlir` with checks for the
+     three new options.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+  - `test/Tools/circt-verilog/disable-local-includes.test`: PASS
+  - `test/Conversion/ImportVerilog/max-instance-array.sv`: PASS
+  - `test/Tools/circt-verilog/avip-timescale-default.test`: PASS
+  - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS with
+    `BMC_ASSUME_KNOWN_INPUTS=1` (without this, still FAIL)
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 462 - February 7, 2026
 
 ### Summary
