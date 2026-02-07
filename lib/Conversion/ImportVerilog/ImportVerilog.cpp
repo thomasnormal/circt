@@ -35,6 +35,7 @@
 #include "slang/driver/Driver.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxPrinter.h"
+#include "slang/util/Bag.h"
 #include "slang/util/VersionInfo.h"
 
 using namespace mlir;
@@ -252,6 +253,15 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
           << "': " << ec.message();
   });
 
+  forEachCommaValue(options.suppressMacroWarningsPaths,
+                    [&](StringRef pathPattern) {
+                      if (auto ec =
+                              driver.diagEngine.addIgnoreMacroPaths(pathPattern))
+                        emitWarning(UnknownLoc::get(mlirContext))
+                            << "--suppress-macro-warnings path '" << pathPattern
+                            << "': " << ec.message();
+                    });
+
   forEachCommaValue(options.libraryFiles, [&](StringRef libraryPattern) {
     StringRef libraryName;
     StringRef filePattern = libraryPattern;
@@ -261,6 +271,10 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
       filePattern = libraryPattern.drop_front(eqPos + 1).trim();
     }
     driver.sourceLoader.addLibraryFiles(libraryName, filePattern);
+  });
+
+  forEachCommaValue(options.libraryMapFiles, [&](StringRef mapPattern) {
+    driver.sourceLoader.addLibraryMaps(mapPattern, {}, slang::Bag{});
   });
 
   // Populate the driver options.
@@ -333,6 +347,10 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
       slang::ast::CompilationFlags::DisableInstanceCaching, false);
   driver.options.topModules = options.topModules;
   driver.options.paramOverrides = options.paramOverrides;
+  forEachCommaValue(options.libraryOrder, [&](StringRef libraryName) {
+    driver.options.libraryOrder.emplace_back(libraryName.str());
+  });
+  driver.options.defaultLibName = options.defaultLibName;
 
   driver.options.errorLimit = options.errorLimit;
   driver.options.warningOptions = options.warningOptions;
