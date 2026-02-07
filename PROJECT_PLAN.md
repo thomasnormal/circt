@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 463)
+## Current Status - February 7, 2026 (Iteration 464)
 
 ### Test Results
 
@@ -46,6 +46,53 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 464
+
+1. **New Slang option integration in `circt-verilog`**
+   - Added keyword-version file mapping:
+     `--map-keyword-version=<keyword-version>+<file-pattern>[,...]`.
+   - Added min/typ/max selection:
+     `--timing=min|typ|max` and alias `-T`.
+   - Wired both into Slang `Driver::Options`.
+
+2. **Behavioral regression coverage**
+   - Added `test/Tools/circt-verilog/map-keyword-version.test` with dedicated
+     inputs under `test/Tools/circt-verilog/Inputs/map-keyword-version/`.
+   - Updated `test/Conversion/ImportVerilog/mintypmax-let.sv` to lock default
+     typ behavior plus `--timing=min` and `--timing=max`.
+   - Updated `test/Tools/circt-verilog/commandline.mlir` for the new options.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+     - `test/Tools/circt-verilog/map-keyword-version.test`: PASS
+     - `test/Tools/circt-verilog/disable-local-includes.test`: PASS
+     - `test/Conversion/ImportVerilog/mintypmax-let.sv`: PASS
+     - `test/Conversion/ImportVerilog/max-instance-array.sv`: PASS
+     - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Multi-clock pruning in `circt-bmc` is still guarded when
+     `--allow-multi-clock` is enabled; we need a robust one-shot
+     externalize+prune fix before enabling it long term.
+   - OpenTitan LEC still requires `XPROP_ONLY` acceptance in key cases; better
+     X/4-state initialization correlation remains high priority.
+   - Verilator BMC still depends on known-input assumptions in some cases
+     (`BMC_ASSUME_KNOWN_INPUTS=1` for `assert_rose`).
+   - Next high-value Slang options to expose are UDP coverage note limits and
+     additional compilation compatibility toggles with focused behavioral tests.
 
 ### Session Summary - Iteration 463
 

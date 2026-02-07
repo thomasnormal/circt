@@ -106,6 +106,10 @@ struct ImportVerilogOptions {
   /// `<common>,<start>,<end>`.
   std::vector<std::string> translateOffOptions;
 
+  /// Maps file patterns to keyword versions, formatted as
+  /// `<keyword-version>+<file-pattern>[,...]`.
+  std::vector<std::string> keywordVersionMappings;
+
   //===--------------------------------------------------------------------===//
   // Compilation
   //===--------------------------------------------------------------------===//
@@ -143,6 +147,10 @@ struct ImportVerilogOptions {
   /// A string that indicates the default time scale to use for any design
   /// elements that don't specify one explicitly.
   std::optional<std::string> timeScale;
+
+  /// Select which value in min:typ:max expressions to use (`min`, `typ`,
+  /// or `max`).
+  std::optional<std::string> minTypMax;
 
   /// If true, allow various to be referenced before they are declared.
   std::optional<bool> allowUseBeforeDeclare;

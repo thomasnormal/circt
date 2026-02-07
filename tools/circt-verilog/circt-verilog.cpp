@@ -233,6 +233,12 @@ struct CLOptions {
                "<common>,<start>,<end>"),
       cl::value_desc("<common>,<start>,<end>"), cl::cat(cat)};
 
+  cl::list<std::string> mapKeywordVersion{
+      "map-keyword-version",
+      cl::desc("Parse matching files with a specific keyword version as "
+               "<keyword-version>+<file-pattern>[,...]"),
+      cl::value_desc("<keyword-version>+<file-pattern>[,...]"), cl::cat(cat)};
+
   //===--------------------------------------------------------------------===//
   // Compilation
   //===--------------------------------------------------------------------===//
@@ -242,6 +248,13 @@ struct CLOptions {
       cl::desc("Default time scale to use for design elements that don't "
                "specify one explicitly"),
       cl::value_desc("<base>/<precision>"), cl::cat(cat)};
+
+  cl::opt<std::string> minTypMax{
+      "timing", cl::desc("Select min:typ:max value for compilation"),
+      cl::value_desc("min|typ|max"), cl::cat(cat)};
+  cl::alias minTypMaxShort{"T", cl::desc("Alias for --timing"),
+                           cl::aliasopt(minTypMax), cl::NotHidden,
+                           cl::cat(cat)};
 
   cl::opt<std::string> languageVersion{
       "language-version",
@@ -614,6 +627,7 @@ static LogicalResult executeWithSources(MLIRContext *context,
   options.disableLocalIncludes = opts.disableLocalIncludes;
   options.enableLegacyProtect = opts.enableLegacyProtect;
   options.translateOffOptions = opts.translateOffOptions;
+  options.keywordVersionMappings = opts.mapKeywordVersion;
 
   if (opts.languageVersion.getNumOccurrences() > 0)
     options.languageVersion = opts.languageVersion;
@@ -638,6 +652,8 @@ static LogicalResult executeWithSources(MLIRContext *context,
 
   if (opts.timeScale.getNumOccurrences() > 0)
     options.timeScale = opts.timeScale;
+  if (opts.minTypMax.getNumOccurrences() > 0)
+    options.minTypMax = opts.minTypMax;
   if (opts.allowUseBeforeDeclare.getNumOccurrences() > 0)
     options.allowUseBeforeDeclare = opts.allowUseBeforeDeclare;
   options.ignoreUnknownModules = opts.ignoreUnknownModules;
