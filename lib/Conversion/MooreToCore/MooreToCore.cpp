@@ -14710,8 +14710,12 @@ struct QueueUniqueIndexOpConversion
     Type elementType;
     if (auto queueType = dyn_cast<moore::QueueType>(inputType))
       elementType = queueType.getElementType();
-    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(inputType))
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(inputType))
       elementType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(inputType))
+      elementType = fixedArrayType.getElementType();
     else
       return failure();
 
@@ -14757,8 +14761,12 @@ struct QueueReduceOpConversion
     Type elementType;
     if (auto queueType = dyn_cast<moore::QueueType>(inputType))
       elementType = queueType.getElementType();
-    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(inputType))
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(inputType))
       elementType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(inputType))
+      elementType = fixedArrayType.getElementType();
     else
       return failure();
 
@@ -14870,8 +14878,12 @@ struct QueueRSortOpConversion : public RuntimeCallConversionBase<QueueRSortOp> {
     Type elementType;
     if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
       elementType = queueType.getElementType();
-    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
       elementType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(nestedType))
+      elementType = fixedArrayType.getElementType();
     else
       return failure();
 
@@ -15468,8 +15480,12 @@ struct QueueShuffleOpConversion
     Type elementType;
     if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
       elementType = queueType.getElementType();
-    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
       elementType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(nestedType))
+      elementType = fixedArrayType.getElementType();
     else
       return failure();
 
@@ -15509,8 +15525,12 @@ struct QueueReverseOpConversion
     Type elementType;
     if (auto queueType = dyn_cast<moore::QueueType>(nestedType))
       elementType = queueType.getElementType();
-    else if (auto dynArrayType = dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
       elementType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(nestedType))
+      elementType = fixedArrayType.getElementType();
     else
       return failure();
 

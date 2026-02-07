@@ -18035,6 +18035,177 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_array_min ----
+    // Signature: (array: ptr, elemSize: i64, isSigned: i32)
+    //            -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_min") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t isSigned = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        MooreQueue result = {nullptr, 0};
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_min(
+              reinterpret_cast<MooreQueue *>(arrayAddr),
+              elemSize, isSigned);
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_min()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_unique_index ----
+    // Signature: (array: ptr, elemSize: i64) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_unique_index") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        MooreQueue result = {nullptr, 0};
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_unique_index(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * 8);
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_unique_index() -> len="
+                   << result.len << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_reduce_sum ----
+    // Signature: (array: ptr, elemSize: i64) -> i64
+    if (calleeName == "__moore_array_reduce_sum") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t result = 0;
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_reduce_sum(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, result)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_reduce_sum() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_reduce_product ----
+    // Signature: (array: ptr, elemSize: i64) -> i64
+    if (calleeName == "__moore_array_reduce_product") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t result = 1;
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_reduce_product(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, result)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_reduce_product() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_reduce_and ----
+    // Signature: (array: ptr, elemSize: i64) -> i64
+    if (calleeName == "__moore_array_reduce_and") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t result = 0;
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_reduce_and(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, result)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_reduce_and() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_reduce_or ----
+    // Signature: (array: ptr, elemSize: i64) -> i64
+    if (calleeName == "__moore_array_reduce_or") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t result = 0;
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_reduce_or(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, result)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_reduce_or() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_reduce_xor ----
+    // Signature: (array: ptr, elemSize: i64) -> i64
+    if (calleeName == "__moore_array_reduce_xor") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t result = 0;
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_array_reduce_xor(
+              reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(64, result)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_reduce_xor() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
     // ---- __moore_display ----
     // Signature: (message_ptr: ptr) -> void
     if (calleeName == "__moore_display") {
