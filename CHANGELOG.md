@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 462 - February 7, 2026
+
+### Summary
+
+Exposed more of Slang's parser/elaboration controls through `circt-verilog` so
+we can proactively bound pathological cases and tune compatibility behavior on
+large designs.
+
+### Fixes
+
+1. **Slang option surface expansion in `circt-verilog`**
+   - Added CLI options and pass-through support for:
+     - `--language-version`
+     - `--max-parse-depth`
+     - `--max-lexer-errors`
+     - `--num-threads`
+     - `--max-instance-depth`
+     - `--max-generate-steps`
+     - `--max-constexpr-depth`
+     - `--max-constexpr-steps`
+     - `--max-constexpr-backtrace`
+     - `--max-instance-array`
+   - Wired `ImportVerilogOptions` to Slang `Driver::Options` for all of the
+     above.
+
+2. **New regression coverage**
+   - Added `test/Tools/circt-verilog/commandline.mlir` to lock CLI help output
+     for the new options.
+   - Added `test/Conversion/ImportVerilog/max-instance-array.sv` to verify
+     functional enforcement of `--max-instance-array`.
+
 ## Iteration 461 - February 7, 2026
 
 ### Summary

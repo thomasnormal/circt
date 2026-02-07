@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 461)
+## Current Status - February 7, 2026 (Iteration 462)
 
 ### Test Results
 
@@ -46,6 +46,45 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 462
+
+1. **Expanded Slang controls exposed by `circt-verilog`**
+   - Added pass-through support for `languageVersion` and key parser /
+     elaboration limits:
+     `maxParseDepth`, `maxLexerErrors`, `numThreads`,
+     `maxInstanceDepth`, `maxGenerateSteps`, `maxConstexprDepth`,
+     `maxConstexprSteps`, `maxConstexprBacktrace`, `maxInstanceArray`.
+   - New CLI flags:
+     `--language-version`,
+     `--max-parse-depth`,
+     `--max-lexer-errors`,
+     `--num-threads`,
+     `--max-instance-depth`,
+     `--max-generate-steps`,
+     `--max-constexpr-depth`,
+     `--max-constexpr-steps`,
+     `--max-constexpr-backtrace`,
+     `--max-instance-array`.
+
+2. **Why this matters long-term**
+   - Gives us first-class controls to bound parser / elaboration blowups on
+     problematic sv-tests and large UVM codebases instead of relying on ad-hoc
+     runner workarounds.
+   - Lets us tighten or relax language behavior intentionally (via
+     `--language-version`) while keeping a stable CIRCT front-end entry point.
+
+3. **Regression coverage**
+   - Added `test/Tools/circt-verilog/commandline.mlir` for option visibility.
+   - Added `test/Conversion/ImportVerilog/max-instance-array.sv` to lock
+     functional enforcement of `--max-instance-array`.
+
+4. **Current limitations and next features**
+   - Multi-clock prune integration in `circt-bmc` is still guarded off when
+     `--allow-multi-clock` is enabled; root-cause/fix remains open.
+   - Next Slang-facing upgrades should expose additional preprocessing controls
+     (`disableLocalIncludes`, keyword-version mapping) and connect them to
+     targeted regression failures.
 
 ### Session Summary - Iteration 453
 
