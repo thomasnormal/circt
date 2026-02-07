@@ -295,6 +295,12 @@ struct CLOptions {
       cl::desc("One or more paths in which to suppress warnings"),
       cl::value_desc("filename"), cl::cat(cat)};
 
+  cl::list<std::string> suppressMacroWarningsPaths{
+      "suppress-macro-warnings",
+      cl::desc("One or more paths in which to suppress warnings originating "
+               "in macro expansions"),
+      cl::value_desc("filename"), cl::cat(cat)};
+
   cl::opt<std::string> diagnosticFormat{
       "diagnostic-format",
       cl::desc("Output format for diagnostics (terminal, plain, json, sarif)"),
@@ -325,6 +331,20 @@ struct CLOptions {
           "One or more library files, which are separate compilation units "
           "where modules are not automatically instantiated."),
       cl::value_desc("filename"), cl::Prefix, cl::cat(cat)};
+
+  cl::list<std::string> libraryMapFiles{
+      "libmap",
+      cl::desc("One or more library map files to parse for library mappings"),
+      cl::value_desc("filename"), cl::cat(cat)};
+
+  cl::list<std::string> libraryOrder{
+      "L",
+      cl::desc("A list of library names controlling module lookup priority"),
+      cl::value_desc("library"), cl::Prefix, cl::cat(cat)};
+
+  cl::opt<std::string> defaultLibName{
+      "defaultLibName", cl::desc("Set the default source library name"),
+      cl::value_desc("name"), cl::cat(cat)};
 
   cl::list<std::string> commandFiles{
       "C",
@@ -544,9 +564,14 @@ static LogicalResult executeWithSources(MLIRContext *context,
   if (opts.errorLimit.getNumOccurrences() > 0)
     options.errorLimit = opts.errorLimit;
   options.suppressWarningsPaths = opts.suppressWarningsPaths;
+  options.suppressMacroWarningsPaths = opts.suppressMacroWarningsPaths;
 
   options.singleUnit = opts.singleUnit;
   options.libraryFiles = opts.libraryFiles;
+  options.libraryMapFiles = opts.libraryMapFiles;
+  options.libraryOrder = opts.libraryOrder;
+  if (opts.defaultLibName.getNumOccurrences() > 0)
+    options.defaultLibName = opts.defaultLibName;
   options.commandFiles = opts.commandFiles;
 
   // Open the output file.

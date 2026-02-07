@@ -7,9 +7,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 445 - wait_condition + wait_event Fixes)
+## Current Status - February 7, 2026 (Iteration 453 - sv-tests Fix + Queue/Array Ops)
 
-### Session Summary - Iteration 445
+### Session Summary - Iteration 453
+
+1. **sv-tests elaboration pass rate improvement**: Added `--no-uvm-auto-include` to
+   circt_verilog.py runner and fixed top-module auto-detection. 9 tests fixed (8
+   interface modport + 1 $printtimescale hierarchical path).
+
+2. **Queue/array operations for fixed-size arrays**: Added `UnpackedArrayType` handling
+   to 5 MooreToCore conversion patterns. Previously only QueueType and
+   OpenUnpackedArrayType were handled.
+
+3. **7 new runtime interceptors**: reduce_sum/product/and/or/xor, array_min,
+   unique_index. Plus get_adjacent_successor_nodes for UVM phase graph traversal.
+
+4. **All tests pass**: circt-sim 162/162 (100%), sv-tests regression pending.
+
+### Previous Session Summary - Iteration 445
 
 1. **wait_condition inside function calls** committed (d4dbfb000): Three interconnected fixes
    for `__moore_wait_condition` when called from inside a function (e.g.,
@@ -5888,6 +5903,26 @@ ninja -C build circt-verilog
     on this workspace snapshot (likely unrelated to this option wiring).
   - New tests were scoped to `-E` and `--lint-only` paths to validate the new
     option plumbing without depending on the unstable full-import path.
+
+### Iteration 454
+- Additional Slang frontend gap closure:
+  - Wired `--suppress-macro-warnings`
+    (`ImportVerilogOptions::suppressMacroWarningsPaths`) into
+    `driver.diagEngine.addIgnoreMacroPaths`.
+  - Wired `--libmap` (`ImportVerilogOptions::libraryMapFiles`) into
+    `driver.sourceLoader.addLibraryMaps`.
+  - Wired `-L` (`ImportVerilogOptions::libraryOrder`) into
+    `driver.options.libraryOrder`.
+  - Wired `--defaultLibName` (`ImportVerilogOptions::defaultLibName`) into
+    `driver.options.defaultLibName`.
+- Added tests:
+  - `test/circt-verilog/libmap-files.sv`
+  - `test/circt-verilog/suppress-macro-warnings.sv`
+- Regression status:
+  - Targeted lit tests for library/macro warning suppression and libmap
+    behavior all pass.
+  - External smoke checks pass for AVIP, sv-tests BMC, verilator-verification
+    BMC, yosys SVA BMC, and OpenTitan LEC.
 
 ---
 

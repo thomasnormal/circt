@@ -141,6 +141,10 @@ struct ImportVerilogOptions {
   /// A list of paths in which to suppress warnings.
   std::vector<std::string> suppressWarningsPaths;
 
+  /// A list of paths in which to suppress warnings that originate in macro
+  /// expansions.
+  std::vector<std::string> suppressMacroWarningsPaths;
+
   /// If true, ignore timing controls (event/delay waits) during lowering.
   std::optional<bool> ignoreTimingControls;
 
@@ -158,6 +162,15 @@ struct ImportVerilogOptions {
 
   /// A list of library files to include in the compilation.
   std::vector<std::string> libraryFiles;
+
+  /// A list of library map files to parse.
+  std::vector<std::string> libraryMapFiles;
+
+  /// A list of library names that controls module lookup priority.
+  std::vector<std::string> libraryOrder;
+
+  /// The name of the default source library.
+  std::optional<std::string> defaultLibName;
 
   /// A list of command files to process for compilation.
   std::vector<std::string> commandFiles;
