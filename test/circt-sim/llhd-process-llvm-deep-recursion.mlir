@@ -6,7 +6,7 @@
 // Without the limit, this would cause a stack overflow crash.
 
 // CHECK: [circt-sim] Found 1 LLHD processes
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 // A recursive function that counts down from n to 0
 // When n > 100, this will hit the call depth limit

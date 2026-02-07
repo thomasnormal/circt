@@ -6,10 +6,11 @@
 module PropertyConcatError(input logic clk, a, b);
   wire x = 'x;
 
-  // $changed should lower to a sampled comparison that can be concatenated.
-  // CHECK: moore.past
+  // $changed now uses register-based tracking via procedure.
+  // CHECK: moore.procedure always
   // CHECK: moore.eq
   // CHECK: moore.not
+  // CHECK: moore.blocking_assign
   // CHECK: ltl.concat
   assume property (@(posedge clk) b !== x ##1 $changed(b));
 

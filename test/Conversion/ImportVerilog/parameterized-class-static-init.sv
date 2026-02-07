@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --ir-hw | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include %s --ir-hw | FileCheck %s
 
 // Test that parameterized class specializations have their static member
 // initializers properly generated. This is critical for UVM factory

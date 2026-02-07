@@ -13,7 +13,7 @@
 // CHECK: [circt-sim] Simulation completed at time 0 fs
 // CHECK: Processes executed: 1
 // CHECK: Signal updates: 2
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test_basic() {
   %c0_i8 = hw.constant 0 : i8

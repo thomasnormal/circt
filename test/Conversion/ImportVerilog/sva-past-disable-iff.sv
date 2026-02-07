@@ -13,5 +13,7 @@ module test_past_disable_iff(
 endmodule
 
 // CHECK-LABEL: moore.module @test_past_disable_iff
-// CHECK-DAG: [[RESET:%[0-9]+]] = moore.read %reset
-// CHECK: moore.conditional [[RESET]] : l1 -> l1
+// CHECK: moore.procedure always
+// CHECK: moore.conditional
+// CHECK: moore.blocking_assign
+// CHECK: verif.clocked_assert

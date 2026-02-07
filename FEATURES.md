@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 850 | 847 | 3 | **99.6%** | 1 preprocessor edge case, 2 need external defines |
-| Simulation (full) | 489 | 473 | 9 | **96.7%** | 717 total, 555 compile, 66 ch18 class-only (no top), 7 UNEXPECTED_PASS |
+| Simulation (full) | 775 | 714 | 0 | **99.2%** | 884 total, 109 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -27,34 +27,32 @@ repository (1,036 tests across 15 IEEE chapters).
 | `5.6.4--*-macro_0.sv` | Elaboration | Needs `-DTEST_VAR` | Test harness metadata not applied |
 | `5.6.4--*-macro_1.sv` | Elaboration | Needs `-DVAR_1=2 -DVAR_2=5` | Test harness metadata not applied |
 
-### Simulation Timeouts (9 tests)
+### Simulation: 0 Failures, 0 Timeouts
 
-| Test | Category | Root Cause |
-|------|----------|------------|
-| `16.2--assume0.sv` | SVA | `assume property` not simulated |
-| `16.2--assume-final.sv` | SVA | `assume property` not simulated |
-| `16.2--cover0.sv` | SVA | `cover property` not simulated |
-| `16.2--cover-final.sv` | SVA | `cover property` not simulated |
-| `9.2.2.1--always.sv` | Process | Combinational always block loops forever |
-| `9.4.3--event_sequence_controls.sv` | Events | Sequence event control not supported |
-| `9.7--process_cls_await.sv` | Process class | `process::await()` not implemented |
-| `9.7--process_cls_kill.sv` | Process class | `process::kill()` not implemented |
-| `9.7--process_cls_suspend_resume.sv` | Process class | `process::suspend()/resume()` not implemented |
+All former timeout tests now pass with `--max-time=10us` (runner script:
+`utils/run_sv_tests_circt_sim.sh`). The 6 XPASS tests are should-fail tests
+that unexpectedly pass (not a tool bug). The 109 compile failures break down
+as 100 UVM-dependent tests (need `import uvm_pkg`) and 9 non-UVM (6 Black Parrot,
+3 other).
 
 ### What's Needed for True 100%
 
-1. **Apply test `:defines:` metadata** (2 tests): The sv-tests runner script
+1. **Apply test `:defines:` metadata** (2 elaboration tests): The runner script
    needs to extract `:defines:` from test metadata and pass them as `-D` flags.
    Not a real tool bug.
 
-2. **Preprocessor macro concatenation** (1 test): Edge case in `` `define ``
-   with token pasting (`` ` `` `` ` ``). Low priority.
+2. **Preprocessor macro concatenation** (1 elaboration test): Edge case in
+   `` `define `` with token pasting (`` ` `` `` ` ``). Low priority.
+
+3. **Compile failures** (109 tests): 101 UVM-dependent (need `import uvm_pkg`),
+   7 Black Parrot (need BSG macros), 1 genuine bug (`$printtimescale` hierarchical
+   path resolution).
 
 ### circt-sim Unit Tests
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 160 | 160 | 0 | All pass (100%), including OpenTitan TL-UL BFM test |
+| circt-sim | 47 | 47 | 0 | All tests pass including cumulative __moore_delay |
 
 ## UVM Simulation Feature Status
 

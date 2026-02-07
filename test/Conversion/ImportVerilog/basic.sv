@@ -1,5 +1,5 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-verilog --ir-moore %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.

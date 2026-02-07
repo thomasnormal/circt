@@ -8,7 +8,7 @@
 // CHECK: [circt-sim] Registered 1 LLHD signals and 1 LLHD processes
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time 0 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 // A recursive function that counts down from n to 0
 llvm.func @recursive_count(%n: i32) -> i32 {

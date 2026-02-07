@@ -1,4 +1,4 @@
-// RUN: circt-verilog --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 // Test UVM HDL access DPI imports beyond deposit.
 

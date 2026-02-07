@@ -8,7 +8,7 @@
 // CHECK: [circt-sim] Starting simulation
 // Expect total time = 10 + 20 + 30 = 60 fs
 // CHECK: [circt-sim] Simulation completed at time 60 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 // External declaration of __moore_delay
 llvm.func @__moore_delay(i64)

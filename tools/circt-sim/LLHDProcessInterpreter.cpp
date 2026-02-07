@@ -3737,20 +3737,30 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       CallStackFrame frame = std::move(state.callStack.back());
       state.callStack.pop_back();
 
-      LLVM_DEBUG(llvm::dbgs() << "    Resuming function '"
-                              << frame.funcOp.getName() << "'\n");
+      llvm::StringRef frameName =
+          frame.isLLVM() ? frame.llvmFuncOp.getName()
+                         : frame.funcOp.getName();
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
+                 << "function '" << frameName << "'\n");
 
       // Resume the function from its saved position
       llvm::SmallVector<InterpretedValue, 4> results;
       ++state.callDepth;
       LogicalResult funcResult =
-          interpretFuncBody(procId, frame.funcOp, frame.args, results,
-                            frame.callOp, frame.resumeBlock, frame.resumeOp);
+          frame.isLLVM()
+              ? interpretLLVMFuncBody(procId, frame.llvmFuncOp, frame.args,
+                                      results, frame.callOperands,
+                                      frame.callOp, frame.resumeBlock,
+                                      frame.resumeOp)
+              : interpretFuncBody(procId, frame.funcOp, frame.args, results,
+                                  frame.callOp, frame.resumeBlock,
+                                  frame.resumeOp);
       --state.callDepth;
 
       if (failed(funcResult)) {
         LLVM_DEBUG(llvm::dbgs()
-                   << "    Function '" << frame.funcOp.getName()
+                   << "    Function '" << frameName
                    << "' failed during resume\n");
         finalizeProcess(procId, /*killed=*/false);
         return;
@@ -3759,7 +3769,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       // Check if the function suspended again
       if (state.waiting) {
         LLVM_DEBUG(llvm::dbgs()
-                   << "    Function '" << frame.funcOp.getName()
+                   << "    Function '" << frameName
                    << "' suspended again during resume\n");
         // Schedule pending delay if any before returning
         if (state.pendingDelayFs > 0) {
@@ -3789,11 +3799,17 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                llvm::zip(callOp.getResults(), results)) {
             setValue(procId, result, retVal);
           }
+        } else if (auto llvmCallOp =
+                       dyn_cast<LLVM::CallOp>(frame.callOp)) {
+          for (auto [result, retVal] :
+               llvm::zip(llvmCallOp.getResults(), results)) {
+            setValue(procId, result, retVal);
+          }
         }
       }
 
       LLVM_DEBUG(llvm::dbgs()
-                 << "    Function '" << frame.funcOp.getName()
+                 << "    Function '" << frameName
                  << "' completed, continuing\n");
     }
 
@@ -13347,6 +13363,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // extraction, and load/probe ops but stop at getelementptr
               // (doesn't read memory)
               bool shouldTrace = isa<comb::ICmpOp, LLVM::ZExtOp, LLVM::SExtOp>(defOp) ||
+                                 isa<LLVM::ICmpOp, LLVM::TruncOp, LLVM::BitcastOp>(defOp) ||
                                  isa<comb::AddOp, comb::SubOp, comb::AndOp>(defOp) ||
                                  isa<comb::OrOp, comb::XorOp>(defOp) ||
                                  isa<comb::ExtractOp, LLVM::ExtractValueOp>(defOp) ||
@@ -17860,9 +17877,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Interpret the function body, passing call operands for signal mapping
   SmallVector<InterpretedValue, 2> results;
   LogicalResult funcResult =
-      interpretLLVMFuncBody(procId, funcOp, args, results, callOperands);
+      interpretLLVMFuncBody(procId, funcOp, args, results, callOperands,
+                            callOp.getOperation());
 
-  // Decrement call depth after returning
+  // Decrement call depth after returning (but not if function suspended -
+  // the call stack resume logic will handle depth management)
   --state.callDepth;
 
   // Decrement depth counter after returning
@@ -17896,7 +17915,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     ProcessId procId, LLVM::LLVMFuncOp funcOp, ArrayRef<InterpretedValue> args,
-    SmallVectorImpl<InterpretedValue> &results, ArrayRef<Value> callOperands) {
+    SmallVectorImpl<InterpretedValue> &results, ArrayRef<Value> callOperands,
+    Operation *callerOp, Block *resumeBlock, Block::iterator resumeOp) {
   // IMPORTANT: Do NOT hold a reference to processStates[procId] across operations
   // that may modify processStates (e.g., interpretOperation can create fork
   // children or runtime signals). DenseMap may reallocate, invalidating refs.
@@ -17989,12 +18009,31 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   };
 
   // Execute the function body with operation limit to prevent infinite loops
-  Block *currentBlock = &entryBlock;
+  Block *currentBlock = resumeBlock ? resumeBlock : &entryBlock;
   constexpr size_t maxOps = 1000000;
   size_t opCount = 0;
 
+  // Track if we're starting from a resume point
+  bool skipToResumeOp = (resumeBlock != nullptr);
+
   while (currentBlock && opCount < maxOps) {
-    for (Operation &op : *currentBlock) {
+    bool tookBranch = false;
+    for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
+         ++opIt) {
+      Operation &op = *opIt;
+
+      // If resuming, skip operations until we reach the resume point
+      if (skipToResumeOp) {
+        if (&op == &*resumeOp) {
+          skipToResumeOp = false;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Resuming LLVM function " << funcOp.getName()
+                     << " from saved position\n");
+        } else {
+          continue;
+        }
+      }
+
       ++opCount;
       // Track func body steps in process state for global step limiting
       {
@@ -18059,6 +18098,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
              llvm::zip(currentBlock->getArguments(), branchOp.getDestOperands())) {
           processStates[procId].valueMap[blockArg] = getValue(procId, operand);
         }
+        tookBranch = true;
         break;
       }
 
@@ -18080,6 +18120,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
             processStates[procId].valueMap[blockArg] = getValue(procId, operand);
           }
         }
+        tookBranch = true;
         break;
       }
 
@@ -18097,20 +18138,44 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       }
 
       // Check if process was halted or is waiting (e.g., by sim.terminate,
-      // llvm.unreachable, or moore.wait_event). This is critical for UVM where
-      // wait_for_objection() contains event waits that must suspend execution.
-      auto it = processStates.find(procId);
-      if (it != processStates.end() && (it->second.halted || it->second.waiting)) {
-        LLVM_DEBUG(llvm::dbgs() << "  Process halted/waiting during LLVM function body - "
-                                << "returning early\n");
-        cleanupTempMappings();
-        return success();
+      // llvm.unreachable, moore.wait_event, or __moore_delay). Save a call
+      // stack frame so the function can be resumed from the correct position.
+      {
+        auto it = processStates.find(procId);
+        if (it != processStates.end() &&
+            (it->second.halted || it->second.waiting)) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Process halted/waiting during LLVM function body '"
+                     << funcOp.getName() << "'\n");
+
+          // If waiting (not halted), save a call stack frame for resumption
+          if (it->second.waiting && callerOp) {
+            auto nextOpIt = opIt;
+            ++nextOpIt;
+
+            // Only save if there are more operations to execute
+            if (nextOpIt != currentBlock->end() ||
+                currentBlock != &entryBlock) {
+              CallStackFrame frame(funcOp, currentBlock, nextOpIt, callerOp);
+              frame.args.assign(args.begin(), args.end());
+              frame.callOperands.assign(callOperands.begin(),
+                                        callOperands.end());
+              it->second.callStack.push_back(std::move(frame));
+              LLVM_DEBUG(llvm::dbgs()
+                         << "    Saved LLVM call frame for function '"
+                         << funcOp.getName() << "' with " << args.size()
+                         << " args, will resume after current op\n");
+            }
+          }
+
+          cleanupTempMappings();
+          return success();
+        }
       }
     }
 
     // If we didn't branch, we're done
-    if (currentBlock == &entryBlock ||
-        !currentBlock->back().hasTrait<OpTrait::IsTerminator>())
+    if (!tookBranch)
       break;
   }
 

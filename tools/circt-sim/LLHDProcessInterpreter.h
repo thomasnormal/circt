@@ -140,8 +140,11 @@ private:
 /// When a wait occurs inside a nested function call, we need to save the
 /// function's execution context so we can resume from the correct point.
 struct CallStackFrame {
-  /// The function being executed.
+  /// The MLIR function being executed (mutually exclusive with llvmFuncOp).
   mlir::func::FuncOp funcOp;
+
+  /// The LLVM function being executed (mutually exclusive with funcOp).
+  mlir::LLVM::LLVMFuncOp llvmFuncOp;
 
   /// The block within the function where execution should resume.
   mlir::Block *resumeBlock = nullptr;
@@ -155,10 +158,19 @@ struct CallStackFrame {
   /// Arguments passed to the function (for re-entry if needed).
   llvm::SmallVector<InterpretedValue, 4> args;
 
+  /// Call operands for signal mapping (LLVM functions only).
+  llvm::SmallVector<mlir::Value, 4> callOperands;
+
+  /// Whether this is an LLVM function frame.
+  bool isLLVM() const { return llvmFuncOp != nullptr; }
+
   CallStackFrame() = default;
   CallStackFrame(mlir::func::FuncOp func, mlir::Block *block,
                  mlir::Block::iterator op, mlir::Operation *call)
       : funcOp(func), resumeBlock(block), resumeOp(op), callOp(call) {}
+  CallStackFrame(mlir::LLVM::LLVMFuncOp func, mlir::Block *block,
+                 mlir::Block::iterator op, mlir::Operation *call)
+      : llvmFuncOp(func), resumeBlock(block), resumeOp(op), callOp(call) {}
 };
 
 //===----------------------------------------------------------------------===//
@@ -847,11 +859,17 @@ private:
   /// Interpret an LLVM function body.
   /// If callOperands is provided, signal mappings are created for BlockArguments
   /// when the corresponding call operand resolves to a signal ID.
+  /// @param callerOp The call operation in the caller (for call stack frames).
+  /// @param resumeBlock If not null, resume from this block instead of entry.
+  /// @param resumeOp If resumeBlock is set, resume from this operation.
   mlir::LogicalResult
   interpretLLVMFuncBody(ProcessId procId, mlir::LLVM::LLVMFuncOp funcOp,
                         llvm::ArrayRef<InterpretedValue> args,
                         llvm::SmallVectorImpl<InterpretedValue> &results,
-                        llvm::ArrayRef<mlir::Value> callOperands = {});
+                        llvm::ArrayRef<mlir::Value> callOperands = {},
+                        mlir::Operation *callerOp = nullptr,
+                        mlir::Block *resumeBlock = nullptr,
+                        mlir::Block::iterator resumeOp = {});
 
   /// Get the size in bytes for an LLVM type (sum of field sizes, no alignment
   /// padding, matching MooreToCore's sizeof computation).

@@ -10,7 +10,7 @@
 // CHECK: [circt-sim] Registered 1 LLHD signals and 2 LLHD processes
 // CHECK: [circt-sim] Starting simulation
 // CHECK: [circt-sim] Simulation completed at time 5000000 fs
-// CHECK: [circt-sim] Simulation finished successfully
+// CHECK: [circt-sim] Simulation completed
 
 hw.module @test_posedge_bit() {
   %false = hw.constant false

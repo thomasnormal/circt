@@ -8,10 +8,11 @@
 module PropertyTypeValid(input logic clk, a, b);
 
   // Test: $rose as overlapped implication antecedent
-  // $rose returns a moore value type (l1) which can be used as antecedent.
-  // CHECK: moore.past
+  // $rose now uses register-based tracking via procedure.
+  // CHECK: moore.procedure always
   // CHECK: moore.not
   // CHECK: moore.and
+  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.clocked_assert
   assert property (@(posedge clk) $rose(a) |-> b);

@@ -1,14 +1,14 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-verilog --ir-moore %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.
 // UNSUPPORTED: valgrind
 
-// CHECK-LABEL: moore.module @Foo(out r : !moore.ref<i32>, out subA.a : !moore.ref<i32>)
+// CHECK-LABEL: moore.module @Foo()
 module Foo;
   int r;
-  // CHECK: %subA.a, %subA.subB.y, %subA.subB.x = moore.instance "subA" @SubA(Foo.r: %r: !moore.ref<i32>) -> (a: !moore.ref<i32>, subB.y: !moore.ref<i32>, subB.x: !moore.ref<i32>)
+  // CHECK: %subA.subB.y, %subA.subB.x = moore.instance "subA" @SubA(Foo.r: %r: !moore.ref<i32>) -> (subB.y: !moore.ref<i32>, subB.x: !moore.ref<i32>)
   SubA subA();
   // CHECK: [[RD_SA_SB_Y:%.+]] = moore.read %subA.subB.y : <i32>
   // CHECK: %s = moore.variable [[RD_SA_SB_Y]] : <i32>
@@ -18,23 +18,23 @@ module Foo;
   assign subA.subB.x = r;
 endmodule
 
-// CHECK-LABEL: moore.module private @SubA(in %Foo.r : !moore.ref<i32>, out a : !moore.ref<i32>, out subB.y : !moore.ref<i32>, out subB.x : !moore.ref<i32>)
+// CHECK-LABEL: moore.module private @SubA(in %Foo.r : !moore.ref<i32>, out subB.y : !moore.ref<i32>, out subB.x : !moore.ref<i32>)
 module SubA;
   int a;
-  // CHECK: %subB.y, %subB.x = moore.instance "subB" @SubB(Foo.r: %Foo.r: !moore.ref<i32>, subA.a: %a: !moore.ref<i32>) -> (y: !moore.ref<i32>, x: !moore.ref<i32>)
+  // CHECK: %subB.y, %subB.x = moore.instance "subB" @SubB(Foo.r: %Foo.r: !moore.ref<i32>, Foo.subA.a: %a: !moore.ref<i32>) -> (y: !moore.ref<i32>, x: !moore.ref<i32>)
   SubB subB();
   // CHECK: [[RD_SB_Y:%.+]] = moore.read %subB.y : <i32>
   // CHECK: moore.assign %a, [[RD_SB_Y]] : i32
   assign a = subB.y;
-  // CHECK: moore.output %a, %subB.y, %subB.x : !moore.ref<i32>, !moore.ref<i32>, !moore.ref<i32>
+  // CHECK: moore.output %subB.y, %subB.x : !moore.ref<i32>, !moore.ref<i32>
 endmodule
 
-// CHECK-LABEL: moore.module private @SubB(in %Foo.r : !moore.ref<i32>, in %subA.a : !moore.ref<i32>, out y : !moore.ref<i32>, out x : !moore.ref<i32>)
+// CHECK-LABEL: moore.module private @SubB(in %Foo.r : !moore.ref<i32>, in %Foo.subA.a : !moore.ref<i32>, out y : !moore.ref<i32>, out x : !moore.ref<i32>)
 module SubB;
   int x, y, z;
   // CHECK: [[RD_FOO_R:%.+]] = moore.read %Foo.r : <i32>
   // CHECK: moore.assign %y, [[RD_FOO_R]] : i32
-  // CHECK: [[RD_SA_A:%.+]] = moore.read %subA.a : <i32>
+  // CHECK: [[RD_SA_A:%.+]] = moore.read %Foo.subA.a : <i32>
   // CHECK: moore.assign %z, [[RD_SA_A]] : i32
   assign y = Foo.r;
   assign z = Foo.subA.a;

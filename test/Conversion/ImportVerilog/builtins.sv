@@ -1,5 +1,5 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-verilog --ir-moore %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.
@@ -399,18 +399,23 @@ module SampleValueBuiltins #() (
     input clk_i
 );
   // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <l1>
-  // CHECK: moore.past
+  // CHECK: moore.procedure always
   // CHECK: moore.not
   // CHECK: moore.and
+  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
+  // CHECK: moore.procedure always
   // CHECK: moore.not
   // CHECK: moore.and
+  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
+  // CHECK: moore.procedure always
   // CHECK: moore.eq
+  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));

@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --verify-diagnostics
+// RUN: circt-verilog --no-uvm-auto-include %s --verify-diagnostics
 
 // Test that interface port member assignments work correctly.
 // This tests the fix for the case where continuous assignments inside a module
