@@ -9390,6 +9390,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Check if function body is available (external functions cannot be called)
   if (funcOp.isExternal()) {
+    // Try DPI function interception first (uvm_re_*, uvm_hdl_*, uvm_dpi_*)
+    if (succeeded(interceptDPIFunc(procId, calleeName, callOp)))
+      return success();
+
     LLVM_DEBUG(llvm::dbgs() << "  Warning: External function '"
                             << callOp.getCallee() << "' cannot be interpreted\n");
     for (Value result : callOp.getResults()) {
@@ -12332,6 +12336,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       auto mlirFuncOp = cast<func::FuncOp>(cached.op);
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
                               << "' as func.func (cached)\n");
+
+      // DPI function interception: if the func has no body, try to intercept
+      // it as a known DPI function (uvm_re_*, uvm_hdl_*, uvm_dpi_*).
+      if (mlirFuncOp.getBody().empty()) {
+        if (succeeded(interceptDPIFunc(procId, calleeName, callOp)))
+          return success();
+        // Not a known DPI function - return X for all results
+        for (Value result : callOp.getResults())
+          setValue(procId, result,
+                   InterpretedValue::makeX(getTypeWidth(result.getType())));
+        return success();
+      }
+
       SmallVector<InterpretedValue, 4> args;
       SmallVector<Value, 4> callOperands;
       for (Value arg : callOp.getOperands()) {
@@ -12415,6 +12432,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved '" << calleeName
                               << "' as func.func (cross-dialect call)\n");
+
+      // DPI function interception: if the func has no body, try to intercept
+      // it as a known DPI function (uvm_re_*, uvm_hdl_*, uvm_dpi_*).
+      if (mlirFuncOp.getBody().empty()) {
+        if (succeeded(interceptDPIFunc(procId, calleeName, callOp)))
+          return success();
+        // Not a known DPI function - return X for all results
+        for (Value result : callOp.getResults())
+          setValue(procId, result,
+                   InterpretedValue::makeX(getTypeWidth(result.getType())));
+        return success();
+      }
+
       SmallVector<InterpretedValue, 4> args;
       SmallVector<Value, 4> callOperands;
       for (Value arg : callOp.getOperands()) {
@@ -17853,6 +17883,647 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  llvm.call: called '" << calleeName << "'\n");
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// DPI Function Interception
+//===----------------------------------------------------------------------===//
+// Intercepts calls to external DPI functions (func.func with no body) that
+// have native implementations in MooreRuntime.cpp. Without this, UVM DPI
+// functions like uvm_re_compexecfree return X, breaking regex matching,
+// component hierarchy building, and all UVM phases.
+
+LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
+    ProcessId procId, StringRef calleeName, LLVM::CallOp callOp) {
+
+  // Helper: extract a std::string from a MooreString struct value argument.
+  // The argument is an InterpretedValue holding a 128-bit {ptr, len} struct.
+  auto extractStringFromVal = [&](Value operand) -> std::string {
+    InterpretedValue val = getValue(procId, operand);
+    if (val.isX() || val.getWidth() < 128)
+      return "";
+    APInt bits = val.getAPInt();
+    uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+    int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+    if (strPtr == 0 || strLen <= 0)
+      return "";
+
+    // Try dynamicStrings registry
+    auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+    if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+        dynIt->second.second > 0) {
+      return std::string(dynIt->second.first,
+                         std::min(static_cast<size_t>(strLen),
+                                  static_cast<size_t>(dynIt->second.second)));
+    }
+
+    // Try global/malloc memory via O(log n) range index
+    {
+      uint64_t off = 0;
+      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+      if (gBlock && gBlock->initialized) {
+        size_t avail = std::min(static_cast<size_t>(strLen),
+                                gBlock->data.size() - static_cast<size_t>(off));
+        if (avail > 0)
+          return std::string(
+              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+      }
+    }
+
+    // Try native memory (direct pointer read)
+    bool isNative = false;
+    for (auto &entry : nativeMemoryBlocks) {
+      if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
+        isNative = true;
+        break;
+      }
+    }
+    if (isNative || strPtr >= 0x10000) {
+      const char *p = reinterpret_cast<const char *>(strPtr);
+      return std::string(p, static_cast<size_t>(strLen));
+    }
+
+    return "";
+  };
+
+  // Helper: pack a string result into a 128-bit MooreString struct.
+  auto packStringResult = [&](const std::string &str, Value resultVal) {
+    if (str.empty()) {
+      setValue(procId, resultVal, InterpretedValue(APInt(128, 0)));
+      return;
+    }
+    interpreterStrings.push_back(str);
+    const std::string &stored = interpreterStrings.back();
+    int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+    int64_t lenVal = static_cast<int64_t>(stored.size());
+    dynamicStrings[ptrVal] = {stored.data(), lenVal};
+    APInt packed(128, 0);
+    packed.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+    packed.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+    setValue(procId, resultVal, InterpretedValue(packed));
+  };
+
+  // Helper: write an i32 value to an !llhd.ref<i32> output argument.
+  auto writeRefI32 = [&](Value refOperand, int32_t value) {
+    InterpretedValue refVal = getValue(procId, refOperand);
+    Type refType = refOperand.getType();
+    InterpretedValue writeVal(APInt(32, static_cast<uint32_t>(value)));
+
+    if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+      unsigned sigId = resolveSignalId(refOperand);
+      if (sigId > 0) {
+        pendingEpsilonDrives[sigId] = writeVal;
+      } else {
+        uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+        if (addr > 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+          if (block && block->initialized && offset + 4 <= block->data.size()) {
+            for (int i = 0; i < 4; ++i)
+              block->data[offset + i] =
+                  static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+          }
+        }
+      }
+    } else if (isa<LLVM::LLVMPointerType>(refType)) {
+      uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+      if (addr > 0) {
+        uint64_t offset = 0;
+        auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+        if (block && block->initialized && offset + 4 <= block->data.size()) {
+          for (int i = 0; i < 4; ++i)
+            block->data[offset + i] =
+                static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+        }
+      }
+    }
+  };
+
+  // ---- uvm_re_compexecfree ----
+  // Signature: (pattern: struct{ptr,i64}, str: struct{ptr,i64}, deglob: i1,
+  //             exec_ret: ref<i32>) -> i1
+  if (calleeName == "uvm_re_compexecfree") {
+    std::string pattern = extractStringFromVal(callOp.getOperand(0));
+    std::string str = extractStringFromVal(callOp.getOperand(1));
+    InterpretedValue deglobVal = getValue(procId, callOp.getOperand(2));
+    int32_t deglob =
+        deglobVal.isX() ? 0 : static_cast<int32_t>(deglobVal.getUInt64());
+
+    MooreString patStr = {const_cast<char *>(pattern.c_str()),
+                          static_cast<int64_t>(pattern.size())};
+    MooreString strStr = {const_cast<char *>(str.c_str()),
+                          static_cast<int64_t>(str.size())};
+    int32_t exec_ret = -1;
+    int32_t result = uvm_re_compexecfree(&patStr, &strStr, deglob, &exec_ret);
+
+    // Write exec_ret to the !llhd.ref<i32> output argument
+    if (callOp.getNumOperands() > 3)
+      writeRefI32(callOp.getOperand(3), exec_ret);
+
+    // Return i1 result
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(),
+              InterpretedValue(APInt(1, result != 0 ? 1 : 0)));
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "  DPI: uvm_re_compexecfree(\"" << pattern << "\", \"" << str
+               << "\", " << deglob << ") = " << result
+               << " (exec_ret=" << exec_ret << ")\n");
+    return success();
+  }
+
+  // ---- uvm_re_buffer ----
+  // Signature: () -> struct{ptr,i64}
+  if (calleeName == "uvm_re_buffer") {
+    MooreString result = uvm_re_buffer();
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult());
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "  DPI: uvm_re_buffer() = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_re_free ----
+  // Signature: (ptr) -> void
+  if (calleeName == "uvm_re_free") {
+    if (callOp.getNumOperands() > 0) {
+      InterpretedValue ptrVal = getValue(procId, callOp.getOperand(0));
+      void *ptr =
+          ptrVal.isX() ? nullptr
+                       : reinterpret_cast<void *>(ptrVal.getUInt64());
+      uvm_re_free(ptr);
+      LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_re_free(" << ptr << ")\n");
+    }
+    return success();
+  }
+
+  // ---- uvm_re_deglobbed ----
+  // Signature: (glob: struct{ptr,i64}, with_brackets: i1) -> struct{ptr,i64}
+  if (calleeName == "uvm_re_deglobbed") {
+    std::string glob = extractStringFromVal(callOp.getOperand(0));
+    InterpretedValue bracketVal = getValue(procId, callOp.getOperand(1));
+    int32_t withBrackets =
+        bracketVal.isX() ? 0 : static_cast<int32_t>(bracketVal.getUInt64());
+
+    MooreString globStr = {const_cast<char *>(glob.c_str()),
+                           static_cast<int64_t>(glob.size())};
+    MooreString result = uvm_re_deglobbed(&globStr, withBrackets);
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult());
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_re_deglobbed(\"" << glob << "\", "
+                            << withBrackets << ") = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_dpi_get_next_arg_c ----
+  // Signature: (init: i32) -> struct{ptr,i64}
+  if (calleeName == "uvm_dpi_get_next_arg_c") {
+    InterpretedValue initVal = getValue(procId, callOp.getOperand(0));
+    int32_t init =
+        initVal.isX() ? 1 : static_cast<int32_t>(initVal.getUInt64());
+
+    MooreString result = uvm_dpi_get_next_arg_c(init);
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult());
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_dpi_get_next_arg_c(" << init
+                            << ") = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_check_path ----
+  // Signature: (path: struct{ptr,i64}) -> i32
+  if (calleeName == "uvm_hdl_check_path") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    int32_t result = uvm_hdl_check_path(&pathStr);
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_check_path(\"" << path
+                            << "\") = " << result << "\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_deposit ----
+  // Signature: (path: struct{ptr,i64}, value: hw.struct<value:i1024,unknown:i1024>) -> i32
+  if (calleeName == "uvm_hdl_deposit") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+    // Extract low 64 bits of the 2048-bit value struct as the deposit value
+    InterpretedValue dataArg = getValue(procId, callOp.getOperand(1));
+    uvm_hdl_data_t value = 0;
+    if (!dataArg.isX()) {
+      APInt bits = dataArg.getAPInt();
+      value = static_cast<uvm_hdl_data_t>(
+          bits.extractBits(64, 0).getZExtValue());
+    }
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    int32_t result = uvm_hdl_deposit(&pathStr, value);
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_deposit(\"" << path << "\", "
+                            << value << ") = " << result << "\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_read ----
+  // Signature: (path: struct{ptr,i64}, ref<hw.struct<value:i1024,unknown:i1024>>) -> i32
+  if (calleeName == "uvm_hdl_read") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    uvm_hdl_data_t readValue = 0;
+    int32_t result = uvm_hdl_read(&pathStr, &readValue);
+
+    // Write read value to the !llhd.ref output argument
+    if (callOp.getNumOperands() > 1) {
+      Value outputRef = callOp.getOperand(1);
+      InterpretedValue refVal = getValue(procId, outputRef);
+      Type refType = outputRef.getType();
+
+      if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+        Type innerType = refT.getNestedType();
+        unsigned innerBits = getTypeWidth(innerType);
+        APInt valueBits(innerBits, 0);
+        // Set low 64 bits of value field to readValue
+        valueBits.insertBits(
+            APInt(64, static_cast<uint64_t>(readValue)), 0);
+        InterpretedValue writeVal(valueBits);
+
+        unsigned sigId = resolveSignalId(outputRef);
+        if (sigId > 0) {
+          pendingEpsilonDrives[sigId] = writeVal;
+        } else {
+          uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+          if (addr > 0) {
+            uint64_t offset = 0;
+            auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+            if (block && block->initialized) {
+              unsigned innerBytes = (innerBits + 7) / 8;
+              for (unsigned i = 0;
+                   i < std::min(innerBytes,
+                                (unsigned)(block->data.size() - offset));
+                   ++i)
+                block->data[offset + i] =
+                    (i < 8) ? static_cast<uint8_t>(
+                                  (readValue >> (i * 8)) & 0xFF)
+                            : 0;
+            }
+          }
+        }
+      }
+    }
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_read(\"" << path << "\") = "
+                            << result << " (value=" << readValue << ")\n");
+    return success();
+  }
+
+  // Not a known DPI function
+  LLVM_DEBUG(llvm::dbgs() << "  DPI: unknown function '" << calleeName
+                          << "' - not intercepted\n");
+  return failure();
+}
+
+// func::CallOp overload for DPI interception (used by interpretFuncCall).
+// The logic is identical to the LLVM::CallOp overload above, but uses
+// func::CallOp's getResult(index) accessor instead of getResult().
+LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
+    ProcessId procId, StringRef calleeName, func::CallOp callOp) {
+
+  // Helper: extract a std::string from a MooreString struct value argument.
+  auto extractStringFromVal = [&](Value operand) -> std::string {
+    InterpretedValue val = getValue(procId, operand);
+    if (val.isX() || val.getWidth() < 128)
+      return "";
+    APInt bits = val.getAPInt();
+    uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+    int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+    if (strPtr == 0 || strLen <= 0)
+      return "";
+
+    auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+    if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+        dynIt->second.second > 0) {
+      return std::string(dynIt->second.first,
+                         std::min(static_cast<size_t>(strLen),
+                                  static_cast<size_t>(dynIt->second.second)));
+    }
+
+    {
+      uint64_t off = 0;
+      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+      if (gBlock && gBlock->initialized) {
+        size_t avail = std::min(static_cast<size_t>(strLen),
+                                gBlock->data.size() - static_cast<size_t>(off));
+        if (avail > 0)
+          return std::string(
+              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+      }
+    }
+
+    bool isNative = false;
+    for (auto &entry : nativeMemoryBlocks) {
+      if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
+        isNative = true;
+        break;
+      }
+    }
+    if (isNative || strPtr >= 0x10000) {
+      const char *p = reinterpret_cast<const char *>(strPtr);
+      return std::string(p, static_cast<size_t>(strLen));
+    }
+
+    return "";
+  };
+
+  auto packStringResult = [&](const std::string &str, Value resultVal) {
+    if (str.empty()) {
+      setValue(procId, resultVal, InterpretedValue(APInt(128, 0)));
+      return;
+    }
+    interpreterStrings.push_back(str);
+    const std::string &stored = interpreterStrings.back();
+    int64_t ptrVal = reinterpret_cast<int64_t>(stored.data());
+    int64_t lenVal = static_cast<int64_t>(stored.size());
+    dynamicStrings[ptrVal] = {stored.data(), lenVal};
+    APInt packed(128, 0);
+    packed.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+    packed.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+    setValue(procId, resultVal, InterpretedValue(packed));
+  };
+
+  auto writeRefI32 = [&](Value refOperand, int32_t value) {
+    InterpretedValue refVal = getValue(procId, refOperand);
+    Type refType = refOperand.getType();
+    InterpretedValue writeVal(APInt(32, static_cast<uint32_t>(value)));
+
+    if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+      unsigned sigId = resolveSignalId(refOperand);
+      if (sigId > 0) {
+        pendingEpsilonDrives[sigId] = writeVal;
+      } else {
+        uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+        if (addr > 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+          if (block && block->initialized && offset + 4 <= block->data.size()) {
+            for (int i = 0; i < 4; ++i)
+              block->data[offset + i] =
+                  static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+          }
+        }
+      }
+    } else if (isa<LLVM::LLVMPointerType>(refType)) {
+      uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+      if (addr > 0) {
+        uint64_t offset = 0;
+        auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+        if (block && block->initialized && offset + 4 <= block->data.size()) {
+          for (int i = 0; i < 4; ++i)
+            block->data[offset + i] =
+                static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+        }
+      }
+    }
+  };
+
+  // ---- uvm_re_compexecfree ----
+  if (calleeName == "uvm_re_compexecfree") {
+    std::string pattern = extractStringFromVal(callOp.getOperand(0));
+    std::string str = extractStringFromVal(callOp.getOperand(1));
+    InterpretedValue deglobVal = getValue(procId, callOp.getOperand(2));
+    int32_t deglob =
+        deglobVal.isX() ? 0 : static_cast<int32_t>(deglobVal.getUInt64());
+
+    MooreString patStr = {const_cast<char *>(pattern.c_str()),
+                          static_cast<int64_t>(pattern.size())};
+    MooreString strStr = {const_cast<char *>(str.c_str()),
+                          static_cast<int64_t>(str.size())};
+    int32_t exec_ret = -1;
+    int32_t result = uvm_re_compexecfree(&patStr, &strStr, deglob, &exec_ret);
+
+    if (callOp.getNumOperands() > 3)
+      writeRefI32(callOp.getOperand(3), exec_ret);
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(0),
+              InterpretedValue(APInt(1, result != 0 ? 1 : 0)));
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "  DPI: uvm_re_compexecfree(\"" << pattern << "\", \"" << str
+               << "\", " << deglob << ") = " << result
+               << " (exec_ret=" << exec_ret << ")\n");
+    return success();
+  }
+
+  // ---- uvm_re_buffer ----
+  if (calleeName == "uvm_re_buffer") {
+    MooreString result = uvm_re_buffer();
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult(0));
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "  DPI: uvm_re_buffer() = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_re_free ----
+  if (calleeName == "uvm_re_free") {
+    if (callOp.getNumOperands() > 0) {
+      InterpretedValue ptrVal = getValue(procId, callOp.getOperand(0));
+      void *ptr =
+          ptrVal.isX() ? nullptr
+                       : reinterpret_cast<void *>(ptrVal.getUInt64());
+      uvm_re_free(ptr);
+      LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_re_free(" << ptr << ")\n");
+    }
+    return success();
+  }
+
+  // ---- uvm_re_deglobbed ----
+  if (calleeName == "uvm_re_deglobbed") {
+    std::string glob = extractStringFromVal(callOp.getOperand(0));
+    InterpretedValue bracketVal = getValue(procId, callOp.getOperand(1));
+    int32_t withBrackets =
+        bracketVal.isX() ? 0 : static_cast<int32_t>(bracketVal.getUInt64());
+
+    MooreString globStr = {const_cast<char *>(glob.c_str()),
+                           static_cast<int64_t>(glob.size())};
+    MooreString result = uvm_re_deglobbed(&globStr, withBrackets);
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult(0));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_re_deglobbed(\"" << glob << "\", "
+                            << withBrackets << ") = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_dpi_get_next_arg_c ----
+  if (calleeName == "uvm_dpi_get_next_arg_c") {
+    InterpretedValue initVal = getValue(procId, callOp.getOperand(0));
+    int32_t init =
+        initVal.isX() ? 1 : static_cast<int32_t>(initVal.getUInt64());
+
+    MooreString result = uvm_dpi_get_next_arg_c(init);
+    std::string resultStr;
+    if (result.data && result.len > 0)
+      resultStr = std::string(result.data, result.len);
+    if (result.data)
+      std::free(result.data);
+
+    if (callOp.getNumResults() > 0)
+      packStringResult(resultStr, callOp.getResult(0));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_dpi_get_next_arg_c(" << init
+                            << ") = \"" << resultStr << "\"\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_check_path ----
+  if (calleeName == "uvm_hdl_check_path") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    int32_t result = uvm_hdl_check_path(&pathStr);
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(0),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_check_path(\"" << path
+                            << "\") = " << result << "\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_deposit ----
+  if (calleeName == "uvm_hdl_deposit") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+    InterpretedValue dataArg = getValue(procId, callOp.getOperand(1));
+    uvm_hdl_data_t value = 0;
+    if (!dataArg.isX()) {
+      APInt bits = dataArg.getAPInt();
+      value = static_cast<uvm_hdl_data_t>(
+          bits.extractBits(64, 0).getZExtValue());
+    }
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    int32_t result = uvm_hdl_deposit(&pathStr, value);
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(0),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_deposit(\"" << path << "\", "
+                            << value << ") = " << result << "\n");
+    return success();
+  }
+
+  // ---- uvm_hdl_read ----
+  if (calleeName == "uvm_hdl_read") {
+    std::string path = extractStringFromVal(callOp.getOperand(0));
+
+    MooreString pathStr = {const_cast<char *>(path.c_str()),
+                           static_cast<int64_t>(path.size())};
+    uvm_hdl_data_t readValue = 0;
+    int32_t result = uvm_hdl_read(&pathStr, &readValue);
+
+    if (callOp.getNumOperands() > 1) {
+      Value outputRef = callOp.getOperand(1);
+      InterpretedValue refVal = getValue(procId, outputRef);
+      Type refType = outputRef.getType();
+
+      if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+        Type innerType = refT.getNestedType();
+        unsigned innerBits = getTypeWidth(innerType);
+        APInt valueBits(innerBits, 0);
+        valueBits.insertBits(
+            APInt(64, static_cast<uint64_t>(readValue)), 0);
+        InterpretedValue writeVal(valueBits);
+
+        unsigned sigId = resolveSignalId(outputRef);
+        if (sigId > 0) {
+          pendingEpsilonDrives[sigId] = writeVal;
+        } else {
+          uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
+          if (addr > 0) {
+            uint64_t offset = 0;
+            auto *block = findMemoryBlockByAddress(addr, procId, &offset);
+            if (block && block->initialized) {
+              unsigned innerBytes = (innerBits + 7) / 8;
+              for (unsigned i = 0;
+                   i < std::min(innerBytes,
+                                (unsigned)(block->data.size() - offset));
+                   ++i)
+                block->data[offset + i] =
+                    (i < 8) ? static_cast<uint8_t>(
+                                  (readValue >> (i * 8)) & 0xFF)
+                            : 0;
+            }
+          }
+        }
+      }
+    }
+
+    if (callOp.getNumResults() > 0)
+      setValue(procId, callOp.getResult(0),
+              InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+
+    LLVM_DEBUG(llvm::dbgs() << "  DPI: uvm_hdl_read(\"" << path << "\") = "
+                            << result << " (value=" << readValue << ")\n");
+    return success();
+  }
+
+  // Not a known DPI function
+  return failure();
 }
 
 LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
