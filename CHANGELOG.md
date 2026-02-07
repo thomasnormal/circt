@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 434 - February 7, 2026
+
+### Summary
+
+Iteration 434: Resolved generic interface ports (IEEE 1800-2017 §25.5) by
+looking up the concrete interface type from the connection site when
+`InterfacePortSymbol::interfaceDef` is null. This unblocks AXI-VIP and similar
+verification IPs that use `module foo(interface bus)` patterns.
+
+### Accomplishments
+
+1. **Resolve generic interface ports from connection site** - When a module
+   declares a port as `interface bus` (generic), slang leaves `interfaceDef`
+   null. Now resolved by calling `port.getConnection()` to find the actual
+   connected `InstanceSymbol` and extracting its definition. Works for both
+   plain and parameterized interfaces.
+2. **Added lit tests** - `generic-interface-port.sv` (basic) and
+   `generic-interface-port-param.sv` (parameterized `param_if#(.WIDTH(16))`).
+3. **Updated FEATURES.md** - Interface ports status changed from MISSING to
+   WORKS.
+
+### Verification (February 7, 2026)
+
+- ImportVerilog: 254 pass, 7 xfail, 0 fail (261 total)
+- circt-sim: 47 pass, 0 xfail, 0 fail (47 total)
+- Combined: 301 pass, 7 xfail, 0 fail (308 total)
+
 ## Iteration 433 - February 7, 2026
 
 ### Summary
