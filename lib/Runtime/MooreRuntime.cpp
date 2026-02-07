@@ -860,11 +860,14 @@ extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
     if (!strRef->data)
       return false;
     std::string currentKey(strRef->data, strRef->len);
-    // Find the next key after the current one
+    // Find the next key after the current one. If the current key was deleted
+    // during iteration, use upper_bound to find the next surviving key.
     auto it = arr->data.find(currentKey);
-    if (it == arr->data.end())
-      return false;
-    ++it;
+    if (it == arr->data.end()) {
+      it = arr->data.upper_bound(currentKey);
+    } else {
+      ++it;
+    }
     if (it == arr->data.end())
       return false;
     // Update the key_ref with the next key
@@ -881,9 +884,11 @@ extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
       return false;
     int64_t currentKey = readIntKey(key_ref, arr->keySize);
     auto it = arr->data.find(currentKey);
-    if (it == arr->data.end())
-      return false;
-    ++it;
+    if (it == arr->data.end()) {
+      it = arr->data.upper_bound(currentKey);
+    } else {
+      ++it;
+    }
     if (it == arr->data.end())
       return false;
     writeIntKey(key_ref, it->first, arr->keySize);
@@ -933,8 +938,13 @@ extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
     if (!strRef->data)
       return false;
     std::string currentKey(strRef->data, strRef->len);
+    // If the current key was deleted during iteration, use lower_bound to find
+    // where it would have been, then go back one step.
     auto it = arr->data.find(currentKey);
-    if (it == arr->data.end() || it == arr->data.begin())
+    if (it == arr->data.end()) {
+      it = arr->data.lower_bound(currentKey);
+    }
+    if (it == arr->data.begin())
       return false;
     --it;
     const std::string &prevKey = it->first;
@@ -950,7 +960,10 @@ extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
       return false;
     int64_t currentKey = readIntKey(key_ref, arr->keySize);
     auto it = arr->data.find(currentKey);
-    if (it == arr->data.end() || it == arr->data.begin())
+    if (it == arr->data.end()) {
+      it = arr->data.lower_bound(currentKey);
+    }
+    if (it == arr->data.begin())
       return false;
     --it;
     writeIntKey(key_ref, it->first, arr->keySize);
