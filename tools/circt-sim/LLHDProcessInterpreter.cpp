@@ -13178,58 +13178,134 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
-    // Coverage function stubs (coverage not supported in interpreter)
-    // These are needed to run UVM-based testbenches that use covergroups.
-    if (calleeName == "__moore_covergroup_create") {
-      // Return a dummy covergroup handle (0)
-      if (callOp.getNumResults() >= 1) {
-        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+    // Coverage collection - delegates to MooreRuntime library functions.
+    // Helper: read a C-string (null-terminated) from a pointer value.
+    auto readCStringFromPtr = [&](Value operand) -> const char * {
+      InterpretedValue ptrArg = getValue(procId, operand);
+      if (ptrArg.isX())
+        return "";
+      uint64_t ptrVal = ptrArg.getUInt64();
+      if (ptrVal == 0)
+        return "";
+      // Try global string constant lookup
+      auto globalIt = addressToGlobal.find(ptrVal);
+      if (globalIt != addressToGlobal.end()) {
+        auto blockIt = globalMemoryBlocks.find(globalIt->second);
+        if (blockIt != globalMemoryBlocks.end() && blockIt->second.initialized)
+          return reinterpret_cast<const char *>(blockIt->second.data.data());
       }
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_create() -> 0 (stub)\n");
+      // Try interpreter memory
+      uint64_t off = 0;
+      MemoryBlock *block = findBlockByAddress(ptrVal, off);
+      if (block && block->initialized)
+        return reinterpret_cast<const char *>(block->data.data() + off);
+      return "";
+    };
+
+    if (calleeName == "__moore_covergroup_create") {
+      const char *name = readCStringFromPtr(callOp.getOperand(0));
+      int32_t numCp = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      void *cg = __moore_covergroup_create(name, numCp);
+      if (callOp.getNumResults() >= 1) {
+        setValue(procId, callOp.getResult(),
+                InterpretedValue(reinterpret_cast<uint64_t>(cg), 64));
+      }
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_create(\""
+                               << name << "\", " << numCp << ") -> "
+                               << cg << "\n");
       return success();
     }
 
     if (calleeName == "__moore_covergroup_get_coverage") {
-      // Return 0.0 coverage (represented as 0 in fixed-point or just zero bits)
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      double coverage = __moore_covergroup_get_coverage(cg);
       if (callOp.getNumResults() >= 1) {
-        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+        uint64_t bits;
+        std::memcpy(&bits, &coverage, sizeof(bits));
+        setValue(procId, callOp.getResult(), InterpretedValue(bits, 64));
       }
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_get_coverage() -> 0.0 (stub)\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_covergroup_get_coverage("
+                 << cg << ") -> " << coverage << "%\n");
       return success();
     }
 
     if (calleeName == "__moore_coverpoint_init") {
-      // No-op: coverpoint initialization is not supported
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_init() (stub, no-op)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      __moore_coverpoint_init(cg, cpIdx, name);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_init("
+                               << cg << ", " << cpIdx << ", \""
+                               << name << "\")\n");
       return success();
     }
 
     if (calleeName == "__moore_coverpoint_sample") {
-      // No-op: coverpoint sampling is not supported
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_sample() (stub, no-op)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      int64_t value = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(2)).getUInt64());
+      __moore_coverpoint_sample(cg, cpIdx, value);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_sample("
+                               << cg << ", " << cpIdx << ", "
+                               << value << ")\n");
       return success();
     }
 
     if (calleeName == "__moore_coverpoint_add_ignore_bin") {
-      // No-op: ignore bin configuration is not supported
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_add_ignore_bin() (stub, no-op)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      int64_t lo = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      int64_t hi = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(4)).getUInt64());
+      __moore_coverpoint_add_ignore_bin(cg, cpIdx, name, lo, hi);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverpoint_add_ignore_bin("
+                 << cg << ", " << cpIdx << ", \"" << name << "\", "
+                 << lo << ", " << hi << ")\n");
       return success();
     }
 
     if (calleeName == "__moore_coverpoint_add_illegal_bin") {
-      // No-op: illegal bin configuration is not supported
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_add_illegal_bin() (stub, no-op)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      int64_t lo = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      int64_t hi = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(4)).getUInt64());
+      __moore_coverpoint_add_illegal_bin(cg, cpIdx, name, lo, hi);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverpoint_add_illegal_bin("
+                 << cg << ", " << cpIdx << ", \"" << name << "\", "
+                 << lo << ", " << hi << ")\n");
       return success();
     }
 
     if (calleeName == "__moore_coverage_set_test_name") {
-      // No-op: ignore coverage test name in interpreter.
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_set_test_name() (stub, no-op)\n");
+      const char *name = readCStringFromPtr(callOp.getOperand(0));
+      __moore_coverage_set_test_name(name);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverage_set_test_name(\""
+                 << name << "\")\n");
       return success();
     }
 
     if (calleeName == "__moore_coverage_load_db") {
-      // Return null handle.
+      // Return null handle (DB features not yet needed for basic coverage).
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_load_db() -> 0 (stub)\n");
@@ -13237,7 +13313,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     if (calleeName == "__moore_coverage_merge_db") {
-      // Return success (0).
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_merge_db() -> 0 (stub)\n");
@@ -13245,7 +13320,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     if (calleeName == "__moore_coverage_save_db") {
-      // Return success (0).
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_save_db() -> 0 (stub)\n");
@@ -13253,7 +13327,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     if (calleeName == "__moore_coverage_load") {
-      // Return null handle.
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_load() -> 0 (stub)\n");
@@ -13261,7 +13334,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     if (calleeName == "__moore_coverage_merge") {
-      // Return success (0).
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverage_merge() -> 0 (stub)\n");
@@ -17413,31 +17485,91 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_cross_create ----
     // Signature: (cg: ptr, name: ptr, cp_indices: ptr, num: i32) -> i32
     if (calleeName == "__moore_cross_create") {
-      if (callOp.getNumResults() >= 1) {
-        // Stub: return a dummy cross index
-        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_cross_create() = 0 (stub)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      const char *name = readCStringFromPtr(callOp.getOperand(1));
+      int32_t numCps = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      // Read cp_indices array from interpreter memory
+      uint64_t indicesAddr = getValue(procId, callOp.getOperand(2)).getUInt64();
+      std::vector<int32_t> indices(numCps, 0);
+      if (indicesAddr != 0) {
+        uint64_t off = 0;
+        MemoryBlock *block = findMemoryBlockByAddress(indicesAddr, procId, &off);
+        if (block && block->initialized) {
+          for (int32_t i = 0; i < numCps && off + 4 <= block->data.size(); ++i) {
+            int32_t val = 0;
+            for (int b = 0; b < 4; ++b)
+              val |= static_cast<int32_t>(block->data[off + b]) << (b * 8);
+            indices[i] = val;
+            off += 4;
+          }
+        }
       }
+      int32_t crossIdx = __moore_cross_create(cg, name, indices.data(), numCps);
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                InterpretedValue(static_cast<uint64_t>(crossIdx), 32));
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_cross_create("
+                               << cg << ", \"" << name << "\", ..., "
+                               << numCps << ") = " << crossIdx << "\n");
       return success();
     }
 
     // ---- __moore_cross_sample ----
     // Signature: (cg: ptr, cp_values: ptr, num_values: i32) -> void
     if (calleeName == "__moore_cross_sample") {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  llvm.call: __moore_cross_sample() (stub)\n");
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t numValues = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(2)).getUInt64());
+      // Read cp_values array (i64 elements) from interpreter memory
+      uint64_t valuesAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+      std::vector<int64_t> values(numValues, 0);
+      if (valuesAddr != 0) {
+        uint64_t off = 0;
+        MemoryBlock *block = findMemoryBlockByAddress(valuesAddr, procId, &off);
+        if (block && block->initialized) {
+          for (int32_t i = 0; i < numValues && off + 8 <= block->data.size(); ++i) {
+            int64_t val = 0;
+            for (int b = 0; b < 8; ++b)
+              val |= static_cast<int64_t>(block->data[off + b]) << (b * 8);
+            values[i] = val;
+            off += 8;
+          }
+        }
+      }
+      __moore_cross_sample(cg, values.data(), numValues);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_cross_sample("
+                               << cg << ", ..., " << numValues << ")\n");
       return success();
     }
 
     // ---- __moore_cross_add_named_bin ----
-    // Signature: (cg: ptr, cross_index: i32, name: ptr, ...) -> i32
+    // Signature: (cg: ptr, cross_index: i32, name: ptr, kind: i32,
+    //             filters: ptr, num_filters: i32) -> i32
     if (calleeName == "__moore_cross_add_named_bin") {
-      if (callOp.getNumResults() >= 1) {
-        setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_cross_add_named_bin() = 0\n");
-      }
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t crossIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      int32_t kind = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      // Pass NULL filters for now (named bins without complex filters)
+      int32_t numFilters = 0;
+      if (callOp.getNumOperands() >= 6)
+        numFilters = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(5)).getUInt64());
+      int32_t binIdx = __moore_cross_add_named_bin(
+          cg, crossIdx, name, kind, nullptr, numFilters);
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                InterpretedValue(static_cast<uint64_t>(binIdx), 32));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_cross_add_named_bin("
+                 << cg << ", " << crossIdx << ", \"" << name << "\", "
+                 << kind << ") = " << binIdx << "\n");
       return success();
     }
 
@@ -19922,10 +20054,40 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
     } else if (auto zeroOp = dyn_cast<LLVM::ZeroOp>(&op)) {
       setValue(tempProcId, zeroOp.getResult(), InterpretedValue(0, 64));
       ++opsExecuted;
+    } else if (auto addrOfOp = dyn_cast<LLVM::AddressOfOp>(&op)) {
+      (void)interpretLLVMAddressOf(tempProcId, addrOfOp);
+      ++opsExecuted;
+    } else if (auto loadOp = dyn_cast<LLVM::LoadOp>(&op)) {
+      (void)interpretLLVMLoad(tempProcId, loadOp);
+      ++opsExecuted;
     } else if (isa<LLVM::InsertValueOp>(&op)) {
       (void)interpretOperation(tempProcId, &op);
       ++opsExecuted;
     }
+  }
+
+  // Update signal initial values for llhd.sig ops whose init was computed
+  // by module-level LLVM ops (e.g., covergroup handles loaded from globals).
+  // registerSignals runs before this function, so signals whose init value
+  // comes from an llvm.load or llvm.call result still have their default
+  // value (0). Now that the LLVM ops have executed, we can update them.
+  for (Operation &op : hwModule.getBody().front()) {
+    auto sigOp = dyn_cast<llhd::SignalOp>(&op);
+    if (!sigOp)
+      continue;
+    auto it = processStates[tempProcId].valueMap.find(sigOp.getInit());
+    if (it == processStates[tempProcId].valueMap.end())
+      continue;
+    InterpretedValue initVal = it->second;
+    if (initVal.isX() || initVal.getUInt64() == 0)
+      continue;
+    SignalId sigId = valueToSignal.lookup(sigOp.getResult());
+    if (sigId == 0)
+      continue;
+    scheduler.updateSignal(sigId, initVal.toSignalValue());
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Updated signal " << sigId << " initial value from "
+               << "module-level LLVM op result\n");
   }
 
   // Copy the module-level value map to a special "module init" state

@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+#include "circt/Runtime/MooreRuntime.h"
 #include "circt/Conversion/ArcToLLVM.h"
 #include "circt/Conversion/CombToArith.h"
 #include "circt/Conversion/ConvertToArcs.h"
@@ -1540,6 +1541,8 @@ static LogicalResult processInput(MLIRContext &context,
   else
     llvm::outs() << "[circt-sim] Simulation finished with exit code "
                  << exitCode << "\n";
+  // Print coverage report if any covergroups were registered.
+  __moore_coverage_report();
   llvm::outs().flush();
   llvm::errs().flush();
   std::fflush(stdout);
