@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 468 - February 7, 2026
+
+### Summary
+
+Exposed Slang's ignored-directive preprocessing capability through
+`circt-verilog` and added behavioral regression coverage.
+
+### Fixes
+
+1. **Ignored preprocessor directive control exposed**
+   - Added `--ignore-directive <name>` to `circt-verilog`.
+   - Wired through `ImportVerilogOptions::ignoreDirectives` into Slang
+     `Driver::Options::ignoreDirectives`.
+   - Supports multiple uses of the option to ignore multiple directive names.
+
+2. **Behavioral regression for unknown vendor directives**
+   - Added `test/Tools/circt-verilog/ignore-directive.test`.
+   - Added input file:
+     `test/Tools/circt-verilog/Inputs/ignore-directive/main.sv`.
+   - Verifies default unknown-directive failure and successful preprocessing
+     when `--ignore-directive vendor_directive` is provided.
+
+3. **Updated command-line coverage**
+   - Extended `test/Tools/circt-verilog/commandline.mlir` to include
+     `--ignore-directive`.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-verilog/ignore-directive.test`: PASS
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+  - `test/Conversion/ImportVerilog/generic-interface-port-top.sv`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 467 - February 7, 2026
 
 ### Summary
