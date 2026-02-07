@@ -87,7 +87,7 @@ keeping memory growth controlled.
 | Feature | Priority | Effort | Impact | Details |
 |---------|----------|--------|--------|---------|
 | Interface ports (modport) | MEDIUM | Medium | Full AXI-VIP patterns | Generic ports resolved; may still need modport-qualified interface ports |
-| Nested interface ports | MEDIUM | Medium | Nested sub-interfaces | `missing hierarchical interface value` for `p.child` patterns (Structure.cpp) |
+| Bind scope resolution | HIGH | Medium | I2S/UART/SPI combined | slang resolves bind port signals in enclosing scope instead of target scope (IEEE §23.11) |
 | Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path already uses NBA; only native EventType path lacks it; event clearing needs time-slot tracking |
 | Non-UVM compile failures | NOT-ACTIONABLE | N/A | 9 tests | 6 BSG preprocessor extension, 2 missing submodules, 1 runner heuristic |
 | Coverage collection | LOW | Large | Functional/code coverage | Not implemented |
@@ -100,6 +100,31 @@ keeping memory growth controlled.
 - SVA assume/cover simulation — FIXED (0 simulation failures)
 - Cumulative `__moore_delay` in LLVM function bodies — FIXED (iteration 433)
 - Generic interface ports — FIXED (iteration 434, `getConnection()` resolution)
+- Nested interface ports — FIXED (iteration 435, scope-hierarchy fallback)
+
+### External Test Suite Baselines (February 7, 2026)
+
+| Suite | Total .sv | Tested | Pass | Fail | Rate | Notes |
+|-------|-----------|--------|------|------|------|-------|
+| yosys/tests/ | 105 | 105 | 81 | 24 | **77.1%** | ~6 multi-file deps, ~18 genuine edge cases |
+| verilator-verification/ | 170 | 170 | 125 | 45 | **73.5%** | ~25 UVM deps, ~8 parsing, ~12 genuine |
+| opentitan/ (_pkg.sv) | 576 | 20 | 12 | 8 | **60.0%** | All 8 are missing cross-package deps; 0 genuine bugs |
+
+### AVIP Combined-Mode Status (February 7, 2026)
+
+All 6 AVIPs compile and simulate in combined HdlTop+HvlTop mode. The single
+remaining blocker for 3 of them is slang's bind scope resolution bug (IEEE
+§23.11). Since bind assertions are SVA (already MISSING), the core BFM/UVM
+infrastructure works for all 6.
+
+| AVIP | Combined? | Blocker |
+|------|-----------|---------|
+| APB | YES | None |
+| AHB | YES | None |
+| UART | YES* | bind scope in slang (assertion only) |
+| I2S | YES* | bind scope in slang (assertion only) |
+| I3C | YES | None |
+| SPI | YES* | bind scope in slang (assertion only) |
 
 ### Interface Ports Implementation Plan (PARTIALLY DONE)
 

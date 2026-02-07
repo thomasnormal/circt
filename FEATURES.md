@@ -109,12 +109,12 @@ to commercial simulators like Cadence Xcelium.
 
 | AVIP | HvlTop | HdlTop | Combined | Notes |
 |------|--------|--------|----------|-------|
-| APB | Runs | Runs | Runs | `apb_base_test` completes at ~108 ns sim time |
-| AHB | Runs | Runs | Runs | `AhbBaseTest` completes at ~115 ns sim time |
-| UART | Runs | Runs | Runs | `UartBaseTest` completes at ~255 ns sim time |
-| I2S | Runs | - | - | `I2sBaseTest` completes at ~94 ns sim time |
-| I3C | Runs | - | - | `i3c_base_test` completes at ~112 ns sim time |
-| SPI | Runs | Runs | Runs | `SpiBaseTest` completes at ~743 ns sim time |
+| APB | Runs | Runs | Runs | `apb_base_test` completes at ~200 ns sim time |
+| AHB | Runs | Runs | Runs | `AhbBaseTest` completes at ~200 ns sim time |
+| UART | Runs | Runs* | Runs* | `UartBaseTest` at ~300 ns; *bind assertions need slang fix |
+| I2S | Runs | Runs* | Runs* | `I2sBaseTest` at ~200 ns; *bind assertions need slang fix |
+| I3C | Runs | Runs | Runs | `i3c_base_test` at ~200 ns; pullup/wire/generate all work |
+| SPI | Runs | Runs* | Runs* | `SpiBaseTest` at ~800 ns; *bind assertions need slang fix |
 
 ## Key Fixes History
 
