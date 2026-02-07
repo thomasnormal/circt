@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 430 - February 7, 2026
+
+### Summary
+
+Iteration 430: Fixed bind-scope interface member resolution so bind port
+connections like `bus.clk` resolve in the bind scope, even inside generate
+blocks.
+
+### Accomplishments
+
+1. **Bind-scope port resolution** - Bind port-connection expressions now always
+   resolve in the bind directive scope (slang patch update), matching LRM 23.11
+   and enabling interface member references in binds.
+2. **Bind expression traversal** - Bind port connections now flow through the
+   bind-scope-aware hierarchical collector for property/sequence syntax, so
+   interface member paths are threaded consistently.
+3. **Regression update** - `bind-interface-generate-scope.sv` now binds with
+   `bus.clk`/`bus.data` member references to cover the fixed behavior.
+
+### Verification (February 7, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-generate-scope.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-generate-scope.sv`
+
+## Iteration 429 - February 6, 2026
+
+### Summary
+
+Iteration 429: Improved bind-scope interface port collection for instance
+binds inside generated scopes and added regression coverage.
+
+### Accomplishments
+
+1. **Bind scope collection** - Bind directive port connections now collect
+   hierarchical values with bind-scope context, ensuring interface ports from
+   generate scopes are threaded into bound modules.
+2. **Regression coverage** - Added `bind-interface-generate-scope.sv` to cover
+   instance-specific binds inside generate blocks using interface ports.
+
+### Verification (February 6, 2026)
+
+- `build/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/bind-interface-generate-scope.sv | build/bin/FileCheck test/Conversion/ImportVerilog/bind-interface-generate-scope.sv`
+
 ## Iteration 428 - February 6, 2026
 
 ### Summary
