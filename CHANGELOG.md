@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 464 - February 7, 2026
+
+### Summary
+
+Extended Slang option coverage again with keyword-version file mapping and
+explicit min/typ/max timing selection in `circt-verilog`, plus behavioral
+regressions.
+
+### Fixes
+
+1. **Keyword-version mapping support**
+   - Added `--map-keyword-version=<keyword-version>+<file-pattern>[,...]`.
+   - Parses and forwards mapping entries to Slang `Driver::Options::keywordMapping`.
+   - Added diagnostics for malformed mappings and unknown keyword versions.
+
+2. **Timing selection support**
+   - Added `--timing=min|typ|max` (and `-T` alias).
+   - Plumbed through to Slang `minTypMax` compilation option.
+   - Added validation for invalid values.
+
+3. **New/updated regression coverage**
+   - Added `test/Tools/circt-verilog/map-keyword-version.test` with input corpus
+     under `test/Tools/circt-verilog/Inputs/map-keyword-version/`.
+   - Updated `test/Conversion/ImportVerilog/mintypmax-let.sv` to check:
+     - default typ behavior
+     - `--timing=min`
+     - `--timing=max`
+   - Updated `test/Tools/circt-verilog/commandline.mlir` to include
+     `--map-keyword-version` and `--timing`.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+  - `test/Tools/circt-verilog/map-keyword-version.test`: PASS
+  - `test/Tools/circt-verilog/disable-local-includes.test`: PASS
+  - `test/Conversion/ImportVerilog/mintypmax-let.sv`: PASS
+  - `test/Conversion/ImportVerilog/max-instance-array.sv`: PASS
+  - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 463 - February 7, 2026
 
 ### Summary

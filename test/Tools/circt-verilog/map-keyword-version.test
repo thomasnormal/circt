@@ -1,0 +1,5 @@
+// RUN: not circt-verilog --no-uvm-auto-include --parse-only --language-version=1800-2017 %S/Inputs/map-keyword-version/main.sv 2>&1 | FileCheck %s --check-prefix=NOMAP
+// RUN: circt-verilog --no-uvm-auto-include --parse-only --language-version=1800-2017 --map-keyword-version=1364-2005+%S/Inputs/map-keyword-version/legacy.sv %S/Inputs/map-keyword-version/main.sv | FileCheck %s --check-prefix=MAP
+
+// NOMAP: error:
+// MAP: moore.module @always_ff

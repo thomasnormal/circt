@@ -289,6 +289,53 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.disableLocalIncludes = options.disableLocalIncludes;
   driver.options.enableLegacyProtect = options.enableLegacyProtect;
   driver.options.translateOffOptions = options.translateOffOptions;
+  for (const auto &mappingSpec : options.keywordVersionMappings) {
+    StringRef spec = mappingSpec;
+    auto plusPos = spec.find('+');
+    if (plusPos == StringRef::npos) {
+      emitError(UnknownLoc::get(mlirContext))
+          << "--map-keyword-version expects "
+             "<keyword-version>+<file-pattern>[,...], got '"
+          << spec << "'";
+      return failure();
+    }
+    StringRef versionText = spec.take_front(plusPos).trim();
+    StringRef patternsText = spec.drop_front(plusPos + 1).trim();
+    if (versionText.empty() || patternsText.empty()) {
+      emitError(UnknownLoc::get(mlirContext))
+          << "--map-keyword-version expects "
+             "<keyword-version>+<file-pattern>[,...], got '"
+          << spec << "'";
+      return failure();
+    }
+    auto keywordVersion =
+        slang::parsing::LexerFacts::getKeywordVersion(versionText);
+    if (!keywordVersion) {
+      emitError(UnknownLoc::get(mlirContext))
+          << "--map-keyword-version has unknown keyword version '"
+          << versionText << "'";
+      return failure();
+    }
+    bool addedPattern = false;
+    StringRef remaining = patternsText;
+    while (!remaining.empty()) {
+      auto [part, rest] = remaining.split(',');
+      auto pattern = part.trim();
+      if (!pattern.empty()) {
+        driver.options.keywordMapping.emplace_back(pattern.str(),
+                                                   *keywordVersion);
+        addedPattern = true;
+      }
+      remaining = rest;
+    }
+    if (!addedPattern) {
+      emitError(UnknownLoc::get(mlirContext))
+          << "--map-keyword-version requires at least one non-empty file "
+             "pattern in '"
+          << spec << "'";
+      return failure();
+    }
+  }
 
   driver.options.languageVersion = options.languageVersion;
   driver.options.maxParseDepth = options.maxParseDepth;
@@ -302,6 +349,21 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.maxInstanceArray = options.maxInstanceArray;
 
   driver.options.timeScale = options.timeScale;
+  if (options.minTypMax) {
+    StringRef mtm = *options.minTypMax;
+    if (mtm.equals_insensitive("min"))
+      driver.options.minTypMax = slang::ast::MinTypMax::Min;
+    else if (mtm.equals_insensitive("typ"))
+      driver.options.minTypMax = slang::ast::MinTypMax::Typ;
+    else if (mtm.equals_insensitive("max"))
+      driver.options.minTypMax = slang::ast::MinTypMax::Max;
+    else {
+      emitError(UnknownLoc::get(mlirContext))
+          << "--timing expects one of: min, typ, max";
+      return failure();
+    }
+  }
+
   // Enable AllowUseBeforeDeclare by default — forward references are
   // ubiquitous in real SV code and accepted by VCS/Xcelium.  The explicit
   // CLI flag can still override this.

@@ -13,4 +13,6 @@
 // CHECK-DAG: --max-instance-array
 // CHECK-DAG: --disable-local-includes
 // CHECK-DAG: --enable-legacy-protect
+// CHECK-DAG: --map-keyword-version
 // CHECK-DAG: --translate-off-format
+// CHECK-DAG: --timing
