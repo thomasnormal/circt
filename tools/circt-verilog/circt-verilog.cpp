@@ -227,6 +227,56 @@ struct CLOptions {
                "specify one explicitly"),
       cl::value_desc("<base>/<precision>"), cl::cat(cat)};
 
+  cl::opt<std::string> languageVersion{
+      "language-version",
+      cl::desc("Set the SystemVerilog language keyword version"),
+      cl::value_desc("version"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxParseDepth{
+      "max-parse-depth",
+      cl::desc("Maximum parser call stack depth before erroring"),
+      cl::value_desc("depth"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxLexerErrors{
+      "max-lexer-errors",
+      cl::desc("Maximum lexer errors before aborting parse"),
+      cl::value_desc("count"), cl::cat(cat)};
+
+  cl::opt<uint32_t> numThreads{
+      "num-threads",
+      cl::desc("Number of parser threads to use"),
+      cl::value_desc("count"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxInstanceDepth{
+      "max-instance-depth",
+      cl::desc("Maximum nested instance depth before erroring"),
+      cl::value_desc("depth"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxGenerateSteps{
+      "max-generate-steps",
+      cl::desc("Maximum steps to expand one generate construct"),
+      cl::value_desc("count"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxConstexprDepth{
+      "max-constexpr-depth",
+      cl::desc("Maximum constexpr call depth before erroring"),
+      cl::value_desc("depth"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxConstexprSteps{
+      "max-constexpr-steps",
+      cl::desc("Maximum constexpr evaluation steps before erroring"),
+      cl::value_desc("count"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxConstexprBacktrace{
+      "max-constexpr-backtrace",
+      cl::desc("Maximum constexpr callstack frames shown in diagnostics"),
+      cl::value_desc("count"), cl::cat(cat)};
+
+  cl::opt<uint32_t> maxInstanceArray{
+      "max-instance-array",
+      cl::desc("Maximum allowed elements in an instance array"),
+      cl::value_desc("count"), cl::cat(cat)};
+
   cl::opt<bool> allowUseBeforeDeclare{
       "allow-use-before-declare",
       cl::desc(
@@ -545,6 +595,27 @@ static LogicalResult executeWithSources(MLIRContext *context,
   if (opts.maxIncludeDepth.getNumOccurrences() > 0)
     options.maxIncludeDepth = opts.maxIncludeDepth;
   options.librariesInheritMacros = opts.librariesInheritMacros;
+
+  if (opts.languageVersion.getNumOccurrences() > 0)
+    options.languageVersion = opts.languageVersion;
+  if (opts.maxParseDepth.getNumOccurrences() > 0)
+    options.maxParseDepth = opts.maxParseDepth;
+  if (opts.maxLexerErrors.getNumOccurrences() > 0)
+    options.maxLexerErrors = opts.maxLexerErrors;
+  if (opts.numThreads.getNumOccurrences() > 0)
+    options.numThreads = opts.numThreads;
+  if (opts.maxInstanceDepth.getNumOccurrences() > 0)
+    options.maxInstanceDepth = opts.maxInstanceDepth;
+  if (opts.maxGenerateSteps.getNumOccurrences() > 0)
+    options.maxGenerateSteps = opts.maxGenerateSteps;
+  if (opts.maxConstexprDepth.getNumOccurrences() > 0)
+    options.maxConstexprDepth = opts.maxConstexprDepth;
+  if (opts.maxConstexprSteps.getNumOccurrences() > 0)
+    options.maxConstexprSteps = opts.maxConstexprSteps;
+  if (opts.maxConstexprBacktrace.getNumOccurrences() > 0)
+    options.maxConstexprBacktrace = opts.maxConstexprBacktrace;
+  if (opts.maxInstanceArray.getNumOccurrences() > 0)
+    options.maxInstanceArray = opts.maxInstanceArray;
 
   if (opts.timeScale.getNumOccurrences() > 0)
     options.timeScale = opts.timeScale;

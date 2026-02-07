@@ -287,6 +287,17 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.undefines = options.undefines;
   driver.options.librariesInheritMacros = options.librariesInheritMacros;
 
+  driver.options.languageVersion = options.languageVersion;
+  driver.options.maxParseDepth = options.maxParseDepth;
+  driver.options.maxLexerErrors = options.maxLexerErrors;
+  driver.options.numThreads = options.numThreads;
+  driver.options.maxInstanceDepth = options.maxInstanceDepth;
+  driver.options.maxGenerateSteps = options.maxGenerateSteps;
+  driver.options.maxConstexprDepth = options.maxConstexprDepth;
+  driver.options.maxConstexprSteps = options.maxConstexprSteps;
+  driver.options.maxConstexprBacktrace = options.maxConstexprBacktrace;
+  driver.options.maxInstanceArray = options.maxInstanceArray;
+
   driver.options.timeScale = options.timeScale;
   // Enable AllowUseBeforeDeclare by default — forward references are
   // ubiquitous in real SV code and accepted by VCS/Xcelium.  The explicit

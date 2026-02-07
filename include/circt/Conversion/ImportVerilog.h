@@ -99,6 +99,36 @@ struct ImportVerilogOptions {
   // Compilation
   //===--------------------------------------------------------------------===//
 
+  /// The version of SystemVerilog language keywords to use.
+  std::optional<std::string> languageVersion;
+
+  /// The maximum call stack depth of parsing before an error is issued.
+  std::optional<uint32_t> maxParseDepth;
+
+  /// The maximum number of lexer errors before giving up.
+  std::optional<uint32_t> maxLexerErrors;
+
+  /// The number of threads to use for parsing.
+  std::optional<uint32_t> numThreads;
+
+  /// The maximum depth of nested module/interface/program instances.
+  std::optional<uint32_t> maxInstanceDepth;
+
+  /// The maximum number of steps when expanding one generate construct.
+  std::optional<uint32_t> maxGenerateSteps;
+
+  /// The maximum nested function-call depth for constant expressions.
+  std::optional<uint32_t> maxConstexprDepth;
+
+  /// The maximum number of steps for constant-expression evaluation.
+  std::optional<uint32_t> maxConstexprSteps;
+
+  /// The maximum number of constexpr callstack frames shown in diagnostics.
+  std::optional<uint32_t> maxConstexprBacktrace;
+
+  /// The maximum number of elements allowed in a single instance array.
+  std::optional<uint32_t> maxInstanceArray;
+
   /// A string that indicates the default time scale to use for any design
   /// elements that don't specify one explicitly.
   std::optional<std::string> timeScale;
