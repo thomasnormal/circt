@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 456)
+## Current Status - February 7, 2026 (Iteration 457)
 
 ### Test Results
 
@@ -119,6 +119,36 @@ All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
    - Improve 4-state/X modeling to reduce `XPROP_ONLY` dependence in LEC.
    - Add an in-tree assignment-conflict fallback analysis until Slang analysis
      APIs are stable for this workflow.
+
+### Session Summary - Iteration 457
+
+1. **Stream-unpack 4-state lowering robustness**
+   - Fixed MooreToCore `moore.stream_unpack` conversion for 4-state packed
+     sources by extracting the `"value"` field from converted
+     `{value, unknown}` structs before integer widening.
+   - This aligns streaming-unpack lowering with 4-state representation used in
+     the rest of the pipeline.
+
+2. **Coverage and validation**
+   - Added focused regression coverage for 4-state stream unpacking and queue
+     destination cases.
+   - Revalidated stream-specific sv-tests simulation paths and UVM chapter-16
+     compile-heavy tests, plus full external smoke subset (sv-tests/verilator/
+     yosys BMC+LEC, OpenTitan canright LEC, AVIP APB compile).
+
+3. **Current limitations we still need to solve**
+   - UVM-heavy formal is still burdened by non-property runtime/reporting
+     machinery in the lowered IR.
+   - OpenTitan still requires `XPROP_ONLY` acceptance for some LEC scenarios.
+   - Slang `AnalysisManager` remains unstable for assignment-conflict analysis.
+
+4. **Best long-term features to build next**
+   - A formal cone-of-influence/abstraction pass to strip non-property UVM code
+     before HW/SMT lowering.
+   - Stronger 4-state semantics and initialization modeling to reduce
+     X-prop-only equivalence escapes.
+   - In-tree assignment-conflict fallback analysis to unblock remaining sv-tests
+     diagnostics while upstream Slang work matures.
 
 ### Previous Session Summary - Iteration 445
 

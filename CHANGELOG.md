@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 457 - February 7, 2026
+
+### Summary
+
+Fixed `moore.stream_unpack` lowering for 4-state packed sources by extracting
+the value lane before bitvector widening, improving robustness for UVM and
+dynamic-array streaming flows.
+
+### Accomplishments
+
+1. **MooreToCore stream-unpack fix (4-state source types)**
+   - In `StreamUnpackOpConversion`, added handling for 4-state converted
+     struct inputs (`{value, unknown}`) by extracting `"value"` before the
+     i64 extension/truncation path.
+   - This avoids type mismatch/failure paths when `moore.stream_unpack`
+     receives logic-typed packed sources (e.g. `!moore.l8`, `!moore.l32`).
+
+2. **Regression coverage**
+   - Added `test/Conversion/MooreToCore/stream-unpack-fourstate.mlir`:
+     - 4-state source into `open_uarray<i1>`
+     - 2-state source control case
+     - wider 4-state source
+     - queue destination case
+   - Checks ensure `hw.struct_extract "value"` is present for 4-state sources
+     and runtime call lowering remains intact.
+
+### Verification
+
+- Lit:
+  - `test/Conversion/MooreToCore/stream-unpack-fourstate.mlir` (pass)
+  - `test/Conversion/ImportVerilog/lvalue-streaming.sv` (pass)
+  - `test/Conversion/ImportVerilog/mixed-streaming.sv` (pass)
+  - `test/Conversion/ImportVerilog/mixed-streaming-large-prefix.sv` (pass)
+- Targeted sv-tests stream compile/sim:
+  - `11.4.14.4--dynamic_array_stream*.sv` compile checks via `circt-verilog`
+    (pass)
+  - `utils/run_sv_tests_circt_sim.sh` with `TEST_FILTER=dynamic_array_stream`:
+    `total=3 pass=3 fail=0 timeout=0`
+- UVM-heavy compile spot checks:
+  - `16.12--property-uvm.sv`, `16.17--expect-uvm.sv`,
+    `16.2--assert-final-uvm.sv` (`circt-verilog --ir-hw`, all pass)
+- External smoke rerun:
+  - sv-tests BMC (`16.12--property`): pass
+  - verilator-verification BMC (`assert_rose`): pass
+  - yosys/tests/sva BMC (`basic00`): pass
+  - sv-tests LEC (`16.10--property-local-var`): pass
+  - verilator-verification LEC (`assert_rose`): pass
+  - yosys/tests/sva LEC (`basic00`): pass
+  - OpenTitan LEC (`canright`, `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP compile smoke (`apb_avip`): pass
+
 ## Iteration 456 - February 7, 2026
 
 ### Summary
