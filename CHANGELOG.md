@@ -24,6 +24,14 @@ circt-sim 162/162 (100%), ImportVerilog 262/262 (100%).
      MLIR interface declarations with numeric suffixes
    - New test: `param-interface-dedup.sv`
 
+3. **BMC prune derived-clock input liveness hardening**
+   - `PruneBMCRegisters` now preserves module input dependencies of
+     `seq.to_clock` expressions.
+   - This prevents accidental pruning of ports used only through
+     `bmc_reg_clock_sources` `clock_key` metadata in derived-clock flows.
+   - New regression:
+     `test/Tools/circt-bmc/prune-bmc-registers-clock-input-deps.mlir`
+
 ### Test Results
 
 | Suite | Total | Pass | Rate |

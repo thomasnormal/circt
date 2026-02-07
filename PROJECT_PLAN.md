@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 460)
+## Current Status - February 7, 2026 (Iteration 461)
 
 ### Test Results
 
@@ -255,6 +255,37 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
      stronger 4-state/X initialization semantics remain high priority.
    - We still need a dedicated formal COI abstraction pass to strip UVM
      runtime/reporting noise before SMT lowering.
+
+### Session Summary - Iteration 461
+
+1. **Clock-key dependency hardening for register pruning**
+   - Fixed `prune-bmc-registers` to keep input dependencies of `seq.to_clock`
+     expressions live.
+   - This prevents pruning of ports that only feed derived clock expressions
+     represented by `bmc_reg_clock_sources` `clock_key` entries.
+
+2. **New regression coverage**
+   - Added `test/Tools/circt-bmc/prune-bmc-registers-clock-input-deps.mlir`.
+   - The test locks that derived-clock inputs (`%a`, `%b`) are preserved by
+     pruning and still drive `seq.to_clock`.
+
+3. **Validation**
+   - `check-circt-tools-circt-bmc`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`) with
+       `--prune-bmc-registers=true`: PASS
+     - `yosys/tests/sva` BMC (`basic00`) with
+       `--prune-bmc-registers=true`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+
+4. **Remaining limitations and long-term feature priorities**
+   - Multi-clock pruning in the full BMC tool pipeline is still blocked; keep
+     `--prune-bmc-registers` and `--allow-multi-clock` mutually incompatible
+     until we root-cause/fix the one-shot pipeline crash.
+   - Once stabilized, make pruning default-on for single-clock flows and then
+     extend to multi-clock.
+   - Continue toward the larger formal COI abstraction pass and stronger
+     4-state/X initialization modeling to reduce `XPROP_ONLY` dependence.
 
 ### Previous Session Summary - Iteration 445
 
