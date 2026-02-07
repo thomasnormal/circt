@@ -29,6 +29,8 @@ extended k-induction to support `ignore-asserts-until` warmup windows.
      to ensure final-prefix assumptions are skipped during induction warmup.
    - Added `test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir` to
      cover end-to-end `--induction --ignore-asserts-until`.
+   - Updated `test/Tools/circt-bmc/bmc-liveness-induction-conflict.mlir` to
+     cover both `--induction` and `--k-induction` spellings.
    - Existing induction/liveness/final tests remain green.
 
 4. **Verification**
@@ -36,6 +38,8 @@ extended k-induction to support `ignore-asserts-until` warmup windows.
    - Broader lit sweep:
      - `test/Tools/circt-bmc` + `test/Conversion/VerifToSMT`: 344 total,
        207 pass, 14 xfail, 123 unsupported, 0 unexpected failures.
+     - `test/Tools/circt-bmc`: 232 total, 97 pass, 12 xfail, 123 unsupported,
+       0 unexpected failures.
    - External smoke rerun:
      - sv-tests BMC: total=26 pass=23 fail=0 xfail=3 error=0
      - sv-tests LEC: total=23 pass=23 fail=0 error=0

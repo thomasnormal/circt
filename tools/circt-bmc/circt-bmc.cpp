@@ -862,17 +862,19 @@ static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
 
 static LogicalResult executeBMCWithInduction(MLIRContext &context) {
   if (liveness) {
-    llvm::errs() << "--liveness is incompatible with --k-induction\n";
+    llvm::errs()
+        << "--liveness is incompatible with --induction/--k-induction\n";
     return failure();
   }
 #ifdef CIRCT_BMC_ENABLE_JIT
   if (outputFormat != OutputRunSMTLIB && outputFormat != OutputRunJIT) {
-    llvm::errs() << "--k-induction requires --run or --run-smtlib\n";
+    llvm::errs()
+        << "--induction/--k-induction requires --run or --run-smtlib\n";
     return failure();
   }
 #else
   if (outputFormat != OutputRunSMTLIB) {
-    llvm::errs() << "--k-induction requires --run-smtlib\n";
+    llvm::errs() << "--induction/--k-induction requires --run-smtlib\n";
     return failure();
   }
 #endif
