@@ -1116,6 +1116,18 @@ private:
   /// UVM initialization to complete (re-entrant calls set uvm_top properly).
   bool inGlobalInit = false;
 
+  /// Cache of function lookups to avoid repeated moduleOp.lookupSymbol calls.
+  /// Maps function name to a cached result:
+  ///   - LLVM::LLVMFuncOp* if found as LLVM function
+  ///   - func::FuncOp* cast to Operation* if found as MLIR function
+  ///   - nullptr if not found (negative cache)
+  /// The second element of the pair is 0 for LLVM, 1 for MLIR func, 2 for not found.
+  struct CachedFuncLookup {
+    mlir::Operation *op = nullptr;
+    uint8_t kind = 0; // 0=LLVM, 1=func, 2=not found
+  };
+  llvm::StringMap<CachedFuncLookup> funcLookupCache;
+
   /// Map of dynamic string pointers to their content (for runtime string
   /// handling). Key is the pointer value, value is {data, len}.
   llvm::DenseMap<int64_t, std::pair<const char *, int64_t>> dynamicStrings;
