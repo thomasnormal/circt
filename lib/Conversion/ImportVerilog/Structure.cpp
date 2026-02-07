@@ -3292,7 +3292,7 @@ Value Context::resolveInterfaceInstance(
   const slang::ast::InstanceSymbol *cursor = instSym;
   while (cursor) {
     if (!visited.insert(cursor).second)
-      return {};
+      break;
     chain.push_back(cursor);
     cursor = cursor->body.parentInstance;
   }
@@ -3322,6 +3322,70 @@ Value Context::resolveInterfaceInstance(
         baseIndex = static_cast<int>(i);
         currentRef = scoped;
         break;
+      }
+    }
+  }
+
+  // Fallback: if the target instance is inside an interface body, resolve
+  // through the parent interface instance. Sub-interface instances (e.g.,
+  // ChildIf child inside ParentIf) are not cached in interfaceInstances
+  // because their InstanceSymbol is shared across all parent interface
+  // instances. Instead, navigate from the parent interface value.
+  if (!currentRef) {
+    auto *parentScope = instSym->getParentScope();
+    auto *containingBody =
+        parentScope ? parentScope->getContainingInstance() : nullptr;
+    if (containingBody &&
+        containingBody->getDefinition().definitionKind ==
+            slang::ast::DefinitionKind::Interface) {
+      // Find the parent interface instance registered in interfaceInstances
+      // whose body matches the containing interface body.
+      Value parentRef;
+      // First pass: prefer instances in the current scope.
+      if (currentScope) {
+        for (const auto &entry : interfaceInstances) {
+          if (&entry.first->body == containingBody) {
+            auto *entryParent = getInstanceBodyParent(*entry.first);
+            if (entryParent == currentScope) {
+              parentRef = entry.second;
+              break;
+            }
+          }
+        }
+      }
+      // Second pass: any matching instance.
+      if (!parentRef) {
+        for (const auto &entry : interfaceInstances) {
+          if (&entry.first->body == containingBody) {
+            parentRef = entry.second;
+            break;
+          }
+        }
+      }
+      if (parentRef) {
+        // Navigate from parent interface to the sub-interface child.
+        auto parentRefTy = dyn_cast<moore::RefType>(parentRef.getType());
+        if (parentRefTy) {
+          auto parentVifTy = dyn_cast<moore::VirtualInterfaceType>(
+              parentRefTy.getNestedType());
+          if (parentVifTy) {
+            auto *ifaceLowering = convertInterfaceHeader(&instSym->body);
+            if (ifaceLowering) {
+              Value parentVif = moore::ConversionOp::create(builder, loc,
+                                                            parentVifTy,
+                                                            parentRef);
+              auto ifaceRef = mlir::FlatSymbolRefAttr::get(
+                  getContext(), ifaceLowering->op.getSymName());
+              auto childVifTy =
+                  moore::VirtualInterfaceType::get(getContext(), ifaceRef);
+              auto childRefTy = moore::RefType::get(childVifTy);
+              auto signalSym =
+                  mlir::FlatSymbolRefAttr::get(getContext(), instSym->name);
+              currentRef = moore::VirtualInterfaceSignalRefOp::create(
+                  builder, loc, childRefTy, parentVif, signalSym);
+            }
+          }
+        }
       }
     }
   }
