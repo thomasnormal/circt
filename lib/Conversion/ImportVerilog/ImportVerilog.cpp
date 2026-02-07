@@ -229,6 +229,40 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
     if (driver.sourceManager.addSystemDirectories(includeSystemDir))
       return failure();
 
+  // These options are exposed on circt-verilog and should behave like slang's
+  // standard command line parser, including support for comma-separated values.
+  auto forEachCommaValue =
+      [](const std::vector<std::string> &values, auto &&processOne) {
+        for (const auto &value : values) {
+          StringRef remaining = value;
+          while (!remaining.empty()) {
+            auto [part, rest] = remaining.split(',');
+            auto token = part.trim();
+            if (!token.empty())
+              processOne(token);
+            remaining = rest;
+          }
+        }
+      };
+
+  forEachCommaValue(options.suppressWarningsPaths, [&](StringRef pathPattern) {
+    if (auto ec = driver.diagEngine.addIgnorePaths(pathPattern))
+      emitWarning(UnknownLoc::get(mlirContext))
+          << "--suppress-warnings path '" << pathPattern
+          << "': " << ec.message();
+  });
+
+  forEachCommaValue(options.libraryFiles, [&](StringRef libraryPattern) {
+    StringRef libraryName;
+    StringRef filePattern = libraryPattern;
+    auto eqPos = libraryPattern.find('=');
+    if (eqPos != StringRef::npos) {
+      libraryName = libraryPattern.take_front(eqPos).trim();
+      filePattern = libraryPattern.drop_front(eqPos + 1).trim();
+    }
+    driver.sourceLoader.addLibraryFiles(libraryName, filePattern);
+  });
+
   // Populate the driver options.
   driver.options.excludeExts.insert(options.excludeExts.begin(),
                                     options.excludeExts.end());
@@ -356,6 +390,7 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
     driver.diagEngine.issue(diag);
   if (!parseSuccess || driver.diagEngine.getNumErrors() > 0)
     return failure();
+
   compileTimer.stop();
 
   // If we were only supposed to lint the input, return here. This leaves the

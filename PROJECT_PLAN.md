@@ -5873,6 +5873,22 @@ ninja -C build circt-verilog
 - `f6b79c4c7` - [ImportVerilog] Fix non-integral assoc array keys and pure virtual methods
 - `14dfdbe9f` - [ImportVerilog] Add support for string ato* methods
 
+### Iteration 453
+- Slang frontend gap closure:
+  - Wired `--suppress-warnings` (`ImportVerilogOptions::suppressWarningsPaths`)
+    into `driver.diagEngine.addIgnorePaths`.
+  - Wired `-l` (`ImportVerilogOptions::libraryFiles`) into
+    `driver.sourceLoader.addLibraryFiles`.
+  - Added comma-separated option parsing to match Slang CLI behavior.
+- Added tests:
+  - `test/circt-verilog/library-files.sv`
+  - `test/circt-verilog/suppress-warnings.sv`
+- Current limitation observed while validating:
+  - Successful full import runs currently crash in `ImportDriver::importVerilog`
+    on this workspace snapshot (likely unrelated to this option wiring).
+  - New tests were scoped to `-E` and `--lint-only` paths to validate the new
+    option plumbing without depending on the unstable full-import path.
+
 ---
 
 ## Architecture Reference
