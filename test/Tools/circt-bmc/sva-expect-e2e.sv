@@ -1,10 +1,7 @@
-// RUN: circt-verilog --ir-hw %s | \
+// RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
 // RUN:   circt-bmc --emit-mlir -b 2 --module=sva_expect - | \
 // RUN:   FileCheck %s --check-prefix=CHECK-BMC
 // REQUIRES: slang
-// XFAIL: *
-
-// NOTE: expect statements are not yet being lowered to BMC
 
 module sva_expect(input logic clk, input logic a, input logic b);
   initial begin
@@ -12,4 +9,6 @@ module sva_expect(input logic clk, input logic a, input logic b);
   end
 endmodule
 
-// CHECK-BMC: verif.bmc
+// CHECK-BMC: func.func @sva_expect()
+// CHECK-BMC: scf.for
+// CHECK-BMC: smt.assert

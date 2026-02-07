@@ -5924,6 +5924,19 @@ ninja -C build circt-verilog
   - External smoke checks pass for AVIP, sv-tests BMC, verilator-verification
     BMC, yosys SVA BMC, and OpenTitan LEC.
 
+### Iteration 455
+- BMC test hygiene / coverage:
+  - Removed stale `XFAIL` from:
+    - `test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+    - `test/Tools/circt-bmc/sva-expect-e2e.sv`
+  - Added `--no-uvm-auto-include` to isolate these tests from unrelated UVM
+    compilation failures.
+  - Updated checks to validate current SMT-lowered `--emit-mlir` output.
+- Validation:
+  - Both targeted tests pass.
+  - Full `test/Tools/circt-bmc` lit sweep passes with expected baseline:
+    103 pass / 10 xfail / 123 unsupported.
+
 ---
 
 ## Architecture Reference
