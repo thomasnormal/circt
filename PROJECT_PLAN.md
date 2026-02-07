@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 454)
+## Current Status - February 7, 2026 (Iteration 455)
 
 ### Test Results
 
@@ -62,6 +62,35 @@ All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 4. **Slang AnalysisManager investigation**: Attempted to integrate Slang's driver
    tracking for assignment conflict detection (IEEE §6.5). All approaches crash —
    `analyze()` triggers lazy AST allocation on frozen BumpAllocator. Deferred.
+
+### Session Summary - Iteration 455
+
+1. **BMC unblock for UVM-heavy IR in HWToSMT**
+   - Added fallback mapping for LLVM value types to `!smt.sort<...>` so
+     `!hw.array<Nx!llvm.struct<...>>` lowers instead of failing legalization.
+   - Fixed singleton-array SMT domain width (`!hw.array<1xT>` now uses
+     `!smt.bv<1>` indices) across array create/get/inject and array constant
+     materialization.
+
+2. **Regression coverage + targeted formal validation**
+   - Added HWToSMT regressions for singleton array access and opaque LLVM
+     struct array lowering.
+   - Confirmed previously failing UVM-inclusive `sva_assert_final` and
+     `sva_expect` BMC pipelines now exit successfully.
+
+3. **Current formal limitations to prioritize next**
+   - We still carry broad UVM import noise and unsupported semantics (DPI/class
+     runtime stubs, dropped builtin class methods) that can pollute formal IR.
+   - We still rely on `XPROP_ONLY` acceptance for parts of OpenTitan LEC.
+   - Slang `AnalysisManager` crash still blocks robust assignment conflict checks.
+
+4. **Best long-term next features**
+   - Add a formal-oriented pre-lowering cleanup pass to eliminate or abstract
+     non-property UVM runtime/reporting code earlier.
+   - Reduce dependence on `XPROP_ONLY` by strengthening x-propagation semantics
+     and initialization modeling in BMC/LEC lowering.
+   - Land an in-tree fallback assignment-conflict analysis until Slang
+     `AnalysisManager` becomes stable for this workflow.
 
 ### Previous Session Summary - Iteration 445
 

@@ -14,6 +14,8 @@
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace circt {
 #define GEN_PASS_DEF_CONVERTHWTOSMT
@@ -28,6 +30,137 @@ using namespace hw;
 //===----------------------------------------------------------------------===//
 
 namespace {
+static unsigned getArrayDomainWidth(size_t numElements) {
+  // SMT bit-vectors must have width >= 1. For 1-element arrays use a single
+  // bit index and rely on explicit in-bounds checks.
+  return llvm::Log2_64_Ceil(numElements > 1 ? numElements : 2);
+}
+
+static LogicalResult flattenAggregateConstantAttr(Attribute attr, Type type,
+                                                  APInt &flattened,
+                                                  unsigned &nextInsertion) {
+  if (auto alias = dyn_cast<hw::TypeAliasType>(type))
+    return flattenAggregateConstantAttr(attr, alias.getCanonicalType(),
+                                        flattened, nextInsertion);
+
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    auto arrayAttr = dyn_cast<ArrayAttr>(attr);
+    if (!arrayAttr || arrayAttr.size() != structType.getElements().size())
+      return failure();
+    for (auto [fieldAttr, fieldInfo] :
+         llvm::zip(arrayAttr.getValue(), structType.getElements()))
+      if (failed(flattenAggregateConstantAttr(fieldAttr, fieldInfo.type,
+                                              flattened, nextInsertion)))
+        return failure();
+    return success();
+  }
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type)) {
+    auto arrayAttr = dyn_cast<ArrayAttr>(attr);
+    if (!arrayAttr || arrayAttr.size() != arrayType.getNumElements())
+      return failure();
+    for (auto elementAttr : arrayAttr.getValue())
+      if (failed(flattenAggregateConstantAttr(elementAttr,
+                                              arrayType.getElementType(),
+                                              flattened, nextInsertion)))
+        return failure();
+    return success();
+  }
+
+  if (auto arrayType = dyn_cast<hw::UnpackedArrayType>(type)) {
+    auto arrayAttr = dyn_cast<ArrayAttr>(attr);
+    if (!arrayAttr || arrayAttr.size() != arrayType.getNumElements())
+      return failure();
+    for (auto elementAttr : arrayAttr.getValue())
+      if (failed(flattenAggregateConstantAttr(elementAttr,
+                                              arrayType.getElementType(),
+                                              flattened, nextInsertion)))
+        return failure();
+    return success();
+  }
+
+  if (auto intType = dyn_cast<IntegerType>(type)) {
+    auto intAttr = dyn_cast<IntegerAttr>(attr);
+    if (!intAttr)
+      return failure();
+    auto chunk = intAttr.getValue().zextOrTrunc(intType.getWidth());
+    nextInsertion -= chunk.getBitWidth();
+    flattened.insertBits(chunk, nextInsertion);
+    return success();
+  }
+
+  if (auto enumType = dyn_cast<hw::EnumType>(type)) {
+    auto enumAttr = dyn_cast<StringAttr>(attr);
+    if (!enumAttr)
+      return failure();
+    auto idx = enumType.indexOf(enumAttr.getValue());
+    auto width = enumType.getBitWidth();
+    if (!idx || !width)
+      return failure();
+    APInt chunk(*width, *idx);
+    nextInsertion -= chunk.getBitWidth();
+    flattened.insertBits(chunk, nextInsertion);
+    return success();
+  }
+
+  if (auto clockConst = dyn_cast<seq::ClockConstAttr>(attr)) {
+    if (!isa<seq::ClockType>(type))
+      return failure();
+    APInt chunk(1, clockConst.getValue() == seq::ClockConst::High ? 1 : 0);
+    nextInsertion -= 1;
+    flattened.insertBits(chunk, nextInsertion);
+    return success();
+  }
+
+  return failure();
+}
+
+static Value materializeAggregateConstant(Attribute attr, Type sourceType,
+                                          Type targetType,
+                                          ConversionPatternRewriter &rewriter,
+                                          Location loc) {
+  if (auto targetBV = dyn_cast<mlir::smt::BitVectorType>(targetType)) {
+    APInt flattened(targetBV.getWidth(), 0);
+    unsigned nextInsertion = targetBV.getWidth();
+    if (failed(flattenAggregateConstantAttr(attr, sourceType, flattened,
+                                            nextInsertion)))
+      return Value();
+    if (nextInsertion != 0)
+      return Value();
+    return mlir::smt::BVConstantOp::create(rewriter, loc, flattened);
+  }
+
+  if (auto targetArray = dyn_cast<mlir::smt::ArrayType>(targetType)) {
+    auto sourceArray = dyn_cast<hw::ArrayType>(sourceType);
+    if (!sourceArray)
+      return Value();
+    auto elementsAttr = dyn_cast<ArrayAttr>(attr);
+    if (!elementsAttr || elementsAttr.size() != sourceArray.getNumElements())
+      return Value();
+
+    Value array = mlir::smt::DeclareFunOp::create(rewriter, loc, targetArray);
+    unsigned numElements = sourceArray.getNumElements();
+    unsigned indexWidth = getArrayDomainWidth(numElements);
+    auto elementType = sourceArray.getElementType();
+    auto targetElementType = targetArray.getRangeType();
+    for (auto [idx, elementAttr] : llvm::enumerate(elementsAttr.getValue())) {
+      Value element =
+          materializeAggregateConstant(elementAttr, elementType,
+                                       targetElementType, rewriter, loc);
+      if (!element)
+        return Value();
+      Value index = mlir::smt::BVConstantOp::create(rewriter, loc,
+                                                    numElements - idx - 1,
+                                                    indexWidth);
+      array = mlir::smt::ArrayStoreOp::create(rewriter, loc, array, index,
+                                              element);
+    }
+    return array;
+  }
+
+  return Value();
+}
+
 /// Lower a hw::ConstantOp operation to smt::BVConstantOp
 struct HWConstantOpConversion : OpConversionPattern<ConstantOp> {
   using OpConversionPattern<ConstantOp>::OpConversionPattern;
@@ -40,6 +173,27 @@ struct HWConstantOpConversion : OpConversionPattern<ConstantOp> {
                                          "0-bit constants not supported");
     rewriter.replaceOpWithNewOp<mlir::smt::BVConstantOp>(op,
                                                          adaptor.getValue());
+    return success();
+  }
+};
+
+/// Lower a hw::AggregateConstantOp operation to SMT constants.
+struct HWAggregateConstantOpConversion
+    : OpConversionPattern<hw::AggregateConstantOp> {
+  using OpConversionPattern<hw::AggregateConstantOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(hw::AggregateConstantOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type targetType = getTypeConverter()->convertType(op.getType());
+    if (!targetType)
+      return failure();
+    Value lowered = materializeAggregateConstant(
+        op.getFieldsAttr(), op.getType(), targetType, rewriter, op.getLoc());
+    if (!lowered)
+      return rewriter.notifyMatchFailure(
+          op, "unsupported aggregate constant attribute/type combination");
+    rewriter.replaceOp(op, lowered);
     return success();
   }
 };
@@ -171,11 +325,12 @@ struct ArrayCreateOpConversion : OpConversionPattern<ArrayCreateOp> {
       return rewriter.notifyMatchFailure(op.getLoc(), "unsupported array type");
 
     unsigned width = adaptor.getInputs().size();
+    unsigned indexWidth = getArrayDomainWidth(width);
 
     Value arr = mlir::smt::DeclareFunOp::create(rewriter, loc, arrTy);
     for (auto [i, el] : llvm::enumerate(adaptor.getInputs())) {
       Value idx = mlir::smt::BVConstantOp::create(rewriter, loc, width - i - 1,
-                                                  llvm::Log2_64_Ceil(width));
+                                                  indexWidth);
       arr = mlir::smt::ArrayStoreOp::create(rewriter, loc, arr, idx, el);
     }
 
@@ -194,6 +349,7 @@ struct ArrayGetOpConversion : OpConversionPattern<ArrayGetOp> {
     Location loc = op.getLoc();
     unsigned numElements =
         cast<hw::ArrayType>(op.getInput().getType()).getNumElements();
+    unsigned indexWidth = getArrayDomainWidth(numElements);
 
     Type type = typeConverter->convertType(op.getType());
     if (!type)
@@ -202,7 +358,7 @@ struct ArrayGetOpConversion : OpConversionPattern<ArrayGetOp> {
 
     Value oobVal = mlir::smt::DeclareFunOp::create(rewriter, loc, type);
     Value numElementsVal = mlir::smt::BVConstantOp::create(
-        rewriter, loc, numElements - 1, llvm::Log2_64_Ceil(numElements));
+        rewriter, loc, numElements - 1, indexWidth);
     Value inBounds = mlir::smt::BVCmpOp::create(
         rewriter, loc, mlir::smt::BVCmpPredicate::ule, adaptor.getIndex(),
         numElementsVal);
@@ -224,6 +380,7 @@ struct ArrayInjectOpConversion : OpConversionPattern<ArrayInjectOp> {
     Location loc = op.getLoc();
     unsigned numElements =
         cast<hw::ArrayType>(op.getInput().getType()).getNumElements();
+    unsigned indexWidth = getArrayDomainWidth(numElements);
 
     Type arrType = typeConverter->convertType(op.getType());
     if (!arrType)
@@ -232,7 +389,7 @@ struct ArrayInjectOpConversion : OpConversionPattern<ArrayInjectOp> {
     Value oobVal = mlir::smt::DeclareFunOp::create(rewriter, loc, arrType);
     // Check if the index is within bounds
     Value numElementsVal = mlir::smt::BVConstantOp::create(
-        rewriter, loc, numElements - 1, llvm::Log2_64_Ceil(numElements));
+        rewriter, loc, numElements - 1, indexWidth);
     Value inBounds = mlir::smt::BVCmpOp::create(
         rewriter, loc, mlir::smt::BVCmpPredicate::ule, adaptor.getIndex(),
         numElementsVal);
@@ -386,12 +543,15 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
   converter.addConversion([](seq::ClockType type) -> std::optional<Type> {
     return mlir::smt::BitVectorType::get(type.getContext(), 1);
   });
+  converter.addConversion([&](hw::TypeAliasType type) -> std::optional<Type> {
+    return converter.convertType(type.getCanonicalType());
+  });
   converter.addConversion([&](ArrayType type) -> std::optional<Type> {
     auto rangeType = converter.convertType(type.getElementType());
     if (!rangeType)
       return {};
     auto domainType = mlir::smt::BitVectorType::get(
-        type.getContext(), llvm::Log2_64_Ceil(type.getNumElements()));
+        type.getContext(), getArrayDomainWidth(type.getNumElements()));
     return mlir::smt::ArrayType::get(type.getContext(), domainType, rangeType);
   });
   converter.addConversion([](StructType type) -> std::optional<Type> {
@@ -399,6 +559,15 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
     if (width <= 0)
       return std::nullopt;
     return mlir::smt::BitVectorType::get(type.getContext(), width);
+  });
+  converter.addConversion([](Type type) -> std::optional<Type> {
+    auto &dialect = type.getDialect();
+    if (dialect.getNamespace() != "llvm")
+      return std::nullopt;
+    std::string sortName;
+    llvm::raw_string_ostream os(sortName);
+    type.print(os);
+    return mlir::smt::SortType::get(type.getContext(), os.str());
   });
 
   auto ensureInsertionInValueRegion = [](OpBuilder &builder, Value input) {
@@ -502,7 +671,8 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
 void circt::populateHWToSMTConversionPatterns(TypeConverter &converter,
                                               RewritePatternSet &patterns,
                                               bool forSMTLIBExport) {
-  patterns.add<HWConstantOpConversion, WireOpConversion, InstanceOpConversion,
+  patterns.add<HWConstantOpConversion, HWAggregateConstantOpConversion,
+               WireOpConversion, InstanceOpConversion,
                ReplaceWithInput<seq::ToClockOp>,
                ReplaceWithInput<seq::FromClockOp>, ArrayCreateOpConversion,
                ArrayGetOpConversion, ArrayInjectOpConversion,
