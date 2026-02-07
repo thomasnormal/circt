@@ -43,6 +43,8 @@ struct StripUnreachableSymbolsPass
 
     if (!entrySymbol.empty())
       addSymbol(symbolTable.lookup(entrySymbol));
+    if (!secondEntrySymbol.empty())
+      addSymbol(symbolTable.lookup(secondEntrySymbol));
     addSymbol(symbolTable.lookup("main"));
 
     if (worklist.empty())

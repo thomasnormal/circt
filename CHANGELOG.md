@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 456 - February 7, 2026
+
+### Summary
+
+Added early unreachable-symbol pruning to both BMC and LEC pipelines so dead
+modules/symbol scopes no longer block formal lowering.
+
+### Accomplishments
+
+1. **Early symbol pruning in `circt-bmc`**
+   - Added an early `strip-unreachable-symbols` pass invocation immediately
+     after test/OM/sim stripping, before LLHD/HW/SMT lowering.
+   - Kept the existing late pruning pass to remove helper symbols introduced by
+     lowering.
+   - This prevents unsupported dead HW symbols from causing conversion failures.
+
+2. **Extended `strip-unreachable-symbols` pass for multi-entry use**
+   - Added optional `second-entry-symbol` pass option.
+   - Pass now computes liveness from up to two entry symbols.
+   - Enables direct reuse in LEC where two circuits (`-c1`/`-c2`) must both be
+     retained.
+
+3. **Early symbol pruning in `circt-lec`**
+   - Added `--prune-unreachable-symbols` (default `true`) to `circt-lec`.
+   - Added an early prune pass seeded with `-c1` and `-c2` before expensive
+     lowering.
+   - This drops dead symbol scopes/modules before SMT conversion.
+
+4. **Regression tests**
+   - Added `test/Tools/circt-bmc/circt-bmc-prune-unreachable-hw-before-smt.mlir`
+     (dead `hw.type_scope` no longer blocks BMC by default; disabling prune
+     reproduces legalization failure).
+   - Added `test/Tools/circt-lec/lec-prune-unreachable-before-smt.mlir`
+     (same concept for LEC with `-c1/-c2`).
+   - Updated `test/Tools/circt-bmc/strip-unreachable-symbols.mlir` to cover the
+     new `second-entry-symbol` behavior.
+
+### Verification
+
+- Targeted lit:
+  - `test/Tools/circt-bmc/strip-unreachable-symbols.mlir` (pass)
+  - `test/Tools/circt-bmc/circt-bmc-strip-unused-funcs.mlir` (pass)
+  - `test/Tools/circt-bmc/circt-bmc-prune-unreachable-hw-before-smt.mlir`
+    (pass)
+  - `test/Tools/circt-lec/lec-prune-unreachable-before-smt.mlir` (pass)
+- UVM-inclusive BMC e2e checks:
+  - `sva_assert_final` emit-mlir pipeline: `EXIT:0`
+  - `sva_expect` emit-mlir pipeline: `EXIT:0`
+- External smoke rerun:
+  - sv-tests BMC (`TEST_FILTER=16.12--property`): `total=5 pass=5 fail=0`
+  - verilator-verification BMC (`assert_rose`): `total=1 pass=1 fail=0`
+  - yosys/tests/sva BMC (`basic00`): pass/fail variants pass
+  - sv-tests LEC (`TEST_FILTER=16.10--property-local-var`): `total=1 pass=1`
+  - verilator-verification LEC (`assert_rose`): `total=1 pass=1 fail=0`
+  - yosys/tests/sva LEC (`basic00`): `total=1 pass=1 fail=0`
+  - OpenTitan LEC (`canright`, `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP compile smoke (`apb_avip`): pass
+
 ## Iteration 455 - February 7, 2026
 
 ### Summary

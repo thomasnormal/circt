@@ -75,7 +75,10 @@ def StripUnreachableSymbols : Pass<"strip-unreachable-symbols",
   let options = [
     Option<"entrySymbol", "entry-symbol", "std::string",
            /*default=*/"",
-           "Name of the entry symbol to preserve.">
+           "Name of the entry symbol to preserve.">,
+    Option<"secondEntrySymbol", "second-entry-symbol", "std::string",
+           /*default=*/"",
+           "Optional second entry symbol to preserve.">
   ];
 }
 

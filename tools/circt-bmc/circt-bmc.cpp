@@ -456,6 +456,13 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
   pm.addPass(verif::createLowerTestsPass());
+  if (pruneUnreachableSymbols) {
+    // Prune unreachable symbols early so unsupported ops in dead modules do
+    // not block subsequent lowering.
+    StripUnreachableSymbolsOptions pruneOptions;
+    pruneOptions.entrySymbol = moduleName;
+    pm.addPass(createStripUnreachableSymbols(pruneOptions));
+  }
 
   bool hasLLHD = false;
   module.walk([&](Operation *op) {
@@ -539,6 +546,8 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
 
   if (pruneUnreachableSymbols) {
+    // A second pruning round catches dead helper symbols introduced by
+    // lowering/conversion passes.
     StripUnreachableSymbolsOptions pruneOptions;
     pruneOptions.entrySymbol = moduleName;
     pm.addPass(createStripUnreachableSymbols(pruneOptions));
