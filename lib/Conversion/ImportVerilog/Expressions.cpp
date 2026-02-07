@@ -8420,6 +8420,14 @@ Context::convertSystemCallArity0(const slang::ast::SystemSubroutine &subroutine,
                   return (Value)moore::ConstantOp::create(builder, loc, intTy,
                                                           0);
                 })
+          .Case("$initstate",
+                [&]() -> FailureOr<Value> {
+                  // $initstate returns 1 during the initial/reset state and 0
+                  // otherwise. In simulation (not formal), stub it to return 0.
+                  auto bitTy = moore::IntType::getInt(getContext(), 1);
+                  return (Value)moore::ConstantOp::create(builder, loc, bitTy,
+                                                          0);
+                })
           .Default([&]() -> FailureOr<Value> {
             if (subroutine.name == "rand_mode" ||
                 subroutine.name == "constraint_mode") {

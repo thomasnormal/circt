@@ -3909,3 +3909,16 @@ module TestDPIImport;
         result = my_dpi_func(10, 20);
     end
 endmodule
+
+// CHECK-LABEL: moore.module @TestInitstate
+module TestInitstate;
+    bit b;
+    // $initstate returns 1 during the initial/reset state, 0 otherwise.
+    // In simulation it is stubbed to constant 0.
+    // CHECK: moore.procedure initial {
+    // CHECK:   %[[CONST:.*]] = moore.constant 0 : i1
+    // CHECK:   moore.blocking_assign %b, %[[CONST]]
+    initial begin
+        b = $initstate;
+    end
+endmodule
