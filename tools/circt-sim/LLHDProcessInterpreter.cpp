@@ -18021,6 +18021,49 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_array_max(
               reinterpret_cast<MooreQueue *>(arrayAddr),
               elemSize, isSigned);
+        } else if (arrayAddr != 0) {
+          // Interpreter-managed memory: read queue struct {ptr, len}
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_max(&tmpQ, elemSize, isSigned);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  // Build a temporary native queue from interpreter data
+                  std::vector<uint8_t> tmpData(arrLen * elemSize);
+                  std::memcpy(tmpData.data(), base, arrLen * elemSize);
+                  MooreQueue tmpQ;
+                  tmpQ.data = tmpData.data();
+                  tmpQ.len = arrLen;
+                  result = __moore_array_max(&tmpQ, elemSize, isSigned);
+                }
+              }
+            }
+          }
         }
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
@@ -18051,6 +18094,48 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_array_min(
               reinterpret_cast<MooreQueue *>(arrayAddr),
               elemSize, isSigned);
+        } else if (arrayAddr != 0) {
+          // Interpreter-managed memory: read queue struct {ptr, len}
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_min(&tmpQ, elemSize, isSigned);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  std::vector<uint8_t> tmpData(arrLen * elemSize);
+                  std::memcpy(tmpData.data(), base, arrLen * elemSize);
+                  MooreQueue tmpQ;
+                  tmpQ.data = tmpData.data();
+                  tmpQ.len = arrLen;
+                  result = __moore_array_min(&tmpQ, elemSize, isSigned);
+                }
+              }
+            }
+          }
         }
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
@@ -18077,6 +18162,48 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_unique_index(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          // Interpreter-managed memory: read queue struct {ptr, len}
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_unique_index(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  std::vector<uint8_t> tmpData(arrLen * elemSize);
+                  std::memcpy(tmpData.data(), base, arrLen * elemSize);
+                  MooreQueue tmpQ;
+                  tmpQ.data = tmpData.data();
+                  tmpQ.len = arrLen;
+                  result = __moore_array_unique_index(&tmpQ, elemSize);
+                }
+              }
+            }
+          }
         }
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
@@ -18108,6 +18235,52 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_reduce_sum(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          // Interpreter-managed memory: read queue struct {ptr, len}
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_reduce_sum(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  for (int64_t i = 0; i < arrLen; ++i) {
+                    int64_t elem = 0;
+                    int64_t bytesToRead =
+                        std::min(elemSize, static_cast<int64_t>(8));
+                    for (int64_t b = 0; b < bytesToRead; ++b)
+                      elem |= static_cast<int64_t>(
+                                  base[i * elemSize + b])
+                              << (b * 8);
+                    result += elem;
+                  }
+                }
+              }
+            }
+          }
         }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(64, result)));
@@ -18130,6 +18303,51 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_reduce_product(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_reduce_product(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  for (int64_t i = 0; i < arrLen; ++i) {
+                    int64_t elem = 0;
+                    int64_t bytesToRead =
+                        std::min(elemSize, static_cast<int64_t>(8));
+                    for (int64_t b = 0; b < bytesToRead; ++b)
+                      elem |= static_cast<int64_t>(
+                                  base[i * elemSize + b])
+                              << (b * 8);
+                    result *= elem;
+                  }
+                }
+              }
+            }
+          }
         }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(64, result)));
@@ -18152,6 +18370,53 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_reduce_and(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_reduce_and(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  // Start with all-ones for AND
+                  result = -1LL;
+                  for (int64_t i = 0; i < arrLen; ++i) {
+                    int64_t elem = 0;
+                    int64_t bytesToRead =
+                        std::min(elemSize, static_cast<int64_t>(8));
+                    for (int64_t b = 0; b < bytesToRead; ++b)
+                      elem |= static_cast<int64_t>(
+                                  base[i * elemSize + b])
+                              << (b * 8);
+                    result &= elem;
+                  }
+                }
+              }
+            }
+          }
         }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(64, result)));
@@ -18174,6 +18439,51 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_reduce_or(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_reduce_or(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  for (int64_t i = 0; i < arrLen; ++i) {
+                    int64_t elem = 0;
+                    int64_t bytesToRead =
+                        std::min(elemSize, static_cast<int64_t>(8));
+                    for (int64_t b = 0; b < bytesToRead; ++b)
+                      elem |= static_cast<int64_t>(
+                                  base[i * elemSize + b])
+                              << (b * 8);
+                    result |= elem;
+                  }
+                }
+              }
+            }
+          }
         }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(64, result)));
@@ -18196,6 +18506,51 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (arrayAddr >= 0x10000000000ULL) {
           result = __moore_array_reduce_xor(
               reinterpret_cast<MooreQueue *>(arrayAddr), elemSize);
+        } else if (arrayAddr != 0) {
+          uint64_t queueOffset = 0;
+          auto *queueBlock =
+              findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+          if (queueBlock && queueBlock->initialized &&
+              queueOffset + 16 <= queueBlock->data.size()) {
+            uint64_t dataPtr = 0;
+            int64_t arrLen = 0;
+            for (int i = 0; i < 8; ++i)
+              dataPtr |= static_cast<uint64_t>(
+                             queueBlock->data[queueOffset + i])
+                         << (i * 8);
+            for (int i = 0; i < 8; ++i)
+              arrLen |= static_cast<int64_t>(
+                            queueBlock->data[queueOffset + 8 + i])
+                        << (i * 8);
+            if (arrLen > 0 && dataPtr != 0) {
+              auto nmIt = nativeMemoryBlocks.find(dataPtr);
+              bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                  (nmIt != nativeMemoryBlocks.end());
+              if (isNativeData) {
+                MooreQueue tmpQ;
+                tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                tmpQ.len = arrLen;
+                result = __moore_array_reduce_xor(&tmpQ, elemSize);
+              } else {
+                uint64_t dataOffset = 0;
+                auto *dataBlock =
+                    findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                if (dataBlock && dataBlock->initialized) {
+                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  for (int64_t i = 0; i < arrLen; ++i) {
+                    int64_t elem = 0;
+                    int64_t bytesToRead =
+                        std::min(elemSize, static_cast<int64_t>(8));
+                    for (int64_t b = 0; b < bytesToRead; ++b)
+                      elem |= static_cast<int64_t>(
+                                  base[i * elemSize + b])
+                              << (b * 8);
+                    result ^= elem;
+                  }
+                }
+              }
+            }
+          }
         }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(64, result)));
