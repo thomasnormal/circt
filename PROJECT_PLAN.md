@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 462)
+## Current Status - February 7, 2026 (Iteration 463)
 
 ### Test Results
 
@@ -46,6 +46,52 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 463
+
+1. **Slang preprocessing controls integrated in `circt-verilog`**
+   - Added support for:
+     - `--disable-local-includes`
+     - `--enable-legacy-protect`
+     - `--translate-off-format`
+   - Wired through `ImportVerilogOptions` and into Slang `Driver::Options`.
+
+2. **Behavioral include-resolution regression coverage**
+   - Added `test/Tools/circt-verilog/disable-local-includes.test` and focused
+     input files under
+     `test/Tools/circt-verilog/Inputs/disable-local-includes/`.
+   - Locks both default local-include semantics and explicit
+     `--disable-local-includes` semantics.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-verilog/commandline.mlir`: PASS
+     - `test/Tools/circt-verilog/disable-local-includes.test`: PASS
+     - `test/Conversion/ImportVerilog/max-instance-array.sv`: PASS
+     - `test/Tools/circt-verilog/avip-timescale-default.test`: PASS
+     - `test/Conversion/ImportVerilog/compat-vcs.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `verilator-verification` BMC (`assert_rose`): PASS with
+       `BMC_ASSUME_KNOWN_INPUTS=1`
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best next long-term features**
+   - Multi-clock pruning remains guarded in `circt-bmc` when
+     `--allow-multi-clock` is enabled; we still need a robust one-shot pipeline
+     fix to remove this restriction.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in key paths;
+     stronger 4-state/X initialization correlation remains high priority.
+   - Slang features still worth exposing next:
+     keyword-version mapping (`--map-keyword-version` equivalent),
+     timing selection (`min|typ|max`),
+     and UDP diagnostics limit controls.
 
 ### Session Summary - Iteration 462
 

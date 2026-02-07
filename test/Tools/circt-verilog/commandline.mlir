@@ -11,3 +11,6 @@
 // CHECK-DAG: --max-constexpr-steps
 // CHECK-DAG: --max-constexpr-backtrace
 // CHECK-DAG: --max-instance-array
+// CHECK-DAG: --disable-local-includes
+// CHECK-DAG: --enable-legacy-protect
+// CHECK-DAG: --translate-off-format

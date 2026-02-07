@@ -217,6 +217,22 @@ struct CLOptions {
                "this option is used."),
       cl::init(false), cl::cat(cat)};
 
+  cl::opt<bool> disableLocalIncludes{
+      "disable-local-includes",
+      cl::desc("Disable local include lookup relative to the including file"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> enableLegacyProtect{
+      "enable-legacy-protect",
+      cl::desc("Enable legacy protected envelope directives"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::list<std::string> translateOffOptions{
+      "translate-off-format",
+      cl::desc("Comment directive format marking disabled source text as "
+               "<common>,<start>,<end>"),
+      cl::value_desc("<common>,<start>,<end>"), cl::cat(cat)};
+
   //===--------------------------------------------------------------------===//
   // Compilation
   //===--------------------------------------------------------------------===//
@@ -595,6 +611,9 @@ static LogicalResult executeWithSources(MLIRContext *context,
   if (opts.maxIncludeDepth.getNumOccurrences() > 0)
     options.maxIncludeDepth = opts.maxIncludeDepth;
   options.librariesInheritMacros = opts.librariesInheritMacros;
+  options.disableLocalIncludes = opts.disableLocalIncludes;
+  options.enableLegacyProtect = opts.enableLegacyProtect;
+  options.translateOffOptions = opts.translateOffOptions;
 
   if (opts.languageVersion.getNumOccurrences() > 0)
     options.languageVersion = opts.languageVersion;

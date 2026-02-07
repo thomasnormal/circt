@@ -1,0 +1,5 @@
+// RUN: circt-verilog --no-uvm-auto-include -E %S/Inputs/disable-local-includes/main.sv -I %S/Inputs/disable-local-includes/include | FileCheck %s --check-prefix=LOCAL
+// RUN: circt-verilog --no-uvm-auto-include --disable-local-includes -E %S/Inputs/disable-local-includes/main.sv -I %S/Inputs/disable-local-includes/include | FileCheck %s --check-prefix=GLOBAL
+
+// LOCAL: module local_cfg_mod;
+// GLOBAL: module include_cfg_mod;
