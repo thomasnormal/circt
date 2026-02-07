@@ -1361,10 +1361,23 @@ struct ModuleVisitor : public BaseVisitor {
 
     // Handle delayed assignments.
     if (auto *timingCtrl = assignNode.getDelay()) {
-      auto *ctrl = timingCtrl->as_if<slang::ast::DelayControl>();
-      assert(ctrl && "slang guarantees this to be a simple delay");
-      auto delay = context.convertRvalueExpression(
-          ctrl->expr, moore::TimeType::get(builder.getContext()));
+      Value delay;
+      auto timeType = moore::TimeType::get(builder.getContext());
+      if (auto *ctrl = timingCtrl->as_if<slang::ast::DelayControl>()) {
+        // Simple delay: #10
+        delay = context.convertRvalueExpression(ctrl->expr, timeType);
+      } else if (auto *ctrl3 =
+                     timingCtrl->as_if<slang::ast::Delay3Control>()) {
+        // Rise/fall/turnoff delay: #(rise, fall) or #(rise, fall, z)
+        // Min:typ:max delay: #(min:typ:max)
+        // Use the first expression (rise delay / min value) as the delay.
+        delay = context.convertRvalueExpression(ctrl3->expr1, timeType);
+      } else {
+        mlir::emitError(loc)
+            << "unsupported continuous assignment timing control: "
+            << slang::ast::toString(timingCtrl->kind);
+        return failure();
+      }
       if (!delay)
         return failure();
       moore::DelayedContinuousAssignOp::create(builder, loc, lhs, rhs, delay);
