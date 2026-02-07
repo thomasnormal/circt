@@ -10,6 +10,7 @@
 #include "slang/ast/Constraints.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/LiteralExpressions.h"
 #include "slang/ast/expressions/MiscExpressions.h"
@@ -3484,13 +3485,33 @@ struct RvalueExprVisitor : public ExprVisitor {
 
       if (subroutine->name == "sample") {
         // sample() triggers sampling of the covergroup
-        // Convert any arguments passed to sample()
         SmallVector<Value> sampleArgs;
-        for (const auto *arg : expr.arguments()) {
-          Value argVal = context.convertRvalueExpression(*arg);
-          if (!argVal)
-            return {};
-          sampleArgs.push_back(argVal);
+        if (expr.arguments().empty()) {
+          // Implicit sampling: evaluate each coverpoint's expression at the
+          // call site. IEEE 1800-2017 Section 19.8.1 - when sample() is
+          // called without arguments, each coverpoint's expression is
+          // evaluated to obtain the current value for coverage tracking.
+          const auto &cgBody =
+              parentSym.as<slang::ast::CovergroupBodySymbol>();
+          for (const auto &member : cgBody.members()) {
+            if (auto *cp =
+                    member.as_if<slang::ast::CoverpointSymbol>()) {
+              Value val =
+                  context.convertRvalueExpression(cp->getCoverageExpr());
+              if (!val)
+                return {};
+              sampleArgs.push_back(val);
+            }
+          }
+        } else {
+          // Explicit sample arguments (parametric covergroup with
+          // `with function sample(...)`)
+          for (const auto *arg : expr.arguments()) {
+            Value argVal = context.convertRvalueExpression(*arg);
+            if (!argVal)
+              return {};
+            sampleArgs.push_back(argVal);
+          }
         }
         moore::CovergroupSampleOp::create(builder, loc, covergroupInstance,
                                           sampleArgs);

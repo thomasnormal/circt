@@ -4344,11 +4344,18 @@ struct CovergroupDeclOpConversion
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(mod.getBody());
 
-      // Check if init function already exists
-      if (!mod.lookupSymbol<LLVM::LLVMFuncOp>(initFuncName)) {
-        auto initFnTy = LLVM::LLVMFunctionType::get(voidTy, {});
-        auto initFn =
-            LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName, initFnTy);
+      // Get or create the init function. It may already exist as a declaration
+      // (without body) created by CovergroupInstOpConversion.
+      auto existingFn = mod.lookupSymbol<LLVM::LLVMFuncOp>(initFuncName);
+      if (!existingFn || existingFn.isExternal()) {
+        LLVM::LLVMFuncOp initFn;
+        if (existingFn) {
+          initFn = existingFn;
+        } else {
+          auto initFnTy = LLVM::LLVMFunctionType::get(voidTy, {});
+          initFn =
+              LLVM::LLVMFuncOp::create(rewriter, loc, initFuncName, initFnTy);
+        }
         initFn.setLinkage(LLVM::Linkage::Internal);
 
         // Create the function body
@@ -4929,8 +4936,21 @@ struct CovergroupSampleOpConversion
     int32_t cpIndex = 0;
     for (Value val : adaptor.getValues()) {
       // Convert value to i64 for the runtime call.
+      // For 4-state types (hw.struct<value: iN, unknown: iN>), extract the
+      // value field since coverage only cares about the actual value bits.
       Value i64Val;
-      if (val.getType().isInteger(64)) {
+      if (isFourStateStructType(val.getType())) {
+        auto structTy = cast<hw::StructType>(val.getType());
+        Value valueField = hw::StructExtractOp::create(
+            rewriter, loc, val, "value");
+        unsigned width = structTy.getElements()[0].type.getIntOrFloatBitWidth();
+        if (width < 64)
+          i64Val = arith::ExtUIOp::create(rewriter, loc, i64Ty, valueField);
+        else if (width > 64)
+          i64Val = arith::TruncIOp::create(rewriter, loc, i64Ty, valueField);
+        else
+          i64Val = valueField;
+      } else if (val.getType().isInteger(64)) {
         i64Val = val;
       } else if (val.getType().isIntOrIndex()) {
         // Zero-extend or truncate to i64.
@@ -4943,8 +4963,7 @@ struct CovergroupSampleOpConversion
           i64Val = val;
         }
       } else {
-        // For non-integer types, bitcast to integer first if possible.
-        // For now, use 0 as placeholder.
+        // For other types, bitcast to integer first if possible.
         i64Val = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
                                           rewriter.getI64IntegerAttr(0));
       }
