@@ -504,7 +504,9 @@ struct Context {
   /// Interfaces indexed by their definition symbol. This is used to deduplicate
   /// interface declarations when multiple virtual interface variables reference
   /// the same interface definition.
-  DenseMap<const slang::ast::DefinitionSymbol *, InterfaceLowering *>
+  DenseMap<const slang::ast::DefinitionSymbol *,
+           SmallVector<std::pair<const slang::ast::InstanceBodySymbol *,
+                                 InterfaceLowering *>>>
       interfacesByDefinition;
   /// A list of interfaces for which the header has been created, but the body
   /// has not been converted yet.

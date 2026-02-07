@@ -14,16 +14,16 @@ repository (1,036 tests across 15 IEEE chapters).
 | Mode | Eligible | Pass | Fail | Rate | Notes |
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
-| Elaboration | 1028 | 1011 | 17 | **98.3%** | 7 UVM `stream_unpack`, 3 queue ops on fixed arrays, 2 multi-assign detection, 5 crash/timeout (tagged union, SVA) |
-| Simulation (full) | 775 | 714 | 0 | **99.2%** | 884 total, 109 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
+| Elaboration | 1028 | 1018+ | 10 | **99.0%+** | 3 queue ops on fixed arrays, 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED |
+| Simulation (full) | 776 | 715 | 0 | **99.2%** | 884 total, 108 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
-### Remaining Failures (17 tests)
+### Remaining Failures (10 tests)
 
 | Category | Count | Tests | Root Cause |
 |----------|-------|-------|------------|
-| UVM `stream_unpack` | 7 | `testbenches/uvm_*` | `moore.stream_unpack` not legalized in MooreToCore |
+| ~~UVM `stream_unpack`~~ | ~~7~~ | ~~`testbenches/uvm_*`~~ | **FIXED** (b3031c5ec): Extract 4-state value field before i64 extension |
 | Queue ops on fixed arrays | 3 | `18.14`, `18.5.8.*` | Fixed-size arrays produce `!llhd.ref`/`!hw.array` types instead of `!llvm.ptr` |
 | Assignment conflict detection | 2 | `6.5--variable_*` | Slang's `AnalysisManager` crashes with SIGSEGV — needs upstream fix |
 | Tagged union | 1 | `11.9--tagged_union_*` | Crash/timeout (empty log) |
@@ -37,13 +37,13 @@ that unexpectedly pass (not a tool bug).
 
 ### What's Needed for True 100%
 
-1. **`moore.stream_unpack` legalization** (7 tests): The UVM testbenches use
-   streaming operators that lower to `moore.stream_unpack`, which has no
-   conversion pattern in MooreToCore yet.
+1. ~~**`moore.stream_unpack` legalization** (7 tests)~~: **FIXED** in commit
+   b3031c5ec. Extract 4-state `{value, unknown}` struct before i64 widening.
 
 2. **Queue ops on fixed-size arrays** (3 tests): `shuffle`/`reduce` on
    `UnpackedArrayType` produce `!llhd.ref` operands where `!llvm.ptr` is
-   expected. Needs type converter work in MooreToCore.
+   expected. MooreToCore patterns added but `llhd::ProbeOp` type mismatch
+   remains for `!hw.array` → `!llvm.array` conversion.
 
 3. **Assignment conflict detection** (2 tests): Slang's `AnalysisManager`
    crashes when invoked from CIRCT. Needs upstream Slang investigation.

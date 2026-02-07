@@ -2897,18 +2897,21 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   if (slot)
     return slot.get();
 
-  // Check if an interface with the same definition has already been created.
-  // This handles the case where multiple virtual interface variables reference
-  // the same interface type, which would otherwise create duplicate interface
-  // declarations with mangled names (e.g., @my_if, @my_if_0, @my_if_1).
+  // Check if an interface with the same definition and compatible
+  // parameterization has already been created. Different parameterizations
+  // (e.g., param_if#(.WIDTH(16)) vs param_if#(.WIDTH(32))) must produce
+  // separate interface declarations.
   const auto &definition = iface->getDefinition();
   auto defIt = interfacesByDefinition.find(&definition);
   if (defIt != interfacesByDefinition.end()) {
-    // Reuse the existing interface lowering. We don't need to create a new
-    // unique_ptr; instead, we create a new one that points to the same op.
-    slot = std::make_unique<InterfaceLowering>();
-    slot->op = defIt->second->op;
-    return slot.get();
+    for (auto &[existingBody, existingLowering] : defIt->second) {
+      if (existingBody->hasSameType(*iface)) {
+        // Reuse the existing interface lowering for matching parameterization.
+        slot = std::make_unique<InterfaceLowering>();
+        slot->op = existingLowering->op;
+        return slot.get();
+      }
+    }
   }
 
   // Create a new interface lowering.
@@ -2925,9 +2928,13 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   else
     builder.setInsertionPoint(it->second);
 
-  // Create the interface op
-  auto ifaceOp = moore::InterfaceDeclOp::create(
-      builder, loc, definition.name);
+  // Create the interface op. Append a numeric suffix for additional
+  // parameterizations of the same definition to ensure unique names.
+  auto &defEntries = interfacesByDefinition[&definition];
+  std::string ifaceName(definition.name);
+  if (!defEntries.empty())
+    ifaceName += ("_" + llvm::Twine(defEntries.size())).str();
+  auto ifaceOp = moore::InterfaceDeclOp::create(builder, loc, ifaceName);
   orderedRootOps.insert(it, {iface->location, ifaceOp});
 
   // Create the body block for the interface
@@ -2936,7 +2943,7 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   lowering.op = ifaceOp;
 
   // Register in the definition-based map for deduplication.
-  interfacesByDefinition[&definition] = &lowering;
+  defEntries.push_back({iface, &lowering});
 
   // Add the interface to the symbol table
   symbolTable.insert(ifaceOp);
