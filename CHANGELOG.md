@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 437 - February 7, 2026
+
+### Summary
+
+Iteration 437: Completed bind scope resolution — all 11 bind tests now pass with
+0 XFAIL. Fixed scope resolution order (target scope first, bind scope as fallback)
+to handle definition-level binds inside module bodies (e.g., UART AVIP's
+`bind UartRxMonitorBfm UartRxAssertions`). Also fixed cross-hierarchy interface
+bind (`bind top.b.t Monitor mon(.bus(top.a.bus))`) by skipping redundant syntax
+re-binding in `collectBindDirectiveHierarchicalValues`. XFAIL count reduced from
+6 to 2 (only SVA tests remain). UART AVIP now compiles without bind errors.
+
+### Accomplishments
+
+1. **Fix bind scope resolution order** - Changed slang PortSymbols.cpp to use
+   target scope (parent scope) as the primary scope, with bind scope as fallback.
+   Previously, module-level bind scopes were always used as primary, which broke
+   cases like UART where `baudClk`/`rx` exist in the target module, not the bind
+   scope. Now: try target scope first, fall back to bind scope if name not found.
+
+2. **Fix bind-interface-instance-sibling** - Cross-hierarchy interface bind
+   (`bind top.b.t Monitor mon(.bus(top.a.bus))`) failed because
+   `collectBindDirectiveHierarchicalValues` tried to re-bind port connection
+   expressions from raw syntax, but `top.a.bus` can't resolve from Target scope.
+   Fix: skip `HierarchyInstantiationSyntax` processing in that function since
+   module bind instances are handled by InstBodyVisitor.
+
+3. **Bind scope signal threading** - When a bind port connection references a
+   regular signal from outside the target module, thread it through via hierPaths
+   using LCA-based upward/downward propagation.
+
+4. **Recompiled I3C AVIP MLIR** - String `i3c_base_test` now correctly i104
+   (was truncated to i64 in stale MLIR). All AVIP MLIRs being recompiled.
+
+### Tests
+
+- `bind-directive.sv` - Removed XFAIL
+- `bind-generate.sv` - Removed XFAIL
+- `bind-parent-port.sv` - Removed XFAIL
+- `bind-interface-instance-sibling.sv` - Removed XFAIL
+- All 11 bind tests pass: 11 PASS, 0 XFAIL, 0 FAIL
+
+### Verification (February 7, 2026)
+
+- ImportVerilog: 259 pass, 2 xfail, 0 fail (261 total)
+- circt-sim: 47 pass, 0 xfail, 0 fail (47 total)
+- Combined: 306 pass, 2 xfail, 0 fail (308 total)
+
 ## Iteration 435 - February 7, 2026
 
 ### Summary

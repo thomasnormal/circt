@@ -493,6 +493,97 @@ struct HierPathValueExprVisitor
           slang::ast::DefinitionKind::Interface) {
         threadInterfaceInstance(ifaceInst, mlir::StringAttr{});
       }
+      return;
+    }
+
+    // Handle regular signals (Variables/Nets) from the bind scope.
+    // When a bind port connection references a signal from the bind-writing
+    // module (not the target module), thread it through via hierPaths.
+    if (bindScope) {
+      auto *outermostInstBody =
+          outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+      auto *symScope = expr.symbol.getParentScope();
+      const slang::ast::InstanceBodySymbol *symBody = nullptr;
+      if (symScope) {
+        symBody =
+            symScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+        if (!symBody)
+          symBody = symScope->getContainingInstance();
+      }
+
+      if (outermostInstBody && symBody && symBody != outermostInstBody) {
+        // Build ancestor chains for the symbol's scope and the target scope.
+        SmallVector<const slang::ast::InstanceBodySymbol *, 8> symChain;
+        SmallVector<const slang::ast::InstanceBodySymbol *, 8> outerChain;
+        for (auto *body = symBody; body;
+             body = body->parentInstance
+                        ? body->parentInstance->getParentScope()
+                              ->getContainingInstance()
+                        : nullptr)
+          symChain.push_back(body);
+        for (auto *body = outermostInstBody; body;
+             body = body->parentInstance
+                        ? body->parentInstance->getParentScope()
+                              ->getContainingInstance()
+                        : nullptr)
+          outerChain.push_back(body);
+
+        DenseMap<const slang::ast::InstanceBodySymbol *, size_t> symIndex;
+        symIndex.reserve(symChain.size());
+        for (size_t i = 0; i < symChain.size(); ++i)
+          symIndex[symChain[i]] = i;
+
+        const slang::ast::InstanceBodySymbol *lca = nullptr;
+        size_t lcaOuterIndex = 0;
+        for (size_t i = 0; i < outerChain.size(); ++i) {
+          if (symIndex.count(outerChain[i])) {
+            lca = outerChain[i];
+            lcaOuterIndex = i;
+            break;
+          }
+        }
+        if (!lca)
+          return;
+
+        auto addHierPath = [&](const slang::ast::InstanceBodySymbol *sym,
+                               mlir::StringAttr nameAttr,
+                               slang::ast::ArgumentDirection dir) {
+          auto &paths = context.hierPaths[sym];
+          bool exists = llvm::any_of(paths, [&](const auto &info) {
+            return info.hierName == nameAttr;
+          });
+          if (!exists)
+            paths.push_back(
+                HierPathInfo{nameAttr, {}, dir, &expr.symbol});
+        };
+
+        auto nameAttr = builder.getStringAttr(expr.symbol.name);
+
+        // Propagate upward from the symbol's body to the LCA.
+        SmallString<64> upwardName(expr.symbol.name);
+        for (auto *body = symBody; body && body != lca;
+             body = body->parentInstance
+                        ? body->parentInstance->getParentScope()
+                              ->getContainingInstance()
+                        : nullptr) {
+          addHierPath(body, builder.getStringAttr(upwardName),
+                      slang::ast::ArgumentDirection::Out);
+          if (body->parentInstance) {
+            SmallString<64> nextName;
+            nextName += body->parentInstance->name;
+            nextName += ".";
+            nextName += upwardName;
+            upwardName = nextName;
+          }
+        }
+
+        // Propagate downward from the LCA to the target scope.
+        for (size_t i = lcaOuterIndex; i > 0; --i) {
+          auto *body = outerChain[i - 1];
+          addHierPath(body, nameAttr, slang::ast::ArgumentDirection::In);
+        }
+        return;
+      }
     }
   }
 
@@ -613,7 +704,17 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
     if (!bindScope)
       continue;
 
-    slang::ast::ASTContext astContext(*bindScope,
+    // For definition-level or file-level binds, the bind scope is the
+    // compilation unit, where target module names aren't visible. In that case,
+    // use the target module body for expression binding. Only use the bind scope
+    // when it's inside an instance body (i.e., the bind was written inside a
+    // module body).
+    const slang::ast::Scope *exprScope = bindScope;
+    if (!bindScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>() &&
+        !bindScope->getContainingInstance())
+      exprScope = &body;
+
+    slang::ast::ASTContext astContext(*exprScope,
                                       slang::ast::LookupLocation::max);
 
     auto collectFromPropertyExpr =
@@ -683,42 +784,18 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
       return success();
     };
 
-    auto collectFromHierarchyInstances =
-        [&](const auto &instances) -> LogicalResult {
-      for (auto *inst : instances) {
-        for (auto *conn : inst->connections) {
-          if (auto *ordered =
-                  conn->template as_if<
-                      slang::syntax::OrderedPortConnectionSyntax>()) {
-            if (!ordered->expr)
-              continue;
-            if (failed(collectFromPropertyExpr(*ordered->expr, *bindTargetBody)))
-              return failure();
-            continue;
-          }
-          if (auto *named =
-                  conn->template as_if<
-                      slang::syntax::NamedPortConnectionSyntax>()) {
-            if (!named->expr)
-              continue;
-            if (failed(collectFromPropertyExpr(*named->expr, *bindTargetBody)))
-              return failure();
-            continue;
-          }
-        }
-      }
-      return success();
-    };
-
     // Module bind instances show up in the instance body and are handled by
     // InstBodyVisitor; only checker binds need special property parsing here.
+    // For HierarchyInstantiationSyntax (module binds), the port connections
+    // are already resolved in slang's AST and will be visited when
+    // InstBodyVisitor encounters the bound instance. Re-binding the raw
+    // syntax here can fail because the expression scope (target module body)
+    // may not be able to resolve hierarchical references that were written
+    // relative to the original bind scope (e.g., file-level binds
+    // referencing sibling module instances like `top.a.bus`).
     if (auto *checker = bindSyntax->instantiation->template as_if<
             slang::syntax::CheckerInstantiationSyntax>()) {
       if (failed(collectFromCheckerInstances(checker->instances)))
-        return failure();
-    } else if (auto *hierarchy = bindSyntax->instantiation->template as_if<
-                   slang::syntax::HierarchyInstantiationSyntax>()) {
-      if (failed(collectFromHierarchyInstances(hierarchy->instances)))
         return failure();
     }
   }

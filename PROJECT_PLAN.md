@@ -7,20 +7,24 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 435 - Nested Interface Ports)
+## Current Status - February 7, 2026 (Iteration 437 - Bind Scope Complete)
 
-### Session Summary - Iteration 435
+### Session Summary - Iteration 437
 
-1. **Fixed nested interface port instances**: Sub-interfaces inside interfaces
-   (e.g., `ChildIf child` inside `ParentIf`) have shared `InstanceSymbol` pointers
-   and were not cached in `interfaceInstances`. Added scope-hierarchy fallback in
-   `resolveInterfaceInstance` that navigates through parent interface values via
-   `VirtualInterfaceSignalRefOp`. Fixed chain-walk cycle detection (`break` instead
-   of `return {}`) so fallback executes. Test `nested-interface-port-instance.sv`
-   now passes (XFAIL count: 7→6).
+1. **Completed bind scope resolution**: All 11 bind tests pass (0 XFAIL). Fixed
+   scope resolution order to use target scope first with bind scope fallback.
+   This handles both cross-module signals (bind-parent-port) and same-module
+   signals (UART `baudClk`/`rx`). XFAIL count 6→2 (only SVA tests remain).
 
-2. **Continued from iteration 434**: Generic interface ports and cumulative
-   `__moore_delay` timing bug fixed.
+2. **Fixed cross-hierarchy interface bind**: `bind top.b.t Monitor mon(.bus(top.a.bus))`
+   now works by skipping redundant syntax re-binding in
+   `collectBindDirectiveHierarchicalValues`.
+
+3. **UART AVIP compiles clean**: The bind scope fix resolves UART/SPI definition-level
+   bind assertions. All AVIP MLIRs being recompiled from source.
+
+4. **I3C AVIP recompiled**: String `i3c_base_test` now properly i104, fixing the
+   truncation that caused test name mismatch at runtime.
 
 | Mode | Eligible | Pass | Rate |
 |------|----------|------|------|
@@ -29,7 +33,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Simulation (full) | 775 | 714 | **99.2%** |
 | BMC (full Z3) | 26 | 26 | **100%** |
 | LEC (full Z3) | 23 | 23 | **100%** |
-| ImportVerilog lit | 261 | 255+6xf | **100%** |
+| ImportVerilog lit | 261 | 259+2xf | **100%** |
 | circt-sim lit | 47 | 47 | **100%** |
 
 0 simulation failures, 0 timeouts.
@@ -39,10 +43,10 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Track | Focus | Status | Next Action |
 |-------|-------|--------|-------------|
-| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Baseline confirmed (714 pass, 0 fail); 9 non-UVM compile failures are external (BSG/3rd-party) |
-| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Agent testing combined HdlTop+HvlTop for I2S/I3C |
+| **A: sv-tests** | IEEE 1800 compliance | **99.2%** | Running fresh baseline |
+| **B: AVIP Sim** | UVM testbench simulation | **6/6 pass** | Recompiling all AVIPs with bind fix |
 | **C: External Tests** | verilator/yosys/opentitan | Agent running | Agent establishing verilator/yosys/opentitan baselines |
-| **D: Missing Features** | Named events, coverage, etc | Nested iface ports DONE | Next: named events NBA gap (minor), remaining 6 XFAIL tests |
+| **D: Missing Features** | Named events, coverage, etc | Bind scope DONE | Only 2 SVA XFAIL tests remain |
 | **E: Bind + Hierarchy** | OpenTitan formal readiness | In progress | Codex handles |
 | **F: Formal (BMC/LEC)** | k-induction + liveness | In progress | Codex handles |
 
@@ -87,7 +91,7 @@ keeping memory growth controlled.
 | Feature | Priority | Effort | Impact | Details |
 |---------|----------|--------|--------|---------|
 | Interface ports (modport) | MEDIUM | Medium | Full AXI-VIP patterns | Generic ports resolved; may still need modport-qualified interface ports |
-| Bind scope resolution | HIGH | Medium | I2S/UART/SPI combined | slang resolves bind port signals in enclosing scope instead of target scope (IEEE §23.11) |
+| Bind scope resolution | DONE | Medium | I2S/UART/SPI combined | Fixed in iteration 436: slang patch + CIRCT signal threading; 1 cross-module interface bind remains XFAIL |
 | Named events (NBA/clearing) | LOW | Medium | Spec compliance | `->>` integer path already uses NBA; only native EventType path lacks it; event clearing needs time-slot tracking |
 | Non-UVM compile failures | NOT-ACTIONABLE | N/A | 9 tests | 6 BSG preprocessor extension, 2 missing submodules, 1 runner heuristic |
 | Coverage collection | LOW | Large | Functional/code coverage | Not implemented |
@@ -101,6 +105,7 @@ keeping memory growth controlled.
 - Cumulative `__moore_delay` in LLVM function bodies — FIXED (iteration 433)
 - Generic interface ports — FIXED (iteration 434, `getConnection()` resolution)
 - Nested interface ports — FIXED (iteration 435, scope-hierarchy fallback)
+- Bind scope resolution — FIXED (iteration 436, slang patch fix + CIRCT signal threading)
 
 ### External Test Suite Baselines (February 7, 2026)
 

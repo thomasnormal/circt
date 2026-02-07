@@ -1,8 +1,25 @@
 diff --git a/include/slang/ast/Compilation.h b/include/slang/ast/Compilation.h
-index 927a4db..0ccf038 100644
+index 927a4db..9d3c87d 100644
 --- a/include/slang/ast/Compilation.h
 +++ b/include/slang/ast/Compilation.h
-@@ -220,6 +220,10 @@ struct SLANG_EXPORT BindDirectiveInfo {
+@@ -114,9 +114,14 @@ enum class SLANG_EXPORT CompilationFlags {
+     DisallowRefsToUnknownInstances = 1 << 12,
+ 
+     /// Allow unnamed generate blocks (e.g. genblk) to be referenced
+-    AllowUnnamedGenerate = 1 << 13
++    AllowUnnamedGenerate = 1 << 13,
++
++    /// Allow interface instances that are bind/defparam targets to be assigned
++    /// to virtual interfaces. This violates IEEE 1800-2017 but matches behavior
++    /// of some commercial tools like Cadence Xcelium.
++    AllowVirtualIfaceWithOverride = 1 << 14
+ };
+-SLANG_BITMASK(CompilationFlags, AllowUnnamedGenerate)
++SLANG_BITMASK(CompilationFlags, AllowVirtualIfaceWithOverride)
+ 
+ /// Contains various options that can control compilation behavior.
+ struct SLANG_EXPORT CompilationOptions {
+@@ -220,6 +225,10 @@ struct SLANG_EXPORT BindDirectiveInfo {
      /// A liblist that applies to the newly bound instance.
      std::span<const SourceLibrary* const> liblist;
  
@@ -13,7 +30,7 @@ index 927a4db..0ccf038 100644
      /// If true, the new instance is also a new config root,
      /// and @a configRootSyntax points to the config block
      /// for that root. Otherwise, it points either to nullptr,
-@@ -520,6 +524,10 @@ public:
+@@ -520,6 +529,10 @@ public:
      /// scope elaboration to include the newly bound instances.
      void noteBindDirective(const syntax::BindDirectiveSyntax& syntax, const Scope& scope);
  
@@ -58,11 +75,108 @@ index 282c70b..c2b9a4b 100644
  };
  
  /// The body of a module, interface, or program instance, which acts as the scope for its members.
+diff --git a/include/slang/parsing/ParserBase.h b/include/slang/parsing/ParserBase.h
+index 2c6595f..6e7a916 100644
+--- a/include/slang/parsing/ParserBase.h
++++ b/include/slang/parsing/ParserBase.h
+@@ -106,6 +106,7 @@ protected:
+     }
+ 
+     enum class AllowEmpty { False, True };
++    enum class AllowTrailingSeparator { False, True };
+     enum class RequireItems { False, True };
+ 
+     /// This is a generalized method for parsing a delimiter separated list of things
+@@ -114,7 +115,8 @@ protected:
+     void parseList(TokenKind openKind, TokenKind closeKind, TokenKind separatorKind,
+                    Token& openToken, std::span<syntax::TokenOrSyntax>& list, Token& closeToken,
+                    RequireItems requireItems, DiagCode code, TParserFunc&& parseItem,
+-                   AllowEmpty allowEmpty = {}) {
++                   AllowEmpty allowEmpty = {},
++                   AllowTrailingSeparator allowTrailingSeparator = {}) {
+         openToken = expect(openKind);
+         if (openToken.isMissing()) {
+             closeToken = missingToken(closeKind, openToken.location());
+@@ -125,14 +127,16 @@ protected:
+         SmallVector<syntax::TokenOrSyntax, 16> buffer;
+         parseList<IsExpected, IsEnd, TParserFunc>(buffer, closeKind, separatorKind, closeToken,
+                                                   requireItems, code,
+-                                                  std::forward<TParserFunc>(parseItem), allowEmpty);
++                                                  std::forward<TParserFunc>(parseItem), allowEmpty,
++                                                  allowTrailingSeparator);
+         list = buffer.copy(alloc);
+     }
+ 
+     template<bool (*IsExpected)(TokenKind), bool (*IsEnd)(TokenKind), typename TParserFunc>
+     void parseList(SmallVectorBase<syntax::TokenOrSyntax>& buffer, TokenKind closeKind,
+                    TokenKind separatorKind, Token& closeToken, RequireItems requireItems,
+-                   DiagCode code, TParserFunc&& parseItem, AllowEmpty allowEmpty = {}) {
++                   DiagCode code, TParserFunc&& parseItem, AllowEmpty allowEmpty = {},
++                   AllowTrailingSeparator allowTrailingSeparator = {}) {
+         auto current = peek();
+         if (IsEnd(current.kind)) {
+             if (requireItems == RequireItems::True && !haveDiagAtCurrentLoc())
+@@ -192,8 +196,7 @@ protected:
+                     // Empty items are allowed, so call the parse function
+                     // to get one here and then we're finished.
+                     buffer.push_back(parseItem());
+-                }
+-                else {
++                } else if (allowTrailingSeparator == AllowTrailingSeparator::False) {
+                     // Specific check for misplaced trailing separators here.
+                     reportMisplacedSeparator();
+                 }
+diff --git a/scripts/diagnostics.txt b/scripts/diagnostics.txt
+index b8886ff..1061f09 100644
+--- a/scripts/diagnostics.txt
++++ b/scripts/diagnostics.txt
+@@ -26,7 +26,7 @@ error MisplacedDirectiveChar "expected directive name"
+ error EscapedWhitespace "unexpected whitespace after escape character"
+ error ExpectedClosingQuote "missing closing quote"
+ error UnterminatedBlockComment "block comment unclosed at end of file"
+-error NestedBlockComment "nested block comments are disallowed by SystemVerilog"
++warning nested-block-comment NestedBlockComment "nested block comments are disallowed by SystemVerilog"
+ error ExpectedIntegerBaseAfterSigned "expected integer base specifier after signed specifier"
+ error OctalEscapeCodeTooBig "octal escape code is too large to be an ASCII character"
+ error InvalidHexEscapeCode "invalid hexadecimal number"
+@@ -387,7 +387,7 @@ error VirtualReturnMismatch "return type {} of virtual method '{}' does not matc
+ error VirtualArgCountMismatch "virtual method '{}' has different number of arguments from its superclass method"
+ error VirtualArgNameMismatch "virtual method argument name '{}' doesn't match '{}' given in its superclass method"
+ error VirtualArgTypeMismatch "virtual method argument '{}' is of type {} which differs from {} given in its superclass method"
+-error VirtualArgNoParentDefault "virtual method argument '{}' provides a default value but its superclass method argument does not"
++warning virtual-arg-no-parent-default VirtualArgNoParentDefault "virtual method argument '{}' provides a default value but its superclass method argument does not"
+ error VirtualArgNoDerivedDefault "virtual method argument '{}' does not provide a default value but its superclass method argument does"
+ error VirtualArgDirectionMismatch "direction of virtual method argument '{}' differs from the direction given in its superclass method"
+ error BaseConstructorDuplicate "cannot provide both 'super.new' as well as class constructor arguments in 'extends' clause"
 diff --git a/source/ast/Compilation.cpp b/source/ast/Compilation.cpp
-index 83af0fe..a6a8f33 100644
+index 83af0fe..a967cef 100644
 --- a/source/ast/Compilation.cpp
 +++ b/source/ast/Compilation.cpp
-@@ -1097,6 +1097,14 @@ void Compilation::noteBindDirective(const BindDirectiveSyntax& syntax, const Sco
+@@ -659,7 +659,22 @@ Compilation::DefinitionLookupResult Compilation::getDefinition(
+             case SyntaxKind::InterfaceDeclaration:
+             case SyntaxKind::ProgramDeclaration: {
+                 auto& mds = bindInfo.instantiationDefSyntax->as<ModuleDeclarationSyntax>();
+-                result.definition = getDefinition(scope, mds);
++                // Try bind scope first (where the bind directive was written), then target scope.
++                // For nested definitions, the scope where the bind is written may differ from
++                // the scope where the definition was registered (InstanceBody vs Definition).
++                if (bindInfo.bindScope)
++                    result.definition = getDefinition(*bindInfo.bindScope, mds);
++                if (!result.definition)
++                    result.definition = getDefinition(scope, mds);
++                // If still not found, the syntax uniquely identifies the definition,
++                // so pick any definition for that syntax (handles nested definitions
++                // where the registering scope differs from both bind and target scopes).
++                if (!result.definition) {
++                    if (auto it = definitionFromSyntax.find(&mds);
++                        it != definitionFromSyntax.end() && !it->second.empty()) {
++                        result.definition = it->second.begin()->second;
++                    }
++                }
+                 if (!result.definition)
+                     errorMissingDef(name, scope, sourceRange, diag::UnknownModule);
+                 break;
+@@ -1097,6 +1112,14 @@ void Compilation::noteBindDirective(const BindDirectiveSyntax& syntax, const Sco
      }
  }
  
@@ -77,7 +191,7 @@ index 83af0fe..a6a8f33 100644
  void Compilation::noteInstanceWithDefBind(const Symbol& instance) {
      SLANG_ASSERT(!isFrozen());
  
-@@ -2365,6 +2373,16 @@ void Compilation::resolveDefParamsAndBinds() {
+@@ -2365,6 +2388,16 @@ void Compilation::resolveDefParamsAndBinds() {
  
              BindDirectiveInfo info;
              info.bindSyntax = syntax;
@@ -94,6 +208,234 @@ index 83af0fe..a6a8f33 100644
  
              auto& def = resolvedBind.instanceDef;
              info.configRuleSyntax = def.configRule ? def.configRule->syntax.get() : nullptr;
+diff --git a/source/ast/Expression.cpp b/source/ast/Expression.cpp
+index c787a84..e880d64 100644
+--- a/source/ast/Expression.cpp
++++ b/source/ast/Expression.cpp
+@@ -1442,7 +1442,8 @@ Expression* Expression::tryBindInterfaceRef(const ASTContext& context,
+     }
+ 
+     if (!isInterfacePort) {
+-        if (iface->hierarchyOverrideNode) {
++        if (iface->hierarchyOverrideNode &&
++            !context.getCompilation().hasFlag(CompilationFlags::AllowVirtualIfaceWithOverride)) {
+             auto& diag = context.addDiag(diag::VirtualIfaceDefparam, sourceRange);
+             if (auto source = findOverrideNodeSource(*iface->hierarchyOverrideNode))
+                 diag.addNote(diag::NoteDeclarationHere, source->sourceRange());
+diff --git a/source/ast/FmtHelpers.cpp b/source/ast/FmtHelpers.cpp
+index 175f791..27d2221 100644
+--- a/source/ast/FmtHelpers.cpp
++++ b/source/ast/FmtHelpers.cpp
+@@ -58,7 +58,8 @@ static bool checkArgType(TContext& context, const Expression& arg, char spec, So
+         case 'o':
+         case 'b':
+         case 'c':
+-            if (type.isIntegral() || type.isString())
++            if (type.isIntegral() || type.isString() || type.isClass() ||
++                type.isNull() || type.isCHandle())
+                 return true;
+             if (type.isFloating()) {
+                 // Just a warning, we will implicitly convert.
+diff --git a/source/ast/Lookup.cpp b/source/ast/Lookup.cpp
+index 5920ead..a325002 100644
+--- a/source/ast/Lookup.cpp
++++ b/source/ast/Lookup.cpp
+@@ -1568,7 +1568,8 @@ bool Lookup::ensureAccessible(const Symbol& symbol, const ASTContext& context,
+     }
+ 
+     auto [parent, inStatic] = getContainingClass(*context.scope);
+-    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope)) {
++    if (parent && !isAccessibleFrom(symbol, *parent) && !withinCovergroup(symbol, *context.scope) &&
++        !context.randomizeDetails) {
+         if (sourceRange) {
+             auto& diag = context.addDiag(diag::NestedNonStaticClassProperty, *sourceRange);
+             diag << symbol.name << parent->name;
+@@ -1639,9 +1640,16 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+         if (details.thisVar) {
+             auto dt = details.thisVar->getDeclaredType();
+             SLANG_ASSERT(dt);
+-            return dt->getType().getCanonicalType().as<ClassType>();
++            auto& canonical = dt->getType().getCanonicalType();
++            if (canonical.kind == SymbolKind::ClassType)
++                return canonical.as<ClassType>();
+         }
+ 
++        // Fall back to classScope if thisVar's type is not a class
++        // (e.g. when randomizing an array element).
++        if (classScope.asSymbol().kind == SymbolKind::ClassType)
++            return classScope;
++
+         return *context.scope;
+     };
+ 
+@@ -1669,6 +1677,17 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+             break;
+         case SyntaxKind::ThisHandle:
+             result.found = details.thisVar;
++            // When the randomize target is an array element select
++            // (e.g. arr[i].randomize()), thisVar may point to the array
++            // variable whose type doesn't match the class scope.  Fall back
++            // to the class's own thisVar so that 'this' resolves to the
++            // element (class) type, not the array type.
++            if (result.found && result.found->getDeclaredType() &&
++                result.found->getDeclaredType()->getType().getCanonicalType().kind !=
++                    SymbolKind::ClassType) {
++                if (classScope.asSymbol().kind == SymbolKind::ClassType)
++                    result.found = classScope.asSymbol().as<ClassType>().thisVar;
++            }
+             if (!result.found)
+                 result.found = findThisHandle(*context.scope, flags, name.range, result);
+ 
+diff --git a/source/ast/builtins/NonConstFuncs.cpp b/source/ast/builtins/NonConstFuncs.cpp
+index e993d7c..617c93b 100644
+--- a/source/ast/builtins/NonConstFuncs.cpp
++++ b/source/ast/builtins/NonConstFuncs.cpp
+@@ -350,7 +350,11 @@ public:
+     }
+ 
+     bool allowEmptyArgument(size_t argIndex) const final { return argIndex == 1 || argIndex == 2; }
+-    bool allowClockingArgument(size_t argIndex) const final { return argIndex == 3; }
++    // Allow clocking argument at both position 2 and 3.
++    // IEEE 1800-2017 specifies $past(expr, [numTicks], [gating], [clocking])
++    // but in practice users often omit the gating expression and put clocking
++    // in position 3 (index 2): $past(expr, numTicks, @(posedge clk))
++    bool allowClockingArgument(size_t argIndex) const final { return argIndex == 2 || argIndex == 3; }
+ 
+     const Type& checkArguments(const ASTContext& context, const Args& args, SourceRange range,
+                                const Expression*) const final {
+@@ -370,7 +374,10 @@ public:
+                 context.addDiag(diag::PastNumTicksInvalid, args[1]->sourceRange);
+         }
+ 
+-        if (args.size() > 2 && args[2]->kind != ExpressionKind::EmptyArgument) {
++        // Position 2 can be either a gating expression (boolean) or a clocking event.
++        // If it's a clocking event, skip the boolean check.
++        if (args.size() > 2 && args[2]->kind != ExpressionKind::EmptyArgument &&
++            args[2]->kind != ExpressionKind::ClockingEvent) {
+             if (!context.requireBooleanConvertible(*args[2]))
+                 return comp.getErrorType();
+         }
+diff --git a/source/ast/expressions/CallExpression.cpp b/source/ast/expressions/CallExpression.cpp
+index f38be5f..ce7d7e6 100644
+--- a/source/ast/expressions/CallExpression.cpp
++++ b/source/ast/expressions/CallExpression.cpp
+@@ -530,8 +530,23 @@ Expression& CallExpression::createSystemCall(
+             // so that class members can be found in the constraint block.
+             argContext.randomizeDetails = &randomizeDetails;
+             if (firstArg) {
+-                randomizeDetails.classType = &firstArg->type->getCanonicalType().as<ClassType>();
+-                randomizeDetails.thisVar = firstArg->getSymbolReference();
++                auto& canonType = firstArg->type->getCanonicalType();
++                if (canonType.isClass()) {
++                    randomizeDetails.classType = &canonType.as<ClassType>();
++                    if (auto symRef = firstArg->getSymbolReference()) {
++                        if (auto valueSym = symRef->as_if<ValueSymbol>();
++                            valueSym && valueSym->getType().getCanonicalType().isClass()) {
++                            randomizeDetails.thisVar = valueSym;
++                        }
++                    }
++                    if (!randomizeDetails.thisVar) {
++                        if (auto classSym =
++                                randomizeDetails.classType->asSymbol().as_if<ClassType>();
++                            classSym && classSym->thisVar) {
++                            randomizeDetails.thisVar = classSym->thisVar;
++                        }
++                    }
++                }
+             }
+             else if (randomizeScope && randomizeScope->asSymbol().kind == SymbolKind::ClassType) {
+                 randomizeDetails.classType = randomizeScope;
+@@ -612,6 +627,12 @@ Expression& CallExpression::createSystemCall(
+                             buffer.push_back(compilation.emplace<EmptyArgumentExpression>(
+                                 compilation.getVoidType(), actualArgs[i]->sourceRange()));
+                         }
++                        else if (i == actualArgs.size() - 1) {
++                            // Trailing comma in system function call arguments
++                            // (e.g. $sformatf("fmt", arg,)) -- commercial simulators
++                            // like Xcelium and VCS accept this, so just skip the
++                            // empty trailing argument instead of erroring.
++                        }
+                         else {
+                             argContext.addDiag(diag::EmptyArgNotAllowed,
+                                                actualArgs[i]->sourceRange());
+@@ -701,8 +722,8 @@ ConstantValue CallExpression::evalImpl(EvalContext& context) const {
+     for (size_t i = 0; i < formals.size(); i++)
+         context.createLocal(formals[i], args[i]);
+ 
+-    SLANG_ASSERT(symbol.returnValVar);
+-    context.createLocal(symbol.returnValVar);
++    if (symbol.returnValVar)
++        context.createLocal(symbol.returnValVar);
+ 
+     using ER = Statement::EvalResult;
+     ER er = symbol.getBody().eval(context);
+@@ -713,7 +734,9 @@ ConstantValue CallExpression::evalImpl(EvalContext& context) const {
+     if (er == ER::Disable)
+         context.addDiag(diag::ConstEvalDisableTarget, context.getDisableRange());
+ 
+-    ConstantValue result = std::move(*context.findLocal(symbol.returnValVar));
++    ConstantValue result;
++    if (symbol.returnValVar)
++        result = std::move(*context.findLocal(symbol.returnValVar));
+     context.popFrame();
+ 
+     if (er == ER::Fail || er == ER::Disable)
+diff --git a/source/ast/expressions/OperatorExpressions.cpp b/source/ast/expressions/OperatorExpressions.cpp
+index c2961dd..06350e1 100644
+--- a/source/ast/expressions/OperatorExpressions.cpp
++++ b/source/ast/expressions/OperatorExpressions.cpp
+@@ -818,7 +818,8 @@ Expression& BinaryExpression::fromComponents(Expression& lhs, Expression& rhs, B
+         case BinaryOperator::LogicalImplication:
+         case BinaryOperator::LogicalEquivalence:
+             // Result is always a single bit.
+-            good = bothNumeric;
++            // Allow any boolean-convertible types (numeric, class handles, etc.)
++            good = lt->isBooleanConvertible() && rt->isBooleanConvertible();
+             result->type = singleBitType(compilation, lt, rt);
+             selfDetermined(context, result->left_);
+             selfDetermined(context, result->right_);
+@@ -1887,6 +1888,22 @@ Expression& ConcatenationExpression::fromSyntax(Compilation& comp,
+                                                                ConversionKind::Implicit, *expr,
+                                                                nullptr, {});
+                 }
++                else if (expr->type->isIntegral() &&
++                         context.getCompilation().hasFlag(
++                             CompilationFlags::RelaxStringConversions)) {
++                    // Allow byte-sized integral types in string concatenations under
++                    // relaxed string conversion rules (VCS compatibility).
++                    if (expr->type->getBitWidth() == 8) {
++                        expr = comp.emplace<ConversionExpression>(
++                            comp.getStringType(), ConversionKind::Explicit, *expr,
++                            expr->sourceRange);
++                    }
++                    else {
++                        errored = true;
++                        context.addDiag(diag::ConcatWithStringInt, expr->sourceRange);
++                        break;
++                    }
++                }
+                 else {
+                     errored = true;
+                     context.addDiag(diag::ConcatWithStringInt, expr->sourceRange);
+diff --git a/source/ast/symbols/ClassSymbols.cpp b/source/ast/symbols/ClassSymbols.cpp
+index 9ca79d1..0f62b2b 100644
+--- a/source/ast/symbols/ClassSymbols.cpp
++++ b/source/ast/symbols/ClassSymbols.cpp
+@@ -247,9 +247,13 @@ void ClassType::populate(const Scope& scope, const ClassDeclarationSyntax& synta
+ void ClassType::inheritMembers(function_ref<void(const Symbol&)> insertCB) const {
+     // Check for invalid overrides of the special pre and post randomize methods.
+     auto checkOverride = [](auto& s) {
++        // Allow MethodFlags::Virtual since pre_randomize/post_randomize are
++        // implicitly virtual per IEEE 1800-2017 Section 18.6.1, so explicitly
++        // marking them as 'virtual' is valid.
++        auto validFlags = s.flags & ~MethodFlags::Virtual;
+         return s.subroutineKind == SubroutineKind::Function && s.getArguments().empty() &&
+                s.getReturnType().isVoid() && s.visibility == Visibility::Public &&
+-               s.flags == MethodFlags::None;
++               validFlags == MethodFlags::None;
+     };
+ 
+     auto checkPrePost = [&](std::string_view funcName) {
 diff --git a/source/ast/symbols/InstanceSymbols.cpp b/source/ast/symbols/InstanceSymbols.cpp
 index 859363c..23a153d 100644
 --- a/source/ast/symbols/InstanceSymbols.cpp
@@ -136,26 +478,41 @@ index 859363c..23a153d 100644
  
          if (auto node = hierarchyOverrideNode) {
 diff --git a/source/ast/symbols/PortSymbols.cpp b/source/ast/symbols/PortSymbols.cpp
-index 327a400..0349403 100644
+index 327a400..46d983b 100644
 --- a/source/ast/symbols/PortSymbols.cpp
 +++ b/source/ast/symbols/PortSymbols.cpp
-@@ -780,8 +780,13 @@ class PortConnectionBuilder {
+@@ -778,9 +778,29 @@ private:
+ 
+ class PortConnectionBuilder {
  public:
++    // Returns the bind scope only if it is an instance body scope (i.e., the bind
++    // directive was written inside a module body). For definition-level binds at
++    // the compilation unit scope, port connections should resolve in the target
++    // module scope, not the compilation unit scope.
++    static const Scope* getInstanceBindScope(const InstanceSymbol& inst) {
++        auto bs = inst.getBindScope();
++        if (!bs)
++            return nullptr;
++        // Only use bind scope if it's inside an instance body (module scope).
++        if (bs->asSymbol().kind == SymbolKind::InstanceBody ||
++            bs->getContainingInstance())
++            return bs;
++        return nullptr;
++    }
++
      PortConnectionBuilder(const InstanceSymbol& instance,
                            const SeparatedSyntaxList<PortConnectionSyntax>& portConnections) :
 -        scope(*instance.getParentScope()), instance(instance), comp(scope.getCompilation()),
--        lookupLocation(LookupLocation::after(instance)),
-+        // Per LRM 23.11, bind port connections resolve names in the scope where
-+        // the bind directive was written, not the target module scope.
-+        scope(instance.getBindScope() ? *instance.getBindScope()
-+                                      : *instance.getParentScope()),
++        // Use the target module scope (parent scope) as the primary scope for
++        // port connection resolution. For bind instances, names that aren't found
++        // in the target scope are looked up in the bind scope as a fallback
++        // (see implicitNamedPort and getImplicitInterface).
++        scope(*instance.getParentScope()),
 +        instance(instance), comp(scope.getCompilation()),
-+        lookupLocation(instance.getBindScope() ? LookupLocation::max
-+                                               : LookupLocation::after(instance)),
+         lookupLocation(LookupLocation::after(instance)),
          context(scope, lookupLocation, ASTFlags::NonProcedural),
          connMap(portConnections, scope, lookupLocation) {
- 
-@@ -789,7 +794,8 @@ public:
+@@ -789,7 +809,8 @@ public:
  
          // Build up the set of dimensions for the instantiating instance's array parent, if any.
          // This builds up the dimensions in reverse order, so we have to reverse them back.
@@ -165,23 +522,383 @@ index 327a400..0349403 100644
          while (parent && parent->asSymbol().kind == SymbolKind::InstanceArray) {
              auto& sym = parent->asSymbol().as<InstanceArraySymbol>();
              instanceDims.push_back(sym.range);
-@@ -1772,8 +1778,15 @@ const Expression* PortConnection::getExpression() const {
-
-    if (connectedSymbol || exprSyntax) {
-        auto& parentInstance = getParentInstance();
+@@ -1086,6 +1107,14 @@ private:
+             flags |= LookupFlags::DisallowWildcardImport | LookupFlags::DisallowUnitReferences;
+ 
+         auto symbol = Lookup::unqualified(scope, port.name, flags);
++        bool usedBindScope = false;
++        if (!symbol && instance.body.flags.has(InstanceFlags::FromBind)) {
++            auto bindScope = getInstanceBindScope(instance);
++            if (bindScope && bindScope != &scope) {
++                symbol = Lookup::unqualified(*bindScope, port.name, flags);
++                usedBindScope = symbol != nullptr;
++            }
++        }
+         if (!symbol) {
+             // If this is a wildcard connection, we're allowed to use the port's default value,
+             // if it has one.
+@@ -1096,7 +1125,8 @@ private:
+             return emptyConnection(port);
+         }
+ 
+-        if (!symbol->isDeclaredBefore(lookupLocation).value_or(true) &&
++        auto useLookupLocation = usedBindScope ? LookupLocation::max : lookupLocation;
++        if (!symbol->isDeclaredBefore(useLookupLocation).value_or(true) &&
+             !comp.hasFlag(CompilationFlags::AllowUseBeforeDeclare)) {
+ 
+             auto& diag = scope.addDiag(diag::UsedBeforeDeclared, range);
+@@ -1126,6 +1156,11 @@ private:
+                                          std::span<const AttributeSymbol* const> attributes,
+                                          bool isWildcard) {
+         auto symbol = Lookup::unqualified(scope, port.name);
++        if (!symbol && instance.body.flags.has(InstanceFlags::FromBind)) {
++            auto bindScope = getInstanceBindScope(instance);
++            if (bindScope && bindScope != &scope)
++                symbol = Lookup::unqualified(*bindScope, port.name);
++        }
+         if (!symbol) {
+             scope.addDiag(diag::ImplicitNamedPortNotFound, range) << port.name;
+             return emptyConnection(port);
+@@ -1772,8 +1807,45 @@ const Expression* PortConnection::getExpression() const {
+ 
+     if (connectedSymbol || exprSyntax) {
+         auto& parentInstance = getParentInstance();
 -        auto ll = LookupLocation::after(parentInstance);
 -        auto scope = ll.getScope();
 +        const Scope* scope;
 +        LookupLocation ll;
-+        if (auto bindScope = parentInstance.getBindScope()) {
-+            // Per LRM 23.11, bind port connections resolve in the bind scope.
-+            scope = bindScope;
-+            ll = LookupLocation::max;
-+        }
-+        else {
-+            ll = LookupLocation::after(parentInstance);
-+            scope = ll.getScope();
++        // Default: use parent scope (target module scope).
++        ll = LookupLocation::after(parentInstance);
++        scope = ll.getScope();
++
++        // For bind instances, names may come from either the target scope or
++        // the bind scope. Use the target scope as default, and fall back to
++        // the bind scope when a name isn't found in the target scope.
++        if (parentInstance.body.flags.has(InstanceFlags::FromBind)) {
++            auto bindScope = parentInstance.getBindScope();
++            bool isModuleBindScope = bindScope &&
++                (bindScope->asSymbol().kind == SymbolKind::InstanceBody ||
++                 bindScope->getContainingInstance());
++            if (isModuleBindScope && bindScope != scope) {
++                if (connectedSymbol) {
++                    // For implicit named ports, symbol was already resolved.
++                    // Use bind scope if the symbol isn't in the target scope.
++                    if (!Lookup::unqualified(*scope, connectedSymbol->name)) {
++                        scope = bindScope;
++                        ll = LookupLocation::max;
++                    }
++                }
++                else if (exprSyntax) {
++                    // For explicit port expressions, check if the first
++                    // identifier resolves in the target scope. If not, try
++                    // the bind scope.
++                    auto firstToken = exprSyntax->getFirstToken();
++                    if (firstToken.kind == TokenKind::Identifier) {
++                        auto name = firstToken.valueText();
++                        if (!Lookup::unqualified(*scope, name) &&
++                            Lookup::unqualified(*bindScope, name)) {
++                            scope = bindScope;
++                            ll = LookupLocation::max;
++                        }
++                    }
++                }
++            }
 +        }
          SLANG_ASSERT(scope);
  
          const bool isNetPort = port.kind == SymbolKind::Port && port.as<PortSymbol>().isNetPort();
+diff --git a/source/ast/symbols/SubroutineSymbols.cpp b/source/ast/symbols/SubroutineSymbols.cpp
+index e024e57..2d9bc97 100644
+--- a/source/ast/symbols/SubroutineSymbols.cpp
++++ b/source/ast/symbols/SubroutineSymbols.cpp
+@@ -146,12 +146,18 @@ std::pair<SubroutineSymbol*, bool> SubroutineSymbol::fromSyntax(
+     }
+     else if (subroutineKind == SubroutineKind::Function) {
+         // The function gets an implicit variable inserted that represents the return value.
+-        auto implicitReturnVar = compilation.emplace<VariableSymbol>(result->name, result->location,
+-                                                                     VariableLifetime::Automatic);
+-        implicitReturnVar->setDeclaredType(*proto->returnType);
+-        implicitReturnVar->flags |= VariableFlags::CompilerGenerated;
+-        result->addMember(*implicitReturnVar);
+-        result->returnValVar = implicitReturnVar;
++        // Per IEEE 1800-2017 Section 13.4.1, only non-void functions have the implicit
++        // return value variable. For void functions, skip creating it to avoid name
++        // conflicts with parameters that have the same name as the function.
++        bool isVoidReturn = proto->returnType->kind == SyntaxKind::VoidType;
++        if (!isVoidReturn) {
++            auto implicitReturnVar = compilation.emplace<VariableSymbol>(
++                result->name, result->location, VariableLifetime::Automatic);
++            implicitReturnVar->setDeclaredType(*proto->returnType);
++            implicitReturnVar->flags |= VariableFlags::CompilerGenerated;
++            result->addMember(*implicitReturnVar);
++            result->returnValVar = implicitReturnVar;
++        }
+         result->declaredReturnType.setTypeSyntax(*proto->returnType);
+     }
+     else {
+diff --git a/source/parsing/Parser.cpp b/source/parsing/Parser.cpp
+index a9ecf0b..eae5dc2 100644
+--- a/source/parsing/Parser.cpp
++++ b/source/parsing/Parser.cpp
+@@ -84,7 +84,9 @@ AnsiPortListSyntax& Parser::parseAnsiPortList(Token openParen) {
+     parseList<isPossibleAnsiPort, isEndOfParenList>(buffer, TokenKind::CloseParenthesis,
+                                                     TokenKind::Comma, closeParen,
+                                                     RequireItems::False, diag::ExpectedAnsiPort,
+-                                                    [this] { return &parseAnsiPort(); });
++                                                    [this] { return &parseAnsiPort(); },
++                                                    AllowEmpty::False,
++                                                    AllowTrailingSeparator::True);
+ 
+     auto& result = factory.ansiPortList(openParen, buffer.copy(alloc), closeParen);
+     result.previewNode = std::exchange(previewNode, nullptr);
+diff --git a/source/parsing/Parser_expressions.cpp b/source/parsing/Parser_expressions.cpp
+index 99cc6df..a54eb55 100644
+--- a/source/parsing/Parser_expressions.cpp
++++ b/source/parsing/Parser_expressions.cpp
+@@ -1247,6 +1247,22 @@ TimingControlSyntax* Parser::parseTimingControl(bool inAssertion) {
+                 case TokenKind::SystemIdentifier:
+                     return &factory.eventControl(at,
+                                                  parsePrimaryExpression(ExpressionOptions::None));
++                case TokenKind::EdgeKeyword:
++                case TokenKind::PosEdgeKeyword:
++                case TokenKind::NegEdgeKeyword: {
++                    // Verilator-style extension: @posedge (clk) instead of @(posedge clk)
++                    // Transform it into the standard @(posedge clk) form.
++                    auto edge = consume();
++                    auto openParen = expect(TokenKind::OpenParenthesis);
++                    auto& expr = parseExpression();
++                    auto closeParen = expect(TokenKind::CloseParenthesis);
++
++                    // Create a parenthesized expression for the signal
++                    auto& parenExpr = factory.parenthesizedExpression(openParen, expr, closeParen);
++                    // Create a signal event expression with the edge and the expression
++                    auto& eventExpr = factory.signalEventExpression(edge, parenExpr, nullptr);
++                    return &factory.eventControlWithExpression(at, eventExpr);
++                }
+                 default:
+                     return &factory.eventControl(at, parseName(NameOptions::NoClassScope));
+             }
+diff --git a/source/parsing/Parser_members.cpp b/source/parsing/Parser_members.cpp
+index db55f24..e6f71f2 100644
+--- a/source/parsing/Parser_members.cpp
++++ b/source/parsing/Parser_members.cpp
+@@ -2544,7 +2544,13 @@ SequenceDeclarationSyntax& Parser::parseSequenceDeclaration(AttrList attributes)
+         declarations.push_back(&parseLocalVariableDeclaration());
+ 
+     auto& expr = parseSequenceExpr(0, /* isInProperty */ false);
+-    auto semi2 = expect(TokenKind::Semicolon);
++    Token semi2;
++    if (peek(TokenKind::Semicolon))
++        semi2 = consume();
++    else if (peek(TokenKind::EndSequenceKeyword))
++        semi2 = Token::createMissing(alloc, TokenKind::Semicolon, peek().location());
++    else
++        semi2 = expect(TokenKind::Semicolon);
+     auto end = expect(TokenKind::EndSequenceKeyword);
+ 
+     auto blockName = parseNamedBlockClause();
+diff --git a/source/parsing/Preprocessor.cpp b/source/parsing/Preprocessor.cpp
+index f0fd95f..cbaad37 100644
+--- a/source/parsing/Preprocessor.cpp
++++ b/source/parsing/Preprocessor.cpp
+@@ -17,6 +17,8 @@
+ #include "slang/util/String.h"
+ #include "slang/util/VersionInfo.h"
+ 
++#include <optional>
++
+ namespace slang::parsing {
+ 
+ using namespace syntax;
+@@ -1212,15 +1214,20 @@ Trivia Preprocessor::handleDefaultTriregStrengthDirective(Token directive) {
+ }
+ 
+ ConditionalDirectiveExpressionSyntax* Preprocessor::parseConditionalExpr() {
+-    auto isBinaryOp = [](TokenKind kind) {
++    auto getPrecedence = [](TokenKind kind) {
+         switch (kind) {
++            case TokenKind::DoubleEquals:
++            case TokenKind::ExclamationEquals:
++                return 30;
+             case TokenKind::DoubleAnd:
++                return 20;
+             case TokenKind::DoubleOr:
++                return 10;
+             case TokenKind::MinusArrow:
+             case TokenKind::LessThanMinusArrow:
+-                return true;
++                return 5;
+             default:
+-                return false;
++                return -1;
+         }
+     };
+ 
+@@ -1234,54 +1241,85 @@ ConditionalDirectiveExpressionSyntax* Preprocessor::parseConditionalExpr() {
+                                                                                     *operand,
+                                                                                     closeParen);
+         }
+-        else {
+-            auto id = expect(TokenKind::Identifier);
+-            return alloc.emplace<NamedConditionalDirectiveExpressionSyntax>(id);
++        if (token.kind == TokenKind::IntegerLiteral) {
++            return alloc.emplace<NamedConditionalDirectiveExpressionSyntax>(consume());
+         }
++        auto id = expect(TokenKind::Identifier);
++        return alloc.emplace<NamedConditionalDirectiveExpressionSyntax>(id);
+     };
+ 
+-    ConditionalDirectiveExpressionSyntax* left;
+-    if (peek(TokenKind::Exclamation)) {
+-        auto op = consume();
+-        auto operand = parsePrimary();
+-        left = alloc.emplace<UnaryConditionalDirectiveExpressionSyntax>(op, *operand);
+-    }
+-    else {
+-        left = parsePrimary();
+-    }
+-
+-    while (true) {
+-        if (!isBinaryOp(peek().kind))
+-            break;
++    auto parseExpr = [&](auto&& self, int minPrecedence)
++        -> ConditionalDirectiveExpressionSyntax* {
++        auto parseUnary = [&](auto&& unarySelf) -> ConditionalDirectiveExpressionSyntax* {
++            if (peek(TokenKind::Exclamation)) {
++                auto op = consume();
++                auto operand = unarySelf(unarySelf);
++                return alloc.emplace<UnaryConditionalDirectiveExpressionSyntax>(op, *operand);
++            }
++            return parsePrimary();
++        };
+ 
+-        auto op = consume();
+-        auto right = parseConditionalExpr();
+-        left = alloc.emplace<BinaryConditionalDirectiveExpressionSyntax>(*left, op, *right);
+-    }
++        auto left = parseUnary(parseUnary);
++        while (true) {
++            if (!peekSameLine())
++                break;
++            int prec = getPrecedence(peek().kind);
++            if (prec < minPrecedence)
++                break;
++            auto op = consume();
++            auto right = self(self, prec + 1);
++            left = alloc.emplace<BinaryConditionalDirectiveExpressionSyntax>(*left, op, *right);
++        }
++        return left;
++    };
+ 
+-    return left;
++    return parseExpr(parseExpr, 0);
+ }
+ 
+ ConditionalDirectiveExpressionSyntax& Preprocessor::parseConditionalExprTop() {
+-    SLANG_ASSERT(!inIfDefCondition);
+-    auto guard = ScopeGuard([this] { inIfDefCondition = false; });
++    bool prevIfDefCondition = inIfDefCondition;
++    auto guard = ScopeGuard([this, prevIfDefCondition] { inIfDefCondition = prevIfDefCondition; });
+     inIfDefCondition = true;
+ 
+-    if (peek(TokenKind::OpenParenthesis)) {
+-        auto result = parseConditionalExpr();
+-        if (options.languageVersion < LanguageVersion::v1800_2023) {
+-            addDiag(diag::WrongLanguageVersion, result->sourceRange())
+-                << toString(options.languageVersion);
+-        }
+-        return *result;
++    bool startsWithParen = peek(TokenKind::OpenParenthesis);
++    auto result = parseConditionalExpr();
++    if (startsWithParen && options.languageVersion < LanguageVersion::v1800_2023) {
++        addDiag(diag::WrongLanguageVersion, result->sourceRange())
++            << toString(options.languageVersion);
+     }
+-
+-    auto id = expect(TokenKind::Identifier);
+-    return *alloc.emplace<NamedConditionalDirectiveExpressionSyntax>(id);
++    return *result;
+ }
+ 
+ bool Preprocessor::evalConditionalExpr(
+     const syntax::ConditionalDirectiveExpressionSyntax& expr) const {
++    auto evalValue = [&](auto&& self,
++                         const syntax::ConditionalDirectiveExpressionSyntax& node)
++        -> std::optional<SVInt> {
++        switch (node.kind) {
++            case SyntaxKind::ParenthesizedConditionalDirectiveExpression:
++                return self(self,
++                            *node.as<ParenthesizedConditionalDirectiveExpressionSyntax>().operand);
++            case SyntaxKind::NamedConditionalDirectiveExpression: {
++                auto nameToken = node.as<NamedConditionalDirectiveExpressionSyntax>().name;
++                if (nameToken.kind == TokenKind::IntegerLiteral)
++                    return nameToken.intValue();
++                if (nameToken.kind != TokenKind::Identifier)
++                    return std::nullopt;
++
++                auto it = macros.find(nameToken.valueText());
++                if (it == macros.end())
++                    return std::nullopt;
++                if (!it->second.syntax)
++                    return std::nullopt;
++                auto& body = it->second.syntax->body;
++                if (body.size() != 1 || body[0].kind != TokenKind::IntegerLiteral)
++                    return std::nullopt;
++                return body[0].intValue();
++            }
++            default:
++                return std::nullopt;
++        }
++    };
+ 
+     switch (expr.kind) {
+         case SyntaxKind::ParenthesizedConditionalDirectiveExpression:
+@@ -1293,22 +1331,42 @@ bool Preprocessor::evalConditionalExpr(
+                 *expr.as<UnaryConditionalDirectiveExpressionSyntax>().operand);
+         case SyntaxKind::BinaryConditionalDirectiveExpression: {
+             auto& bcde = expr.as<BinaryConditionalDirectiveExpressionSyntax>();
+-            const bool l = evalConditionalExpr(*bcde.left);
+-            const bool r = evalConditionalExpr(*bcde.right);
+             switch (bcde.op.kind) {
++                case TokenKind::DoubleEquals:
++                case TokenKind::ExclamationEquals: {
++                    auto lhs = evalValue(evalValue, *bcde.left);
++                    auto rhs = evalValue(evalValue, *bcde.right);
++                    bool equal = false;
++                    if (lhs && rhs)
++                        equal = static_cast<bool>(*lhs == *rhs);
++                    else
++                        equal = evalConditionalExpr(*bcde.left) ==
++                                evalConditionalExpr(*bcde.right);
++                    return bcde.op.kind == TokenKind::ExclamationEquals ? !equal : equal;
++                }
+                 case TokenKind::DoubleAnd:
+-                    return l && r;
++                    return evalConditionalExpr(*bcde.left) &&
++                           evalConditionalExpr(*bcde.right);
+                 case TokenKind::DoubleOr:
+-                    return l || r;
++                    return evalConditionalExpr(*bcde.left) ||
++                           evalConditionalExpr(*bcde.right);
+                 case TokenKind::MinusArrow:
+-                    return !l || r;
++                    return !evalConditionalExpr(*bcde.left) ||
++                           evalConditionalExpr(*bcde.right);
+                 case TokenKind::LessThanMinusArrow:
+-                    return l == r;
++                    return evalConditionalExpr(*bcde.left) ==
++                           evalConditionalExpr(*bcde.right);
+                 default:
+                     SLANG_UNREACHABLE;
+             }
+         }
+         case SyntaxKind::NamedConditionalDirectiveExpression:
++            if (expr.as<NamedConditionalDirectiveExpressionSyntax>().name.kind ==
++                TokenKind::IntegerLiteral) {
++                return static_cast<bool>(
++                    expr.as<NamedConditionalDirectiveExpressionSyntax>().name.intValue() !=
++                    SVInt::Zero);
++            }
+             return macros.find(
+                        expr.as<NamedConditionalDirectiveExpressionSyntax>().name.valueText()) !=
+                    macros.end();

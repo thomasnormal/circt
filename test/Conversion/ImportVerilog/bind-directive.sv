@@ -1,6 +1,5 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // REQUIRES: slang
-// XFAIL: *
 
 //===----------------------------------------------------------------------===//
 // Test: Bind to module definition (affects all instances)
