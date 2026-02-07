@@ -4569,6 +4569,7 @@ struct VerifBoundedModelCheckingOpConversion
       size_t numBMCStateArgs = numRegs + totalDelaySlots + totalNFAStateSlots;
       SmallVector<Value> iterArgs = inputDecls;
       SmallVector<SmallVector<Value>> lassoStateHistory;
+      SmallVector<SmallVector<Value>> lassoFinalCheckSampleHistory;
       auto captureStateSnapshot = [&](ValueRange values) {
         if (!livenessLassoMode)
           return;
@@ -5122,6 +5123,9 @@ struct VerifBoundedModelCheckingOpConversion
         ValueRange finalCheckStates =
             numFinalChecks == 0 ? ValueRange{}
                                 : iterRange.drop_back(1).take_back(numFinalChecks);
+        SmallVector<Value> finalCheckSamplesThisIter;
+        if (livenessLassoMode && numFinalChecks > 0)
+          finalCheckSamplesThisIter.reserve(numFinalChecks);
         auto getCheckGate =
             [&](size_t checkIdx, ArrayRef<std::optional<unsigned>> clockPoses,
                 ArrayRef<NonFinalCheckInfo> infos) -> Value {
@@ -5164,6 +5168,8 @@ struct VerifBoundedModelCheckingOpConversion
         };
         for (auto [idx, finalVal] : llvm::enumerate(finalCheckOutputs)) {
           Value gate = getCheckGate(idx, finalCheckClockPos, finalCheckInfos);
+          if (livenessLassoMode)
+            finalCheckSamplesThisIter.push_back(gate ? gate : constTrue);
           if (gate && idx < finalCheckStates.size()) {
             newDecls.push_back(smt::IteOp::create(rewriter, loc, gate, finalVal,
                                                  finalCheckStates[idx]));
@@ -5174,6 +5180,8 @@ struct VerifBoundedModelCheckingOpConversion
         newDecls.push_back(violated);
         iterArgs = std::move(newDecls);
         captureStateSnapshot(ValueRange(iterArgs));
+        if (livenessLassoMode)
+          lassoFinalCheckSampleHistory.push_back(std::move(finalCheckSamplesThisIter));
       }
 
       if (livenessLassoMode) {
@@ -5181,24 +5189,55 @@ struct VerifBoundedModelCheckingOpConversion
           op.emitError("liveness-lasso mode requires bound >= 1");
           return failure();
         }
+        if (lassoFinalCheckSampleHistory.size() != boundValue) {
+          op.emitError("internal error while building liveness-lasso "
+                       "fairness history");
+          return failure();
+        }
         Value hasLassoLoop;
-        if (numBMCStateArgs == 0) {
-          hasLassoLoop = constTrue;
-        } else if (lassoStateHistory.size() >= 2) {
+        if (lassoStateHistory.size() >= 2) {
           ArrayRef<Value> finalState = lassoStateHistory.back();
-          for (ArrayRef<Value> candidate :
-               ArrayRef<SmallVector<Value>>(lassoStateHistory).drop_back(1)) {
+          for (auto [candidateIndex, candidate] :
+               llvm::enumerate(
+                   ArrayRef<SmallVector<Value>>(lassoStateHistory).drop_back(1))) {
+            Value candidateLoop = constTrue;
             if (candidate.size() != finalState.size()) {
               op.emitError("internal error while building liveness-lasso "
                            "state snapshots");
               return failure();
             }
-            Value thisLoop;
-            for (auto [lhs, rhs] : llvm::zip(candidate, finalState)) {
-              Value eq = smt::EqOp::create(rewriter, loc, lhs, rhs);
-              thisLoop = combineAnd(thisLoop, eq);
+            if (numBMCStateArgs > 0) {
+              Value thisLoop;
+              for (auto [lhs, rhs] : llvm::zip(candidate, finalState)) {
+                Value eq = smt::EqOp::create(rewriter, loc, lhs, rhs);
+                thisLoop = combineAnd(thisLoop, eq);
+              }
+              candidateLoop = combineAnd(candidateLoop, thisLoop);
             }
-            hasLassoLoop = combineOr(hasLassoLoop, thisLoop);
+
+            // Fairness-style acceptance: for each final check, require at least
+            // one sampling point on the selected loop segment.
+            Value samplingFairness;
+            for (size_t checkIdx = 0; checkIdx < numFinalChecks; ++checkIdx) {
+              Value sampledOnLoop;
+              for (size_t iterIdx = candidateIndex; iterIdx < boundValue;
+                   ++iterIdx) {
+                ArrayRef<Value> iterSamples = lassoFinalCheckSampleHistory[iterIdx];
+                if (checkIdx >= iterSamples.size()) {
+                  op.emitError("internal error while building liveness-lasso "
+                               "sampling constraints");
+                  return failure();
+                }
+                sampledOnLoop = combineOr(sampledOnLoop, iterSamples[checkIdx]);
+              }
+              if (!sampledOnLoop)
+                sampledOnLoop = constFalse;
+              samplingFairness = combineAnd(samplingFairness, sampledOnLoop);
+            }
+            if (samplingFairness)
+              candidateLoop = combineAnd(candidateLoop, samplingFairness);
+
+            hasLassoLoop = combineOr(hasLassoLoop, candidateLoop);
           }
         }
         if (!hasLassoLoop)
