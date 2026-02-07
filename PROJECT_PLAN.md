@@ -5937,6 +5937,25 @@ ninja -C build circt-verilog
   - Full `test/Tools/circt-bmc` lit sweep passes with expected baseline:
     103 pass / 10 xfail / 123 unsupported.
 
+### Iteration 456
+- Slang library resolution test coverage:
+  - Added `test/circt-verilog/library-order.sv` to verify `-L` priority
+    selection across multiple libraries with duplicate module names.
+  - Added `test/circt-verilog/default-lib-name.sv` to verify
+    `--defaultLibName` participates correctly in library-order resolution for
+    unnamed (`-l<file>`) library files.
+- Regression status:
+  - All focused Slang-option tests pass:
+    `library-files.sv`, `suppress-warnings.sv`, `libmap-files.sv`,
+    `suppress-macro-warnings.sv`, `library-order.sv`,
+    `default-lib-name.sv`.
+- External smoke status (re-run):
+  - AVIP (`apb_avip`) compile smoke PASS.
+  - sv-tests BMC mini smoke PASS.
+  - verilator-verification BMC mini smoke PASS.
+  - yosys SVA BMC mini smoke PASS.
+  - OpenTitan LEC mini smoke PASS.
+
 ---
 
 ## Architecture Reference
