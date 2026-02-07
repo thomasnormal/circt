@@ -1,13 +1,11 @@
-// XFAIL: *
-// The forSMTLIBExport mode creates verif.yield instead of smt.yield in the
-// dialect conversion framework context. This needs deeper investigation.
 // RUN: circt-opt %s --convert-verif-to-smt=for-smtlib-export --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
 // CHECK-LABEL: smt.solver
 // CHECK: %[[NOT0:.*]] = smt.not
 // CHECK: %[[NOT1:.*]] = smt.not
-// CHECK: %[[AND:.*]] = smt.and %[[NOT0]], %[[NOT1]]
-// CHECK: smt.assert %[[AND]]
+// CHECK: %[[OR:.*]] = smt.or %[[NOT0]], %[[NOT1]]
+// CHECK: %[[ORW:.*]] = smt.or
+// CHECK: smt.assert %[[ORW]]
 
 func.func @bmc_final_checks_smtlib() -> i1 {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values []

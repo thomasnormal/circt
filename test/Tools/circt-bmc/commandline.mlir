@@ -8,5 +8,6 @@
 // CHECK-DAG: --fail-on-violation
 // CHECK-DAG: --flatten-modules
 // CHECK-DAG: --k-induction
+// CHECK-DAG: --liveness
 // CHECK-DAG: --print-solver-output
 // CHECK-DAG: --emit-smtlib

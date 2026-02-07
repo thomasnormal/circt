@@ -175,6 +175,11 @@ static cl::opt<bool> kInduction(
              "induction step at -b+1"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> liveness(
+    "liveness",
+    cl::desc("Run bounded liveness checking using only bmc.final properties"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to z3 binary for --run-smtlib (optional)"),
@@ -766,7 +771,7 @@ static FailureOr<BMCResult> runJITSolver(ModuleOp module, TimingScope &ts) {
   {
     auto timer = ts.nest("Setting up the JIT");
     auto entryPoint =
-        dyn_cast_or_null<LLVM::LLVMFuncOp>(module->lookupSymbol(moduleName));
+        dyn_cast_or_null<LLVM::LLVMFuncOp>(module.lookupSymbol(moduleName));
     if (!entryPoint || entryPoint.empty()) {
       llvm::errs() << "no valid entry point found, expected 'llvm.func' named '"
                    << moduleName << "'\n";
@@ -850,6 +855,10 @@ static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
 }
 
 static LogicalResult executeBMCWithInduction(MLIRContext &context) {
+  if (liveness) {
+    llvm::errs() << "--liveness is incompatible with --k-induction\n";
+    return failure();
+  }
 #ifdef CIRCT_BMC_ENABLE_JIT
   if (outputFormat != OutputRunSMTLIB && outputFormat != OutputRunJIT) {
     llvm::errs() << "--k-induction requires --run or --run-smtlib\n";
@@ -982,7 +991,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
   convertVerifToSMTOptions.forSMTLIBExport =
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
-  convertVerifToSMTOptions.bmcMode = "bounded";
+  convertVerifToSMTOptions.bmcMode = liveness ? "liveness" : "bounded";
   if (failed(runPassPipeline(context, *module, ts, convertVerifToSMTOptions,
                              clockBound, /*emitResultMessages=*/true)))
     return failure();

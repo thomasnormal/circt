@@ -2036,6 +2036,7 @@ struct VerifBoundedModelCheckingOpConversion
     Location loc = op.getLoc();
     bool emitSMTLIB = forSMTLIBExport;
     bool inductionStep = bmcMode == BMCCheckMode::InductionStep;
+    bool livenessMode = bmcMode == BMCCheckMode::Liveness;
 
     if (inductionStep && !emitSMTLIB) {
       op.emitError("k-induction currently requires SMT-LIB export "
@@ -2849,6 +2850,17 @@ struct VerifBoundedModelCheckingOpConversion
     });
     // Erase the bmc.final ops using the rewriter to properly notify the
     // conversion framework
+    if (livenessMode) {
+      if (opsToErase.empty()) {
+        op.emitError(
+            "liveness mode requires at least one bmc.final property");
+        return failure();
+      }
+      // Liveness mode focuses on final-only obligations. Non-final checks
+      // remain lowered into the circuit but are not treated as violations.
+      nonFinalOps.clear();
+      nonFinalCheckInfos.clear();
+    }
     size_t numNonFinalChecks = nonFinalOps.size();
     size_t numFinalChecks = opsToErase.size();
     uint64_t boundValue = op.getBound();
@@ -4558,13 +4570,6 @@ struct VerifBoundedModelCheckingOpConversion
           return lhs;
         return smt::OrOp::create(rewriter, loc, lhs, rhs);
       };
-      auto combineAnd = [&](Value lhs, Value rhs) -> Value {
-        if (!lhs)
-          return rhs;
-        if (!rhs)
-          return lhs;
-        return smt::AndOp::create(rewriter, loc, lhs, rhs);
-      };
 
       SmallVector<Value> iterArgs = inputDecls;
       for (uint64_t iter = 0; iter < boundValue; ++iter) {
@@ -5114,7 +5119,7 @@ struct VerifBoundedModelCheckingOpConversion
               isTrue = smt::EqOp::create(rewriter, loc, finalVal, trueBV);
             }
             Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
-            finalCheckViolated = combineAnd(finalCheckViolated, isFalse);
+            finalCheckViolated = combineOr(finalCheckViolated, isFalse);
           }
         }
 
@@ -5793,6 +5798,8 @@ struct VerifBoundedModelCheckingOpConversion
       }
 
       if (!finalAssertOutputs.empty()) {
+        smt::PushOp::create(rewriter, loc, 1);
+        Value anyFinalAssertViolation;
         for (Value finalVal : finalAssertOutputs) {
           Value isTrue;
           if (isa<smt::BoolType>(finalVal.getType())) {
@@ -5805,8 +5812,14 @@ struct VerifBoundedModelCheckingOpConversion
           }
           // Assert the negation: we're looking for cases where the check FAILS
           Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
-          smt::AssertOp::create(rewriter, loc, isFalse);
+          if (!anyFinalAssertViolation)
+            anyFinalAssertViolation = isFalse;
+          else
+            anyFinalAssertViolation =
+                smt::OrOp::create(rewriter, loc, anyFinalAssertViolation,
+                                  isFalse);
         }
+        smt::AssertOp::create(rewriter, loc, anyFinalAssertViolation);
         // Now check if there's a satisfying assignment (i.e., a violation)
         auto finalCheckOp =
             smt::CheckOp::create(rewriter, loc, rewriter.getI1Type());
@@ -5819,6 +5832,7 @@ struct VerifBoundedModelCheckingOpConversion
           rewriter.createBlock(&finalCheckOp.getUnsatRegion());
           smt::YieldOp::create(rewriter, loc, constFalse);
         }
+        smt::PopOp::create(rewriter, loc, 1);
         finalCheckViolated = finalCheckOp.getResult(0);
       }
 
@@ -5918,6 +5932,8 @@ static void populateLTLToSMTConversionPatterns(TypeConverter &converter,
 static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
   if (mode.empty() || mode == "bounded")
     return BMCCheckMode::Bounded;
+  if (mode == "liveness")
+    return BMCCheckMode::Liveness;
   if (mode == "induction-base")
     return BMCCheckMode::InductionBase;
   if (mode == "induction-step")
@@ -5965,7 +5981,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   if (failed(bmcModeOr)) {
     getOperation().emitError()
         << "invalid bmc-mode: '" << bmcMode
-        << "' (expected bounded, induction-base, or induction-step)";
+        << "' (expected bounded, liveness, induction-base, or "
+           "induction-step)";
     signalPassFailure();
     return;
   }
