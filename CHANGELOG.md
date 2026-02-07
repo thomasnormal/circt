@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 458 - February 7, 2026
+
+### Summary
+
+AXI4 AVIP now passes simulation (7th working AVIP). Confirmed stream_unpack fix
+resolves all 7 UVM testbench elaboration failures. Parameterized interface
+deduplication bug discovered and being fixed. sv-tests elaboration now 99.0%+.
+
+### Accomplishments
+
+1. **AXI4 AVIP newly working**
+   - Recompiled from SystemVerilog source using `circt-verilog --ir-hw`
+   - Produces 57MB MLIR, simulates with `--top hvl_top`, exit code 0
+   - Total working AVIPs: APB, AHB, UART, SPI, I2S, I3C, AXI4 (7 of 9)
+
+2. **AVIP recompilation from source**
+   - Recompiled APB (31MB), AHB (32MB), UART (30MB), SPI (33MB) from
+     SystemVerilog source files, replacing stale moore-dialect MLIR
+   - All 5 recompiled AVIPs pass simulation
+
+3. **stream_unpack fix confirmed (b3031c5ec)**
+   - All 7 UVM testbench sv-tests now pass (uvm_agent_active, uvm_agent_env,
+     uvm_agent_passive, uvm_driver_sequencer_env, uvm_monitor_env,
+     uvm_scoreboard_env, uvm_scoreboard_monitor_agent_env, etc.)
+   - sv-tests elaboration: 98.3% → 99.0%+ (1018/1028)
+
+4. **Parameterized interface deduplication bug found and fixing**
+   - `convertInterfaceHeader()` deduplicates by DefinitionSymbol*, which
+     collapses different parameterizations (e.g. WIDTH=16 vs WIDTH=32)
+   - Fix: use `InstanceBodySymbol::hasSameType()` for correct deduplication
+   - AXI4/AXI4Lite do NOT use parameterized interfaces (corrected docs)
+
+### AVIP Status Update
+
+| AVIP | Status | Failure Reason |
+|------|--------|---------------|
+| JTAG | FAIL | 12 enum type casting (`reg[4:0]` → enum), 1 bind/virtual interface |
+| AXI4Lite | FAIL | Timescale errors + duplicate import ambiguity |
+
+### Verification
+
+- circt-sim lit: 162/162 pass
+- sv-tests simulation: 715/776 = 99.2% (0 fail, 0 timeout)
+- sv-tests elaboration: 1018+/1028 = 99.0%+ (10 remaining)
+- All 7 AVIPs: PASS (APB, AHB, UART, SPI, I2S, I3C, AXI4)
+
 ## Iteration 457 - February 7, 2026
 
 ### Summary
@@ -19895,3 +19941,35 @@ CIRCT/slang correctly enforces LRM restrictions.
   - `verilator-verification` BMC smoke (`assert_rose`): PASS
   - `yosys/tests/sva` BMC smoke (`basic00`): PASS (pass/fail variants)
   - OpenTitan LEC smoke (`aes_sbox_canright`): PASS
+
+---
+
+## Iteration 459 - February 7, 2026
+
+### BMC Liveness-Lasso Fairness: Prevent Sampled-True Vacuity
+
+- Hardened `VerifToSMT` liveness-lasso fairness constraints for non-cover
+  `bmc.final` checks.
+- In addition to requiring that each final check is sampled on the selected
+  lasso segment, we now require it to stay unsatisfied on that segment.
+- This prevents spurious lasso witnesses when final assertions are sampled but
+  already true.
+
+### New Regression Test
+
+- Added `test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
+  to lock down the sampled-true vacuity case.
+
+### Validation
+
+- `ninja -C build check-circt-conversion-veriftosmt`: PASS
+- `ninja -C build check-circt-tools-circt-bmc`: PASS
+- External smoke runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`, `BMC_ASSUME_KNOWN_INPUTS=1`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - AVIP APB compile smoke: PASS

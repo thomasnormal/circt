@@ -7,15 +7,15 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 457)
+## Current Status - February 7, 2026 (Iteration 459)
 
 ### Test Results
 
 | Mode | Eligible | Pass | Fail | Rate |
 |------|----------|------|------|------|
 | Parsing | 853 | 853 | 0 | **100%** |
-| Elaboration | 1028 | 1011 | 17 | **98.3%** |
-| Simulation (full) | 775 | 714 | 0 | **99.2%** |
+| Elaboration | 1028 | 1018+ | 10 | **99.0%+** |
+| Simulation (full) | 776 | 715 | 0 | **99.2%** |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** |
 | circt-sim lit | 162 | 162 | 0 | **100%** |
@@ -23,7 +23,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ### AVIP Status
 
-All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
+All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
 
 | AVIP | Status | Notes |
 |------|--------|-------|
@@ -33,14 +33,15 @@ All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | I2S | WORKS | I2sBaseTest, 418ns sim time |
 | I3C | WORKS | i3c_base_test, 466ns sim time |
 | SPI | WORKS | SpiBaseTest, 434ns sim time |
-| JTAG | FAIL | Verilog source type errors |
-| AXI4 | FAIL | Parameterized interface ports not yet supported |
+| AXI4 | WORKS | hvl_top, 57MB MLIR — recompiled from source, passes sim |
+| JTAG | FAIL | 12 enum type casting errors (`reg[4:0]` to enum), 1 bind/virtual interface error |
+| AXI4Lite | FAIL | Timescale errors + duplicate import ambiguity (investigating) |
 
-### Remaining sv-tests Elaboration Failures (17)
+### Remaining sv-tests Elaboration Failures (10)
 
 | Category | Count | Root Cause | Fixable? |
 |----------|-------|-----------|----------|
-| UVM `stream_unpack` | 7 | Streaming ops fail in UVM context — conversion exists but UVM patterns trip it | YES (medium effort) |
+| ~~UVM `stream_unpack`~~ | ~~7~~ | **FIXED** (b3031c5ec): 4-state value extraction before i64 widening | DONE |
 | Queue ops on fixed arrays | 3 | `!llhd.ref`/`!hw.array` type mismatch in LLVM lowering | YES (low effort) |
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
@@ -149,6 +150,68 @@ All 6 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
      X-prop-only equivalence escapes.
    - In-tree assignment-conflict fallback analysis to unblock remaining sv-tests
      diagnostics while upstream Slang work matures.
+
+### Session Summary - Iteration 458
+
+1. **7 AVIPs now passing** (was 6)
+   - Recompiled APB, AHB, UART, SPI from source using `circt-verilog --ir-hw`
+   - AXI4 AVIP newly compiled and passes simulation (57MB MLIR, hvl_top)
+   - All 7 AVIPs pass with `--max-time=500000000`
+   - JTAG fails: 12 enum type casting errors + 1 bind/virtual interface error
+   - AXI4Lite fails: timescale errors + duplicate import ambiguity (investigating)
+
+2. **stream_unpack fix confirmed** (b3031c5ec)
+   - All 7 UVM testbench sv-tests that previously failed now pass
+   - No code change was needed beyond the 4-state value extraction fix from iter 457
+   - Previous test logs were stale (run against older binary)
+   - Elaboration pass rate: 98.3% → 99.0%+ (1018/1028)
+
+3. **Parameterized interface research**
+   - Discovered AXI4/AXI4Lite do NOT actually use parameterized interface ports
+   - Found and fixing a real parameterized interface deduplication bug in
+     `convertInterfaceHeader()` (interfacesByDefinition keyed by DefinitionSymbol
+     collapses different parameterizations)
+
+4. **sv-tests simulation: 99.2%** (715/776 eligible, 0 fail, 0 timeout)
+   - 6 XPASS tests (should-fail tests that unexpectedly pass)
+   - 100 COMPILE_FAIL (expected: SVA Ch16, randomization Ch18, UVM)
+
+### Session Summary - Iteration 459
+
+1. **BMC liveness-lasso fairness hardening**
+   - Strengthened `VerifToSMT` liveness-lasso constraints so non-cover
+     `bmc.final` checks must be sampled and remain unsatisfied along the chosen
+     lasso loop segment.
+   - This closes a vacuity hole where sampled-but-already-satisfied final
+     assertions could still admit a spurious lasso witness.
+
+2. **New regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`.
+   - The test locks the expected UNSAT SMT query shape (`(assert false)`) when
+     the only sampled final assert is trivially true.
+
+3. **Validation**
+   - `check-circt-conversion-veriftosmt`: PASS
+   - `check-circt-tools-circt-bmc`: PASS
+   - External formal smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+     - AVIP APB compile smoke: PASS
+
+4. **Current formal limitations and next features**
+   - OpenTitan equivalence still needs `XPROP_ONLY` acceptance in some paths;
+     we need stronger 4-state initialization and X-correlation modeling.
+   - UVM-heavy formal still carries non-property runtime/reporting noise into
+     lowering; a dedicated formal COI abstraction pass remains the highest
+     leverage cleanup.
+   - Slang `AnalysisManager` instability still blocks robust assignment-conflict
+     diagnostics; an in-tree fallback analysis remains a key long-term target.
 
 ### Previous Session Summary - Iteration 445
 
