@@ -154,7 +154,9 @@ func.func @test_queue_sort_with_abs() {
 
 // CHECK-LABEL: func @test_dyn_array_new
 // CHECK: [[SIZE:%.+]] = hw.constant 10 : i32
-// CHECK: llvm.call @__moore_dyn_array_new([[SIZE]]) : (i32) -> !llvm.struct<(ptr, i64)>
+// CHECK: [[ELEMSIZE:%.+]] = llvm.mlir.constant(4 : i32) : i32
+// CHECK: [[TOTAL:%.+]] = llvm.mul [[SIZE]], [[ELEMSIZE]] : i32
+// CHECK: llvm.call @__moore_dyn_array_new([[TOTAL]]) : (i32) -> !llvm.struct<(ptr, i64)>
 func.func @test_dyn_array_new() {
   %c10 = moore.constant 10 : i32
   %arr = moore.dyn_array.new %c10 : !moore.i32 -> !moore.open_uarray<!moore.i32>
