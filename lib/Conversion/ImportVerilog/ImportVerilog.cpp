@@ -329,6 +329,14 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
       std::make_shared<slang::ast::NonConstantFunction>(
           "$get_initial_random_seed", compilation->getIntType()));
 
+  // $initstate is used in formal verification to indicate the initial state.
+  // It returns 1 during the initial/reset state and 0 otherwise.
+  // We stub it to return bit (value 0) since in simulation we are never in
+  // the formal initial state.
+  compilation->addSystemSubroutine(
+      std::make_shared<slang::ast::NonConstantFunction>(
+          "$initstate", compilation->getBitType()));
+
   for (auto &diag : compilation->getAllDiagnostics())
     driver.diagEngine.issue(diag);
   if (!parseSuccess || driver.diagEngine.getNumErrors() > 0)
