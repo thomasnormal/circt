@@ -318,6 +318,7 @@ struct PruneBMCRegistersPass
       hwModule.walk([&](seq::ToClockOp toClockOp) {
         liveOps.insert(toClockOp);
         addLiveSlice(toClockOp.getInput());
+        liveInputs |= collectInputDeps(toClockOp.getInput());
       });
       hwModule.walk([&](Operation *op) {
         if (isa<AssertOp, AssumeOp, CoverOp, ClockedAssertOp, ClockedAssumeOp,
