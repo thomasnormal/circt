@@ -15952,8 +15952,15 @@ struct StreamUnpackOpConversion
     // Get the source value
     Value srcValue = adaptor.getSrc();
 
-    // Extend or truncate source to i64 for the runtime call
+    // Extend or truncate source to i64 for the runtime call.
+    // If the source is a 4-state type (e.g., !moore.l8), the type converter
+    // will have converted it to a hw::StructType {value: iN, unknown: iN}.
+    // We extract just the value field and discard the unknown bits.
     Type srcType = srcValue.getType();
+    if (isFourStateStructType(srcType)) {
+      srcValue = extractFourStateValue(rewriter, loc, srcValue);
+      srcType = srcValue.getType();
+    }
     if (srcType != i64Ty) {
       if (srcType.isIntOrFloat()) {
         auto srcWidth = srcType.getIntOrFloatBitWidth();
