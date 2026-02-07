@@ -165,34 +165,20 @@ index 327a400..0349403 100644
          while (parent && parent->asSymbol().kind == SymbolKind::InstanceArray) {
              auto& sym = parent->asSymbol().as<InstanceArraySymbol>();
              instanceDims.push_back(sym.range);
-@@ -1772,8 +1778,31 @@ const Expression* PortConnection::getExpression() const {
- 
-     if (connectedSymbol || exprSyntax) {
-         auto& parentInstance = getParentInstance();
+@@ -1772,8 +1778,15 @@ const Expression* PortConnection::getExpression() const {
+
+    if (connectedSymbol || exprSyntax) {
+        auto& parentInstance = getParentInstance();
 -        auto ll = LookupLocation::after(parentInstance);
 -        auto scope = ll.getScope();
 +        const Scope* scope;
 +        LookupLocation ll;
 +        if (auto bindScope = parentInstance.getBindScope()) {
-+            // For bind instances, we need to support name resolution in both
-+            // the target scope (where the bind instance is inserted) and the
-+            // bind directive scope (where the bind statement was written).
-+            // Try the target scope first; if the root name isn't found there,
-+            // fall back to the bind directive scope per LRM 23.11.
-+            ll = LookupLocation::after(parentInstance);
-+            scope = ll.getScope();
-+            if (!connectedSymbol && exprSyntax) {
-+                auto firstToken = exprSyntax->getFirstToken();
-+                if (firstToken.kind == TokenKind::Identifier) {
-+                    auto rootName = firstToken.valueText();
-+                    if (!rootName.empty() &&
-+                        !Lookup::unqualified(*scope, rootName)) {
-+                        scope = bindScope;
-+                        ll = LookupLocation::max;
-+                    }
-+                }
-+            }
-+        } else {
++            // Per LRM 23.11, bind port connections resolve in the bind scope.
++            scope = bindScope;
++            ll = LookupLocation::max;
++        }
++        else {
 +            ll = LookupLocation::after(parentInstance);
 +            scope = ll.getScope();
 +        }

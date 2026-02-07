@@ -23,15 +23,17 @@ struct HierPathValueExprVisitor
   Location loc;
   OpBuilder &builder;
   LogicalResult result = success();
+  const slang::ast::Scope *bindScope = nullptr;
 
   // Such as `sub.a`, the `sub` is the outermost module for the hierarchical
   // variable `a`.
   const slang::ast::Symbol &outermostModule;
 
   HierPathValueExprVisitor(Context &context, Location loc,
-                           const slang::ast::Symbol &outermostModule)
+                           const slang::ast::Symbol &outermostModule,
+                           const slang::ast::Scope *bindScope)
       : context(context), loc(loc), builder(context.builder),
-        outermostModule(outermostModule) {}
+        bindScope(bindScope), outermostModule(outermostModule) {}
 
   void threadInterfaceInstance(const slang::ast::InstanceSymbol *ifaceInst,
                                mlir::StringAttr pathName) {
@@ -137,6 +139,80 @@ struct HierPathValueExprVisitor
     }
     auto *outermostInstBody =
         outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+
+    if (bindScope && outermostInstBody) {
+      const slang::ast::Scope *parentScope = nullptr;
+      if (auto *var = expr.symbol.as_if<slang::ast::VariableSymbol>())
+        parentScope = var->getParentScope();
+      else if (auto *net = expr.symbol.as_if<slang::ast::NetSymbol>())
+        parentScope = net->getParentScope();
+
+      const slang::ast::InstanceBodySymbol *ifaceBody = nullptr;
+      if (parentScope)
+        ifaceBody =
+            parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+
+      if (ifaceBody && ifaceBody->getDefinition().definitionKind ==
+                           slang::ast::DefinitionKind::Interface) {
+        const slang::ast::Scope *bindPortScope = bindScope;
+        if (auto *bindScopeInst = bindScope->getContainingInstance())
+          bindPortScope = bindScopeInst;
+
+        const slang::ast::InstanceBodySymbol *bindPortBody = nullptr;
+        if (bindPortScope)
+          bindPortBody = bindPortScope->asSymbol()
+                             .as_if<slang::ast::InstanceBodySymbol>();
+
+        if (bindPortBody) {
+          const slang::ast::InterfacePortSymbol *matchedPort = nullptr;
+          for (auto *portSym : bindPortBody->getPortList()) {
+            auto *ifacePort =
+                portSym->as_if<slang::ast::InterfacePortSymbol>();
+            if (!ifacePort || !ifacePort->interfaceDef)
+              continue;
+            if (ifacePort->interfaceDef != &ifaceBody->getDefinition())
+              continue;
+            if (matchedPort) {
+              matchedPort = nullptr;
+              break;
+            }
+            matchedPort = ifacePort;
+          }
+          if (matchedPort) {
+            auto &ports = context.bindScopeInterfacePorts[outermostInstBody];
+            bool exists = llvm::any_of(ports, [&](const auto &info) {
+              return info.ifacePort == matchedPort;
+            });
+            if (!exists)
+              ports.push_back({matchedPort, std::nullopt});
+          }
+        }
+      }
+    }
+
+    // If this reference is through an interface port in a bind scope, record
+    // the interface port for threading into the target module.
+    if (bindScope && outermostInstBody && expr.ref.isViaIfacePort()) {
+      auto *bindScopeInst = bindScope->getContainingInstance();
+      for (const auto &elem : expr.ref.path) {
+        auto *ifacePort =
+            elem.symbol->as_if<slang::ast::InterfacePortSymbol>();
+        if (!ifacePort)
+          continue;
+        auto *portParent = ifacePort->getParentScope();
+        if (!portParent ||
+            !(portParent == bindScope ||
+              (bindScopeInst && portParent == bindScopeInst)))
+          continue;
+        auto &ports = context.bindScopeInterfacePorts[outermostInstBody];
+        bool exists = llvm::any_of(ports, [&](const auto &info) {
+          return info.ifacePort == ifacePort;
+        });
+        if (!exists)
+          ports.push_back({ifacePort, std::nullopt});
+        return;
+      }
+    }
 
     // Handle hierarchical references to interface instances directly.
     if (auto *ifaceInst =
@@ -481,8 +557,9 @@ struct BindAssertionExprVisitor
   LogicalResult result = success();
 
   BindAssertionExprVisitor(Context &context, Location loc,
-                           const slang::ast::Symbol &outermostModule)
-      : exprVisitor(context, loc, outermostModule) {}
+                           const slang::ast::Symbol &outermostModule,
+                           const slang::ast::Scope *bindScope)
+      : exprVisitor(context, loc, outermostModule, bindScope) {}
 
   void handle(const slang::ast::HierarchicalValueExpression &expr) {
     if (failed(result))
@@ -504,9 +581,10 @@ struct BindAssertionExprVisitor
 
 LogicalResult
 Context::collectHierarchicalValues(const slang::ast::Expression &expr,
-                                   const slang::ast::Symbol &outermostModule) {
+                                   const slang::ast::Symbol &outermostModule,
+                                   const slang::ast::Scope *bindScope) {
   auto loc = convertLocation(expr.sourceRange);
-  HierPathValueExprVisitor visitor(*this, loc, outermostModule);
+  HierPathValueExprVisitor visitor(*this, loc, outermostModule, bindScope);
   expr.visit(visitor);
   return visitor.result;
 }
@@ -528,9 +606,6 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
 
   for (const auto &entry : node->binds) {
     const auto &bindInfo = entry.first;
-    const auto *targetDefSyntax = entry.second;
-    if (targetDefSyntax)
-      continue;
     auto *bindSyntax = bindInfo.bindSyntax;
     if (!bindSyntax)
       continue;
@@ -542,7 +617,9 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
                                       slang::ast::LookupLocation::max);
 
     auto collectFromPropertyExpr =
-        [&](const slang::syntax::PropertyExprSyntax &syntax) -> LogicalResult {
+        [&](const slang::syntax::PropertyExprSyntax &syntax,
+            const slang::ast::InstanceBodySymbol &outermostModule)
+        -> LogicalResult {
       if (syntax.kind == slang::syntax::SyntaxKind::SimplePropertyExpr) {
         auto seqExpr = syntax.as<slang::syntax::SimplePropertyExprSyntax>().expr;
         if (seqExpr->kind == slang::syntax::SyntaxKind::SimpleSequenceExpr) {
@@ -553,7 +630,8 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
                 slang::ast::Expression::bind(*simpleSeq.expr, astContext);
             if (expr.bad())
               return failure();
-            return context.collectHierarchicalValues(expr, body);
+            return context.collectHierarchicalValues(expr, outermostModule,
+                                                    bindScope);
           }
         }
       }
@@ -561,10 +639,22 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
       const auto &expr = slang::ast::AssertionExpr::bind(
           syntax, astContext, /*allowDisable=*/true);
       auto loc = context.convertLocation(syntax.sourceRange());
-      BindAssertionExprVisitor visitor(context, loc, body);
+      BindAssertionExprVisitor visitor(context, loc, outermostModule, bindScope);
       expr.visit(visitor);
       return visitor.result;
     };
+
+    const slang::ast::InstanceBodySymbol *bindTargetBody = &body;
+    if (bindScope && bindSyntax->target) {
+      const auto &targetExpr =
+          slang::ast::Expression::bind(*bindSyntax->target, astContext);
+      if (!targetExpr.bad()) {
+        if (auto *sym = targetExpr.getSymbolReference()) {
+          if (auto *inst = sym->as_if<slang::ast::InstanceSymbol>())
+            bindTargetBody = &inst->body;
+        }
+      }
+    }
 
     auto collectFromCheckerInstances =
         [&](const auto &instances) -> LogicalResult {
@@ -575,7 +665,7 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
                       slang::syntax::OrderedPortConnectionSyntax>()) {
             if (!ordered->expr)
               continue;
-            if (failed(collectFromPropertyExpr(*ordered->expr)))
+            if (failed(collectFromPropertyExpr(*ordered->expr, *bindTargetBody)))
               return failure();
             continue;
           }
@@ -584,7 +674,34 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
                       slang::syntax::NamedPortConnectionSyntax>()) {
             if (!named->expr)
               continue;
-            if (failed(collectFromPropertyExpr(*named->expr)))
+            if (failed(collectFromPropertyExpr(*named->expr, *bindTargetBody)))
+              return failure();
+            continue;
+          }
+        }
+      }
+      return success();
+    };
+
+    auto collectFromHierarchyInstances =
+        [&](const auto &instances) -> LogicalResult {
+      for (auto *inst : instances) {
+        for (auto *conn : inst->connections) {
+          if (auto *ordered =
+                  conn->template as_if<
+                      slang::syntax::OrderedPortConnectionSyntax>()) {
+            if (!ordered->expr)
+              continue;
+            if (failed(collectFromPropertyExpr(*ordered->expr, *bindTargetBody)))
+              return failure();
+            continue;
+          }
+          if (auto *named =
+                  conn->template as_if<
+                      slang::syntax::NamedPortConnectionSyntax>()) {
+            if (!named->expr)
+              continue;
+            if (failed(collectFromPropertyExpr(*named->expr, *bindTargetBody)))
               return failure();
             continue;
           }
@@ -598,6 +715,10 @@ static LogicalResult collectBindDirectiveHierarchicalValues(
     if (auto *checker = bindSyntax->instantiation->template as_if<
             slang::syntax::CheckerInstantiationSyntax>()) {
       if (failed(collectFromCheckerInstances(checker->instances)))
+        return failure();
+    } else if (auto *hierarchy = bindSyntax->instantiation->template as_if<
+                   slang::syntax::HierarchyInstantiationSyntax>()) {
+      if (failed(collectFromHierarchyInstances(hierarchy->instances)))
         return failure();
     }
   }
@@ -624,75 +745,12 @@ struct InstBodyVisitor {
   // Handle instances.
   LogicalResult visit(const slang::ast::InstanceSymbol &instNode) {
     auto &outermostModule = getOutermostModule(*instNode.getParentScope());
+    auto *bindScope = instNode.getBindScope();
     for (const auto *con : instNode.getPortConnections()) {
       if (const auto *expr = con->getExpression())
-        if (failed(context.collectHierarchicalValues(*expr, outermostModule)))
+        if (failed(context.collectHierarchicalValues(*expr, outermostModule,
+                                                     bindScope)))
           return failure();
-    }
-
-    // Check if this is a bound instance (has a bind scope)
-    if (auto *bindScope = instNode.getBindScope()) {
-      // For bound instances, analyze port connections that might reference
-      // interface ports from the bind scope
-      if (bindScope->getContainingInstance()) {
-        for (const auto *con : instNode.getPortConnections()) {
-          // Check if the port connection expression references an interface
-          // port from the bind scope
-          const auto *expr = con->getExpression();
-          if (!expr)
-            continue;
-
-          // Look for hierarchical value expressions that go through interface
-          // ports
-          auto checkExpr =
-              [&](const slang::ast::HierarchicalValueExpression &hierExpr) {
-                if (!hierExpr.ref.isViaIfacePort())
-                  return;
-                // Find the interface port in the path
-                for (const auto &elem : hierExpr.ref.path) {
-                  if (auto *ifacePort =
-                          elem.symbol
-                              ->as_if<slang::ast::InterfacePortSymbol>()) {
-                    // Check if this interface port is from the bind scope
-                    auto *portParent = ifacePort->getParentScope();
-                    if (portParent && portParent == bindScope) {
-                      // This interface port needs to be threaded to the target
-                      // module
-                      auto *targetBody =
-                          instNode.getParentScope()->getContainingInstance();
-                      if (targetBody) {
-                        // Check if we already have this interface port
-                        auto &ports =
-                            context.bindScopeInterfacePorts[targetBody];
-                        bool exists = llvm::any_of(
-                            ports, [&](const BindScopeInterfacePortInfo &info) {
-                              return info.ifacePort == ifacePort;
-                            });
-                        if (!exists) {
-                          ports.push_back({ifacePort, std::nullopt});
-                        }
-                      }
-                    }
-                    break;
-                  }
-                }
-              };
-
-          // Recursively visit the expression to find hierarchical value exprs
-          struct HierExprVisitor
-              : public slang::ast::ASTVisitor<HierExprVisitor, false, true,
-                                              true> {
-            std::function<void(const slang::ast::HierarchicalValueExpression &)>
-                callback;
-            void handle(const slang::ast::HierarchicalValueExpression &expr) {
-              callback(expr);
-            }
-          };
-          HierExprVisitor visitor;
-          visitor.callback = checkExpr;
-          expr->visit(visitor);
-        }
-      }
     }
     return context.traverseInstanceBody(instNode.body);
   }

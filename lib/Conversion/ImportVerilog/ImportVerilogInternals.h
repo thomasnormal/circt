@@ -331,7 +331,8 @@ struct Context {
   // Traverse the whole AST to collect hierarchical names.
   LogicalResult
   collectHierarchicalValues(const slang::ast::Expression &expr,
-                            const slang::ast::Symbol &outermostModule);
+                            const slang::ast::Symbol &outermostModule,
+                            const slang::ast::Scope *bindScope = nullptr);
   LogicalResult
   collectHierarchicalValuesFromStatement(const slang::ast::Statement &stmt,
                                          const slang::ast::Symbol &outermostModule);

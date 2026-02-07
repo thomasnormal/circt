@@ -309,6 +309,10 @@ keeping memory growth controlled.
   - Command: `CIRCT_LEC_ARGS="--mlir-disable-threading --print-counterexample --print-solver-output" utils/run_opentitan_circt_lec.py --impl-filter canright --keep-workdir`
   - Model (packed value+unknown): `op_i=4'h8`, `data_i=16'h9C04`, outputs `c1=16'h000A`, `c2=16'h00FE`.
 
+### New Findings (2026-02-06, Iteration 429 - Bind Generate Scope Interface Ports)
+- **Bind generate scope interface ports**: bind directives inside generate scopes now collect interface port connections for threading into bound modules.
+- **Regression coverage**: added `test/Conversion/ImportVerilog/bind-interface-generate-scope.sv`.
+
 ### New Findings (2026-02-06, Iteration 413 - Sampled Explicit Clocking + Disable)
 - **Sampled explicit clocking + disable**: added regression for `$rose` with explicit clocking under default disable to ensure gating is preserved.
 - **Regression coverage**: added `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`.
@@ -552,6 +556,7 @@ All key regression suites **ALL CLEAN**. circt-sim 99p/1xf, unit tests 23/23, fo
 1. **Sequence operator completeness** - `throughout/within/intersect/first_match`, open-ended ranges, and repetition operators (`[->]`, `[=]`) as first-class IR. Sequence event controls now handle `@seq` symbol references; property event controls remain unsupported.
 2. **Default clocking / disable semantics** - Ensure sampled value functions and `$past` honor default clocking and default disable iff.
 3. **Bind + hierarchy** - ✅ Landed sibling/LCA interface threading for bind port connections; still need param/genvar-heavy coverage and OpenTitan formal validation.
+   - ✅ Fixed bind-scope interface member access (e.g. `bus.clk`) by resolving bind port-connection expressions in the bind scope via slang patch; added regression coverage.
 4. **Liveness / k-induction** - Add liveness encoding and k-induction modes for unbounded properties in circt-bmc.
 5. **Trace UX** - Hierarchical mapping + clock-domain annotations for counterexamples.
 
