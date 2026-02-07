@@ -19526,3 +19526,31 @@ CIRCT/slang correctly enforces LRM restrictions.
 ### Test Baselines Verified
 - yosys SVA BMC: 14/16 (87.5%) - maintained
 - All other baselines from Iteration 179 maintained
+
+---
+
+## Iteration 453 - February 7, 2026
+
+### Slang Option Wiring: `-l` and `--suppress-warnings`
+
+- Wired `ImportVerilogOptions::libraryFiles` into Slang source loading by
+  forwarding `-l` entries to `sourceLoader.addLibraryFiles(...)`.
+- Wired `ImportVerilogOptions::suppressWarningsPaths` into Slang diagnostics by
+  forwarding `--suppress-warnings` entries to `diagEngine.addIgnorePaths(...)`.
+- Added comma-list handling for both option vectors so behavior matches Slang's
+  native command-line handling.
+
+### New Regression Tests
+
+- `test/circt-verilog/library-files.sv`
+  - Verifies `-l` injects library sources into preprocessing input (`-E` path).
+- `test/circt-verilog/suppress-warnings.sv`
+  - Verifies `--suppress-warnings=%s` suppresses `-Windex-oob` diagnostics in
+    `--lint-only` mode.
+
+### Validation
+
+- Manual checks with `FileCheck` passed for both new tests using a stable
+  `circt-verilog` snapshot binary:
+  - `library-files.sv` (`NO-LIB` / `WITH-LIB`)
+  - `suppress-warnings.sv` (`NO-SUPPRESS` / `SUPPRESS`)
