@@ -310,6 +310,25 @@ support. All 5 former timeout tests now pass. Full simulation suite:
 - 24/24 circt-sim unit tests pass
 - bind-interface-generate-scope.sv FileCheck passes
 
+## Iteration 431 - February 7, 2026
+
+### Summary
+
+Iteration 431: Tightened `first_match` boundedness checks for intersect/and
+compositions that include unbounded repetitions.
+
+### Accomplishments
+
+1. **Conservative bounds for intersect/and** - Treat unbounded operands as
+   unbounded when deriving sequence length bounds, so `first_match` rejects
+   sequences that cannot be proven bounded.
+2. **Regression coverage** - Added a `first_match` diagnostic for
+   nonconsecutive-repeat intersected with a bounded sequence.
+
+### Verification (February 7, 2026)
+
+- `build/bin/circt-translate --import-verilog --verify-diagnostics --split-input-file test/Conversion/ImportVerilog/errors.sv`
+
 ## Iteration 430 - February 7, 2026
 
 ### Summary

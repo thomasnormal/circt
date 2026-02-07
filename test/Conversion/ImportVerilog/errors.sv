@@ -81,6 +81,13 @@ endmodule
 
 // -----
 module Foo;
+  logic a, b, c;
+  // expected-error @below {{first_match requires a bounded sequence}}
+  assert property (first_match((a [=2]) intersect (b ##1 c)));
+endmodule
+
+// -----
+module Foo;
   logic clk, a;
   // expected-error @below {{first_match requires a bounded sequence}}
   assert property (first_match(@(posedge clk) (a [=2])));
