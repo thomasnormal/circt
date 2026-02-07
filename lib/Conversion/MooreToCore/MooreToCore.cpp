@@ -6220,14 +6220,17 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     auto loc = op.getLoc();
     auto kind = op.getKind();
 
-    // Support wire, interconnect, supply0, and supply1 nets.
+    // Support wire, tri, uwire, interconnect, supply0, and supply1 nets.
+    // Tri nets behave identically to wire nets (multiple drivers produce X).
+    // UWire is a single-driver wire (lowered the same as wire).
     // Interconnect nets are used for connecting signals with potentially
     // different types but can be treated as wires for lowering purposes.
     // Supply0/supply1 are constant-driven nets (ground/power).
-    if (kind != NetKind::Wire && kind != NetKind::Interconnect &&
+    if (kind != NetKind::Wire && kind != NetKind::Tri &&
+        kind != NetKind::UWire && kind != NetKind::Interconnect &&
         kind != NetKind::Supply0 && kind != NetKind::Supply1)
       return rewriter.notifyMatchFailure(
-          loc, "only wire/interconnect/supply0/supply1 nets supported");
+          loc, "only wire/tri/uwire/interconnect/supply nets supported");
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
     if (!resultType)
