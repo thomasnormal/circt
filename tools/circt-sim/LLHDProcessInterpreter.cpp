@@ -3529,6 +3529,13 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   ProcessExecutionState &state = it->second;
 
+  // Cache the active process state to avoid repeated std::map lookups
+  // in executeStep/getValue/setValue on every operation.
+  ProcessId savedActiveProcessId = activeProcessId;
+  ProcessExecutionState *savedActiveProcessState = activeProcessState;
+  activeProcessId = procId;
+  activeProcessState = &state;
+
   // Check if this process is waiting on a memory event.
   // If so, check if the memory value has changed before proceeding.
   auto memWaiterIt = memoryEventWaiters.find(procId);
@@ -3900,14 +3907,26 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         targetTime, SchedulingRegion::Active,
         Event([this, procId]() { resumeProcess(procId); }));
   }
+
+  // Restore the previously active process state.
+  activeProcessId = savedActiveProcessId;
+  activeProcessState = savedActiveProcessState;
 }
 
 bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
-  auto it = processStates.find(procId);
-  if (it == processStates.end())
-    return false;
+  // Use the cached active process state when available to avoid
+  // an O(log n) std::map lookup on every single operation.
+  ProcessExecutionState *statePtr;
+  if (procId == activeProcessId && activeProcessState) {
+    statePtr = activeProcessState;
+  } else {
+    auto it = processStates.find(procId);
+    if (it == processStates.end())
+      return false;
+    statePtr = &it->second;
+  }
 
-  ProcessExecutionState &state = it->second;
+  ProcessExecutionState &state = *statePtr;
 
   // Check if we've reached the end of the block
   if (state.currentOp == state.currentBlock->end()) {
@@ -4220,14 +4239,15 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
 
   // Control flow operations
   if (auto branchOp = dyn_cast<mlir::cf::BranchOp>(op)) {
-    auto &state = processStates[procId];
-    state.currentBlock = branchOp.getDest();
-    state.currentOp = state.currentBlock->begin();
+    auto *statePtr = (procId == activeProcessId && activeProcessState)
+                         ? activeProcessState : &processStates[procId];
+    statePtr->currentBlock = branchOp.getDest();
+    statePtr->currentOp = statePtr->currentBlock->begin();
 
     // Transfer operands to block arguments
-    for (auto [arg, operand] : llvm::zip(state.currentBlock->getArguments(),
+    for (auto [arg, operand] : llvm::zip(statePtr->currentBlock->getArguments(),
                                           branchOp.getDestOperands())) {
-      state.valueMap[arg] = getValue(procId, operand);
+      statePtr->valueMap[arg] = getValue(procId, operand);
       if (isa<llhd::RefType>(arg.getType())) {
         if (SignalId sigId = resolveSignalId(operand))
           valueToSignal[arg] = sigId;
@@ -4239,17 +4259,18 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   if (auto condBranchOp = dyn_cast<mlir::cf::CondBranchOp>(op)) {
-    auto &state = processStates[procId];
+    auto *statePtr = (procId == activeProcessId && activeProcessState)
+                         ? activeProcessState : &processStates[procId];
     InterpretedValue cond = getValue(procId, condBranchOp.getCondition());
 
     if (!cond.isX() && cond.getUInt64() != 0) {
       // True branch
-      state.currentBlock = condBranchOp.getTrueDest();
-      state.currentOp = state.currentBlock->begin();
+      statePtr->currentBlock = condBranchOp.getTrueDest();
+      statePtr->currentOp = statePtr->currentBlock->begin();
       for (auto [arg, operand] :
-           llvm::zip(state.currentBlock->getArguments(),
+           llvm::zip(statePtr->currentBlock->getArguments(),
                      condBranchOp.getTrueDestOperands())) {
-        state.valueMap[arg] = getValue(procId, operand);
+        statePtr->valueMap[arg] = getValue(procId, operand);
         if (isa<llhd::RefType>(arg.getType())) {
           if (SignalId sigId = resolveSignalId(operand))
             valueToSignal[arg] = sigId;
@@ -4259,12 +4280,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
       }
     } else {
       // False branch (or X treated as false)
-      state.currentBlock = condBranchOp.getFalseDest();
-      state.currentOp = state.currentBlock->begin();
+      statePtr->currentBlock = condBranchOp.getFalseDest();
+      statePtr->currentOp = statePtr->currentBlock->begin();
       for (auto [arg, operand] :
-           llvm::zip(state.currentBlock->getArguments(),
+           llvm::zip(statePtr->currentBlock->getArguments(),
                      condBranchOp.getFalseDestOperands())) {
-        state.valueMap[arg] = getValue(procId, operand);
+        statePtr->valueMap[arg] = getValue(procId, operand);
         if (isa<llhd::RefType>(arg.getType())) {
           if (SignalId sigId = resolveSignalId(operand))
             valueToSignal[arg] = sigId;
@@ -10126,9 +10147,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
 InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
                                                    Value value) {
-  auto it = processStates.find(procId);
-  if (it == processStates.end())
-    return InterpretedValue::makeX(getTypeWidth(value.getType()));
+  // Use the cached active process state when available to avoid
+  // an O(log n) std::map lookup on every getValue call.
+  ProcessExecutionState *statePtr;
+  if (procId == activeProcessId && activeProcessState) {
+    statePtr = activeProcessState;
+  } else {
+    auto it = processStates.find(procId);
+    if (it == processStates.end())
+      return InterpretedValue::makeX(getTypeWidth(value.getType()));
+    statePtr = &it->second;
+  }
 
   // Check the cache FIRST. If a value has been explicitly set (e.g., by
   // interpretProbe when the probe operation was executed), use that cached
@@ -10140,7 +10169,7 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
   //   %edge = comb.and %new, (not %old)  // needs OLD cached value for %old
   // Without this check, signal values would be re-read every time, causing
   // %old to return the current (new) value instead of the cached old value.
-  auto &valueMap = it->second.valueMap;
+  auto &valueMap = statePtr->valueMap;
   auto valIt = valueMap.find(value);
   if (valIt != valueMap.end())
     return valIt->second;
@@ -10610,6 +10639,11 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
 
 void LLHDProcessInterpreter::setValue(ProcessId procId, Value value,
                                        InterpretedValue val) {
+  // Use the cached active process state when available.
+  if (procId == activeProcessId && activeProcessState) {
+    activeProcessState->valueMap[value] = val;
+    return;
+  }
   auto it = processStates.find(procId);
   if (it == processStates.end())
     return;
@@ -10618,9 +10652,23 @@ void LLHDProcessInterpreter::setValue(ProcessId procId, Value value,
 }
 
 unsigned LLHDProcessInterpreter::getTypeWidth(Type type) {
-  // Handle integer types
+  // Fast path for integer types (most common case) - no cache needed.
   if (auto intType = dyn_cast<IntegerType>(type))
     return intType.getWidth();
+
+  // Check the cache for composite/complex types to avoid repeated recursive
+  // computation (struct/array types recurse through all elements).
+  static llvm::DenseMap<Type, unsigned> typeWidthCache;
+  auto cacheIt = typeWidthCache.find(type);
+  if (cacheIt != typeWidthCache.end())
+    return cacheIt->second;
+
+  unsigned result = getTypeWidthUncached(type);
+  typeWidthCache[type] = result;
+  return result;
+}
+
+unsigned LLHDProcessInterpreter::getTypeWidthUncached(Type type) {
 
   // Handle LLHD ref types
   if (auto refType = dyn_cast<llhd::RefType>(type))
@@ -17917,9 +17965,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     ProcessId procId, LLVM::LLVMFuncOp funcOp, ArrayRef<InterpretedValue> args,
     SmallVectorImpl<InterpretedValue> &results, ArrayRef<Value> callOperands,
     Operation *callerOp, Block *resumeBlock, Block::iterator resumeOp) {
-  // IMPORTANT: Do NOT hold a reference to processStates[procId] across operations
-  // that may modify processStates (e.g., interpretOperation can create fork
-  // children or runtime signals). DenseMap may reallocate, invalidating refs.
+  // NOTE: processStates uses std::map which guarantees reference stability
+  // across inserts/erases, so we can safely cache a pointer to the state.
+  // Use the activeProcessState cache when available to avoid std::map lookups.
+  ProcessExecutionState *cachedState =
+      (procId == activeProcessId && activeProcessState) ? activeProcessState
+                                                         : &processStates[procId];
 
   // Map arguments to block arguments
   Block &entryBlock = funcOp.getBody().front();
@@ -17937,23 +17988,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   llvm::DenseMap<Value, InterpretedValue> savedFuncValues;
   llvm::DenseMap<Value, MemoryBlock> savedFuncMemBlocks;
   if (isRecursive) {
-    auto &state = processStates[procId];
     for (Block &block : funcOp.getBody()) {
       for (auto arg : block.getArguments()) {
-        auto it = state.valueMap.find(arg);
-        if (it != state.valueMap.end())
+        auto it = cachedState->valueMap.find(arg);
+        if (it != cachedState->valueMap.end())
           savedFuncValues[arg] = it->second;
-        auto mIt = state.memoryBlocks.find(arg);
-        if (mIt != state.memoryBlocks.end())
+        auto mIt = cachedState->memoryBlocks.find(arg);
+        if (mIt != cachedState->memoryBlocks.end())
           savedFuncMemBlocks[arg] = mIt->second;
       }
       for (Operation &op : block) {
         for (auto result : op.getResults()) {
-          auto it = state.valueMap.find(result);
-          if (it != state.valueMap.end())
+          auto it = cachedState->valueMap.find(result);
+          if (it != cachedState->valueMap.end())
             savedFuncValues[result] = it->second;
-          auto mIt = state.memoryBlocks.find(result);
-          if (mIt != state.memoryBlocks.end())
+          auto mIt = cachedState->memoryBlocks.find(result);
+          if (mIt != cachedState->memoryBlocks.end())
             savedFuncMemBlocks[result] = mIt->second;
         }
       }
@@ -17963,7 +18013,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   for (auto [idx, blockArg] :
        llvm::enumerate(entryBlock.getArguments())) {
     if (idx < args.size())
-      processStates[procId].valueMap[blockArg] = args[idx];
+      cachedState->valueMap[blockArg] = args[idx];
 
     // If call operands are provided, create signal mappings for BlockArguments
     // when the corresponding call operand resolves to a signal ID.
@@ -17983,18 +18033,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   auto restoreSavedFuncValues = [&]() {
     --funcCallDepth[funcKey];
     if (isRecursive) {
-      auto &state = processStates[procId];
       for (const auto &[val, saved] : savedFuncValues)
-        state.valueMap[val] = saved;
+        cachedState->valueMap[val] = saved;
       for (auto &[val, saved] : savedFuncMemBlocks)
-        state.memoryBlocks[val] = saved;
+        cachedState->memoryBlocks[val] = saved;
     }
   };
 
   // Set current function name for progress reporting and save previous
-  auto &funcState = processStates[procId];
-  std::string prevFuncName = funcState.currentFuncName;
-  funcState.currentFuncName = funcOp.getName().str();
+  std::string prevFuncName = cachedState->currentFuncName;
+  cachedState->currentFuncName = funcOp.getName().str();
 
   // Helper to clean up temporary signal mappings and restore values
   auto cleanupTempMappings = [&]() {
@@ -18003,9 +18051,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
     }
     restoreSavedFuncValues();
     // Restore previous function name
-    auto it = processStates.find(procId);
-    if (it != processStates.end())
-      it->second.currentFuncName = prevFuncName;
+    cachedState->currentFuncName = prevFuncName;
   };
 
   // Execute the function body with operation limit to prevent infinite loops
@@ -18037,41 +18083,38 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       ++opCount;
       // Track func body steps in process state for global step limiting
       {
-        auto stIt = processStates.find(procId);
-        if (stIt != processStates.end()) {
-          ++stIt->second.totalSteps;
-          ++stIt->second.funcBodySteps;
+          ++cachedState->totalSteps;
+          ++cachedState->funcBodySteps;
           // Progress report every 10M func body steps
-          if (stIt->second.funcBodySteps % 10000000 == 0) {
+          if (cachedState->funcBodySteps % 10000000 == 0) {
             llvm::errs() << "[circt-sim] func progress: process " << procId
-                         << " funcBodySteps=" << stIt->second.funcBodySteps
-                         << " totalSteps=" << stIt->second.totalSteps
+                         << " funcBodySteps=" << cachedState->funcBodySteps
+                         << " totalSteps=" << cachedState->totalSteps
                          << " in '" << funcOp.getName() << "'"
-                         << " (callDepth=" << stIt->second.callDepth << ")"
+                         << " (callDepth=" << cachedState->callDepth << ")"
                          << " op=" << op.getName().getStringRef()
                          << "\n";
           }
           // Enforce global process step limit inside function bodies
           if (maxProcessSteps > 0 &&
-              stIt->second.totalSteps > (size_t)maxProcessSteps) {
+              cachedState->totalSteps > (size_t)maxProcessSteps) {
             llvm::errs()
                 << "[circt-sim] ERROR(PROCESS_STEP_OVERFLOW in func): process "
                 << procId << " exceeded " << maxProcessSteps
                 << " total steps in LLVM function '" << funcOp.getName() << "'"
-                << " (totalSteps=" << stIt->second.totalSteps << ")\n";
-            stIt->second.halted = true;
+                << " (totalSteps=" << cachedState->totalSteps << ")\n";
+            cachedState->halted = true;
             cleanupTempMappings();
             return failure();
           }
           // Periodically check for abort (timeout watchdog)
-          if (stIt->second.funcBodySteps % 10000 == 0 && isAbortRequested()) {
-            stIt->second.halted = true;
+          if (cachedState->funcBodySteps % 10000 == 0 && isAbortRequested()) {
+            cachedState->halted = true;
             cleanupTempMappings();
             if (abortCallback)
               abortCallback();
             return failure();
           }
-        }
       }
       if (opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: LLVM function '"
@@ -18096,7 +18139,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
         currentBlock = branchOp.getDest();
         for (auto [blockArg, operand] :
              llvm::zip(currentBlock->getArguments(), branchOp.getDestOperands())) {
-          processStates[procId].valueMap[blockArg] = getValue(procId, operand);
+          cachedState->valueMap[blockArg] = getValue(procId, operand);
         }
         tookBranch = true;
         break;
@@ -18110,14 +18153,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
           for (auto [blockArg, operand] :
                llvm::zip(currentBlock->getArguments(),
                         condBrOp.getTrueDestOperands())) {
-            processStates[procId].valueMap[blockArg] = getValue(procId, operand);
+            cachedState->valueMap[blockArg] = getValue(procId, operand);
           }
         } else {
           currentBlock = condBrOp.getFalseDest();
           for (auto [blockArg, operand] :
                llvm::zip(currentBlock->getArguments(),
                         condBrOp.getFalseDestOperands())) {
-            processStates[procId].valueMap[blockArg] = getValue(procId, operand);
+            cachedState->valueMap[blockArg] = getValue(procId, operand);
           }
         }
         tookBranch = true;
@@ -18140,16 +18183,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       // Check if process was halted or is waiting (e.g., by sim.terminate,
       // llvm.unreachable, moore.wait_event, or __moore_delay). Save a call
       // stack frame so the function can be resumed from the correct position.
-      {
-        auto it = processStates.find(procId);
-        if (it != processStates.end() &&
-            (it->second.halted || it->second.waiting)) {
+      if (cachedState->halted || cachedState->waiting) {
           LLVM_DEBUG(llvm::dbgs()
                      << "  Process halted/waiting during LLVM function body '"
                      << funcOp.getName() << "'\n");
 
           // If waiting (not halted), save a call stack frame for resumption
-          if (it->second.waiting && callerOp) {
+          if (cachedState->waiting && callerOp) {
             auto nextOpIt = opIt;
             ++nextOpIt;
 
@@ -18160,7 +18200,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
               frame.args.assign(args.begin(), args.end());
               frame.callOperands.assign(callOperands.begin(),
                                         callOperands.end());
-              it->second.callStack.push_back(std::move(frame));
+              cachedState->callStack.push_back(std::move(frame));
               LLVM_DEBUG(llvm::dbgs()
                          << "    Saved LLVM call frame for function '"
                          << funcOp.getName() << "' with " << args.size()
@@ -18170,7 +18210,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
 
           cleanupTempMappings();
           return success();
-        }
       }
     }
 
@@ -18503,8 +18542,45 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
   // Clean up the temporary process state
   processStates.erase(tempProcId);
 
+  // Pre-populate all constant ops into moduleInitValueMap so that getValue()
+  // finds them with a single DenseMap lookup (at the moduleInitValueMap check)
+  // instead of falling through to multiple dyn_cast checks per constant.
+  unsigned constantsPrepopulated = 0;
+  hwModule->walk([&](Operation *op) {
+    if (auto constOp = dyn_cast<hw::ConstantOp>(op)) {
+      if (!moduleInitValueMap.count(constOp.getResult())) {
+        moduleInitValueMap[constOp.getResult()] =
+            InterpretedValue(constOp.getValue());
+        ++constantsPrepopulated;
+      }
+    } else if (auto arithConstOp = dyn_cast<arith::ConstantOp>(op)) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
+        if (!moduleInitValueMap.count(arithConstOp.getResult())) {
+          moduleInitValueMap[arithConstOp.getResult()] =
+              InterpretedValue(intAttr.getValue());
+          ++constantsPrepopulated;
+        }
+      }
+    } else if (auto llvmConstOp = dyn_cast<LLVM::ConstantOp>(op)) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(llvmConstOp.getValue())) {
+        if (!moduleInitValueMap.count(llvmConstOp.getResult())) {
+          moduleInitValueMap[llvmConstOp.getResult()] =
+              InterpretedValue(intAttr.getValue());
+          ++constantsPrepopulated;
+        }
+      }
+    } else if (auto aggConstOp = dyn_cast<hw::AggregateConstantOp>(op)) {
+      if (!moduleInitValueMap.count(aggConstOp.getResult())) {
+        moduleInitValueMap[aggConstOp.getResult()] =
+            InterpretedValue(flattenAggregateConstant(aggConstOp));
+        ++constantsPrepopulated;
+      }
+    }
+  });
+
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed " << opsExecuted
-                          << " module-level LLVM ops\n");
+                          << " module-level LLVM ops, pre-populated "
+                          << constantsPrepopulated << " constants\n");
 
   return success();
 }

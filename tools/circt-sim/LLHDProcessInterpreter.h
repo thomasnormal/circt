@@ -552,7 +552,9 @@ public:
   }
 
   /// Get the bit width of a type. Made public for use by helper functions.
+  /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
   static unsigned getTypeWidth(mlir::Type type);
+  static unsigned getTypeWidthUncached(mlir::Type type);
   /// Determine signal encoding based on the type.
   static SignalEncoding getSignalEncoding(mlir::Type type);
 
@@ -1031,6 +1033,12 @@ private:
   /// `auto &state = processStates[procId]`).  std::map provides stable
   /// references across inserts and erases.
   std::map<ProcessId, ProcessExecutionState> processStates;
+
+  /// Cached active process state for the currently-executing process.
+  /// Set by executeProcess() to avoid repeated std::map lookups in
+  /// getValue()/setValue()/executeStep() on every operation.
+  ProcessId activeProcessId = 0;
+  ProcessExecutionState *activeProcessState = nullptr;
 
   /// Map from process handle values to process IDs.
   llvm::DenseMap<uint64_t, ProcessId> processHandleToId;
