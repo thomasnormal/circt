@@ -806,7 +806,8 @@ def ConvertVerifToSMT : Pass<"convert-verif-to-smt", "mlir::ModuleOp"> {
            "Generate output suitable for SMT-LIB export.">,
     Option<"bmcMode", "bmc-mode", "std::string",
            /*default=*/"\"bounded\"",
-           "BMC mode: bounded, liveness, induction-base, or induction-step.">,
+           "BMC mode: bounded, liveness, liveness-lasso, induction-base, or "
+           "induction-step.">,
     Option<"approxTemporalOps", "approx-temporal", "bool",
            /*default=*/"false",
            "Allow UNSOUND approximations for temporal LTL ops (e.g. treating "

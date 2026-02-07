@@ -2036,11 +2036,18 @@ struct VerifBoundedModelCheckingOpConversion
     Location loc = op.getLoc();
     bool emitSMTLIB = forSMTLIBExport;
     bool inductionStep = bmcMode == BMCCheckMode::InductionStep;
-    bool livenessMode = bmcMode == BMCCheckMode::Liveness;
+    bool livenessMode = bmcMode == BMCCheckMode::Liveness ||
+                        bmcMode == BMCCheckMode::LivenessLasso;
+    bool livenessLassoMode = bmcMode == BMCCheckMode::LivenessLasso;
 
     if (inductionStep && !emitSMTLIB) {
       op.emitError("k-induction currently requires SMT-LIB export "
                    "(use --run-smtlib)");
+      return failure();
+    }
+    if (livenessLassoMode && !emitSMTLIB) {
+      op.emitError("liveness-lasso mode currently requires SMT-LIB export "
+                   "(use --emit-smtlib or --run-smtlib)");
       return failure();
     }
 
@@ -4550,13 +4557,34 @@ struct VerifBoundedModelCheckingOpConversion
           return lhs;
         return smt::OrOp::create(rewriter, loc, lhs, rhs);
       };
+      auto combineAnd = [&](Value lhs, Value rhs) -> Value {
+        if (!lhs)
+          return rhs;
+        if (!rhs)
+          return lhs;
+        return smt::AndOp::create(rewriter, loc, lhs, rhs);
+      };
 
+      size_t numCircuitArgs = circuitInputTy.size();
+      size_t numBMCStateArgs = numRegs + totalDelaySlots + totalNFAStateSlots;
       SmallVector<Value> iterArgs = inputDecls;
+      SmallVector<SmallVector<Value>> lassoStateHistory;
+      auto captureStateSnapshot = [&](ValueRange values) {
+        if (!livenessLassoMode)
+          return;
+        SmallVector<Value> snapshot;
+        if (numBMCStateArgs > 0) {
+          ValueRange stateValues =
+              values.take_front(numCircuitArgs).take_back(numBMCStateArgs);
+          snapshot.append(stateValues.begin(), stateValues.end());
+        }
+        lassoStateHistory.push_back(std::move(snapshot));
+      };
+      captureStateSnapshot(ValueRange(iterArgs));
       for (uint64_t iter = 0; iter < boundValue; ++iter) {
         ValueRange iterRange(iterArgs);
 
         // Assert 2-state constraints on the current iteration inputs.
-        size_t numCircuitArgs = circuitInputTy.size();
         for (auto [oldTy, arg] :
              llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
                        iterRange.take_front(numCircuitArgs))) {
@@ -5145,6 +5173,37 @@ struct VerifBoundedModelCheckingOpConversion
         }
         newDecls.push_back(violated);
         iterArgs = std::move(newDecls);
+        captureStateSnapshot(ValueRange(iterArgs));
+      }
+
+      if (livenessLassoMode) {
+        if (boundValue == 0) {
+          op.emitError("liveness-lasso mode requires bound >= 1");
+          return failure();
+        }
+        Value hasLassoLoop;
+        if (numBMCStateArgs == 0) {
+          hasLassoLoop = constTrue;
+        } else if (lassoStateHistory.size() >= 2) {
+          ArrayRef<Value> finalState = lassoStateHistory.back();
+          for (ArrayRef<Value> candidate :
+               ArrayRef<SmallVector<Value>>(lassoStateHistory).drop_back(1)) {
+            if (candidate.size() != finalState.size()) {
+              op.emitError("internal error while building liveness-lasso "
+                           "state snapshots");
+              return failure();
+            }
+            Value thisLoop;
+            for (auto [lhs, rhs] : llvm::zip(candidate, finalState)) {
+              Value eq = smt::EqOp::create(rewriter, loc, lhs, rhs);
+              thisLoop = combineAnd(thisLoop, eq);
+            }
+            hasLassoLoop = combineOr(hasLassoLoop, thisLoop);
+          }
+        }
+        if (!hasLassoLoop)
+          hasLassoLoop = constFalse;
+        smt::AssertOp::create(rewriter, loc, hasLassoLoop);
       }
 
       Value violated = iterArgs.back();
@@ -5990,6 +6049,8 @@ static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
     return BMCCheckMode::Bounded;
   if (mode == "liveness")
     return BMCCheckMode::Liveness;
+  if (mode == "liveness-lasso")
+    return BMCCheckMode::LivenessLasso;
   if (mode == "induction-base")
     return BMCCheckMode::InductionBase;
   if (mode == "induction-step")
@@ -6037,8 +6098,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
   if (failed(bmcModeOr)) {
     getOperation().emitError()
         << "invalid bmc-mode: '" << bmcMode
-        << "' (expected bounded, liveness, induction-base, or "
-           "induction-step)";
+        << "' (expected bounded, liveness, liveness-lasso, "
+           "induction-base, or induction-step)";
     signalPassFailure();
     return;
   }

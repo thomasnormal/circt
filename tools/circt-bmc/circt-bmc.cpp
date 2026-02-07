@@ -186,6 +186,12 @@ static cl::opt<bool> liveness(
     cl::desc("Run bounded liveness checking using only bmc.final properties"),
     cl::init(false), cl::cat(mainCategory));
 
+static cl::opt<bool> livenessLasso(
+    "liveness-lasso",
+    cl::desc("Require a lasso-style loop constraint in liveness mode "
+             "(SMT-LIB only)"),
+    cl::init(false), cl::cat(mainCategory));
+
 static cl::opt<std::string>
     z3PathOpt("z3-path",
               cl::desc("Path to z3 binary for --run-smtlib (optional)"),
@@ -861,9 +867,10 @@ static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
 }
 
 static LogicalResult executeBMCWithInduction(MLIRContext &context) {
-  if (liveness) {
+  if (liveness || livenessLasso) {
     llvm::errs()
-        << "--liveness is incompatible with --induction/--k-induction\n";
+        << "--liveness/--liveness-lasso is incompatible with "
+           "--induction/--k-induction\n";
     return failure();
   }
 #ifdef CIRCT_BMC_ENABLE_JIT
@@ -967,6 +974,16 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
 static LogicalResult executeBMC(MLIRContext &context) {
   if (kInduction || induction)
     return executeBMCWithInduction(context);
+  if (livenessLasso && !liveness) {
+    llvm::errs() << "--liveness-lasso requires --liveness\n";
+    return failure();
+  }
+  if (livenessLasso && outputFormat != OutputSMTLIB &&
+      outputFormat != OutputRunSMTLIB) {
+    llvm::errs()
+        << "--liveness-lasso requires --emit-smtlib or --run-smtlib\n";
+    return failure();
+  }
 
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
@@ -999,7 +1016,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
   convertVerifToSMTOptions.forSMTLIBExport =
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
-  convertVerifToSMTOptions.bmcMode = liveness ? "liveness" : "bounded";
+  convertVerifToSMTOptions.bmcMode =
+      livenessLasso ? "liveness-lasso" : (liveness ? "liveness" : "bounded");
   if (failed(runPassPipeline(context, *module, ts, convertVerifToSMTOptions,
                              clockBound, /*emitResultMessages=*/true)))
     return failure();
