@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 466 - February 7, 2026
+
+### Summary
+
+Added Slang UDP coverage-note limiting control to `circt-verilog` with
+behavioral regression coverage.
+
+### Fixes
+
+1. **UDP coverage-note control exposed**
+   - Added `--max-udp-coverage-notes=<count>` to `circt-verilog`.
+   - Wired through `ImportVerilogOptions` into Slang
+     `Driver::Options::maxUDPCoverageNotes`.
+
+2. **Behavioral regression for note truncation**
+   - Added `test/Conversion/ImportVerilog/udp-coverage-note-limit.sv`.
+   - Verifies default `-Wudp-coverage` behavior and truncation behavior with
+     `--max-udp-coverage-notes=2`.
+
+3. **Updated command-line coverage**
+   - Extended `test/Tools/circt-verilog/commandline.mlir` to include
+     `--max-udp-coverage-notes`.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-verilog/commandline.mlir`: PASS
+  - `test/Conversion/ImportVerilog/udp-coverage-note-limit.sv`: PASS
+  - `test/Conversion/ImportVerilog/relax-enum-conversions.sv`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 465 - February 7, 2026
 
 ### Summary

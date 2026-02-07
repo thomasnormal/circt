@@ -144,6 +144,10 @@ struct ImportVerilogOptions {
   /// The maximum number of elements allowed in a single instance array.
   std::optional<uint32_t> maxInstanceArray;
 
+  /// The maximum number of UDP coverage notes generated for a single missing
+  /// edge-transition warning.
+  std::optional<uint32_t> maxUDPCoverageNotes;
+
   /// A string that indicates the default time scale to use for any design
   /// elements that don't specify one explicitly.
   std::optional<std::string> timeScale;

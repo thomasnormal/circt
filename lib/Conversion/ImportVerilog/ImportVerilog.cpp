@@ -347,6 +347,7 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.maxConstexprSteps = options.maxConstexprSteps;
   driver.options.maxConstexprBacktrace = options.maxConstexprBacktrace;
   driver.options.maxInstanceArray = options.maxInstanceArray;
+  driver.options.maxUDPCoverageNotes = options.maxUDPCoverageNotes;
 
   driver.options.timeScale = options.timeScale;
   if (options.minTypMax) {

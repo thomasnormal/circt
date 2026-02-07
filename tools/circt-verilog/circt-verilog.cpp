@@ -306,6 +306,11 @@ struct CLOptions {
       cl::desc("Maximum allowed elements in an instance array"),
       cl::value_desc("count"), cl::cat(cat)};
 
+  cl::opt<uint32_t> maxUDPCoverageNotes{
+      "max-udp-coverage-notes",
+      cl::desc("Maximum UDP coverage notes for missing edge transitions"),
+      cl::value_desc("count"), cl::cat(cat)};
+
   cl::opt<bool> allowUseBeforeDeclare{
       "allow-use-before-declare",
       cl::desc(
@@ -689,6 +694,8 @@ static LogicalResult executeWithSources(MLIRContext *context,
     options.maxConstexprBacktrace = opts.maxConstexprBacktrace;
   if (opts.maxInstanceArray.getNumOccurrences() > 0)
     options.maxInstanceArray = opts.maxInstanceArray;
+  if (opts.maxUDPCoverageNotes.getNumOccurrences() > 0)
+    options.maxUDPCoverageNotes = opts.maxUDPCoverageNotes;
 
   if (opts.timeScale.getNumOccurrences() > 0)
     options.timeScale = opts.timeScale;
