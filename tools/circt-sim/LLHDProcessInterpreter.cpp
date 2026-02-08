@@ -13721,12 +13721,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // For wait(condition), use polling to re-evaluate.
         // The condition may depend on class member variables in heap memory
         // that aren't tracked via LLHD signals.
-        constexpr int64_t kPollDelayFs = 1000000; // 1 ps polling interval
+        // Use delta steps first to keep $time == 0 during UVM initialization,
+        // but fall back to real time after many delta steps to avoid infinite loops.
         SimTime currentTime = scheduler.getCurrentTime();
-        SimTime targetTime = currentTime.advanceTime(kPollDelayFs);
+        constexpr uint32_t kMaxDeltaPolls = 1000;
+        constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+        SimTime targetTime;
+        if (currentTime.deltaStep < kMaxDeltaPolls) {
+          targetTime = currentTime.nextDelta();
+        } else {
+          targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+        }
 
-        LLVM_DEBUG(llvm::dbgs() << "    Scheduling wait_condition poll after "
-                                << kPollDelayFs << " fs\n");
+        LLVM_DEBUG(llvm::dbgs() << "    Scheduling wait_condition poll (time="
+                                << targetTime.realTime << " fs, delta="
+                                << targetTime.deltaStep << ")\n");
 
         // Schedule the process to resume after the delay
         scheduler.getEventScheduler().schedule(
@@ -13881,13 +13890,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           } else {
             // No signal sensitivities found. This can happen if we're in a
             // func.func context called from llhd.process but no signals are
-            // being watched yet. Use polling as a fallback.
-            constexpr int64_t kPollDelayFs = 1000000; // 1 ps polling interval
+            // being watched yet. Use delta steps first to keep $time == 0
+            // during UVM initialization, then fall back to real time to
+            // avoid infinite delta loops.
             SimTime currentTime = scheduler.getCurrentTime();
-            SimTime targetTime = currentTime.advanceTime(kPollDelayFs);
+            constexpr uint32_t kMaxDeltaPolls = 1000;
+            constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+            SimTime targetTime;
+            if (currentTime.deltaStep < kMaxDeltaPolls) {
+              targetTime = currentTime.nextDelta();
+            } else {
+              targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+            }
 
             LLVM_DEBUG(llvm::dbgs() << "    No signals or address to watch, "
-                                    << "polling after " << kPollDelayFs << " fs\n");
+                                    << "polling (time="
+                                    << targetTime.realTime << " fs, delta="
+                                    << targetTime.deltaStep << ")\n");
 
             scheduler.getEventScheduler().schedule(
                 targetTime, SchedulingRegion::Active,
