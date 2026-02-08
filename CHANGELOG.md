@@ -23896,3 +23896,54 @@ CIRCT/slang correctly enforces LRM restrictions.
   does not preserve unknown markers through cast results.
 - `yosys` `counter` pass/fail polarity remains sensitive to
   `--assume-known-inputs` profile.
+
+---
+
+## Iteration 517 - February 8, 2026
+
+### Four-State Slice Projection Fix in VerifToSMT
+
+- Updated event-arm witness slice lowering (`evalArgValue`) so direct
+  four-state inputs (`!hw.struct<value, unknown>` encoded as `!smt.bv<2w>`)
+  are projected to the value half before applying slices.
+- This fixes a semantic bug where static/dynamic slice operations could
+  otherwise index into unknown-bit lanes.
+- The projection now applies to both:
+  - static slices (`lsb`/`msb`)
+  - dynamic slices (`dyn_index_name` / sign / offset / width)
+
+### Regression Tests
+
+- Extended
+  `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+  with `@bmc_event_arm_witness_cast_slice_projection`.
+- Added checks for value-half projection followed by slice extraction:
+  - `smt.bv.extract ... from 2 : (!smt.bv<4>) -> !smt.bv<2>`
+  - `smt.bv.extract ... from 1 : (!smt.bv<2>) -> !smt.bv<1>`
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (21 tests)
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+- External matrix:
+  - `sv-tests` BMC: 26/26 PASS
+  - `sv-tests` LEC: 23/23 PASS
+  - `verilator-verification` BMC: 17/17 PASS
+  - `verilator-verification` LEC: 17/17 PASS
+  - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+  - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`):
+    PASS (`XPROP_ONLY` accepted)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Slice projection currently keeps value bits only and does not preserve unknown
+  markers through sliced values.
+- Four-state cast semantics on sliced operands are still approximation-based
+  (full domain-fidelity propagation pending).
+- `yosys` `counter` pass/fail polarity remains sensitive to
+  `--assume-known-inputs` profile.

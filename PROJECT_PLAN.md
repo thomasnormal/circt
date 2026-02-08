@@ -9792,6 +9792,53 @@ ninja -C build circt-verilog
   - Split `yosys` `counter` harness expectations by
     `--assume-known-inputs` profile.
 
+### Iteration 517
+- Four-state slice value-projection fix in VerifToSMT witness lowering:
+  - Updated `evalArgValue` slice handling to first project direct four-state
+    arguments (`!hw.struct<value, unknown>`) to value bits before applying
+    static or dynamic slice operations.
+  - This prevents slice indexing from accidentally targeting unknown-bit lanes
+    in the packed `!smt.bv<2w>` encoding.
+  - Applies to both:
+    - static slices (`lsb`/`msb`)
+    - dynamic slices (`dyn_index_name`/`dyn_sign`/`dyn_offset`/`dyn_width`)
+- Regression updates:
+  - Extended
+    `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+    with `bmc_event_arm_witness_cast_slice_projection`.
+  - New checks assert value-half projection then slice extraction:
+    - `smt.bv.extract ... from 2 : (!smt.bv<4>) -> !smt.bv<2>`
+    - `smt.bv.extract ... from 1 : (!smt.bv<2>) -> !smt.bv<1>`
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+      PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (21 tests)
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+  - External matrix:
+    - `sv-tests` BMC: 26/26 PASS
+    - `sv-tests` LEC: 23/23 PASS
+    - `verilator-verification` BMC: 17/17 PASS
+    - `verilator-verification` LEC: 17/17 PASS
+    - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+    - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY` accepted)
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Slice projection currently drops unknown markers (value projection only),
+    so full four-state fidelity is not preserved through sliced values.
+  - Four-state cast-domain behavior on sliced operands still uses mixed
+    approximations across cast and slice paths.
+  - `yosys` `counter` fail-mode remains assumption-profile sensitive.
+- Long-term features to prioritize:
+  - Add first-class four-state value objects in witness lowering so slice/cast
+    operations can preserve and transform unknown markers explicitly.
+  - Unify cast and slice semantics so two-state/four-state domain intent is
+    applied consistently for direct, sliced, and derived expressions.
+  - Split `yosys` harness expectations by `--assume-known-inputs` profile.
+
 ---
 
 ## Architecture Reference

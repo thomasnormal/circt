@@ -48,6 +48,18 @@
 // RUNTIME: {{%.*}} = smt.bv.extract {{%.*}} from 2 : (!smt.bv<4>) -> !smt.bv<2>
 // RUNTIME: {{%.*}} = smt.bv.not {{%.*}} : !smt.bv<2>
 // RUNTIME: {{%.*}} = smt.bv.and {{%.*}}, {{%.*}} : !smt.bv<2>
+//
+// SMTLIB-LABEL: func.func @bmc_event_arm_witness_cast_slice_projection
+// SMTLIB-DAG: signal_lhs_arg_lsb = 1 : i32
+// SMTLIB-DAG: signal_lhs_arg_msb = 1 : i32
+// SMTLIB: {{%.*}} = smt.bv.extract {{%.*}} from 2 : (!smt.bv<4>) -> !smt.bv<2>
+// SMTLIB: {{%.*}} = smt.bv.extract {{%.*}} from 1 : (!smt.bv<2>) -> !smt.bv<1>
+//
+// RUNTIME-LABEL: func.func @bmc_event_arm_witness_cast_slice_projection
+// RUNTIME-DAG: signal_lhs_arg_lsb = 1 : i32
+// RUNTIME-DAG: signal_lhs_arg_msb = 1 : i32
+// RUNTIME: {{%.*}} = smt.bv.extract {{%.*}} from 2 : (!smt.bv<4>) -> !smt.bv<2>
+// RUNTIME: {{%.*}} = smt.bv.extract {{%.*}} from 1 : (!smt.bv<2>) -> !smt.bv<1>
 
 func.func @bmc_event_arm_witness_cast_structured() {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
@@ -83,6 +95,26 @@ func.func @bmc_event_arm_witness_cast_two_state_projection() {
   }
   circuit {
   ^bb0(%fs: !hw.struct<value: i2, unknown: i2>, %ref: i2, %ok: i1):
+    verif.assert %ok : i1
+    verif.yield
+  }
+  return
+}
+
+func.func @bmc_event_arm_witness_cast_slice_projection() {
+  %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
+    bmc_input_names = ["fs", "ref1", "ok"],
+    bmc_event_sources = [["signal[0]:both"]],
+    bmc_event_source_details = [[{edge = "both", kind = "signal", label = "signal[0]:both", signal_bin_op = "eq", signal_index = 0 : i32, signal_lhs_arg_lsb = 1 : i32, signal_lhs_arg_msb = 1 : i32, signal_lhs_arg_name = "fs", signal_lhs_cast_four_state = false, signal_lhs_cast_signed = false, signal_lhs_cast_width = 1 : i32, signal_rhs_name = "ref1"}]]
+  }
+  init {
+    verif.yield
+  }
+  loop {
+    verif.yield
+  }
+  circuit {
+  ^bb0(%fs: !hw.struct<value: i2, unknown: i2>, %ref1: i1, %ok: i1):
     verif.assert %ok : i1
     verif.yield
   }
