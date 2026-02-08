@@ -5968,6 +5968,23 @@ struct VerifBoundedModelCheckingOpConversion
         Value value = values[argIndex];
         if (!slice)
           return value;
+        auto projectFourStateValueBits = [&](Value input) -> FailureOr<Value> {
+          if (argIndex >= oldCircuitInputTy.size())
+            return input;
+          int64_t valueWidth = 0;
+          int64_t unknownWidth = 0;
+          if (!isFourStateStruct(oldCircuitInputTy[argIndex], valueWidth,
+                                 unknownWidth))
+            return input;
+          auto bvTy = dyn_cast<smt::BitVectorType>(input.getType());
+          if (!bvTy || bvTy.getWidth() !=
+                           static_cast<unsigned>(valueWidth + unknownWidth))
+            return input;
+          auto valueTy =
+              smt::BitVectorType::get(builder.getContext(), valueWidth);
+          return Value(
+              smt::ExtractOp::create(builder, loc, valueTy, unknownWidth, input));
+        };
         auto materializeAsSMTBV = [&](Value input, unsigned width)
             -> FailureOr<Value> {
           auto targetTy = smt::BitVectorType::get(builder.getContext(), width);
@@ -5991,6 +6008,10 @@ struct VerifBoundedModelCheckingOpConversion
           return Value(smt::ConcatOp::create(builder, loc, zeroPad, bv));
         };
         if (slice->dynamicIndexArg) {
+          auto projectedValueOr = projectFourStateValueBits(value);
+          if (failed(projectedValueOr))
+            return failure();
+          value = *projectedValueOr;
           if (*slice->dynamicIndexArg >= values.size())
             return failure();
           auto baseTy = dyn_cast<smt::BitVectorType>(value.getType());
@@ -6020,6 +6041,10 @@ struct VerifBoundedModelCheckingOpConversion
         unsigned msb = slice->msb;
         if (lsb > msb)
           return failure();
+        auto projectedValueOr = projectFourStateValueBits(value);
+        if (failed(projectedValueOr))
+          return failure();
+        value = *projectedValueOr;
         if (isa<smt::BoolType>(value.getType())) {
           if (lsb != 0 || msb != 0)
             return failure();
