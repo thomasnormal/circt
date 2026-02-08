@@ -42,7 +42,6 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-86400}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
-YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY:-error}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -187,20 +186,16 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; t
 fi
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR,,}"
 case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR" in
-  auto|python|regex) ;;
+  auto|python) ;;
   *)
-    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python|regex)" >&2
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python)" >&2
     exit 1
     ;;
 esac
-YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY,,}"
-case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY" in
-  allow|warn|error) ;;
-  *)
-    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY (expected allow|warn|error)" >&2
-    exit 1
-    ;;
-esac
+if [[ -v YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY: regex mode has been removed; unset this variable and use YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=auto|python" >&2
+  exit 1
+fi
 strict_unfixable_bundle_reason_filter=""
 strict_unfixable_bundle_severity_filter=""
 case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
@@ -1883,24 +1878,13 @@ emit_mode_summary_outputs() {
     if command -v python3 >/dev/null 2>&1; then
       json_validator_mode="python"
     else
-      echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=auto requires python3 in PATH; set YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex to opt out" >&2
+      echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=auto requires python3 in PATH" >&2
       exit 1
     fi
   fi
   if [[ "$json_validator_mode" == "python" ]] && ! command -v python3 >/dev/null 2>&1; then
     echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=python requires python3 in PATH" >&2
     exit 1
-  fi
-  if [[ "$json_validator_mode" == "regex" ]]; then
-    case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY" in
-      warn)
-        echo "warning: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is deprecated; use auto or python (set YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=allow to silence)" >&2
-        ;;
-      error)
-        echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is disabled by YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=error" >&2
-        exit 1
-        ;;
-    esac
   fi
   local tsv_row
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
@@ -2054,91 +2038,7 @@ PY
     local line="$1"
     local file="$2"
     local lineno="$3"
-    if [[ "$json_validator_mode" == "python" ]]; then
-      validate_history_jsonl_line_python "$line" "$file" "$lineno"
-      return 0
-    fi
-    local key
-    local section
-    local section_payload
-    local count_key
-    if [[ "$line" != \{* || "$line" != *\} ]]; then
-      echo "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line in $file at line $lineno: expected JSON object" >&2
-      exit 1
-    fi
-    if ! printf '%s\n' "$line" | grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*"[0-9]+"'; then
-      echo "error: invalid JSONL schema_version in $file at line $lineno" >&2
-      exit 1
-    fi
-    if ! printf '%s\n' "$line" | grep -Eq '"run_id"[[:space:]]*:[[:space:]]*"[^"]+"'; then
-      echo "error: invalid run_id in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-      exit 1
-    fi
-    if ! printf '%s\n' "$line" | grep -Eq '"generated_at_utc"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"'; then
-      echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-      exit 1
-    fi
-    for key in run_id generated_at_utc test_summary mode_summary skip_reasons; do
-      if ! printf '%s\n' "$line" | grep -Eq "\"$key\"[[:space:]]*:"; then
-        echo "error: missing key '$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-        exit 1
-      fi
-    done
-    for section in test_summary mode_summary skip_reasons; do
-      if ! printf '%s\n' "$line" | grep -Eq "\"$section\"[[:space:]]*:[[:space:]]*\\{"; then
-        echo "error: invalid object '$section' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-        exit 1
-      fi
-      section_payload="$(printf '%s\n' "$line" | sed -nE "s/.*\"$section\"[[:space:]]*:[[:space:]]*\\{([^}]*)\\}.*/\\1/p")"
-      if [[ -z "$section_payload" ]]; then
-        echo "error: invalid object '$section' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-        exit 1
-      fi
-      case "$section" in
-        test_summary)
-          for key in total failures xfail xpass skipped; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$key\"[[:space:]]*:"; then
-              echo "error: missing summary field '$section.$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          for count_key in total failures xfail xpass skipped; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$count_key\"[[:space:]]*:[[:space:]]*[0-9]+"; then
-              echo "error: invalid numeric summary field '$section.$count_key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          ;;
-        mode_summary)
-          for key in total pass fail xfail xpass epass efail unskip skipped skip_pass skip_fail skip_expected skip_unexpected; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$key\"[[:space:]]*:"; then
-              echo "error: missing summary field '$section.$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          for count_key in total pass fail xfail xpass epass efail unskip skipped skip_pass skip_fail skip_expected skip_unexpected; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$count_key\"[[:space:]]*:[[:space:]]*[0-9]+"; then
-              echo "error: invalid numeric summary field '$section.$count_key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          ;;
-        skip_reasons)
-          for key in vhdl fail_no_macro no_property other; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$key\"[[:space:]]*:"; then
-              echo "error: missing summary field '$section.$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          for count_key in vhdl fail_no_macro no_property other; do
-            if ! printf '%s\n' "$section_payload" | grep -Eq "\"$count_key\"[[:space:]]*:[[:space:]]*[0-9]+"; then
-              echo "error: invalid numeric summary field '$section.$count_key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
-              exit 1
-            fi
-          done
-          ;;
-      esac
-    done
+    validate_history_jsonl_line_python "$line" "$file" "$lineno"
   }
 
   utc_to_epoch() {
