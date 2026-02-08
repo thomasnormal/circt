@@ -200,6 +200,8 @@ struct ResolvedNamedBoolExpr {
     And,
     Or,
     Xor,
+    Implies,
+    Iff,
     Eq,
     Ne
   };
@@ -980,6 +982,10 @@ static bool resolveStructuredExprFromDetail(
       binKind = ResolvedNamedBoolExpr::Kind::Or;
     else if (binOp == "xor")
       binKind = ResolvedNamedBoolExpr::Kind::Xor;
+    else if (binOp == "implies")
+      binKind = ResolvedNamedBoolExpr::Kind::Implies;
+    else if (binOp == "iff")
+      binKind = ResolvedNamedBoolExpr::Kind::Iff;
     else if (binOp == "eq")
       binKind = ResolvedNamedBoolExpr::Kind::Eq;
     else if (binOp == "ne")
@@ -6002,6 +6008,8 @@ struct VerifBoundedModelCheckingOpConversion
       case ResolvedNamedBoolExpr::Kind::And:
       case ResolvedNamedBoolExpr::Kind::Or:
       case ResolvedNamedBoolExpr::Kind::Xor:
+      case ResolvedNamedBoolExpr::Kind::Implies:
+      case ResolvedNamedBoolExpr::Kind::Iff:
       case ResolvedNamedBoolExpr::Kind::Eq:
       case ResolvedNamedBoolExpr::Kind::Ne: {
         auto lhsOr = self(self, builder, values, *expr.lhs);
@@ -6015,6 +6023,12 @@ struct VerifBoundedModelCheckingOpConversion
           return Value(smt::OrOp::create(builder, loc, *lhsOr, *rhsOr));
         case ResolvedNamedBoolExpr::Kind::Xor:
           return Value(smt::DistinctOp::create(builder, loc, *lhsOr, *rhsOr));
+        case ResolvedNamedBoolExpr::Kind::Implies: {
+          auto notLhs = smt::NotOp::create(builder, loc, *lhsOr);
+          return Value(smt::OrOp::create(builder, loc, notLhs, *rhsOr));
+        }
+        case ResolvedNamedBoolExpr::Kind::Iff:
+          return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
         case ResolvedNamedBoolExpr::Kind::Eq:
           return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
         case ResolvedNamedBoolExpr::Kind::Ne:

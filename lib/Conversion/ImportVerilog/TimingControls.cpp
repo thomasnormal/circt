@@ -514,9 +514,17 @@ getStructuredBinaryEventOp(const slang::ast::BinaryExpression &expr) {
     return StringRef("or");
   case BinaryOperator::BinaryXor:
     return StringRef("xor");
+  case BinaryOperator::LogicalImplication:
+    return StringRef("implies");
+  case BinaryOperator::LogicalEquivalence:
+    return StringRef("iff");
   case BinaryOperator::Equality:
+  case BinaryOperator::CaseEquality:
+  case BinaryOperator::WildcardEquality:
     return StringRef("eq");
   case BinaryOperator::Inequality:
+  case BinaryOperator::CaseInequality:
+  case BinaryOperator::WildcardInequality:
     return StringRef("ne");
   default:
     return std::nullopt;
