@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 477 - February 8, 2026
+
+### Summary
+
+Implemented common-clock sequence event-list support (`@(seq1 or seq2)`) and
+fixed a cloning bug in sequence-event wait lowering that could disconnect clock
+references inside nested wait regions.
+
+### Fixes
+
+1. **Sequence event-list OR lowering**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp` to lower event
+     lists composed entirely of sequence/property events on the same clock.
+   - Added a combined sequence-event path that:
+     - merges sequence conditions with OR semantics,
+     - lowers through the existing NFA-based event loop machinery,
+     - waits on the shared clock edge.
+
+2. **Reference-value cloning correctness**
+   - Updated `cloneValueIntoBlock` in timing control lowering to avoid cloning
+     `!moore.ref` values (variables/nets/state objects) into nested wait
+     regions.
+   - This keeps event detection and sequence progression attached to original
+     module storage instead of accidentally creating disconnected references.
+
+3. **Diagnostics for unsupported event-list forms**
+   - Added explicit errors for:
+     - mixed sequence/signal event lists (`@(seq or sig)`)
+     - sequence event-list entries on different clocks.
+
+4. **Regression coverage**
+   - Extended `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+     `SequenceEventListControl` (`@(seq1 or seq2)`).
+   - Added
+     `test/Tools/circt-bmc/sva-sequence-event-list-or-unsat-e2e.sv`.
+
+### Validation
+
+- Lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/ImportVerilog/clocking-event-wait.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+- Direct BMC:
+  - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - `sva-clocking-block-procedural-assert-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - BMC e2e lit tests remain unsupported in this local configuration
+    (`bmc-jit` feature gate), validated via direct tool runs.
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
 ## Iteration 476 - February 8, 2026
 
 ### Summary
