@@ -3824,6 +3824,10 @@ DEFAULT_CONTEXT_EXPR_LIMITS = {
     "max_bool_expr_nodes": 256,
     "max_bool_expr_depth": 32,
 }
+DEFAULT_CONTEXT_INT_ARITHMETIC = {
+    "div_mode": "floor",
+    "mod_mode": "floor",
+}
 
 
 def create_expression_budget(max_nodes: int, max_depth: int):
@@ -3866,6 +3870,56 @@ def parse_context_expression_limits(value, field_name: str):
             )
         limits[limit_key] = limit_value
     return limits
+
+
+def parse_context_int_arithmetic(value, field_name: str):
+    arithmetic = dict(DEFAULT_CONTEXT_INT_ARITHMETIC)
+    if value is None:
+        return arithmetic
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    unknown_keys = sorted(set(value.keys()) - {"div_mode", "mod_mode"})
+    if unknown_keys:
+        fail(
+            f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
+        )
+    if "div_mode" in value:
+        div_mode = value["div_mode"]
+        if div_mode not in {"floor", "trunc_zero"}:
+            fail(
+                f"error: invalid {field_name}.div_mode: expected one of floor, trunc_zero"
+            )
+        arithmetic["div_mode"] = div_mode
+    if "mod_mode" in value:
+        mod_mode = value["mod_mode"]
+        if mod_mode not in {"floor", "trunc_zero"}:
+            fail(
+                f"error: invalid {field_name}.mod_mode: expected one of floor, trunc_zero"
+            )
+        arithmetic["mod_mode"] = mod_mode
+    return arithmetic
+
+
+def evaluate_int_division(lhs_value: int, rhs_value: int, div_mode: str):
+    if rhs_value == 0:
+        return None
+    if div_mode == "trunc_zero":
+        quotient = abs(lhs_value) // abs(rhs_value)
+        if (lhs_value < 0) != (rhs_value < 0):
+            quotient = -quotient
+        return quotient
+    return lhs_value // rhs_value
+
+
+def evaluate_int_modulus(lhs_value: int, rhs_value: int, mod_mode: str):
+    if rhs_value == 0:
+        return None
+    if mod_mode == "trunc_zero":
+        quotient = evaluate_int_division(lhs_value, rhs_value, "trunc_zero")
+        return lhs_value - quotient * rhs_value
+    return lhs_value % rhs_value
 
 
 def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
@@ -3947,7 +4001,9 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
     )
 
 
-def evaluate_int_expression(expr, context):
+def evaluate_int_expression(expr, context, int_arithmetic=None):
+    if int_arithmetic is None:
+        int_arithmetic = DEFAULT_CONTEXT_INT_ARITHMETIC
     kind = expr[0]
     if kind == "const":
         return expr[1]
@@ -3957,14 +4013,14 @@ def evaluate_int_expression(expr, context):
             return None
         return parse_context_integer(context[key])
     if kind == "neg":
-        value = evaluate_int_expression(expr[1], context)
+        value = evaluate_int_expression(expr[1], context, int_arithmetic)
         if value is None:
             return None
         return -value
     if kind in {"add", "sub", "mul", "min", "max"}:
         operands = []
         for operand in expr[1]:
-            value = evaluate_int_expression(operand, context)
+            value = evaluate_int_expression(operand, context, int_arithmetic)
             if value is None:
                 return None
             operands.append(value)
@@ -3984,17 +4040,21 @@ def evaluate_int_expression(expr, context):
             return min(operands)
         return max(operands)
     if kind == "div":
-        lhs_value = evaluate_int_expression(expr[1], context)
-        rhs_value = evaluate_int_expression(expr[2], context)
-        if lhs_value is None or rhs_value is None or rhs_value == 0:
+        lhs_value = evaluate_int_expression(expr[1], context, int_arithmetic)
+        rhs_value = evaluate_int_expression(expr[2], context, int_arithmetic)
+        if lhs_value is None or rhs_value is None:
             return None
-        return lhs_value // rhs_value
+        return evaluate_int_division(
+            lhs_value, rhs_value, int_arithmetic["div_mode"]
+        )
     if kind == "mod":
-        lhs_value = evaluate_int_expression(expr[1], context)
-        rhs_value = evaluate_int_expression(expr[2], context)
-        if lhs_value is None or rhs_value is None or rhs_value == 0:
+        lhs_value = evaluate_int_expression(expr[1], context, int_arithmetic)
+        rhs_value = evaluate_int_expression(expr[2], context, int_arithmetic)
+        if lhs_value is None or rhs_value is None:
             return None
-        return lhs_value % rhs_value
+        return evaluate_int_modulus(
+            lhs_value, rhs_value, int_arithmetic["mod_mode"]
+        )
     return None
 
 
@@ -4203,11 +4263,13 @@ def parse_bool_expression(
     )
 
 
-def evaluate_bool_expression(expr, context):
+def evaluate_bool_expression(expr, context, int_arithmetic=None):
+    if int_arithmetic is None:
+        int_arithmetic = DEFAULT_CONTEXT_INT_ARITHMETIC
     kind = expr[0]
     if kind == "cmp":
-        lhs_value = evaluate_int_expression(expr[1], context)
-        rhs_value = evaluate_int_expression(expr[3], context)
+        lhs_value = evaluate_int_expression(expr[1], context, int_arithmetic)
+        rhs_value = evaluate_int_expression(expr[3], context, int_arithmetic)
         if lhs_value is None or rhs_value is None:
             return False
         op = expr[2]
@@ -4270,11 +4332,17 @@ def evaluate_bool_expression(expr, context):
             haystack = format_context_scalar(context_value)
         return compile_bool_expression_regex(pattern, regex_flags).search(haystack) is not None
     if kind == "all":
-        return all(evaluate_bool_expression(child, context) for child in expr[1])
+        return all(
+            evaluate_bool_expression(child, context, int_arithmetic)
+            for child in expr[1]
+        )
     if kind == "any":
-        return any(evaluate_bool_expression(child, context) for child in expr[1])
+        return any(
+            evaluate_bool_expression(child, context, int_arithmetic)
+            for child in expr[1]
+        )
     if kind == "not":
-        return not evaluate_bool_expression(expr[1], context)
+        return not evaluate_bool_expression(expr[1], context, int_arithmetic)
     return False
 
 
@@ -5243,7 +5311,9 @@ def format_context_scalar_literal(value_type: str, value):
     return str(value)
 
 
-def is_context_presence_clause_satisfied(context, clause):
+def is_context_presence_clause_satisfied(context, clause, int_arithmetic=None):
+    if int_arithmetic is None:
+        int_arithmetic = DEFAULT_CONTEXT_INT_ARITHMETIC
     keys_all = clause["keys_all"]
     if keys_all is not None:
         for key in keys_all:
@@ -5455,8 +5525,8 @@ def is_context_presence_clause_satisfied(context, clause):
     int_expr_terms = clause["int_expr_terms"]
     if int_expr_terms is not None:
         for lhs_expr, op, rhs_expr in int_expr_terms:
-            lhs_value = evaluate_int_expression(lhs_expr, context)
-            rhs_value = evaluate_int_expression(rhs_expr, context)
+            lhs_value = evaluate_int_expression(lhs_expr, context, int_arithmetic)
+            rhs_value = evaluate_int_expression(rhs_expr, context, int_arithmetic)
             if lhs_value is None or rhs_value is None:
                 return False
             if op == "lt" and lhs_value >= rhs_value:
@@ -5474,7 +5544,7 @@ def is_context_presence_clause_satisfied(context, clause):
     bool_expr_terms = clause["bool_expr_terms"]
     if bool_expr_terms is not None:
         for term_expr in bool_expr_terms:
-            if not evaluate_bool_expression(term_expr, context):
+            if not evaluate_bool_expression(term_expr, context, int_arithmetic):
                 return False
     return True
 
@@ -5827,6 +5897,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "keys",
             "regex_defs",
             "limits",
+            "int_arithmetic",
             "all_of",
             "any_of",
         }
@@ -5866,6 +5937,10 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
     expr_limits = parse_context_expression_limits(
         payload.get("limits"),
         f"{field_name}.limits",
+    )
+    int_arithmetic = parse_context_int_arithmetic(
+        payload.get("int_arithmetic"),
+        f"{field_name}.int_arithmetic",
     )
     all_of_clauses = None
     if "all_of" in payload:
@@ -6051,6 +6126,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         "allow_unknown_keys": allow_unknown_keys,
         "validate_merged_context": validate_merged_context,
         "key_specs": key_specs,
+        "int_arithmetic": int_arithmetic,
         "all_of_clauses": all_of_clauses,
         "any_of_clauses": any_of_clauses,
     }
@@ -6096,6 +6172,7 @@ def validate_selector_profile_route_context_map(
             value, key_spec, f"{field_name}.{key}", format_output
         )
     if schema_spec is not None and enforce_required:
+        int_arithmetic = schema_spec["int_arithmetic"]
         for key, key_spec in key_specs.items():
             if key_spec["required"] and key not in context:
                 fail(
@@ -6122,7 +6199,9 @@ def validate_selector_profile_route_context_map(
         all_of_clauses = schema_spec["all_of_clauses"]
         if all_of_clauses is not None:
             for idx, clause in enumerate(all_of_clauses):
-                if not is_context_presence_clause_satisfied(context, clause):
+                if not is_context_presence_clause_satisfied(
+                    context, clause, int_arithmetic
+                ):
                     fail(
                         "error: invalid "
                         f"{field_name}: unsatisfied schema all_of clause #{idx + 1} "
@@ -6132,7 +6211,9 @@ def validate_selector_profile_route_context_map(
         if any_of_clauses is not None:
             matched = False
             for clause in any_of_clauses:
-                if is_context_presence_clause_satisfied(context, clause):
+                if is_context_presence_clause_satisfied(
+                    context, clause, int_arithmetic
+                ):
                     matched = True
                     break
             if not matched:
