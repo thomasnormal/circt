@@ -31066,3 +31066,48 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict-gate still compares against latest snapshot only.
 - CI wiring for strict-gate policy enforcement remains pending.
+
+## Iteration 626 - February 8, 2026
+
+### Formal Cadence Runner (24/7 Execution)
+
+- Added `utils/run_formal_cadence.sh` to execute `run_formal_all.sh` on fixed
+  cadence with fail-fast behavior.
+- Default interval is 6 hours (`--interval-secs 21600`) and strict gate is
+  enabled by default.
+- Supports:
+  - `--interval-secs`
+  - `--iterations` (`0` = infinite)
+  - `--run-formal-all`
+  - `--strict-gate` / `--no-strict-gate`
+  - pass-through `run_formal_all.sh` args via `--`.
+- Emits per-iteration artifacts:
+  - `<out-root>/run-0001-<timestamp>/...`
+  - `<out-root>/latest` symlink
+  - `<out-root>/cadence.log`
+  - `<out-root>/cadence.state`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-cadence.test`
+    - validates successful multi-iteration cadence execution
+    - validates fail-fast exit when an iteration fails
+
+### Documentation
+
+- Updated `docs/FormalRegression.md` with cadence-runner usage for 24/7 formal
+  sweeps.
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test`: PASS
+
+### Remaining Limitations
+
+- Cadence runner currently lacks built-in retention/pruning for old run
+  directories.
+- Notification hooks for failures are not yet integrated.

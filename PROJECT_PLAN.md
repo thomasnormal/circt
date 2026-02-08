@@ -16403,6 +16403,38 @@ ninja -C build circt-verilog
     logic).
   - Strict-gate policy wiring to CI remains pending.
 
+### Iteration 626
+- Formal 24/7 cadence runner:
+  - Added `utils/run_formal_cadence.sh` to run `run_formal_all.sh` on a fixed
+    interval with fail-fast semantics.
+  - Supports:
+    - `--interval-secs` (default 21600 / 6 hours)
+    - `--iterations` (`0` = infinite loop)
+    - `--run-formal-all` override
+    - strict gate default (`--strict-gate`, `--no-strict-gate`)
+    - pass-through arguments to `run_formal_all.sh` via `--`.
+  - Adds per-iteration artifact layout:
+    - `<out-root>/run-0001-<timestamp>/...`
+    - `<out-root>/latest` symlink
+    - `<out-root>/cadence.log`
+    - `<out-root>/cadence.state`
+- Regression coverage:
+  - Added `test/Tools/run-formal-cadence.test`:
+    - validates multi-iteration success path
+    - validates fail-fast behavior on iteration failure.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with cadence runner usage for 24/7
+    execution.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test` -> PASS
+- Current limitations / debt:
+  - Cadence runner does not yet support auto-pruning/retention policy for old
+    run directories.
+  - Notification hooks (e.g., webhook/email) are not yet integrated.
+
 ---
 
 ## Architecture Reference

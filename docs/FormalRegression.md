@@ -49,6 +49,15 @@ utils/run_formal_all.sh --fail-on-new-xpass
 utils/run_formal_all.sh --fail-on-passrate-regression
 ```
 
+Run formal suites on a fixed cadence (6-hour interval example):
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 -- --with-opentitan --opentitan ~/opentitan --with-avip --avip-glob "~/mbit/*avip*"
+```
+
+The cadence runner fails fast on the first failing iteration and keeps
+per-iteration artifacts under `formal-cadence-results-YYYYMMDD/`.
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:
