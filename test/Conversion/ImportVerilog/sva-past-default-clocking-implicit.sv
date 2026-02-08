@@ -11,7 +11,5 @@ module test_past_default_clocking_implicit(input logic clk, a);
 endmodule
 
 // CHECK-LABEL: moore.module @test_past_default_clocking_implicit
-// CHECK-NOT: moore.past
-// CHECK: moore.procedure always
-// CHECK: moore.wait_event
-// CHECK: moore.blocking_assign
+// CHECK: moore.past
+// CHECK: verif.assert
