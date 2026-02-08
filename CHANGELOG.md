@@ -28220,3 +28220,63 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector lists use comma-separated exact values only (no quoted-list grammar).
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 585 - February 8, 2026
+
+### Yosys SVA BMC Typed Selector-List Grammar Hardening
+
+- Upgraded typed selector-list parsing for:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST`
+- Parser now uses strict CSV semantics:
+  - supports quoted entries containing commas
+  - rejects malformed quoted lists with stable diagnostics
+  - rejects newline-containing list payloads
+- This improves long-term reliability of typed rewrite scoping without changing
+  selector matching semantics (still exact-match set membership).
+
+### Migration Semantics
+
+- Added explicit malformed-list diagnostics for typed selector lists.
+- Preserved existing empty-entry rejection behavior.
+
+### Test Coverage
+
+- Expanded
+  `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+  with:
+  - quoted history-file list entry (comma in value) rewrite case
+  - malformed quoted history-file list rejection case
+- Focused lit run:
+  - 4/4 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic05$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - skipped (vhdl case), failures=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic05$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - skipped (vhdl case), fail=0 error=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Selector dimensions compose via implicit AND only (no OR/group syntax yet).
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.

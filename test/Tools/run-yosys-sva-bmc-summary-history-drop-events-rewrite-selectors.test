@@ -156,6 +156,31 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST='2,,3' \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMALIST
 
+// RUN: printf '{"schema_version":"1","event_id":"drop-file-list-comma","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy,comma.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-file-list-quoted-selector.jsonl
+// RUN: printf '{"schema_version":"1","event_id":"drop-file-list-other","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-other.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-file-list-quoted-selector.jsonl
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-file-list-quoted-selector.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH=crc32 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST='"legacy,comma.tsv"' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-list-quoted-selector.out
+// RUN: cat %t/drop-events-file-list-quoted-selector.jsonl | FileCheck %s --check-prefix=FILELISTQUOTED
+
+// RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-file-list-malformed.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-file-list-malformed.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST='"legacy.tsv' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADFILELISTMALFORMED
+
 // SELECTOR: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"target","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // SELECTOR: {"schema_version":"1","event_id":"drop-legacy-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"max_entries","history_file":"legacy.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"keep","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 
@@ -185,3 +210,8 @@
 // FILELIST: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-b.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 
 // BADSCHEMALIST: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST: empty entry in comma-separated list
+
+// FILELISTQUOTED: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy,comma.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
+// FILELISTQUOTED: {"schema_version":"1","event_id":"drop-file-list-other","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-other.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
+
+// BADFILELISTMALFORMED: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST: malformed comma-separated list

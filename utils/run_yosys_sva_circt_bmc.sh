@@ -3012,6 +3012,7 @@ PY
       local migrate_file="$1"
       python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
+import csv
 import json
 import re
 import shutil
@@ -3054,8 +3055,22 @@ def parse_utc_epoch(value: str, field_name: str) -> int:
 def parse_selector_list(raw: str, field_name: str):
     if not raw:
         return None
+    if "\n" in raw or "\r" in raw:
+        fail(
+            f"error: invalid {field_name}: newline is not allowed in comma-separated list"
+        )
+    try:
+        rows = list(csv.reader([raw], skipinitialspace=True, strict=True))
+    except csv.Error as ex:
+        fail(
+            f"error: invalid {field_name}: malformed comma-separated list ({ex})"
+        )
+    if len(rows) != 1:
+        fail(
+            f"error: invalid {field_name}: malformed comma-separated list"
+        )
     values = []
-    for token in raw.split(","):
+    for token in rows[0]:
         value = token.strip()
         if not value:
             fail(
