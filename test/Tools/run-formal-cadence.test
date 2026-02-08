@@ -37,6 +37,13 @@
 // RUN: not sh -c 'cd %t && rm -f %t/curl-par-call.txt && cp %t/utils/curl-par %t/utils/curl && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-webhook https://example.invalid/formal-p1 --on-fail-webhook https://example.invalid/formal-p2 --webhook-fanout-mode parallel --webhook-max-parallel 1 --webhook-retries 0 --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=PARFAILFAST
 // RUN: cat %t/formal-cadence-results-*/cadence.log | FileCheck %s --check-prefix=PARLOG
 // RUN: cat %t/curl-par-call.txt | FileCheck %s --check-prefix=PARWEBHOOK
+// RUN: printf '{"webhooks":[{"url":"https://example.invalid/cfg-a","retries":2,"backoff_mode":"fixed","backoff_secs":0,"backoff_max_secs":0,"jitter_secs":0,"timeout_secs":9},{"url":"https://example.invalid/cfg-b","retries":0,"timeout_secs":9}]}\n' > %t/webhook-config.json
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nurl=\"${@: -1}\"\nprintf \"cfg_url=%%%%s\\n\" \"$url\" >> %t/curl-cfg-call.txt\nif [[ \"$url\" == *\"cfg-a\" ]]; then\n  state=%t/curl-cfg-a-state.txt\n  count=0\n  if [[ -f \"$state\" ]]; then count=$(cat \"$state\"); fi\n  count=$((count + 1))\n  echo \"$count\" > \"$state\"\n  if [[ \"$count\" -le 2 ]]; then\n    exit 7\n  fi\nfi\n' > %t/utils/curl-cfg
+// RUN: chmod +x %t/utils/curl-cfg
+// RUN: not sh -c 'cd %t && rm -f %t/curl-cfg-call.txt %t/curl-cfg-a-state.txt && cp %t/utils/curl-cfg %t/utils/curl && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --out-root %t/formal-cadence-webhook-config --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-webhook-config %t/webhook-config.json --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=CFGFAILFAST
+// RUN: cat %t/curl-cfg-call.txt | FileCheck %s --check-prefix=CFGWEBHOOK
+// RUN: sh -c 'test "$(grep -c "cfg-a" %t/curl-cfg-call.txt)" -eq 3'
+// RUN: sh -c 'test "$(grep -c "cfg-b" %t/curl-cfg-call.txt)" -eq 1'
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
@@ -53,3 +60,6 @@
 // PARLOG: posting on-fail webhooks in parallel: 2 endpoints (max_parallel=1)
 // PARWEBHOOK: https://example.invalid/formal-p1
 // PARWEBHOOK: https://example.invalid/formal-p2
+// CFGFAILFAST: failing fast: iteration 1 failed
+// CFGWEBHOOK: https://example.invalid/cfg-a
+// CFGWEBHOOK: https://example.invalid/cfg-b

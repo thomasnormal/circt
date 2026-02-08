@@ -97,9 +97,17 @@ Post failure events directly to an HTTP webhook:
 utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-webhook https://hooks.example/formal -- --with-opentitan --opentitan ~/opentitan
 ```
 
+Use a JSON file for per-endpoint webhook policy overrides:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-webhook-config ./webhooks.json -- --with-opentitan --opentitan ~/opentitan
+```
+
 Webhook options:
 
 - `--on-fail-webhook <url>` can be specified multiple times.
+- `--on-fail-webhook-config <file>` loads webhook endpoints with per-endpoint
+  retry/backoff/timeout overrides.
 - `--webhook-fanout-mode <sequential|parallel>` controls endpoint dispatch.
 - `--webhook-max-parallel <n>` bounds concurrent webhook posts in parallel mode.
 - `--webhook-retries <n>` controls retries per endpoint.

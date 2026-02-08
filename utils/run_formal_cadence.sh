@@ -20,6 +20,8 @@ Options:
   --on-fail-hook PATH    Executable hook invoked on iteration failure
   --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
                          (repeatable; can specify multiple endpoints)
+  --on-fail-webhook-config FILE
+                         JSON webhook config with per-endpoint policy overrides
   --webhook-fanout-mode MODE
                          Webhook fanout: sequential | parallel (default: sequential)
   --webhook-max-parallel N
@@ -56,6 +58,7 @@ ITERATIONS=0
 RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
+WEBHOOK_CONFIG_FILE=""
 WEBHOOK_RETRIES=0
 WEBHOOK_FANOUT_MODE="sequential"
 WEBHOOK_MAX_PARALLEL=8
@@ -69,6 +72,13 @@ STRICT_GATE=1
 
 declare -a FORWARD_ARGS=()
 declare -a ON_FAIL_WEBHOOKS=()
+declare -a CONFIG_WEBHOOK_URLS=()
+declare -a CONFIG_WEBHOOK_RETRIES=()
+declare -a CONFIG_WEBHOOK_BACKOFF_MODE=()
+declare -a CONFIG_WEBHOOK_BACKOFF_SECS=()
+declare -a CONFIG_WEBHOOK_BACKOFF_MAX_SECS=()
+declare -a CONFIG_WEBHOOK_JITTER_SECS=()
+declare -a CONFIG_WEBHOOK_TIMEOUT_SECS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -86,6 +96,8 @@ while [[ $# -gt 0 ]]; do
       ON_FAIL_HOOK="$2"; shift 2 ;;
     --on-fail-webhook)
       ON_FAIL_WEBHOOKS+=("$2"); shift 2 ;;
+    --on-fail-webhook-config)
+      WEBHOOK_CONFIG_FILE="$2"; shift 2 ;;
     --webhook-retries)
       WEBHOOK_RETRIES="$2"; shift 2 ;;
     --webhook-fanout-mode)
@@ -186,7 +198,90 @@ if [[ -n "$ON_FAIL_HOOK" && ! -x "$ON_FAIL_HOOK" ]]; then
   echo "on-fail hook not executable: $ON_FAIL_HOOK" >&2
   exit 1
 fi
-if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 ]]; then
+if [[ -n "$WEBHOOK_CONFIG_FILE" ]]; then
+  if [[ ! -r "$WEBHOOK_CONFIG_FILE" ]]; then
+    echo "on-fail webhook config not readable: $WEBHOOK_CONFIG_FILE" >&2
+    exit 1
+  fi
+  while IFS=$'\t' read -r cfg_url cfg_retries cfg_backoff_mode cfg_backoff_secs cfg_backoff_max_secs cfg_jitter_secs cfg_timeout_secs; do
+    CONFIG_WEBHOOK_URLS+=("$cfg_url")
+    CONFIG_WEBHOOK_RETRIES+=("$cfg_retries")
+    CONFIG_WEBHOOK_BACKOFF_MODE+=("$cfg_backoff_mode")
+    CONFIG_WEBHOOK_BACKOFF_SECS+=("$cfg_backoff_secs")
+    CONFIG_WEBHOOK_BACKOFF_MAX_SECS+=("$cfg_backoff_max_secs")
+    CONFIG_WEBHOOK_JITTER_SECS+=("$cfg_jitter_secs")
+    CONFIG_WEBHOOK_TIMEOUT_SECS+=("$cfg_timeout_secs")
+  done < <(
+    WEBHOOK_CONFIG_FILE="$WEBHOOK_CONFIG_FILE" python3 - <<'PY'
+import json
+import os
+import sys
+
+config_path = os.environ["WEBHOOK_CONFIG_FILE"]
+try:
+    with open(config_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except Exception as ex:
+    print(f"invalid --on-fail-webhook-config: unable to parse '{config_path}' ({ex})", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(payload, dict):
+    print("invalid --on-fail-webhook-config: expected top-level object", file=sys.stderr)
+    raise SystemExit(1)
+
+webhooks = payload.get("webhooks")
+if webhooks is None or not isinstance(webhooks, list) or len(webhooks) == 0:
+    print("invalid --on-fail-webhook-config: expected non-empty 'webhooks' array", file=sys.stderr)
+    raise SystemExit(1)
+
+def read_nonneg_int(entry, key, default):
+    if key not in entry:
+        return default
+    value = entry[key]
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"field '{key}' must be non-negative integer")
+    return value
+
+for idx, entry in enumerate(webhooks):
+    if not isinstance(entry, dict):
+        print(f"invalid --on-fail-webhook-config: webhooks[{idx}] must be object", file=sys.stderr)
+        raise SystemExit(1)
+    url = entry.get("url")
+    if not isinstance(url, str) or not url.strip():
+        print(f"invalid --on-fail-webhook-config: webhooks[{idx}].url must be non-empty string", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        retries = read_nonneg_int(entry, "retries", 0)
+        backoff_mode = entry.get("backoff_mode", "fixed")
+        if backoff_mode not in {"fixed", "exponential"}:
+            raise ValueError("field 'backoff_mode' must be fixed or exponential")
+        backoff_secs = read_nonneg_int(entry, "backoff_secs", 5)
+        backoff_max_secs = read_nonneg_int(entry, "backoff_max_secs", 300)
+        jitter_secs = read_nonneg_int(entry, "jitter_secs", 0)
+        timeout_secs = entry.get("timeout_secs", 15)
+        if not isinstance(timeout_secs, int) or timeout_secs <= 0:
+            raise ValueError("field 'timeout_secs' must be positive integer")
+    except ValueError as ex:
+        print(f"invalid --on-fail-webhook-config: webhooks[{idx}] {ex}", file=sys.stderr)
+        raise SystemExit(1)
+    print(
+        "\t".join(
+            [
+                url.strip(),
+                str(retries),
+                backoff_mode,
+                str(backoff_secs),
+                str(backoff_max_secs),
+                str(jitter_secs),
+                str(timeout_secs),
+            ]
+        )
+    )
+PY
+  )
+fi
+
+if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 || "${#CONFIG_WEBHOOK_URLS[@]}" -gt 0 ]]; then
   if ! command -v curl >/dev/null 2>&1; then
     echo "--on-fail-webhook requires curl in PATH" >&2
     exit 1
@@ -204,8 +299,9 @@ CADENCE_LOG="$OUT_ROOT/cadence.log"
 STATE_FILE="$OUT_ROOT/cadence.state"
 
 on_fail_webhooks_csv=""
-if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 ]]; then
-  on_fail_webhooks_csv="$(IFS=,; echo "${ON_FAIL_WEBHOOKS[*]}")"
+if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 || "${#CONFIG_WEBHOOK_URLS[@]}" -gt 0 ]]; then
+  all_webhooks=("${ON_FAIL_WEBHOOKS[@]}" "${CONFIG_WEBHOOK_URLS[@]}")
+  on_fail_webhooks_csv="$(IFS=,; echo "${all_webhooks[*]}")"
 fi
 
 echo "start_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"
@@ -215,6 +311,7 @@ echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
 echo "on_fail_webhooks=$on_fail_webhooks_csv" >> "$STATE_FILE"
+echo "on_fail_webhook_config=$WEBHOOK_CONFIG_FILE" >> "$STATE_FILE"
 echo "webhook_fanout_mode=$WEBHOOK_FANOUT_MODE" >> "$STATE_FILE"
 echo "webhook_max_parallel=$WEBHOOK_MAX_PARALLEL" >> "$STATE_FILE"
 echo "webhook_retries=$WEBHOOK_RETRIES" >> "$STATE_FILE"
@@ -305,14 +402,20 @@ post_fail_webhook() {
   local webhook_url="$1"
   local payload="$2"
   local webhook_ts="$3"
+  local webhook_retries="$4"
+  local webhook_backoff_mode="$5"
+  local webhook_backoff_secs="$6"
+  local webhook_backoff_max_secs="$7"
+  local webhook_jitter_secs="$8"
+  local webhook_timeout_secs="$9"
   local attempt=0
-  local max_attempts=$((WEBHOOK_RETRIES + 1))
+  local max_attempts=$((webhook_retries + 1))
   while true; do
     attempt=$((attempt + 1))
     echo "[$webhook_ts] posting on-fail webhook attempt $attempt/$max_attempts: $webhook_url" \
       | tee -a "$CADENCE_LOG"
     set +e
-    curl -fsS --max-time "$WEBHOOK_TIMEOUT_SECS" -X POST \
+    curl -fsS --max-time "$webhook_timeout_secs" -X POST \
       -H "Content-Type: application/json" --data "$payload" \
       "$webhook_url" >> "$CADENCE_LOG" 2>&1
     local curl_ec=$?
@@ -326,21 +429,21 @@ post_fail_webhook() {
       return 1
     fi
     local retry_index="$attempt"
-    local sleep_secs="$WEBHOOK_BACKOFF_SECS"
-    if [[ "$WEBHOOK_BACKOFF_MODE" == "exponential" && "$retry_index" -gt 1 ]]; then
+    local sleep_secs="$webhook_backoff_secs"
+    if [[ "$webhook_backoff_mode" == "exponential" && "$retry_index" -gt 1 ]]; then
       local exp_mul=1
       local step=1
       while [[ "$step" -lt "$retry_index" ]]; do
         exp_mul=$((exp_mul * 2))
         step=$((step + 1))
       done
-      sleep_secs=$((WEBHOOK_BACKOFF_SECS * exp_mul))
+      sleep_secs=$((webhook_backoff_secs * exp_mul))
     fi
-    if [[ "$sleep_secs" -gt "$WEBHOOK_BACKOFF_MAX_SECS" ]]; then
-      sleep_secs="$WEBHOOK_BACKOFF_MAX_SECS"
+    if [[ "$sleep_secs" -gt "$webhook_backoff_max_secs" ]]; then
+      sleep_secs="$webhook_backoff_max_secs"
     fi
-    if [[ "$WEBHOOK_JITTER_SECS" -gt 0 ]]; then
-      sleep_secs=$((sleep_secs + (RANDOM % (WEBHOOK_JITTER_SECS + 1))))
+    if [[ "$webhook_jitter_secs" -gt 0 ]]; then
+      sleep_secs=$((sleep_secs + (RANDOM % (webhook_jitter_secs + 1))))
     fi
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook attempt failed with exit code $curl_ec (retrying): $webhook_url" \
       | tee -a "$CADENCE_LOG"
@@ -355,7 +458,37 @@ invoke_fail_webhooks() {
   local iteration="$1"
   local exit_code="$2"
   local run_dir="$3"
-  if [[ "${#ON_FAIL_WEBHOOKS[@]}" -eq 0 ]]; then
+  local -a webhook_urls=()
+  local -a webhook_retries=()
+  local -a webhook_backoff_mode=()
+  local -a webhook_backoff_secs=()
+  local -a webhook_backoff_max_secs=()
+  local -a webhook_jitter_secs=()
+  local -a webhook_timeout_secs=()
+
+  local webhook_url
+  local idx
+  for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
+    webhook_urls+=("$webhook_url")
+    webhook_retries+=("$WEBHOOK_RETRIES")
+    webhook_backoff_mode+=("$WEBHOOK_BACKOFF_MODE")
+    webhook_backoff_secs+=("$WEBHOOK_BACKOFF_SECS")
+    webhook_backoff_max_secs+=("$WEBHOOK_BACKOFF_MAX_SECS")
+    webhook_jitter_secs+=("$WEBHOOK_JITTER_SECS")
+    webhook_timeout_secs+=("$WEBHOOK_TIMEOUT_SECS")
+  done
+  for ((idx = 0; idx < ${#CONFIG_WEBHOOK_URLS[@]}; idx++)); do
+    webhook_urls+=("${CONFIG_WEBHOOK_URLS[$idx]}")
+    webhook_retries+=("${CONFIG_WEBHOOK_RETRIES[$idx]}")
+    webhook_backoff_mode+=("${CONFIG_WEBHOOK_BACKOFF_MODE[$idx]}")
+    webhook_backoff_secs+=("${CONFIG_WEBHOOK_BACKOFF_SECS[$idx]}")
+    webhook_backoff_max_secs+=("${CONFIG_WEBHOOK_BACKOFF_MAX_SECS[$idx]}")
+    webhook_jitter_secs+=("${CONFIG_WEBHOOK_JITTER_SECS[$idx]}")
+    webhook_timeout_secs+=("${CONFIG_WEBHOOK_TIMEOUT_SECS[$idx]}")
+  done
+
+  local webhook_count="${#webhook_urls[@]}"
+  if [[ "$webhook_count" -eq 0 ]]; then
     return 0
   fi
 
@@ -368,7 +501,7 @@ invoke_fail_webhooks() {
     OUT_ROOT="$OUT_ROOT" \
     CADENCE_LOG_PATH="$CADENCE_LOG" \
     CADENCE_STATE_PATH="$STATE_FILE" \
-    WEBHOOK_COUNT="${#ON_FAIL_WEBHOOKS[@]}" \
+    WEBHOOK_COUNT="$webhook_count" \
     EVENT_TS="$webhook_ts" python3 - <<'PY'
 import json
 import os
@@ -392,14 +525,22 @@ print(
 PY
   )"
 
-  local webhook_url
   local failures=0
   if [[ "$WEBHOOK_FANOUT_MODE" == "parallel" ]]; then
-    echo "[$webhook_ts] posting on-fail webhooks in parallel: ${#ON_FAIL_WEBHOOKS[@]} endpoints (max_parallel=$WEBHOOK_MAX_PARALLEL)" \
+    echo "[$webhook_ts] posting on-fail webhooks in parallel: $webhook_count endpoints (max_parallel=$WEBHOOK_MAX_PARALLEL)" \
       | tee -a "$CADENCE_LOG"
     local -a webhook_pids=()
-    for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
-      post_fail_webhook "$webhook_url" "$payload" "$webhook_ts" &
+    for ((idx = 0; idx < webhook_count; idx++)); do
+      post_fail_webhook \
+        "${webhook_urls[$idx]}" \
+        "$payload" \
+        "$webhook_ts" \
+        "${webhook_retries[$idx]}" \
+        "${webhook_backoff_mode[$idx]}" \
+        "${webhook_backoff_secs[$idx]}" \
+        "${webhook_backoff_max_secs[$idx]}" \
+        "${webhook_jitter_secs[$idx]}" \
+        "${webhook_timeout_secs[$idx]}" &
       webhook_pids+=("$!")
       if [[ "${#webhook_pids[@]}" -ge "$WEBHOOK_MAX_PARALLEL" ]]; then
         local throttle_pid="${webhook_pids[0]}"
@@ -416,14 +557,23 @@ PY
       fi
     done
   else
-    for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
-      if ! post_fail_webhook "$webhook_url" "$payload" "$webhook_ts"; then
+    for ((idx = 0; idx < webhook_count; idx++)); do
+      if ! post_fail_webhook \
+        "${webhook_urls[$idx]}" \
+        "$payload" \
+        "$webhook_ts" \
+        "${webhook_retries[$idx]}" \
+        "${webhook_backoff_mode[$idx]}" \
+        "${webhook_backoff_secs[$idx]}" \
+        "${webhook_backoff_max_secs[$idx]}" \
+        "${webhook_jitter_secs[$idx]}" \
+        "${webhook_timeout_secs[$idx]}"; then
         failures=$((failures + 1))
       fi
     done
   fi
   if [[ "$failures" -gt 0 ]]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] webhook delivery failures: $failures/${#ON_FAIL_WEBHOOKS[@]}" \
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] webhook delivery failures: $failures/$webhook_count" \
       | tee -a "$CADENCE_LOG"
   fi
 }
