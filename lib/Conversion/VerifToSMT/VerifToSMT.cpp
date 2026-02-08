@@ -164,6 +164,7 @@ struct ResolvedNamedBoolExpr {
   enum class Kind { Arg, Const, Not, And, Or, Xor, Eq, Ne };
   Kind kind = Kind::Arg;
   unsigned argIndex = 0;
+  std::optional<unsigned> bitIndex;
   bool constValue = false;
   std::unique_ptr<ResolvedNamedBoolExpr> lhs;
   std::unique_ptr<ResolvedNamedBoolExpr> rhs;
@@ -211,7 +212,7 @@ private:
 
   static bool isIdentifierChar(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' ||
-           c == '.';
+           c == '.' || c == '[' || c == ']';
   }
 
   static std::optional<bool> parseBoolLiteral(StringRef text) {
@@ -450,6 +451,30 @@ static std::unique_ptr<ResolvedNamedBoolExpr>
 resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
                      const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
                      size_t numNonStateArgs) {
+  auto resolveArgName = [&](StringRef name) -> std::optional<std::pair<unsigned, std::optional<unsigned>>> {
+    if (auto it = inputNameToArgIndex.find(name);
+        it != inputNameToArgIndex.end() && it->second < numNonStateArgs)
+      return std::pair<unsigned, std::optional<unsigned>>{it->second,
+                                                           std::nullopt};
+
+    size_t lbracket = name.find_last_of('[');
+    size_t rbracket = name.find_last_of(']');
+    if (lbracket == StringRef::npos || rbracket == StringRef::npos ||
+        lbracket + 1 >= rbracket || rbracket + 1 != name.size())
+      return std::nullopt;
+    StringRef base = name.take_front(lbracket);
+    StringRef indexText = name.slice(lbracket + 1, rbracket);
+    if (indexText.contains(':'))
+      return std::nullopt;
+    unsigned bit = 0;
+    if (indexText.getAsInteger(10, bit))
+      return std::nullopt;
+    auto it = inputNameToArgIndex.find(base);
+    if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
+      return std::nullopt;
+    return std::pair<unsigned, std::optional<unsigned>>{it->second, bit};
+  };
+
   auto resolved = std::make_unique<ResolvedNamedBoolExpr>();
   switch (expr.kind) {
   case ParsedNamedBoolExpr::Kind::Const:
@@ -457,11 +482,12 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
     resolved->constValue = expr.constValue;
     return resolved;
   case ParsedNamedBoolExpr::Kind::Name: {
-    auto it = inputNameToArgIndex.find(expr.name);
-    if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
+    auto argOr = resolveArgName(expr.name);
+    if (!argOr)
       return {};
     resolved->kind = ResolvedNamedBoolExpr::Kind::Arg;
-    resolved->argIndex = it->second;
+    resolved->argIndex = argOr->first;
+    resolved->bitIndex = argOr->second;
     return resolved;
   }
   case ParsedNamedBoolExpr::Kind::Not: {
@@ -5167,7 +5193,31 @@ struct VerifBoundedModelCheckingOpConversion
       case ResolvedNamedBoolExpr::Kind::Arg:
         if (expr.argIndex >= values.size())
           return failure();
-        return toSMTBool(builder, values[expr.argIndex]);
+        if (!expr.bitIndex)
+          return toSMTBool(builder, values[expr.argIndex]);
+        {
+          Value value = values[expr.argIndex];
+          unsigned bit = *expr.bitIndex;
+          if (isa<smt::BoolType>(value.getType())) {
+            if (bit != 0)
+              return failure();
+            return value;
+          }
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
+            if (bit >= bvTy.getWidth())
+              return failure();
+            auto bitTy = smt::BitVectorType::get(builder.getContext(), 1);
+            auto bitValue =
+                smt::ExtractOp::create(builder, loc, bitTy, bit, value);
+            auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
+            return Value(smt::EqOp::create(builder, loc, bitValue, one));
+          }
+          if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
+            if (intTy.getWidth() == 1 && bit == 0)
+              return toSMTBool(builder, value);
+          }
+          return failure();
+        }
       case ResolvedNamedBoolExpr::Kind::Const:
         return Value(smt::BoolConstantOp::create(builder, loc, expr.constValue));
       case ResolvedNamedBoolExpr::Kind::Not: {

@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 504)
+## Current Status - February 8, 2026 (Iteration 505)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis (`signal_expr`/`iff_expr`) and counterexample coverage; next: richer Slang expr graphs, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis with bit-select support (`signal_expr = "bus[0]"`); next: canonical Slang expression IDs/graphs, part-select/reduction/cast lowering, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,61 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 505
+
+1. **Expression-backed witness lowering now supports bit-select references**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended named-expression resolution so `signal_expr`/`iff_expr` can bind:
+     - direct names (`foo`)
+     - constant bit-selects (`foo[0]`)
+   - Added strict bounds/shape checks and preserved existing fallback behavior
+     for unsupported forms.
+
+2. **Bit-select witness firing generation in SMT lowering**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `ResolvedNamedBoolExpr::Arg` evaluation now handles bit extraction from:
+     - `!smt.bv<N>` (via `smt.bv.extract` + compare-to-one)
+     - `!smt.bool` (index `0` only)
+   - This unblocks expression-backed edge witnesses for common packed-vector
+     event controls without requiring alias-only metadata.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-bit-select.mlir`
+   - New test verifies witness synthesis with:
+     - `signal_expr = "bus[0]"`
+     - `iff_expr = "en"`
+   - Covers both SMT-LIB export and non-SMTLIB runtime lowering modes.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Expression lowering still uses syntax text plus a local parser; richer SV
+     forms beyond simple boolean/bit-select remain unsupported.
+   - Part-select ranges (`foo[msb:lsb]`), reductions, casts, concatenations,
+     and many builtin calls still need dedicated lowering.
+   - Highest-value Slang leverage not yet used end-to-end:
+     - canonical Slang expression IDs/graphs in metadata (instead of text),
+     - explicit expression type/4-state information for robust SMT typing,
+     - direct SVA/procedural origin metadata for `always @(property)` and
+       multi-clock diagnostics.
 
 ### Session Summary - Iteration 504
 
