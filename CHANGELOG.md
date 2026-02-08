@@ -30264,3 +30264,73 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Expression normalization and complexity controls are still missing.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 613 - February 8, 2026
+
+### Yosys SVA BMC Key-vs-Key Scalar Bool-Expression Operators
+
+- Extended `bool_expr` node set with typed key-vs-key scalar operators:
+  - `eq_key`: `[lhs_key, rhs_key]`
+  - `ne_key`: `[lhs_key, rhs_key]`
+- Runtime evaluation compares canonical scalar string forms for both keys.
+- Added formatting diagnostics:
+  - renders `eq_key` / `ne_key` as `lhs==rhs` / `lhs!=rhs`.
+
+### Schema-Type Validation
+
+- Added schema parse-time key validation for `eq_key` / `ne_key`:
+  - both keys must be declared in schema `keys`
+  - both keys must share the same declared type
+- Existing checks remain active:
+  - `cmp` integer-key enforcement
+  - `eq_const` / `ne_const` literal-type key enforcement
+  - `regex` string-key enforcement
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive merged schema case now exercises `eq_key` and `ne_key`
+    - `eq_key` mismatch rejection
+    - `eq_key` mixed-type key rejection at schema parse-time
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Scalar comparisons still do not expose explicit collation/normalization
+  policy for non-integer comparisons.
+- Regex predicates still lack flags/options and profile-level compiled reuse.
+- Integer `div`/`mod` semantics remain implicit and not schema-versioned.
+- Expression normalization and complexity controls are still missing.
+- OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
+  `aes_sbox_canright`.

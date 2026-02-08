@@ -3939,6 +3939,21 @@ def parse_bool_expression(expr, field_name: str):
             payload[1], f"{field_name}.{op}[1]"
         )
         return (op, key, literal_type, literal_value)
+    if op in {"eq_key", "ne_key"}:
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 2
+            or not isinstance(payload[0], str)
+            or not isinstance(payload[1], str)
+        ):
+            fail(
+                f"error: invalid {field_name}.{op}: expected [lhs_key, rhs_key]"
+            )
+        lhs_key = payload[0]
+        rhs_key = payload[1]
+        validate_context_key_name(lhs_key, f"{field_name}.{op}[0]")
+        validate_context_key_name(rhs_key, f"{field_name}.{op}[1]")
+        return (op, lhs_key, rhs_key)
     if op == "regex":
         if (
             not isinstance(payload, list)
@@ -4015,6 +4030,18 @@ def evaluate_bool_expression(expr, context):
         if kind == "eq_const":
             return parsed_value == literal_value
         return parsed_value != literal_value
+    if kind in {"eq_key", "ne_key"}:
+        lhs_key = expr[1]
+        rhs_key = expr[2]
+        if lhs_key not in context or rhs_key not in context:
+            return False
+        lhs_raw = context[lhs_key]
+        rhs_raw = context[rhs_key]
+        lhs_value = lhs_raw if isinstance(lhs_raw, str) else format_context_scalar(lhs_raw)
+        rhs_value = rhs_raw if isinstance(rhs_raw, str) else format_context_scalar(rhs_raw)
+        if kind == "eq_key":
+            return lhs_value == rhs_value
+        return lhs_value != rhs_value
     if kind == "regex":
         key = expr[1]
         pattern = expr[2]
@@ -4059,6 +4086,9 @@ def format_bool_expression(expr):
             f"{expr[1]}{op_symbol}"
             f"{format_context_scalar_literal(expr[2], expr[3])}"
         )
+    if kind in {"eq_key", "ne_key"}:
+        op_symbol = "==" if kind == "eq_key" else "!="
+        return f"{expr[1]}{op_symbol}{expr[2]}"
     if kind == "regex":
         return f"regex({expr[1]}, {json.dumps(expr[2])})"
     if kind in {"all", "any"}:
@@ -4072,7 +4102,9 @@ def format_bool_expression(expr):
     return "<invalid-bool-expr>"
 
 
-def validate_bool_expression_key_types(expr, require_integer_key, require_key_type):
+def validate_bool_expression_key_types(
+    expr, require_integer_key, require_key_type, require_same_key_type
+):
     kind = expr[0]
     if kind == "cmp":
         expr_keys = set()
@@ -4084,18 +4116,21 @@ def validate_bool_expression_key_types(expr, require_integer_key, require_key_ty
     if kind in {"eq_const", "ne_const"}:
         require_key_type(expr[1], expr[2])
         return
+    if kind in {"eq_key", "ne_key"}:
+        require_same_key_type(expr[1], expr[2])
+        return
     if kind == "regex":
         require_key_type(expr[1], "string")
         return
     if kind in {"all", "any"}:
         for child in expr[1]:
             validate_bool_expression_key_types(
-                child, require_integer_key, require_key_type
+                child, require_integer_key, require_key_type, require_same_key_type
             )
         return
     if kind == "not":
         validate_bool_expression_key_types(
-            expr[1], require_integer_key, require_key_type
+            expr[1], require_integer_key, require_key_type, require_same_key_type
         )
 
 
@@ -5409,6 +5444,22 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
                 f"error: invalid {op_field}: comparator key '{key}' must be declared with {expected_type} type"
             )
 
+    def require_same_key_type(lhs_key, rhs_key, op_field):
+        lhs_spec = key_specs.get(lhs_key)
+        if lhs_spec is None:
+            fail(
+                f"error: invalid {op_field}: comparator key '{lhs_key}' must be declared in schema keys"
+            )
+        rhs_spec = key_specs.get(rhs_key)
+        if rhs_spec is None:
+            fail(
+                f"error: invalid {op_field}: comparator key '{rhs_key}' must be declared in schema keys"
+            )
+        if lhs_spec["type"] != rhs_spec["type"]:
+            fail(
+                f"error: invalid {op_field}: comparator keys '{lhs_key}' and '{rhs_key}' must share same declared type"
+            )
+
     int_lt_pairs = clause["int_lt_pairs"]
     if int_lt_pairs is not None:
         for lhs, rhs in int_lt_pairs:
@@ -5497,6 +5548,9 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
                 lambda key: require_integer_key(key, f"{field_name}.bool_expr"),
                 lambda key, expected_type: require_key_type(
                     key, expected_type, f"{field_name}.bool_expr"
+                ),
+                lambda lhs_key, rhs_key: require_same_key_type(
+                    lhs_key, rhs_key, f"{field_name}.bool_expr"
                 ),
             )
 
