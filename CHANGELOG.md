@@ -31433,3 +31433,51 @@ CIRCT/slang correctly enforces LRM restrictions.
   `axi4Lite_avip` currently failing in this smoke).
 - Optional-lane binary selection is global (`--circt-verilog`) and not yet
   per-suite override.
+
+## Iteration 635 - February 8, 2026
+
+### Per-Suite CIRCT_VERILOG Overrides in `run_formal_all.sh`
+
+- Added lane-specific binary options:
+  - `--circt-verilog-avip <path>`
+  - `--circt-verilog-opentitan <path>`
+- Both options default to global `--circt-verilog` when not explicitly set.
+- Added lane-specific executable validation:
+  - AVIP lane validates effective AVIP binary path
+  - OpenTitan lane validates effective OpenTitan binary path
+- Updated env propagation:
+  - AVIP runs now receive `CIRCT_VERILOG=<avip-path>`
+  - OpenTitan runs now receive `CIRCT_VERILOG=<opentitan-path>`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - adds fake AVIP and fake OpenTitan lanes
+    - verifies lane-specific `CIRCT_VERILOG` env wiring
+    - verifies summary rows for AVIP compile PASS and OpenTitan LEC PASS
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - expanded optional-run examples with
+      `--circt-verilog-avip` / `--circt-verilog-opentitan`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-suite-bins-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Lane-specific overrides are currently implemented for optional lanes
+  (AVIP/OpenTitan) only.
+- Per-lane fallback chains (multiple candidate binaries) are not yet supported.

@@ -123,6 +123,7 @@ OpenTitan and AVIP runs are optional:
 utils/run_formal_all.sh --with-opentitan --opentitan ~/opentitan
 utils/run_formal_all.sh --with-avip --avip-glob "~/mbit/*avip*"
 utils/run_formal_all.sh --with-avip --avip-glob "~/mbit/*avip*" --circt-verilog /abs/path/to/circt-verilog
+utils/run_formal_all.sh --with-opentitan --opentitan ~/opentitan --circt-verilog-opentitan /abs/path/to/circt-verilog --with-avip --avip-glob "~/mbit/*avip*" --circt-verilog-avip /abs/path/to/circt-verilog
 ```
 
 These are not formal checks but are tracked here to keep external testing
