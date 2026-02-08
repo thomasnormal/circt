@@ -38,6 +38,9 @@ Options:
   --expectations-dry-run-report-hmac-key-file FILE
                          Optional key file for HMAC-SHA256 signing of run_end
                          payload digest
+  --expectations-dry-run-report-hmac-key-id ID
+                         Optional key identifier emitted in run_meta/run_end
+                         when HMAC signing is enabled
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
@@ -126,6 +129,7 @@ EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
 EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS=5
 EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE=""
+EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID=""
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 PRUNE_EXPECTED_FAILURES_FILE=""
@@ -217,6 +221,8 @@ while [[ $# -gt 0 ]]; do
       EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$2"; shift 2 ;;
     --expectations-dry-run-report-hmac-key-file)
       EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE="$2"; shift 2 ;;
+    --expectations-dry-run-report-hmac-key-id)
+      EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID="$2"; shift 2 ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
@@ -289,6 +295,11 @@ fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
       ! -r "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
   echo "expectations dry-run report HMAC key file not readable: $EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" >&2
+  exit 1
+fi
+if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID" && \
+      -z "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
+  echo "--expectations-dry-run-report-hmac-key-id requires --expectations-dry-run-report-hmac-key-file" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
@@ -387,6 +398,7 @@ emit_expectations_dry_run_run_end() {
     EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
     EXPECTATIONS_DRY_RUN_EXIT_CODE="$exit_code" \
     EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE="$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" \
+    EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID="$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID" \
     python3 - <<'PY'
 import hmac
 import hashlib
@@ -431,9 +443,12 @@ payload = {
 hmac_key_file = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE", "")
 if hmac_key_file:
   key_bytes = Path(hmac_key_file).read_bytes()
+  key_id = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID", "").strip()
   payload["payload_hmac_sha256"] = hmac.new(
       key_bytes, payload_hash_hex.encode("utf-8"), hashlib.sha256
   ).hexdigest()
+  if key_id:
+    payload["hmac_key_id"] = key_id
 with report_path.open("a", encoding="utf-8") as f:
   f.write(json.dumps(payload, sort_keys=True) + "\n")
 PY
@@ -448,6 +463,7 @@ if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" 
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE="$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" \
+  EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID="$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   python3 - <<'PY'
 import json
@@ -469,6 +485,10 @@ payload = {
     else "none",
     "out_dir": os.environ.get("OUT_DIR", ""),
 }
+if payload["hmac_mode"] != "none":
+  hmac_key_id = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_ID", "").strip()
+  if hmac_key_id:
+    payload["hmac_key_id"] = hmac_key_id
 with report_path.open("a", encoding="utf-8") as f:
   f.write(json.dumps(payload, sort_keys=True) + "\n")
 PY
