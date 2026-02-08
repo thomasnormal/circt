@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 484)
+## Current Status - February 8, 2026 (Iteration 485)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed sequence `.triggered`; next: procedural `@property`, richer multiclock proofs |
+| **BMC/LEC** | Codex | Active | Landed no-edge mixed sequence/signal event lists; next: procedural `@property`, stronger multiclock UNSAT harnesses |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,45 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 485
+
+1. **Mixed sequence/signal event-list support for no-edge signal events**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp` to remove the
+     explicit-edge restriction in mixed event lists.
+   - `always @(seq or sig)` now lowers instead of erroring, using existing
+     multi-clock/event-loop machinery (`any`-change ticks for the signal event).
+
+2. **Regression coverage**
+   - Import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceSignalEventListNoEdge`.
+   - BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-noedge-sat-e2e.sv`.
+
+3. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-noedge-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+   - External smoke (requested suite sweep, representative samples):
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Procedural property event controls remain blocked at front-end legality for
+     direct `always @(property)` forms.
+   - We still need stronger non-vacuous multiclock equivalence harnesses for
+     derived/non-keyable clock scenarios.
+   - High-value next work:
+     - robust multiclock traceability diagnostics for mixed event lists,
+     - broader sequence/property method coverage in procedural contexts,
+     - upstream + flow-level strategy for property-like procedural events.
 
 ### Session Summary - Iteration 484
 

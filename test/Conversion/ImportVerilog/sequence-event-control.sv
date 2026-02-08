@@ -173,3 +173,22 @@ module SequenceTriggeredMethodControl;
     c <= ~c;
   end
 endmodule
+
+// Test mixed sequence/signal event list with no-edge signal event.
+module SequenceSignalEventListNoEdge;
+  logic clk, a, b, c;
+
+  sequence seq;
+    @(posedge clk) a;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListNoEdge
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK-DAG: moore.detect_event any
+  // CHECK-DAG: moore.detect_event any
+  // CHECK: cf.cond_br
+  always @(seq or b) begin
+    c <= ~c;
+  end
+endmodule
