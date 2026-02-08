@@ -67,6 +67,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEX
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2036,6 +2037,7 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_profile_route_context_ci_job="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB"
   local drop_events_rewrite_selector_profile_route_context_ci_branch="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH"
   local drop_events_rewrite_selector_profile_route_context_ci_target="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET"
+  local drop_events_rewrite_selector_profile_route_context_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_route_context_ci_provider=""
@@ -3112,7 +3114,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_route_context_ci_provider" "$drop_events_route_context_ci_job" "$drop_events_route_context_ci_branch" "$drop_events_route_context_ci_target" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_route_context_ci_provider" "$drop_events_route_context_ci_job" "$drop_events_route_context_ci_branch" "$drop_events_route_context_ci_target" "$drop_events_rewrite_selector_profile_route_context_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3154,8 +3156,9 @@ rewrite_selector_context_ci_provider = sys.argv[28]
 rewrite_selector_context_ci_job = sys.argv[29]
 rewrite_selector_context_ci_branch = sys.argv[30]
 rewrite_selector_context_ci_target = sys.argv[31]
-rewrite_row_generated_at_utc_min = sys.argv[32]
-rewrite_row_generated_at_utc_max = sys.argv[33]
+rewrite_selector_context_json_raw = sys.argv[32]
+rewrite_row_generated_at_utc_min = sys.argv[33]
+rewrite_row_generated_at_utc_max = sys.argv[34]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3677,6 +3680,36 @@ def parse_selector_profile_name_array(payload, field_name: str):
     return names
 
 
+def parse_selector_profile_route_context(raw: str):
+    if not raw:
+        return {}
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+    )
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(f"error: invalid {field_name}: expected JSON object")
+    if not isinstance(payload, dict):
+        fail(f"error: invalid {field_name}: expected JSON object")
+    context = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not key:
+            fail(
+                f"error: invalid {field_name}: context keys must be non-empty strings"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key):
+            fail(
+                f"error: invalid {field_name}: invalid context key '{key}'"
+            )
+        if not isinstance(value, str):
+            fail(
+                f"error: invalid {field_name}.{key}: expected string value"
+            )
+        context[key] = value
+    return context
+
+
 def parse_selector_profile_routes(raw: str):
     if not raw:
         return None
@@ -3706,7 +3739,8 @@ def parse_selector_profile_routes(raw: str):
                 f"error: invalid {route_field}: expected non-empty object"
             )
         unknown_keys = sorted(
-            set(route_spec.keys()) - {"default_list", "profile_list", "overlay_list", "when"}
+            set(route_spec.keys())
+            - {"default_list", "profile_list", "overlay_list", "when", "priority"}
         )
         if unknown_keys:
             fail(
@@ -3733,6 +3767,18 @@ def parse_selector_profile_routes(raw: str):
             overlay_names = parse_route_name_list(
                 route_spec["overlay_list"], f"{route_field}.overlay_list"
             )
+        route_priority = 0
+        if "priority" in route_spec:
+            priority_value = route_spec["priority"]
+            if (
+                not isinstance(priority_value, int)
+                or isinstance(priority_value, bool)
+                or priority_value < 0
+            ):
+                fail(
+                    f"error: invalid {route_field}.priority: expected non-negative integer"
+                )
+            route_priority = priority_value
         when_conditions = []
         if "when" in route_spec:
             when_value = route_spec["when"]
@@ -3750,6 +3796,7 @@ def parse_selector_profile_routes(raw: str):
                     "ci_job_regex",
                     "ci_branch_regex",
                     "ci_target_regex",
+                    "context_regex",
                 }
             )
             if unknown_when_keys:
@@ -3826,6 +3873,30 @@ def parse_selector_profile_routes(raw: str):
                         ),
                     )
                 )
+            if "context_regex" in when_value:
+                context_regex_value = when_value["context_regex"]
+                if not isinstance(context_regex_value, dict) or not context_regex_value:
+                    fail(
+                        f"error: invalid {route_field}.when.context_regex: expected non-empty object"
+                    )
+                for context_key, context_pattern in context_regex_value.items():
+                    if not isinstance(context_key, str) or not context_key:
+                        fail(
+                            f"error: invalid {route_field}.when.context_regex: keys must be non-empty strings"
+                        )
+                    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", context_key):
+                        fail(
+                            f"error: invalid {route_field}.when.context_regex: invalid context key '{context_key}'"
+                        )
+                    when_conditions.append(
+                        (
+                            context_key,
+                            compile_clause_regex(
+                                context_pattern,
+                                f"{route_field}.when.context_regex.{context_key}",
+                            ),
+                        )
+                    )
         if not default_names and not profile_names and not overlay_names:
             fail(
                 f"error: invalid {route_field}: expected at least one list key"
@@ -3834,6 +3905,7 @@ def parse_selector_profile_routes(raw: str):
             "default_names": default_names,
             "profile_names": profile_names,
             "overlay_names": overlay_names,
+            "priority": route_priority,
             "when_conditions": when_conditions,
         }
     return routes
@@ -3988,6 +4060,9 @@ rewrite_selector_profile_overlay_names = parse_selector_profile_name_list(
     rewrite_selector_profile_overlay_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
 )
+rewrite_selector_profile_route_context = parse_selector_profile_route_context(
+    rewrite_selector_context_json_raw
+)
 rewrite_selector_profile_routes = parse_selector_profile_routes(
     rewrite_selector_profile_routes_json_raw
 )
@@ -4049,6 +4124,8 @@ elif rewrite_selector_profile_route_auto_mode != "off":
             "ci_branch": rewrite_selector_context_ci_branch,
             "ci_target": rewrite_selector_context_ci_target,
         }
+        for context_key, context_value in rewrite_selector_profile_route_context.items():
+            auto_context[context_key] = context_value
         auto_matches = []
         for route_name, route_spec in rewrite_selector_profile_routes.items():
             when_conditions = route_spec["when_conditions"]
@@ -4060,18 +4137,25 @@ elif rewrite_selector_profile_route_auto_mode != "off":
                     matched = False
                     break
             if matched:
-                auto_matches.append(route_name)
-        if len(auto_matches) > 1:
-            fail(
-                "error: invalid "
-                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: "
-                f"ambiguous auto route matches ({', '.join(auto_matches)})"
+                auto_matches.append((route_name, route_spec["priority"]))
+        if auto_matches:
+            max_priority = max(priority for _, priority in auto_matches)
+            top_matches = sorted(
+                route_name
+                for route_name, priority in auto_matches
+                if priority == max_priority
             )
-        if len(auto_matches) == 1:
-            rewrite_selector_profile_route = auto_matches[0]
-            selected_route_spec = rewrite_selector_profile_routes[
-                rewrite_selector_profile_route
-            ]
+            if len(top_matches) == 1:
+                rewrite_selector_profile_route = top_matches[0]
+                selected_route_spec = rewrite_selector_profile_routes[
+                    rewrite_selector_profile_route
+                ]
+            else:
+                fail(
+                    "error: invalid "
+                    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: "
+                    f"ambiguous auto route matches ({', '.join(top_matches)})"
+                )
         elif rewrite_selector_profile_route_auto_mode == "required":
             fail(
                 "error: invalid "
