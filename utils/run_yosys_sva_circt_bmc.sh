@@ -3749,7 +3749,9 @@ def parse_context_presence_clause(payload, field_name: str):
         fail(
             f"error: invalid {field_name}: expected non-empty object"
         )
-    unknown_keys = sorted(set(payload.keys()) - {"keys_all", "keys_any"})
+    unknown_keys = sorted(
+        set(payload.keys()) - {"keys_all", "keys_any", "equals", "not_equals"}
+    )
     if unknown_keys:
         fail(
             f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
@@ -3788,13 +3790,91 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             keys_any_seen.add(key)
             keys_any.append(key)
-    if keys_all is None and keys_any is None:
+    equals_pairs = None
+    if "equals" in payload:
+        equals_raw = payload["equals"]
+        if not isinstance(equals_raw, list) or not equals_raw:
+            fail(
+                f"error: invalid {field_name}.equals: expected non-empty array"
+            )
+        equals_pairs = []
+        equals_seen = set()
+        for pair_index, pair in enumerate(equals_raw):
+            pair_field = f"{field_name}.equals[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+                or not isinstance(pair[1], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key pair"
+                )
+            lhs = pair[0]
+            rhs = pair[1]
+            validate_context_key_name(lhs, pair_field)
+            validate_context_key_name(rhs, pair_field)
+            if lhs == rhs:
+                fail(
+                    f"error: invalid {pair_field}: pair keys must differ"
+                )
+            pair_key = tuple(sorted((lhs, rhs)))
+            if pair_key in equals_seen:
+                fail(
+                    f"error: invalid {field_name}.equals: duplicate pair '{lhs},{rhs}'"
+                )
+            equals_seen.add(pair_key)
+            equals_pairs.append((lhs, rhs))
+    not_equals_pairs = None
+    if "not_equals" in payload:
+        not_equals_raw = payload["not_equals"]
+        if not isinstance(not_equals_raw, list) or not not_equals_raw:
+            fail(
+                f"error: invalid {field_name}.not_equals: expected non-empty array"
+            )
+        not_equals_pairs = []
+        not_equals_seen = set()
+        for pair_index, pair in enumerate(not_equals_raw):
+            pair_field = f"{field_name}.not_equals[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+                or not isinstance(pair[1], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key pair"
+                )
+            lhs = pair[0]
+            rhs = pair[1]
+            validate_context_key_name(lhs, pair_field)
+            validate_context_key_name(rhs, pair_field)
+            if lhs == rhs:
+                fail(
+                    f"error: invalid {pair_field}: pair keys must differ"
+                )
+            pair_key = tuple(sorted((lhs, rhs)))
+            if pair_key in not_equals_seen:
+                fail(
+                    f"error: invalid {field_name}.not_equals: duplicate pair '{lhs},{rhs}'"
+                )
+            not_equals_seen.add(pair_key)
+            not_equals_pairs.append((lhs, rhs))
+    if (
+        keys_all is None
+        and keys_any is None
+        and equals_pairs is None
+        and not_equals_pairs is None
+    ):
         fail(
-            f"error: invalid {field_name}: expected at least one of keys_all or keys_any"
+            "error: invalid "
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, or not_equals"
         )
     return {
         "keys_all": keys_all,
         "keys_any": keys_any,
+        "equals_pairs": equals_pairs,
+        "not_equals_pairs": not_equals_pairs,
     }
 
 
@@ -3813,6 +3893,24 @@ def is_context_presence_clause_satisfied(context, clause):
                 break
         if not matched:
             return False
+    equals_pairs = clause["equals_pairs"]
+    if equals_pairs is not None:
+        for lhs, rhs in equals_pairs:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = format_context_scalar(context[lhs])
+            rhs_value = format_context_scalar(context[rhs])
+            if lhs_value != rhs_value:
+                return False
+    not_equals_pairs = clause["not_equals_pairs"]
+    if not_equals_pairs is not None:
+        for lhs, rhs in not_equals_pairs:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = format_context_scalar(context[lhs])
+            rhs_value = format_context_scalar(context[rhs])
+            if lhs_value == rhs_value:
+                return False
     return True
 
 
@@ -3824,6 +3922,20 @@ def format_context_presence_clause(clause):
     keys_any = clause["keys_any"]
     if keys_any is not None:
         parts.append("keys_any=[" + ", ".join(keys_any) + "]")
+    equals_pairs = clause["equals_pairs"]
+    if equals_pairs is not None:
+        parts.append(
+            "equals=["
+            + ", ".join(f"{lhs}=={rhs}" for lhs, rhs in equals_pairs)
+            + "]"
+        )
+    not_equals_pairs = clause["not_equals_pairs"]
+    if not_equals_pairs is not None:
+        parts.append(
+            "not_equals=["
+            + ", ".join(f"{lhs}!={rhs}" for lhs, rhs in not_equals_pairs)
+            + "]"
+        )
     return ", ".join(parts)
 
 
