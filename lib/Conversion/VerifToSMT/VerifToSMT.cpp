@@ -157,6 +157,7 @@ struct ParsedNamedBoolExpr {
     Name,
     Const,
     Not,
+    BitwiseNot,
     ReduceAnd,
     ReduceOr,
     ReduceXor,
@@ -189,6 +190,7 @@ struct ResolvedNamedBoolExpr {
     Arg,
     Const,
     Not,
+    BitwiseNot,
     ReduceAnd,
     ReduceOr,
     ReduceXor,
@@ -215,6 +217,7 @@ enum class NamedBoolTokenKind {
   LParen,
   RParen,
   Not,
+  BitwiseNot,
   Nand,
   Nor,
   Xnor,
@@ -323,6 +326,14 @@ private:
       if (!operand)
         return {};
       return makeUnary(ParsedNamedBoolExpr::Kind::Not, std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::BitwiseNot) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::BitwiseNot,
+                       std::move(operand));
     }
     if (token.kind == NamedBoolTokenKind::Nand) {
       consumeToken();
@@ -474,11 +485,11 @@ private:
       }
       return;
     }
-    if (peek('~')) {
-      ++pos;
-      if (peek('&')) {
+      if (peek('~')) {
         ++pos;
-        token = {NamedBoolTokenKind::Nand, input.slice(start, pos)};
+        if (peek('&')) {
+          ++pos;
+          token = {NamedBoolTokenKind::Nand, input.slice(start, pos)};
         return;
       }
       if (peek('|')) {
@@ -486,12 +497,12 @@ private:
         token = {NamedBoolTokenKind::Nor, input.slice(start, pos)};
         return;
       }
-      if (peek('^')) {
-        ++pos;
-        token = {NamedBoolTokenKind::Xnor, input.slice(start, pos)};
-        return;
-      }
-      token = {NamedBoolTokenKind::Not, input.slice(start, pos)};
+        if (peek('^')) {
+          ++pos;
+          token = {NamedBoolTokenKind::Xnor, input.slice(start, pos)};
+          return;
+        }
+      token = {NamedBoolTokenKind::BitwiseNot, input.slice(start, pos)};
       return;
     }
     if (peek('&')) {
@@ -789,6 +800,15 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
     if (!operand)
       return {};
     resolved->kind = ResolvedNamedBoolExpr::Kind::Not;
+    resolved->lhs = std::move(operand);
+    return resolved;
+  }
+  case ParsedNamedBoolExpr::Kind::BitwiseNot: {
+    auto operand = resolveNamedBoolExpr(*expr.lhs, inputNameToArgIndex,
+                                        numNonStateArgs);
+    if (!operand)
+      return {};
+    resolved->kind = ResolvedNamedBoolExpr::Kind::BitwiseNot;
     resolved->lhs = std::move(operand);
     return resolved;
   }
@@ -5754,6 +5774,27 @@ struct VerifBoundedModelCheckingOpConversion
         }
         return failure();
       };
+      auto evalBitwiseNotAsBool = [&](Value input) -> FailureOr<Value> {
+        if (isa<smt::BoolType>(input.getType()))
+          return Value(smt::NotOp::create(builder, loc, input));
+        if (auto bvTy = dyn_cast<smt::BitVectorType>(input.getType())) {
+          unsigned width = bvTy.getWidth();
+          if (width == 0)
+            return failure();
+          auto allOnes =
+              smt::BVConstantOp::create(builder, loc, APInt::getAllOnes(width));
+          return Value(smt::DistinctOp::create(builder, loc, input, allOnes));
+        }
+        if (auto intTy = dyn_cast<IntegerType>(input.getType())) {
+          if (intTy.getWidth() == 1) {
+            auto boolOr = toSMTBool(builder, input);
+            if (failed(boolOr))
+              return failure();
+            return Value(smt::NotOp::create(builder, loc, *boolOr));
+          }
+        }
+        return failure();
+      };
       switch (expr.kind) {
       case ResolvedNamedBoolExpr::Kind::Arg:
         if (expr.argIndex >= values.size())
@@ -5789,6 +5830,18 @@ struct VerifBoundedModelCheckingOpConversion
         if (failed(operandOr))
           return failure();
         return Value(smt::NotOp::create(builder, loc, *operandOr));
+      }
+      case ResolvedNamedBoolExpr::Kind::BitwiseNot: {
+        if (expr.lhs && expr.lhs->kind == ResolvedNamedBoolExpr::Kind::Arg) {
+          auto argValueOr = evalArgValue(expr.lhs->argIndex, expr.lhs->argSlice);
+          if (failed(argValueOr))
+            return failure();
+          return evalBitwiseNotAsBool(*argValueOr);
+        }
+        auto operandOr = self(self, builder, values, *expr.lhs);
+        if (failed(operandOr))
+          return failure();
+        return evalBitwiseNotAsBool(*operandOr);
       }
       case ResolvedNamedBoolExpr::Kind::ReduceAnd:
       case ResolvedNamedBoolExpr::Kind::ReduceOr:
