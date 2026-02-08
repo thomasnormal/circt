@@ -288,6 +288,21 @@ enum class SignalEncoding : uint8_t {
 };
 
 //===----------------------------------------------------------------------===//
+// SignalResolution - Resolution function for multi-driver nets
+//===----------------------------------------------------------------------===//
+
+/// Specifies how multiple drivers on a signal are resolved.
+/// See IEEE 1800-2017 Section 6.7 for net type semantics.
+enum class SignalResolution : uint8_t {
+  /// Default resolution: strength-based (wire/tri behavior).
+  Default = 0,
+  /// Wired-AND: resolved value is bitwise AND of all drivers.
+  WiredAnd = 1,
+  /// Wired-OR: resolved value is bitwise OR of all drivers.
+  WiredOr = 2,
+};
+
+//===----------------------------------------------------------------------===//
 // SensitivityEntry - A single entry in a sensitivity list
 //===----------------------------------------------------------------------===//
 
@@ -574,6 +589,8 @@ class SignalState {
 public:
   SignalState() = default;
   explicit SignalState(uint32_t width) : current(SignalValue::makeX(width)) {}
+  SignalState(uint32_t width, SignalResolution res)
+      : current(SignalValue::makeX(width)), resolution(res) {}
 
   /// Get the current value.
   const SignalValue &getCurrentValue() const { return current; }
@@ -596,6 +613,10 @@ public:
     return SignalValue::detectEdge(previous, current);
   }
 
+  /// Get/set the resolution function for this signal.
+  SignalResolution getResolution() const { return resolution; }
+  void setResolution(SignalResolution res) { resolution = res; }
+
   /// Add or update a driver with strength information.
   void addOrUpdateDriver(uint64_t driverId, const SignalValue &value,
                          DriveStrength strength0, DriveStrength strength1) {
@@ -614,50 +635,82 @@ public:
   }
 
   /// Resolve all drivers to compute the signal value.
-  /// Returns the resolved value based on IEEE 1800-2017 strength rules.
+  /// Returns the resolved value based on IEEE 1800-2017 strength rules,
+  /// or using wired-AND/wired-OR resolution for wand/wor nets.
   SignalValue resolveDrivers() const {
     if (drivers.empty())
       return current;
 
-    // Count active drivers
-    size_t activeCount = 0;
+    // Count active drivers and collect them.
+    llvm::SmallVector<const SignalDriver *, 4> activeDrivers;
     for (const auto &d : drivers)
       if (d.active)
-        ++activeCount;
+        activeDrivers.push_back(&d);
 
-    if (activeCount == 0)
+    if (activeDrivers.empty())
       return current;
 
-    if (activeCount == 1) {
+    if (activeDrivers.size() == 1) {
       // Single driver - use its value directly
-      for (const auto &d : drivers)
-        if (d.active)
-          return d.value;
+      return activeDrivers[0]->value;
     }
 
-    // Multiple drivers - need strength-based resolution
+    // Multiple drivers - use resolution function based on net type.
+    if (resolution == SignalResolution::WiredAnd ||
+        resolution == SignalResolution::WiredOr) {
+      // Wired-AND/Wired-OR: bitwise AND/OR of all driver values.
+      // X drivers are skipped (treated as not driving).
+      uint32_t width = current.getWidth();
+      bool hasNonXDriver = false;
+      llvm::APInt result;
+
+      for (const auto *d : activeDrivers) {
+        if (d->value.isUnknown())
+          continue;
+        llvm::APInt driverBits = d->value.getAPInt();
+        // Normalize to signal width.
+        if (driverBits.getBitWidth() < width)
+          driverBits = driverBits.zext(width);
+        else if (driverBits.getBitWidth() > width)
+          driverBits = driverBits.trunc(width);
+
+        if (!hasNonXDriver) {
+          result = driverBits;
+          hasNonXDriver = true;
+        } else {
+          if (resolution == SignalResolution::WiredAnd)
+            result &= driverBits;
+          else
+            result |= driverBits;
+        }
+      }
+
+      if (!hasNonXDriver)
+        return SignalValue::makeX(width);
+      return SignalValue(result);
+    }
+
+    // Default (wire/tri): strength-based resolution.
     // Separate drivers by their driven value (0 or 1)
     DriveStrength strongestFor0 = DriveStrength::HighZ;
     DriveStrength strongestFor1 = DriveStrength::HighZ;
     bool has0Driver = false;
     bool has1Driver = false;
 
-    for (const auto &d : drivers) {
-      if (!d.active)
-        continue;
-      if (d.value.isUnknown())
+    for (const auto *d : activeDrivers) {
+      if (d->value.isUnknown())
         continue; // Skip X drivers
 
-      if (d.value.getLSB()) {
+      if (d->value.getLSB()) {
         // Driving 1
         has1Driver = true;
-        if (d.strength1 < strongestFor1)
-          strongestFor1 = d.strength1;
+        if (d->strength1 < strongestFor1)
+          strongestFor1 = d->strength1;
       } else {
         // Driving 0
         has0Driver = true;
-        if (d.strength0 < strongestFor0)
-          strongestFor0 = d.strength0;
+        if (d->strength0 < strongestFor0)
+          strongestFor0 = d->strength0;
       }
     }
 
@@ -704,6 +757,7 @@ private:
   SignalValue current;
   SignalValue previous;
   std::vector<SignalDriver> drivers;
+  SignalResolution resolution = SignalResolution::Default;
 };
 
 //===----------------------------------------------------------------------===//
@@ -773,8 +827,15 @@ public:
   SignalId registerSignal(const std::string &name, uint32_t width,
                           SignalEncoding encoding);
 
+  /// Register a signal with encoding and resolution metadata.
+  SignalId registerSignal(const std::string &name, uint32_t width,
+                          SignalEncoding encoding, SignalResolution resolution);
+
   /// Get the signal encoding for a given signal ID.
   SignalEncoding getSignalEncoding(SignalId signalId) const;
+
+  /// Set the resolution function for a signal (wand/wor nets).
+  void setSignalResolution(SignalId signalId, SignalResolution resolution);
 
   /// Set a callback for signal value changes (for waveform tracing).
   void setSignalChangeCallback(
