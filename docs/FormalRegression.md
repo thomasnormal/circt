@@ -91,6 +91,12 @@ Preview refresh/prune changes without rewriting expectation files:
 utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-file utils/formal-expected-failures.tsv --expectations-dry-run
 ```
 
+Emit machine-readable dry-run operation summaries:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failures-file utils/formal-expected-failures.tsv --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun.jsonl
+```
+
 Gate on per-test expected failure cases with expiry policy:
 
 ```bash
@@ -259,6 +265,8 @@ Expected-failure budget file:
   - `suite	mode	expected_fail	expected_error	notes`
 - `--expectations-dry-run` previews expectation refresh/prune updates without
   rewriting expectation files.
+- `--expectations-dry-run-report-jsonl <file>` appends JSON Lines dry-run
+  operation summaries (`operation`, `target_file`, row-count metadata).
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
