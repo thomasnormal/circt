@@ -1,0 +1,48 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'simple\t*\t*\tpass\n' > %t/expect.txt
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES=2 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-1 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run1.out
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES=2 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-2 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run2.out
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES=2 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-3 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run3.out
+
+// RUN: sed 's/\t/|/g' %t/history.tsv | FileCheck %s --check-prefix=TSV
+// RUN: cat %t/history.jsonl | FileCheck %s --check-prefix=JSONL
+
+// TSV: schema_version|run_id|generated_at_utc|test_total|test_failures|test_xfail|test_xpass|test_skipped|mode_total|mode_pass|mode_fail|mode_xfail|mode_xpass|mode_epass|mode_efail|mode_unskip|mode_skipped|mode_skip_pass|mode_skip_fail|mode_skip_expected|mode_skip_unexpected|skip_reason_vhdl|skip_reason_fail-no-macro|skip_reason_no-property|skip_reason_other
+// TSV-NEXT: 1|run-2|{{[0-9T:\-]+Z}}|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
+// TSV-NEXT: 1|run-3|{{[0-9T:\-]+Z}}|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
+// TSV-NOT: run-1
+
+// JSONL-NOT: "run_id":"run-1"
+// JSONL: "run_id":"run-2"
+// JSONL: "run_id":"run-3"
