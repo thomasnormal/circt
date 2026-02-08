@@ -1923,6 +1923,9 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     auto hwModuleOp =
         hw::HWModuleOp::create(rewriter, op.getLoc(), op.getSymNameAttr(),
                                getModulePortInfo(*typeConverter, op));
+    if (auto mixedEventSources =
+            op->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
+      hwModuleOp->setAttr("moore.mixed_event_sources", mixedEventSources);
     // Make hw.module have the same visibility as the moore.module.
     // The entry/top level module is public, otherwise is private.
     SymbolTable::setSymbolVisibility(hwModuleOp,

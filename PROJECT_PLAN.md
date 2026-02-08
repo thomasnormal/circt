@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 488)
+## Current Status - February 8, 2026 (Iteration 489)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed mixed-event source provenance metadata; next: SMT-level trace plumb + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed provenance through `verif.bmc`; next: SMT witness plumb + sequence-only OR provenance + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,71 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 489
+
+1. **Mixed-event provenance plumbing to `hw.module` and `verif.bmc`**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+       - mixed sequence/signal event-list lowering now accumulates module-level
+         provenance in:
+         - `moore.mixed_event_sources`
+       - per-wait metadata:
+         - `moore.event_sources`
+         remains intact.
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+       - `SVModuleOp` conversion now propagates
+         `moore.mixed_event_sources` to `hw.module`.
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+       - `verif.bmc` now carries:
+         - `bmc_mixed_event_sources`.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       - mixed-event checks now assert module-level
+         `moore.mixed_event_sources`.
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       - validates `circt-verilog --ir-llhd` emits
+         `moore.mixed_event_sources`.
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+       - validates `lower-to-bmc` emits `bmc_mixed_event_sources`.
+
+3. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `run_verilator_verification_circt_lec.sh` smoke subset: PASS
+     - `run_yosys_sva_circt_lec.sh` smoke subset: PASS
+
+4. **Current limitations and best long-term next features**
+   - We now preserve mixed-event provenance through `verif.bmc`, but it is not
+     yet threaded into SMT model/witness printing.
+   - Sequence-only multiclock OR event-list lowering still lacks equivalent
+     provenance annotations.
+   - Slang/frontend legality still blocks direct `always @(property)` event
+     forms; a long-term procedural property strategy remains needed.
+   - High-value next work:
+     - map `bmc_mixed_event_sources` into SMT-level trigger/witness diagnostics,
+     - add sequence-only multiclock provenance tagging in ImportVerilog,
+     - design upstream-compatible procedural property event-control handling.
 
 ### Session Summary - Iteration 488
 
