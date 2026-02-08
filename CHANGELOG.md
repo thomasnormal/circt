@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 484 - February 8, 2026
+
+### Summary
+
+Enabled procedural sequence `.triggered` lowering end-to-end for BMC/LEC flows,
+added import+BMC regressions, and revalidated nearby sequence-event behavior.
+
+### Fixes
+
+1. **Sequence `.triggered` in procedural timing controls**
+   - Updated `lib/Conversion/ImportVerilog/Expressions.cpp`:
+     - system-call lowering for `triggered` now supports
+       `!ltl.sequence` operands by emitting `ltl.triggered`.
+   - This unblocks forms like:
+     - `always @(posedge seq.triggered) ...`
+   - Existing event `.triggered` lowering (`moore.event_triggered`) remains
+     unchanged.
+
+2. **Regression coverage**
+   - Import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceTriggeredMethodControl`.
+   - BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-triggered-posedge-sat-e2e.sv`.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog circt-bmc`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-triggered-posedge-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - Sanity:
+     - `test/Tools/circt-sim/event-triggered.sv`: PASS
+
+### Remaining Gaps
+
+- Procedural property event controls (`@property`) remain unsupported in our
+  flow (and direct `always @(property)` forms are rejected upstream as invalid
+  event-expression type).
+- We still need stronger non-vacuous multiclock UNSAT equivalence harnesses.
+- Additional sequence/property method coverage beyond `.triggered` remains a
+  high-value long-term target.
+
 ## Iteration 483 - February 8, 2026
 
 ### Summary
