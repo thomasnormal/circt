@@ -40,6 +40,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FI
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS:-0}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-0}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -176,6 +177,10 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" =~ ^[0-9]+$ ]]; then
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS (expected non-negative integer)" >&2
+  exit 1
+fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS (expected non-negative integer)" >&2
   exit 1
 fi
 strict_unfixable_bundle_reason_filter=""
@@ -2026,6 +2031,7 @@ emit_mode_summary_outputs() {
     local file="$1"
     local max_entries="$2"
     local max_age_days="$3"
+    local max_future_skew_secs="$4"
     local -a lines=()
     local -a cols=()
     local line
@@ -2034,9 +2040,10 @@ emit_mode_summary_outputs() {
     local row_epoch
     local now_epoch
     local cutoff_epoch
+    local max_future_epoch
     local start i rows
     [[ -f "$file" ]] || return 0
-    if ((max_age_days > 0)); then
+    if ((max_age_days > 0 || max_future_skew_secs > 0)); then
       mapfile -t lines < "$file"
       ((${#lines[@]} > 0)) || return 0
       header="${lines[0]}"
@@ -2045,6 +2052,7 @@ emit_mode_summary_outputs() {
         exit 1
       fi
       cutoff_epoch=$((now_epoch - max_age_days * 86400))
+      max_future_epoch=$((now_epoch + max_future_skew_secs))
       : > "$file"
       printf '%s\n' "$header" >> "$file"
       for ((i = 1; i < ${#lines[@]}; ++i)); do
@@ -2056,7 +2064,11 @@ emit_mode_summary_outputs() {
           echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE $file at line $((i + 1))" >&2
           exit 1
         fi
-        if ((row_epoch >= cutoff_epoch)); then
+        if ((max_future_skew_secs > 0 && row_epoch > max_future_epoch)); then
+          echo "error: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE $file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if ((max_age_days == 0 || row_epoch >= cutoff_epoch)); then
           printf '%s\n' "$line" >> "$file"
         fi
       done
@@ -2143,21 +2155,24 @@ emit_mode_summary_outputs() {
     local file="$1"
     local max_entries="$2"
     local max_age_days="$3"
+    local max_future_skew_secs="$4"
     local -a lines=()
     local line
     local generated_at
     local row_epoch
     local now_epoch
     local cutoff_epoch
+    local max_future_epoch
     local start i
     [[ -f "$file" ]] || return 0
-    if ((max_age_days > 0)); then
+    if ((max_age_days > 0 || max_future_skew_secs > 0)); then
       mapfile -t lines < "$file"
       if ! now_epoch="$(date -u +%s 2>/dev/null)"; then
         echo "error: failed to compute current UTC epoch for history age retention" >&2
         exit 1
       fi
       cutoff_epoch=$((now_epoch - max_age_days * 86400))
+      max_future_epoch=$((now_epoch + max_future_skew_secs))
       : > "$file"
       for ((i = 0; i < ${#lines[@]}; ++i)); do
         line="${lines[$i]}"
@@ -2171,7 +2186,11 @@ emit_mode_summary_outputs() {
           echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1))" >&2
           exit 1
         fi
-        if ((row_epoch >= cutoff_epoch)); then
+        if ((max_future_skew_secs > 0 && row_epoch > max_future_epoch)); then
+          echo "error: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if ((max_age_days == 0 || row_epoch >= cutoff_epoch)); then
           printf '%s\n' "$line" >> "$file"
         fi
       done
@@ -2203,7 +2222,8 @@ emit_mode_summary_outputs() {
     trim_history_tsv \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS"
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
   fi
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" ]]; then
@@ -2261,7 +2281,8 @@ emit_mode_summary_outputs() {
     trim_history_jsonl \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS"
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
   fi
 }
 
