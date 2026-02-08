@@ -10540,6 +10540,72 @@ ninja -C build circt-verilog
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
   - Continue first-class four-state value/unknown propagation work.
 
+### Iteration 530
+- Yosys SVA BMC concrete lint-fix proposal artifacts:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_LINT_FIXES_FILE`
+  - Added machine-readable fix proposal output (TSV):
+    - columns: `kind`, `source`, `action`, `key`, `row`, `note`
+  - Added concrete fix proposal emission for lint classes:
+    - `redundant` -> `drop-row`
+    - `conflict` -> `set-row` (canonicalize to final assignment)
+    - `unknown-test` -> `drop-row`
+    - `shadowed` -> `drop-row`
+    - `ambiguity` -> `add-row` (preserve lower-precedence intent on explicit tuple)
+    - `ambiguity` -> `set-row` (align lower-precedence wildcard with overriding row)
+  - Stabilized lint diagnostics ordering by sorting suite test names before
+    tuple-matrix traversal.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-lint-fixes.test`:
+    - validates concrete fix artifact contents for redundant/conflict/unknown/
+      shadowed/ambiguity findings.
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-lint.test`
+    - `test/Tools/run-yosys-sva-bmc-lint-shadow.test`
+    - `test/Tools/run-yosys-sva-bmc-lint-ambiguity.test`
+    - `test/Tools/run-yosys-sva-bmc-lint-hints.test`
+    - `test/Tools/run-yosys-sva-bmc-lint-fixes.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+    - `test/Tools/run-yosys-sva-bmc-regen-override.test`
+    - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/run-yosys-sva-bmc-skip-expected.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 15/15 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Fix proposals are suite-matrix-oriented and still require human review;
+    they are not auto-applied to baseline files.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+  - Four-state witness unknown propagation remains approximation-based in
+    cast/slice paths.
+- Long-term features to prioritize:
+  - Add optional auto-apply mode for safe lint fix classes (`drop-row`,
+    `set-row`) with dry-run diff output.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+  - Continue first-class four-state value/unknown propagation work.
+
 ---
 
 ## Architecture Reference

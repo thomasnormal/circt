@@ -56,6 +56,7 @@ EXPECT_LINT="${EXPECT_LINT:-0}"
 EXPECT_LINT_FAIL_ON_ISSUES="${EXPECT_LINT_FAIL_ON_ISSUES:-0}"
 EXPECT_LINT_FILE="${EXPECT_LINT_FILE:-}"
 EXPECT_LINT_HINTS_FILE="${EXPECT_LINT_HINTS_FILE:-}"
+EXPECT_LINT_FIXES_FILE="${EXPECT_LINT_FIXES_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -94,6 +95,10 @@ if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_HINTS_FILE" ]]; then
   : > "$EXPECT_LINT_HINTS_FILE"
   printf 'kind\tsource\tkey\taction\tnote\n' >> "$EXPECT_LINT_HINTS_FILE"
 fi
+if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_FIXES_FILE" ]]; then
+  : > "$EXPECT_LINT_FIXES_FILE"
+  printf 'kind\tsource\taction\tkey\trow\tnote\n' >> "$EXPECT_LINT_FIXES_FILE"
+fi
 
 emit_expect_lint() {
   local kind="$1"
@@ -119,6 +124,28 @@ emit_expect_lint_hint() {
     "$kind" "$source" "$key" "$action" "$note" >> "$EXPECT_LINT_HINTS_FILE"
   return 0
 }
+
+emit_expect_lint_fix() {
+  local kind="$1"
+  local source="$2"
+  local action="$3"
+  local key="$4"
+  local row="${5:-}"
+  local note="${6:-}"
+  if [[ -z "$EXPECT_LINT_FIXES_FILE" ]]; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$kind" "$source" "$action" "$key" "$row" "$note" >> "$EXPECT_LINT_FIXES_FILE"
+  return 0
+}
+
+format_row_spec() {
+  local key="$1"
+  local expected="$2"
+  printf '%s|%s' "$key" "$expected"
+}
+
 load_expected_cases() {
   local map_name="$1"
   local file="$2"
@@ -149,10 +176,15 @@ load_expected_cases() {
         emit_expect_lint "redundant" "$file row duplicates $key = $expected"
         emit_expect_lint_hint "redundant" "$file" "$key" "remove-duplicate-row" \
           "same value repeated"
+        emit_expect_lint_fix "redundant" "$file" "drop-row" "$key" "" \
+          "remove duplicated row"
       else
         emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
         emit_expect_lint_hint "conflict" "$file" "$key" "resolve-key-conflict" \
           "${seen_in_file["$key"]} vs $expected"
+        emit_expect_lint_fix "conflict" "$file" "set-row" "$key" \
+          "$(format_row_spec "$key" "$expected")" \
+          "keep final assignment and remove earlier conflicting rows"
       fi
     fi
     seen_in_file["$key"]="$expected"
@@ -190,10 +222,15 @@ load_regen_override_cases() {
         emit_expect_lint "redundant" "$file row duplicates $key = $expected"
         emit_expect_lint_hint "redundant" "$file" "$key" "remove-duplicate-row" \
           "same value repeated"
+        emit_expect_lint_fix "redundant" "$file" "drop-row" "$key" "" \
+          "remove duplicated row"
       else
         emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
         emit_expect_lint_hint "conflict" "$file" "$key" "resolve-key-conflict" \
           "${seen_in_file["$key"]} vs $expected"
+        emit_expect_lint_fix "conflict" "$file" "set-row" "$key" \
+          "$(format_row_spec "$key" "$expected")" \
+          "keep final assignment and remove earlier conflicting rows"
       fi
     fi
     seen_in_file["$key"]="$expected"
@@ -233,6 +270,8 @@ lint_unknown_tests_for_map() {
       emit_expect_lint "unknown-test" "$label references missing test '$test' via key $key"
       emit_expect_lint_hint "unknown-test" "$label" "$key" "rename-or-remove-row" \
         "test missing from suite"
+      emit_expect_lint_fix "unknown-test" "$label" "drop-row" "$key" "" \
+        "row targets a non-existent suite test"
     fi
   done < <(printf '%s\n' "${keys[@]}" | sort)
   return 0
@@ -293,9 +332,9 @@ lint_shadowed_patterns_for_map() {
   local -A possible_hits=()
   local test mode profile matched key
 
-  for test in "${!suite_tests[@]}"; do
+  while IFS= read -r test; do
     tests+=("$test")
-  done
+  done < <(printf '%s\n' "${!suite_tests[@]}" | sort)
   if ((${#tests[@]} == 0)); then
     return
   fi
@@ -323,6 +362,8 @@ lint_shadowed_patterns_for_map() {
       emit_expect_lint "shadowed" "$label wildcard key $key is never selected for suite matrix"
       emit_expect_lint_hint "shadowed" "$label" "$key" "remove-or-tighten-key" \
         "wildcard row is dead under precedence"
+      emit_expect_lint_fix "shadowed" "$label" "drop-row" "$key" "" \
+        "wildcard row is never selected under precedence"
     fi
   done < <(printf '%s\n' "${keys[@]}" | sort)
   return 0
@@ -336,12 +377,13 @@ lint_precedence_ambiguity_for_map() {
   local test mode profile winner winner_val other other_val tuple pair
   local -a matches=()
   local -A winner_hits=()
+  local -A winner_first_tuple=()
   local -A pair_counts=()
   local -A pair_examples=()
 
-  for test in "${!suite_tests[@]}"; do
+  while IFS= read -r test; do
     tests+=("$test")
-  done
+  done < <(printf '%s\n' "${!suite_tests[@]}" | sort)
   if ((${#tests[@]} == 0)); then
     return
   fi
@@ -357,6 +399,9 @@ lint_precedence_ambiguity_for_map() {
         winner_hits["$winner"]=$((winner_hits["$winner"] + 1))
         winner_val="${map_ref["$winner"]}"
         tuple="$test|$mode|$profile"
+        if [[ -z "${winner_first_tuple["$winner"]+x}" ]]; then
+          winner_first_tuple["$winner"]="$tuple"
+        fi
         if ((${#matches[@]} < 2)); then
           continue
         fi
@@ -390,6 +435,16 @@ lint_precedence_ambiguity_for_map() {
       "$label precedence-sensitive overlap: $winner (${map_ref["$winner"]}) overrides $other (${map_ref["$other"]}) for $cnt tuple(s), e.g. ${pair_examples["$pair"]}"
     emit_expect_lint_hint "ambiguity" "$label" "$winner||$other" "split-or-align-overlap" \
       "${pair_examples["$pair"]}"
+    winner_val="${map_ref["$winner"]}"
+    other_val="${map_ref["$other"]}"
+    if [[ -n "${winner_first_tuple["$other"]+x}" ]]; then
+      emit_expect_lint_fix "ambiguity" "$label" "add-row" "$other" \
+        "$(format_row_spec "${winner_first_tuple["$other"]}" "$other_val")" \
+        "preserve lower-precedence intent on explicit tuple"
+    fi
+    emit_expect_lint_fix "ambiguity" "$label" "set-row" "$other" \
+      "$(format_row_spec "$other" "$winner_val")" \
+      "align lower-precedence row with overriding row $winner"
   done < <(printf '%s\n' "${!pair_counts[@]}" | sort)
   return 0
 }
