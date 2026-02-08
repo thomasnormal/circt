@@ -9168,6 +9168,47 @@ ninja -C build circt-verilog
   - Add negative tests for malformed structured trees to ensure deterministic
     fallback behavior and no silent miscompilation.
 
+### Iteration 462
+- Structured unary logical-not support for event-arm metadata:
+  - ImportVerilog now captures unary `!` as `<prefix>_logical_not` in
+    structured event source details.
+  - VerifToSMT structured witness resolver now consumes
+    `*_logical_not` (both `UnitAttr` and `BoolAttr`) and emits a
+    `ResolvedNamedBoolExpr::Not` wrapper around structured operands.
+  - Applies uniformly to leaf structured terms and recursive binary
+    structured nodes.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-logical-not-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+    `SequenceSignalEventListStructuredLogicalNot`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (12 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured representation still cannot preserve full unary ordering for
+    mixed `!` and `~` chains at a single node without explicit unary nesting.
+  - Structured metadata still lacks explicit parenthesized/grouping nodes.
+  - OpenTitan `prim_fifo_sync` continues to report `llhd.drv`
+    `interpretOperation` diagnostics.
+- Long-term features to prioritize:
+  - Add explicit structured unary node nesting (`*_unary_op` + child prefixes)
+    to preserve operator ordering exactly.
+  - Add structured grouping / precedence nodes to avoid fallback for
+    parenthesized event-expression trees.
+  - Add dedicated `circt-sim` regression for the `llhd.drv` struct-ref
+    diagnostic path observed in OpenTitan `prim_fifo_sync`.
+
 ---
 
 ## Architecture Reference

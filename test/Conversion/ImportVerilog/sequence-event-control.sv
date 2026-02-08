@@ -397,3 +397,25 @@ module SequenceSignalEventListStructuredBinaryExpr;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for unary logical-not event terms.
+module SequenceSignalEventListStructuredLogicalNot;
+  logic clk, q, en;
+  logic [1:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredLogicalNot
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_name = "bus"
+  // CHECK-DAG: signal_lsb = 0 : i32
+  // CHECK-DAG: signal_msb = 0 : i32
+  // CHECK-DAG: signal_logical_not
+  // CHECK-DAG: iff_name = "en"
+  // CHECK-DAG: iff_logical_not
+  always @(seq or posedge (!bus[0]) iff (!en)) begin
+    q <= ~q;
+  end
+endmodule
