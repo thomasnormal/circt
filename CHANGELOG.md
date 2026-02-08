@@ -27308,3 +27308,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Parser-backed validation still depends on `python3`.
 - `cksum` remains required for generated drop-event IDs.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 571 - February 8, 2026
+
+### Yosys SVA BMC Parser-Backed History JSONL Trim Extraction
+
+- Replaced regex extraction of `generated_at_utc` and `run_id` in
+  `trim_history_jsonl()` with parser-backed top-level extraction.
+- Applied this in all JSONL trim drop paths:
+  - future-skew drops (`YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn`)
+  - age-retention drops
+  - max-entry drops
+- This removes ambiguity from nested extension metadata keys with the same
+  names.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+- New/updated coverage verifies:
+  - future policy trim uses top-level `generated_at_utc` even with nested
+    `detail.generated_at_utc`.
+  - max-entry drop events use top-level `run_id` even with nested
+    `detail.run_id`.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 53/53 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Legacy history JSONL migration still strips outer braces with shell regex
+  before parser validation; parser-first migration would be more robust.
+- Parser-backed validation still depends on `python3`.
+- `cksum` remains required for generated drop-event IDs.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
