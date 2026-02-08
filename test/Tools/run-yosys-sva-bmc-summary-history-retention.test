@@ -31,12 +31,14 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES=2 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-3 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_JSON_FILE=%t/summary3.json \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run3.out
 
 // RUN: sed 's/\t/|/g' %t/history.tsv | FileCheck %s --check-prefix=TSV
 // RUN: cat %t/history.jsonl | FileCheck %s --check-prefix=JSONL
+// RUN: cat %t/summary3.json | FileCheck %s --check-prefix=JSONSUMMARY
 
 // TSV: schema_version|run_id|generated_at_utc|test_total|test_failures|test_xfail|test_xpass|test_skipped|mode_total|mode_pass|mode_fail|mode_xfail|mode_xpass|mode_epass|mode_efail|mode_unskip|mode_skipped|mode_skip_pass|mode_skip_fail|mode_skip_expected|mode_skip_unexpected|skip_reason_vhdl|skip_reason_fail-no-macro|skip_reason_no-property|skip_reason_other
 // TSV-NEXT: 1|run-2|{{[0-9T:\-]+Z}}|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
@@ -46,3 +48,9 @@
 // JSONL-NOT: "run_id":"run-1"
 // JSONL: "run_id":"run-2"
 // JSONL: "run_id":"run-3"
+// JSONSUMMARY: "drop_events_summary": {
+// JSONSUMMARY: "future_skew": 0
+// JSONSUMMARY: "age_retention": 0
+// JSONSUMMARY: "max_entries": 2
+// JSONSUMMARY: "tsv": 1
+// JSONSUMMARY: "jsonl": 1

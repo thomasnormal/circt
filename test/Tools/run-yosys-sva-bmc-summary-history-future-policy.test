@@ -39,7 +39,7 @@
 
 // WARNERR: warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE
 // WARNERR: warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE
-// WARNERR: warning: dropped future-skew history rows (tsv=1, jsonl=1) due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn
+// WARNERR: warning: dropped history rows (future_skew: tsv=1, jsonl=1; age_retention: tsv=0, jsonl=0; max_entries: tsv=0, jsonl=0)
 
 // TSV-NOT: run-future
 // TSV: 1|run-keep|2025-01-01T00:00:00Z|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
@@ -48,10 +48,12 @@
 // JSONL-NOT: "run_id":"run-future"
 // JSONL: "run_id":"run-keep"
 // JSONL: "run_id":"run-new"
-// JSONL: "drop_events_summary":{"total":2,"reasons":{"future_skew":2},"history_format":{"tsv":1,"jsonl":1}}
+// JSONL: "drop_events_summary":{"total":2,"reasons":{"future_skew":2,"age_retention":0,"max_entries":0},"history_format":{"tsv":1,"jsonl":1}}
 
 // JSONSUMMARY: "drop_events_summary": {
 // JSONSUMMARY: "future_skew": 2
+// JSONSUMMARY: "age_retention": 0
+// JSONSUMMARY: "max_entries": 0
 // JSONSUMMARY: "tsv": 1
 // JSONSUMMARY: "jsonl": 1
 
