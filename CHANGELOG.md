@@ -24319,3 +24319,80 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Skip handling is snapshot/regeneration-only; skip is not yet a first-class
   expected outcome in harness evaluation.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 525 - February 8, 2026
+
+### Yosys SVA BMC Skip Expectations and Regen Overrides
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_REGEN_OVERRIDE_FILE`
+  - `EXPECT_SKIP_STRICT`
+- Added per-case regeneration override support keyed by
+  `test|mode|profile` (wildcard-aware):
+  - override values:
+    - `pass`
+    - `fail`
+    - `xfail`
+    - `skip`
+    - `omit`
+    - `auto`
+- Added first-class expected `skip` handling:
+  - `skip` is now accepted in expectation rows
+  - non-skip execution for expected `skip` now reports `UNSKIP(...)` and fails
+- Added strict unexpected-skip checking mode:
+  - `EXPECT_SKIP_STRICT=1` marks unexpected skips as failures
+- Unified skip reporting and observation capture for:
+  - `vhdl` skips
+  - `fail-no-macro` skips
+  - `no-property` skips
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-skip-expected.test`
+  - `test/Tools/run-yosys-sva-bmc-regen-override.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-skip-expected.test`
+  - `test/Tools/run-yosys-sva-bmc-regen-override.test`
+  - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 10/10 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Skip accounting and expectation semantics still use mixed granularity
+  (test-level `skipped` summary versus mode-level observations).
+- Override table hygiene tooling (stale rows / shadowed wildcards) is not yet
+  implemented.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

@@ -1,0 +1,27 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh
+// RUN: echo 'for arg in "$@"; do [[ "$arg" == *_pass.mlir ]] && exit 1; done' >> %t/fake-bmc.sh
+// RUN: echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'simple\tpass\t*\txfail\nsimple\tfail\t*\tpass\n' > %t/expect.txt
+// RUN: printf 'simple\tpass\tknown\tfail\nsimple\tfail\tknown\tskip\n' > %t/overrides.txt
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 EXPECT_REGEN_FILE=%t/regen.tsv \
+// RUN:   EXPECT_REGEN_OVERRIDE_FILE=%t/overrides.txt \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN: sed 's/\t/|/g' %t/regen.tsv | FileCheck %s --check-prefix=REGEN
+
+// OUT: XFAIL(pass): simple [known]
+// OUT: PASS(fail): simple
+// OUT: yosys SVA summary: 1 tests, failures=0, xfail=1, xpass=0, skipped=0
+
+// REGEN: # test_name|mode|profile|expected
+// REGEN: # generated from observed outcomes with policies:
+// REGEN: #   EXPECT_REGEN_FAIL_POLICY=xfail
+// REGEN: #   EXPECT_REGEN_SKIP_POLICY=omit
+// REGEN: simple|fail|known|skip
+// REGEN: simple|pass|known|fail
