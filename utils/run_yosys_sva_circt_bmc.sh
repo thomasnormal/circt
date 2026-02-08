@@ -3769,6 +3769,7 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_le_offset",
             "int_gt_offset",
             "int_ge_offset",
+            "int_linear",
         }
     )
     if unknown_keys:
@@ -4333,6 +4334,60 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_ge_offset_seen.add(triple_key)
             int_ge_offset_triples.append((lhs, rhs, delta))
+    int_linear_terms = None
+    if "int_linear" in payload:
+        int_linear_raw = payload["int_linear"]
+        if not isinstance(int_linear_raw, list) or not int_linear_raw:
+            fail(
+                f"error: invalid {field_name}.int_linear: expected non-empty array"
+            )
+        int_linear_terms = []
+        int_linear_seen = set()
+        for term_index, term in enumerate(int_linear_raw):
+            term_field = f"{field_name}.int_linear[{term_index}]"
+            if (
+                not isinstance(term, list)
+                or len(term) != 4
+                or not isinstance(term[0], str)
+                or not isinstance(term[1], str)
+            ):
+                fail(
+                    f"error: invalid {term_field}: expected [lhs, op, rhs_keys, rhs_const] linear comparator"
+                )
+            lhs = term[0]
+            op = term[1].lower()
+            if op not in {"lt", "le", "gt", "ge"}:
+                fail(
+                    f"error: invalid {term_field}: expected op in {{lt, le, gt, ge}}"
+                )
+            rhs_keys = term[2]
+            if not isinstance(rhs_keys, list) or not rhs_keys:
+                fail(
+                    f"error: invalid {term_field}: expected non-empty rhs_keys array"
+                )
+            validated_rhs_keys = []
+            rhs_seen = set()
+            for rhs_key in rhs_keys:
+                validate_context_key_name(rhs_key, term_field)
+                if rhs_key in rhs_seen:
+                    fail(
+                        f"error: invalid {term_field}: duplicate rhs key '{rhs_key}'"
+                    )
+                rhs_seen.add(rhs_key)
+                validated_rhs_keys.append(rhs_key)
+            validate_context_key_name(lhs, term_field)
+            rhs_const = parse_context_integer(term[3])
+            if rhs_const is None:
+                fail(
+                    f"error: invalid {term_field}: expected integer rhs_const literal"
+                )
+            term_key = (lhs, op, tuple(validated_rhs_keys), rhs_const)
+            if term_key in int_linear_seen:
+                fail(
+                    f"error: invalid {field_name}.int_linear: duplicate linear comparator"
+                )
+            int_linear_seen.add(term_key)
+            int_linear_terms.append(term_key)
     if (
         keys_all is None
         and keys_any is None
@@ -4351,10 +4406,11 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_le_offset_triples is None
         and int_gt_offset_triples is None
         and int_ge_offset_triples is None
+        and int_linear_terms is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, or int_ge_offset"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, or int_linear"
         )
     return {
         "keys_all": keys_all,
@@ -4374,6 +4430,7 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_le_offset_triples": int_le_offset_triples,
         "int_gt_offset_triples": int_gt_offset_triples,
         "int_ge_offset_triples": int_ge_offset_triples,
+        "int_linear_terms": int_linear_terms,
     }
 
 
@@ -4548,6 +4605,30 @@ def is_context_presence_clause_satisfied(context, clause):
                 or lhs_value < rhs_value + delta
             ):
                 return False
+    int_linear_terms = clause["int_linear_terms"]
+    if int_linear_terms is not None:
+        for lhs, op, rhs_keys, rhs_const in int_linear_terms:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None:
+                return False
+            rhs_total = rhs_const
+            for rhs_key in rhs_keys:
+                if rhs_key not in context:
+                    return False
+                rhs_value = parse_context_integer(context[rhs_key])
+                if rhs_value is None:
+                    return False
+                rhs_total += rhs_value
+            if op == "lt" and lhs_value >= rhs_total:
+                return False
+            if op == "le" and lhs_value > rhs_total:
+                return False
+            if op == "gt" and lhs_value <= rhs_total:
+                return False
+            if op == "ge" and lhs_value < rhs_total:
+                return False
     return True
 
 
@@ -4675,6 +4756,16 @@ def format_context_presence_clause(clause):
             )
             + "]"
         )
+    int_linear_terms = clause["int_linear_terms"]
+    if int_linear_terms is not None:
+        op_symbol = {"lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+        linear_parts = []
+        for lhs, op, rhs_keys, rhs_const in int_linear_terms:
+            rhs_expr = "+".join(rhs_keys)
+            if rhs_const != 0:
+                rhs_expr += f"{rhs_const:+d}"
+            linear_parts.append(f"{lhs}{op_symbol[op]}{rhs_expr}")
+        parts.append("int_linear=[" + ", ".join(linear_parts) + "]")
     return ", ".join(parts)
 
 
@@ -4750,6 +4841,12 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
         for lhs, rhs, _ in int_ge_offset_triples:
             require_integer_key(lhs, f"{field_name}.int_ge_offset")
             require_integer_key(rhs, f"{field_name}.int_ge_offset")
+    int_linear_terms = clause["int_linear_terms"]
+    if int_linear_terms is not None:
+        for lhs, _, rhs_keys, _ in int_linear_terms:
+            require_integer_key(lhs, f"{field_name}.int_linear")
+            for rhs_key in rhs_keys:
+                require_integer_key(rhs_key, f"{field_name}.int_linear")
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
