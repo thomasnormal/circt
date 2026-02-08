@@ -911,10 +911,12 @@ format_expectation_file() {
   local malformed_unfixable_strict=0
   local allow_auto_omit=0
   local inferred_profile strict_selected unfix_reason unfix_severity
-  local suggestion reason suggest_pair applied
-  local -a comment_lines=()
-  local -a row_lines=()
-  local -a malformed_lines=()
+  local suggestion reason suggest_pair applied comment_blob rec_idx
+  local -a pending_comments=()
+  local -a row_records=()
+  local -a row_comments=()
+  local -a malformed_records=()
+  local -a malformed_comments=()
   if [[ -n "$EXPECT_REGEN_OVERRIDE_FILE" ]] && [[ "$file" == "$EXPECT_REGEN_OVERRIDE_FILE" ]]; then
     allow_auto_omit=1
   fi
@@ -932,7 +934,7 @@ format_expectation_file() {
       continue
     fi
     if [[ "$trimmed" == \#* ]]; then
-      comment_lines+=("$trimmed")
+      pending_comments+=("$trimmed")
       continue
     fi
     test=""
@@ -958,16 +960,37 @@ format_expectation_file() {
         malformed_suggested=$((malformed_suggested + 1))
         applied=0
         if [[ "$EXPECT_FORMAT_REWRITE_MALFORMED" == "1" ]]; then
-          row_lines+=("$suggestion")
+          comment_blob=""
+          if ((${#pending_comments[@]} > 0)); then
+            comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+            comment_blob="${comment_blob%$'\n'}"
+            pending_comments=()
+          fi
+          row_records+=("$suggestion")
+          row_comments+=("$comment_blob")
           rows=$((rows + 1))
           malformed_fixed=$((malformed_fixed + 1))
           applied=1
         else
-          malformed_lines+=("$trimmed")
+          comment_blob=""
+          if ((${#pending_comments[@]} > 0)); then
+            comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+            comment_blob="${comment_blob%$'\n'}"
+            pending_comments=()
+          fi
+          malformed_records+=("$trimmed")
+          malformed_comments+=("$comment_blob")
         fi
         emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
       else
-        malformed_lines+=("$trimmed")
+        comment_blob=""
+        if ((${#pending_comments[@]} > 0)); then
+          comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+          comment_blob="${comment_blob%$'\n'}"
+          pending_comments=()
+        fi
+        malformed_records+=("$trimmed")
+        malformed_comments+=("$comment_blob")
         malformed_unfixable=$((malformed_unfixable + 1))
         unfix_reason="$(classify_unfixable_reason "$trimmed" "$default_expected" "$allow_auto_omit")"
         unfix_severity="$(classify_unfixable_severity "$unfix_reason")"
@@ -993,16 +1016,37 @@ format_expectation_file() {
         malformed_suggested=$((malformed_suggested + 1))
         applied=0
         if [[ "$EXPECT_FORMAT_REWRITE_MALFORMED" == "1" ]]; then
-          row_lines+=("$suggestion")
+          comment_blob=""
+          if ((${#pending_comments[@]} > 0)); then
+            comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+            comment_blob="${comment_blob%$'\n'}"
+            pending_comments=()
+          fi
+          row_records+=("$suggestion")
+          row_comments+=("$comment_blob")
           rows=$((rows + 1))
           malformed_fixed=$((malformed_fixed + 1))
           applied=1
         else
-          malformed_lines+=("$trimmed")
+          comment_blob=""
+          if ((${#pending_comments[@]} > 0)); then
+            comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+            comment_blob="${comment_blob%$'\n'}"
+            pending_comments=()
+          fi
+          malformed_records+=("$trimmed")
+          malformed_comments+=("$comment_blob")
         fi
         emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
       else
-        malformed_lines+=("$trimmed")
+        comment_blob=""
+        if ((${#pending_comments[@]} > 0)); then
+          comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+          comment_blob="${comment_blob%$'\n'}"
+          pending_comments=()
+        fi
+        malformed_records+=("$trimmed")
+        malformed_comments+=("$comment_blob")
         malformed_unfixable=$((malformed_unfixable + 1))
         unfix_reason="$(classify_unfixable_reason "$trimmed" "$default_expected" "$allow_auto_omit")"
         unfix_severity="$(classify_unfixable_severity "$unfix_reason")"
@@ -1019,27 +1063,53 @@ format_expectation_file() {
     mode_field="${mode_field,,}"
     profile="${profile,,}"
     expected="${expected,,}"
-    row_lines+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$expected")
+    comment_blob=""
+    if ((${#pending_comments[@]} > 0)); then
+      comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+      comment_blob="${comment_blob%$'\n'}"
+      pending_comments=()
+    fi
+    row_records+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$expected")
+    row_comments+=("$comment_blob")
     rows=$((rows + 1))
   done < "$file"
 
+  if ((${#pending_comments[@]} > 0)); then
+    comment_blob="$(printf '%s\n' "${pending_comments[@]}")"
+    comment_blob="${comment_blob%$'\n'}"
+    malformed_records+=("")
+    malformed_comments+=("$comment_blob")
+    pending_comments=()
+  fi
+
   : > "$new_file"
-  if ((${#comment_lines[@]} > 0)); then
-    printf '%s\n' "${comment_lines[@]}" >> "$new_file"
+  if ((${#row_records[@]} > 0)); then
+    while IFS= read -r rec; do
+      rec_idx="${rec##*$'\x1f'}"
+      comment_blob="${row_comments[$((10#$rec_idx))]:-}"
+      if [[ -n "$comment_blob" ]]; then
+        printf '%s\n' "$comment_blob" >> "$new_file"
+      fi
+      echo "${row_records[$((10#$rec_idx))]}" >> "$new_file"
+    done < <(
+      for rec_idx in "${!row_records[@]}"; do
+        printf '%s\x1f%08d\n' "${row_records[$rec_idx]}" "$rec_idx"
+      done | LC_ALL=C sort
+    )
   fi
-  if ((${#comment_lines[@]} > 0 && ${#row_lines[@]} > 0)); then
-    echo >> "$new_file"
-  fi
-  if ((${#row_lines[@]} > 0)); then
-    while IFS= read -r line; do
-      echo "$line" >> "$new_file"
-    done < <(printf '%s\n' "${row_lines[@]}" | LC_ALL=C sort)
-  fi
-  if ((${#malformed_lines[@]} > 0)); then
+  if ((${#malformed_records[@]} > 0)); then
     if [[ -s "$new_file" ]]; then
       echo >> "$new_file"
     fi
-    printf '%s\n' "${malformed_lines[@]}" >> "$new_file"
+    for rec_idx in "${!malformed_records[@]}"; do
+      comment_blob="${malformed_comments[$rec_idx]:-}"
+      if [[ -n "$comment_blob" ]]; then
+        printf '%s\n' "$comment_blob" >> "$new_file"
+      fi
+      if [[ -n "${malformed_records[$rec_idx]}" ]]; then
+        printf '%s\n' "${malformed_records[$rec_idx]}" >> "$new_file"
+      fi
+    done
   fi
 
   if ! cmp -s "$old_file" "$new_file"; then

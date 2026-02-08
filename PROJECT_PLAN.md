@@ -11164,6 +11164,62 @@ ninja -C build circt-verilog
   - Normalize skip accounting to explicit mode-level metrics in summary.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 540
+- Yosys SVA BMC row-local comment anchor preservation in formatter:
+  - Refactored `format_expectation_file` in
+    `utils/run_yosys_sva_circt_bmc.sh` to preserve comment locality.
+  - Added pending-comment anchoring model:
+    - comments now attach to the next parsed row/malformed entry rather than
+      being globally hoisted into a header block.
+  - Canonical row sorting now preserves attached comment bundles:
+    - comments travel with their anchored rows when rows are reordered.
+  - Malformed/trailing comment handling:
+    - malformed entries preserve attached comments in malformed section output.
+    - trailing comment-only blocks at EOF are preserved after formatted content.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-format-comments.test`:
+    - validates comment anchors move with sorted rows
+    - validates malformed-anchor + trailing-comment preservation.
+  - Updated `test/Tools/run-yosys-sva-bmc-format.test` for new anchored comment
+    placement semantics in apply mode.
+  - Re-ran formatter/strict targeted tests:
+    - `test/Tools/run-yosys-sva-bmc-format*.test`
+    - `test/Tools/run-yosys-sva-bmc-format-strict*.test`
+    - result: 7/7 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 23/23 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Comment anchor semantics are line-local but still do not support explicit
+    sticky association across blank-line-separated logical groups.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - Severity tiers are still coarse (`error` vs `warning`) and not tied to
+    deeper parser provenance.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add explicit comment-anchor modes (local vs sticky-group) for formatting.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Add richer malformed reason families with policy-aware severity.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
