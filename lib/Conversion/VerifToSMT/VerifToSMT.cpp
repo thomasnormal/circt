@@ -4727,7 +4727,7 @@ struct VerifBoundedModelCheckingOpConversion
     }
     inputDecls.push_back(constFalse); // wasViolated?
 
-    auto toSMTBool = [&](Value value) -> FailureOr<Value> {
+    auto toSMTBool = [&](OpBuilder &builder, Value value) -> FailureOr<Value> {
       if (isa<smt::BoolType>(value.getType()))
         return value;
       if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
@@ -4736,8 +4736,8 @@ struct VerifBoundedModelCheckingOpConversion
                        "signal values");
           return failure();
         }
-        auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
-        return Value(smt::EqOp::create(rewriter, loc, value, one));
+        auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
+        return Value(smt::EqOp::create(builder, loc, value, one));
       }
       op.emitError("event-arm witness lowering expects bool or bv<1> "
                    "signal values");
@@ -4750,6 +4750,73 @@ struct VerifBoundedModelCheckingOpConversion
     if (ignoreAssertionsUntilAttr)
       ignoreAssertionsUntilValue =
           ignoreAssertionsUntilAttr.getValue().getZExtValue();
+
+    auto boolTy = smt::BoolType::get(rewriter.getContext());
+    auto witnessFalse = smt::BoolConstantOp::create(rewriter, loc, false);
+    for (const auto &witness : armWitnesses) {
+      if (witness.sourceArgIndex >= inputDecls.size())
+        continue;
+      Value initWitness = witnessFalse;
+      if (witness.kind == EventArmWitnessInfo::Kind::Sequence) {
+        auto initBoolOr = toSMTBool(rewriter, inputDecls[witness.sourceArgIndex]);
+        if (failed(initBoolOr))
+          return failure();
+        initWitness = *initBoolOr;
+        if (witness.iffArgIndex && *witness.iffArgIndex < inputDecls.size()) {
+          auto iffBoolOr = toSMTBool(rewriter, inputDecls[*witness.iffArgIndex]);
+          if (failed(iffBoolOr))
+            return failure();
+          initWitness = smt::AndOp::create(rewriter, loc, *iffBoolOr, initWitness);
+        }
+      }
+      auto initWitnessDecl =
+          smt::DeclareFunOp::create(rewriter, loc, boolTy, witness.witnessName);
+      auto initWitnessEq =
+          smt::EqOp::create(rewriter, loc, initWitnessDecl, initWitness);
+      smt::AssertOp::create(rewriter, loc, initWitnessEq);
+    }
+
+    auto buildWitnessFired = [&](OpBuilder &builder, const auto &prevValues,
+                                 const auto &currValues,
+                                 const EventArmWitnessInfo &witness)
+        -> FailureOr<Value> {
+      auto currBoolOr = toSMTBool(builder, currValues[witness.sourceArgIndex]);
+      if (failed(currBoolOr))
+        return failure();
+      Value currBool = *currBoolOr;
+
+      Value fired = currBool;
+      if (witness.kind == EventArmWitnessInfo::Kind::Signal) {
+        auto prevBoolOr = toSMTBool(builder, prevValues[witness.sourceArgIndex]);
+        if (failed(prevBoolOr))
+          return failure();
+        Value prevBool = *prevBoolOr;
+        switch (witness.edge) {
+        case ltl::ClockEdge::Pos: {
+          auto notPrev = smt::NotOp::create(builder, loc, prevBool);
+          fired = smt::AndOp::create(builder, loc, notPrev, currBool);
+          break;
+        }
+        case ltl::ClockEdge::Neg: {
+          auto notCurr = smt::NotOp::create(builder, loc, currBool);
+          fired = smt::AndOp::create(builder, loc, prevBool, notCurr);
+          break;
+        }
+        case ltl::ClockEdge::Both:
+          fired = smt::DistinctOp::create(builder, loc, prevBool, currBool);
+          break;
+        }
+      }
+
+      if (witness.iffArgIndex &&
+          *witness.iffArgIndex < static_cast<unsigned>(currValues.size())) {
+        auto iffBoolOr = toSMTBool(builder, currValues[*witness.iffArgIndex]);
+        if (failed(iffBoolOr))
+          return failure();
+        fired = smt::AndOp::create(builder, loc, *iffBoolOr, fired);
+      }
+      return fired;
+    };
 
     if (emitSMTLIB) {
       auto combineOr = [&](Value lhs, Value rhs) -> Value {
@@ -4769,31 +4836,6 @@ struct VerifBoundedModelCheckingOpConversion
 
       size_t numCircuitArgs = circuitInputTy.size();
       size_t numBMCStateArgs = numRegs + totalDelaySlots + totalNFAStateSlots;
-      auto boolTy = smt::BoolType::get(rewriter.getContext());
-      for (const auto &witness : armWitnesses) {
-        if (witness.sourceArgIndex >= inputDecls.size())
-          continue;
-        Value initWitness = constFalse;
-        if (witness.kind == EventArmWitnessInfo::Kind::Sequence) {
-          auto initBoolOr = toSMTBool(inputDecls[witness.sourceArgIndex]);
-          if (failed(initBoolOr))
-            return failure();
-          initWitness = *initBoolOr;
-          if (witness.iffArgIndex &&
-              *witness.iffArgIndex < inputDecls.size()) {
-            auto iffBoolOr = toSMTBool(inputDecls[*witness.iffArgIndex]);
-            if (failed(iffBoolOr))
-              return failure();
-            initWitness =
-                smt::AndOp::create(rewriter, loc, *iffBoolOr, initWitness);
-          }
-        }
-        auto initWitnessDecl =
-            smt::DeclareFunOp::create(rewriter, loc, boolTy, witness.witnessName);
-        auto initWitnessEq = smt::EqOp::create(rewriter, loc, initWitnessDecl,
-                                               initWitness);
-        smt::AssertOp::create(rewriter, loc, initWitnessEq);
-      }
       SmallVector<Value> iterArgs = inputDecls;
       SmallVector<SmallVector<Value>> lassoStateHistory;
       SmallVector<SmallVector<Value>> lassoFinalCheckSampleHistory;
@@ -5278,48 +5320,16 @@ struct VerifBoundedModelCheckingOpConversion
               witness.sourceArgIndex >= iterRange.size())
             continue;
 
-          auto currBoolOr = toSMTBool(newDecls[witness.sourceArgIndex]);
-          if (failed(currBoolOr))
+          auto firedOr = buildWitnessFired(
+              rewriter, iterRange.take_front(numNonStateArgs),
+              ValueRange(newDecls).take_front(numNonStateArgs), witness);
+          if (failed(firedOr))
             return failure();
-          Value currBool = *currBoolOr;
-
-          Value fired = currBool;
-          if (witness.kind == EventArmWitnessInfo::Kind::Signal) {
-            auto prevBoolOr = toSMTBool(iterRange[witness.sourceArgIndex]);
-            if (failed(prevBoolOr))
-              return failure();
-            Value prevBool = *prevBoolOr;
-            switch (witness.edge) {
-            case ltl::ClockEdge::Pos: {
-              auto notPrev = smt::NotOp::create(rewriter, loc, prevBool);
-              fired = smt::AndOp::create(rewriter, loc, notPrev, currBool);
-              break;
-            }
-            case ltl::ClockEdge::Neg: {
-              auto notCurr = smt::NotOp::create(rewriter, loc, currBool);
-              fired = smt::AndOp::create(rewriter, loc, prevBool, notCurr);
-              break;
-            }
-            case ltl::ClockEdge::Both:
-              fired =
-                  smt::DistinctOp::create(rewriter, loc, prevBool, currBool);
-              break;
-            }
-          }
-
-          if (witness.iffArgIndex &&
-              *witness.iffArgIndex < numNonStateArgs &&
-              *witness.iffArgIndex < newDecls.size()) {
-            auto iffBoolOr = toSMTBool(newDecls[*witness.iffArgIndex]);
-            if (failed(iffBoolOr))
-              return failure();
-            fired = smt::AndOp::create(rewriter, loc, *iffBoolOr, fired);
-          }
 
           auto witnessDecl = smt::DeclareFunOp::create(rewriter, loc, boolTy,
                                                        witness.witnessName);
           auto witnessEq =
-              smt::EqOp::create(rewriter, loc, witnessDecl, fired);
+              smt::EqOp::create(rewriter, loc, witnessDecl, *firedOr);
           smt::AssertOp::create(rewriter, loc, witnessEq);
         }
 
@@ -6091,6 +6101,23 @@ struct VerifBoundedModelCheckingOpConversion
             }
             nonRegIdx++;
             argIndex++;
+          }
+
+          for (const auto &witness : armWitnesses) {
+            if (witness.sourceArgIndex >= numNonStateArgs ||
+                witness.sourceArgIndex >= newDecls.size() ||
+                witness.sourceArgIndex >= iterArgs.size())
+              continue;
+            auto firedOr = buildWitnessFired(
+                builder, iterArgs.take_front(numNonStateArgs),
+                ValueRange(newDecls).take_front(numNonStateArgs), witness);
+            if (failed(firedOr))
+              continue;
+            auto witnessDecl = smt::DeclareFunOp::create(builder, loc, boolTy,
+                                                         witness.witnessName);
+            auto witnessEq =
+                smt::EqOp::create(builder, loc, witnessDecl, *firedOr);
+            smt::AssertOp::create(builder, loc, witnessEq);
           }
 
           // Update registers using the computed clock edge signals.
