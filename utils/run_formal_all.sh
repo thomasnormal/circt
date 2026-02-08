@@ -711,6 +711,7 @@ result_sources = [
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
 ]
+known_detailed_pairs = {(suite, mode) for suite, mode, _ in result_sources}
 
 observed = []
 for suite, mode, path in result_sources:
@@ -737,6 +738,75 @@ for suite, mode, path in result_sources:
           }
       )
 
+summary_path = out_dir / "summary.tsv"
+if summary_path.exists():
+  with summary_path.open() as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    for row in reader:
+      suite = row.get("suite", "")
+      mode = row.get("mode", "")
+      if not suite or not mode:
+        continue
+      if (suite, mode) in known_detailed_pairs:
+        continue
+      summary = row.get("summary", "")
+      try:
+        fail_count = int(row.get("fail", "0"))
+      except Exception:
+        fail_count = 0
+      try:
+        error_count = int(row.get("error", "0"))
+      except Exception:
+        error_count = 0
+      try:
+        xfail_count = int(row.get("xfail", "0"))
+      except Exception:
+        xfail_count = 0
+      try:
+        xpass_count = int(row.get("xpass", "0"))
+      except Exception:
+        xpass_count = 0
+      if fail_count > 0:
+        observed.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "status": "FAIL",
+                "base": "__aggregate__",
+                "path": summary,
+            }
+        )
+      if error_count > 0:
+        observed.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "status": "ERROR",
+                "base": "__aggregate__",
+                "path": summary,
+            }
+        )
+      if xfail_count > 0:
+        observed.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "status": "XFAIL",
+                "base": "__aggregate__",
+                "path": summary,
+            }
+        )
+      if xpass_count > 0:
+        observed.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "status": "XPASS",
+                "base": "__aggregate__",
+                "path": summary,
+            }
+        )
+
 expected_rows = []
 if expected_path is not None:
   with expected_path.open() as f:
@@ -760,11 +830,11 @@ if expected_path is not None:
             f"suite/mode/id must be non-empty at data row {idx + 1}"
         )
       id_kind = row.get("id_kind", "base").strip().lower() or "base"
-      if id_kind not in {"base", "path"}:
+      if id_kind not in {"base", "path", "aggregate"}:
         raise SystemExit(
             "invalid expected-failure-cases row for "
             f"suite={suite} mode={mode} id={case_id}: "
-            "id_kind must be one of base,path"
+            "id_kind must be one of base,path,aggregate"
         )
       status = row.get("status", "ANY").strip().upper() or "ANY"
       if status != "ANY" and status not in fail_like_statuses:
@@ -812,7 +882,12 @@ for row in expected_rows:
   for idx, obs in enumerate(observed):
     if obs["suite"] != row["suite"] or obs["mode"] != row["mode"]:
       continue
-    observed_id = obs["base"] if row["id_kind"] == "base" else obs["path"]
+    if row["id_kind"] == "base":
+      observed_id = obs["base"]
+    elif row["id_kind"] == "path":
+      observed_id = obs["path"]
+    else:
+      observed_id = "__aggregate__"
     if observed_id != row["id"]:
       continue
     if row["status"] != "ANY" and obs["status"] != row["status"]:

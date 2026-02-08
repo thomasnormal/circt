@@ -16532,6 +16532,11 @@ ninja -C build circt-verilog
   - `bash -n utils/run_formal_all.sh` -> PASS
   - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
   - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-expected-cases-agg-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-smoke-agg.tsv --fail-on-unexpected-failure-cases`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (covered by aggregate expected-case)
 - Current limitations / debt:
   - Window selection is count-based by row count; no time-duration windows
     (e.g., last N days) yet.
@@ -16961,6 +16966,34 @@ ninja -C build circt-verilog
   - Matching is exact only (`base` or `path`); regex/grouping semantics are not
     implemented.
   - No built-in expectation-auto-prune workflow yet for matched+expired entries.
+
+### Iteration 644
+- Aggregate expected-case support for lanes without per-test result rows:
+  - Extended expected-cases matching with `id_kind=aggregate`.
+  - Added synthetic aggregate fail-like observation for suite/mode rows in
+    `summary.tsv` when detailed result files are unavailable.
+  - Aggregate observations use:
+    - `id=__aggregate__`
+    - status inferred from summary counts (`fail`, `error`, `xfail`, `xpass`).
+- Initial coverage impact:
+  - Case-level gating can now cover `yosys/tests/sva` BMC using
+    `id_kind=aggregate`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test` with:
+    - positive aggregate-case match scenario for `yosys/tests/sva` BMC.
+- Documentation/schema:
+  - Updated `docs/FormalRegression.md` to document `id_kind=aggregate`.
+  - Updated `utils/formal-summary-schema.json` enum for
+    `expected_failure_cases.rows[].id_kind`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Aggregate matching remains coarse for multi-test lanes (single synthetic
+    `__aggregate__` ID).
+  - OpenTitan/AVIP case granularity is still aggregate-only unless their
+    harnesses emit structured per-test result files.
 
 ---
 

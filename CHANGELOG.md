@@ -31262,6 +31262,11 @@ CIRCT/slang correctly enforces LRM restrictions.
 - `bash -n utils/run_formal_all.sh`: PASS
 - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
 - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-expected-cases-agg-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-smoke-agg.tsv --fail-on-unexpected-failure-cases`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (covered by aggregate expected-case)
 
 ### Remaining Limitations
 
@@ -31880,3 +31885,48 @@ CIRCT/slang correctly enforces LRM restrictions.
   or AVIP compile lanes.
 - Case matching supports exact `base`/`path` keys only (no regex groups).
 - No built-in auto-prune/update flow yet for matched-and-expired expectations.
+
+## Iteration 644 - February 8, 2026
+
+### Aggregate Expected-Case Matching for Non-Detailed Lanes
+
+- Extended expected-failure case matching with:
+  - `id_kind=aggregate`
+- Added synthetic aggregate fail-like observation for suite/mode rows that have
+  summary-level failures but no detailed per-test result file ingestion.
+- Aggregate-case convention:
+  - `id=__aggregate__`
+  - status derived from summary counts (`fail`, `error`, `xfail`, `xpass`)
+
+### Coverage Impact
+
+- Case-level gating now supports `yosys/tests/sva` BMC through aggregate
+  matching even though that lane does not emit a per-test result file in
+  `run_formal_all.sh` today.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added aggregate-case positive scenario for `yosys/tests/sva` BMC
+
+### Documentation and Schema
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - documented `id_kind=aggregate` and `id=__aggregate__` convention
+  - `utils/formal-summary-schema.json`
+    - extended `expected_failure_cases.rows[].id_kind` enum with `aggregate`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Aggregate matching remains coarse for multi-test lanes (single synthetic
+  aggregate ID).
+- OpenTitan/AVIP remain aggregate-only in case-level gating until their harness
+  outputs are promoted to structured per-test result streams.

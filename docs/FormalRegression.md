@@ -212,10 +212,12 @@ Expected-failure cases file:
 - `--expected-failure-cases-file` expects TSV with required columns:
   - `suite	mode	id`
 - Optional columns:
-  - `id_kind` (`base` or `path`, default: `base`)
+  - `id_kind` (`base`, `path`, or `aggregate`, default: `base`)
   - `status` (`ANY`, `FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`; default: `ANY`)
   - `expires_on` (`YYYY-MM-DD`)
   - `reason`
+- `id_kind=aggregate` matches the synthetic aggregate failing case for
+  suite/mode lanes that do not emit per-test result rows (`id=__aggregate__`).
 - `--fail-on-unexpected-failure-cases` fails if observed fail-like test cases are
   not matched by the expected-cases file.
 - `--fail-on-expired-expected-failure-cases` fails if any expected case is past
