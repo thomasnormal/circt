@@ -7020,9 +7020,40 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     const auto *constructor = expr.constructorCall();
-    // If there's no ctor, we are done.
-    if (!constructor)
+    // If there's no ctor, emit property initializers directly.
+    // IEEE 1800-2017 §8.8: property initializers execute as part of the
+    // implicit default constructor.
+    if (!constructor) {
+      if (auto *classType = expr.type->as_if<slang::ast::ClassType>()) {
+        for (auto &member : classType->members()) {
+          auto *prop = member.as_if<slang::ast::ClassPropertySymbol>();
+          if (!prop)
+            continue;
+          if (prop->lifetime == slang::ast::VariableLifetime::Static)
+            continue;
+          auto *init = prop->getInitializer();
+          if (!init)
+            continue;
+
+          auto propTy = context.convertType(prop->getType());
+          if (!propTy)
+            continue;
+
+          Value initVal = context.convertRvalueExpression(*init, propTy);
+          if (!initVal)
+            continue;
+
+          auto fieldRefTy =
+              moore::RefType::get(cast<moore::UnpackedType>(propTy));
+          auto fieldSym =
+              mlir::FlatSymbolRefAttr::get(context.getContext(), prop->name);
+          Value fieldRef = moore::ClassPropertyRefOp::create(
+              builder, loc, fieldRefTy, newObj, fieldSym);
+          moore::BlockingAssignOp::create(builder, loc, fieldRef, initVal);
+        }
+      }
       return newObj;
+    }
 
     if (const auto *callConstructor =
             constructor->as_if<slang::ast::CallExpression>())

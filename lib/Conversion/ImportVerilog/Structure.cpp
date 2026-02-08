@@ -3594,7 +3594,27 @@ Context::declareFunction(const slang::ast::SubroutineSymbol &subroutine) {
     // dispatch. Use isVirtual() to catch implicit virtuality.
     const bool isVirtualMethod = subroutine.isVirtual();
     const auto &parentSym = subroutine.getParentScope()->asSymbol();
-    if (isVirtualMethod &&
+    // Also handle user-defined pre/post_randomize (BuiltIn flag, user syntax).
+    bool isUserPrePost =
+        (subroutine.flags & slang::ast::MethodFlags::BuiltIn) &&
+        (subroutine.name == "pre_randomize" ||
+         subroutine.name == "post_randomize") &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType &&
+        [&]() {
+          auto &body = subroutine.getBody();
+          if (body.kind == slang::ast::StatementKind::List) {
+            return !body.as<slang::ast::StatementList>().list.empty();
+          }
+          if (body.kind == slang::ast::StatementKind::Block) {
+            auto &inner = body.as<slang::ast::BlockStatement>().body;
+            if (inner.kind == slang::ast::StatementKind::List)
+              return !inner.as<slang::ast::StatementList>().list.empty();
+            return inner.kind != slang::ast::StatementKind::Empty;
+          }
+          return body.kind != slang::ast::StatementKind::Empty &&
+                 body.kind != slang::ast::StatementKind::Invalid;
+        }();
+    if ((isVirtualMethod || isUserPrePost) &&
         parentSym.kind == slang::ast::SymbolKind::ClassType) {
       // This is a pure virtual method inside a class.
       const auto *classTy = parentSym.as_if<slang::ast::ClassType>();
@@ -3793,6 +3813,11 @@ Context::declareCallableImpl(const slang::ast::SubroutineSymbol &subroutine,
   symbolTable.insert(funcOp);
   functions[&subroutine] = std::move(lowering);
 
+  LLVM_DEBUG(llvm::dbgs() << "  declareCallableImpl: created "
+                          << funcOp.getSymName()
+                          << " parent=" << funcOp->getParentOp()->getName()
+                          << "\n");
+
   return functions[&subroutine].get();
 }
 
@@ -3918,7 +3943,7 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     return success();
   }
 
-  const bool isMethod = (subroutine.thisVar != nullptr);
+  const bool isMethod = subroutine.thisVar != nullptr;
 
   ValueSymbolScope scope(valueSymbols);
 
@@ -3927,7 +3952,11 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   auto &block = lowering->op.getBody().emplaceBlock();
 
   LLVM_DEBUG(llvm::dbgs() << "convertFunction: "
-                          << lowering->op.getSymName() << "\n");
+                          << lowering->op.getSymName()
+                          << " isMethod=" << isMethod
+                          << " thisVar=" << (subroutine.thisVar ? "yes" : "no")
+                          << " builtin=" << bool(subroutine.flags & slang::ast::MethodFlags::BuiltIn)
+                          << "\n");
 
   // Pure virtual methods: stub out with a default return value.
   // Do this BEFORE full argument processing to avoid issues with pure virtual
@@ -3977,7 +4006,8 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     auto thisArg = block.addArgument(thisType, thisLoc);
 
     // Bind `this` so NamedValue/MemberAccess can find it.
-    valueSymbols.insert(subroutine.thisVar, thisArg);
+    if (subroutine.thisVar)
+      valueSymbols.insert(subroutine.thisVar, thisArg);
   }
 
   // If this is an interface method, the first input is the interface instance.
@@ -4142,7 +4172,8 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
   };
 
   auto savedThis = currentThisRef;
-  currentThisRef = valueSymbols.lookup(subroutine.thisVar);
+  if (subroutine.thisVar)
+    currentThisRef = valueSymbols.lookup(subroutine.thisVar);
   auto restoreThis = llvm::make_scope_exit([&] { currentThisRef = savedThis; });
 
   // Reset assertion guard when entering an isolated function region.
@@ -4161,6 +4192,50 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
 
   lowering->isConverting = true;
   auto convertingGuard = llvm::make_scope_exit([&] { lowering->isConverting = false; });
+
+  // IEEE 1800-2017 §8.8: "The initial value expressions specified in
+  // declarations of class properties shall be executed as part of the class
+  // constructor, prior to the execution of the constructor body."
+  // Emit instance property initializers before the user-written constructor body.
+  if (isMethod &&
+      (subroutine.flags & slang::ast::MethodFlags::Constructor)) {
+    const auto &parentSym = subroutine.getParentScope()->asSymbol();
+    if (auto *classTy = parentSym.as_if<slang::ast::ClassType>()) {
+      for (auto &member : classTy->members()) {
+        auto *prop = member.as_if<slang::ast::ClassPropertySymbol>();
+        if (!prop)
+          continue;
+        // Skip static properties (handled as globals).
+        if (prop->lifetime == slang::ast::VariableLifetime::Static)
+          continue;
+        auto *init = prop->getInitializer();
+        if (!init)
+          continue;
+
+        auto propLoc = convertLocation(prop->location);
+        auto propTy = convertType(prop->getType());
+        if (!propTy)
+          continue;
+
+        // Convert the initializer expression.
+        Value initVal = convertRvalueExpression(*init, propTy);
+        if (!initVal)
+          continue;
+
+        // Build a reference to the property: this.prop
+        auto fieldRefTy =
+            moore::RefType::get(cast<moore::UnpackedType>(propTy));
+        auto fieldSym =
+            mlir::FlatSymbolRefAttr::get(getContext(), prop->name);
+        Value thisRef = valueSymbols.lookup(subroutine.thisVar);
+        Value fieldRef = moore::ClassPropertyRefOp::create(
+            builder, propLoc, fieldRefTy, thisRef, fieldSym);
+
+        // Assign: this.prop = initVal
+        moore::BlockingAssignOp::create(builder, propLoc, fieldRef, initVal);
+      }
+    }
+  }
 
   if (failed(convertStatement(subroutine.getBody())))
     return failure();
@@ -4682,17 +4757,45 @@ struct ClassDeclVisitor {
   LogicalResult visit(const slang::ast::SubroutineSymbol &fn) {
     LLVM_DEBUG(llvm::dbgs() << "      SubroutineSymbol: " << fn.name << "\n");
     if (fn.flags & slang::ast::MethodFlags::BuiltIn) {
-      LLVM_DEBUG(llvm::dbgs() << "        Skipping builtin method\n");
-      static bool remarkEmitted = false;
-      if (remarkEmitted)
-        return success();
+      // Allow pre_randomize/post_randomize through when user-defined.
+      // Slang marks these as BuiltIn even when the user provides a body.
+      // Check if the body is a non-empty block (user-provided statements).
+      bool isUserCallback = false;
+      if ((fn.name == "pre_randomize" || fn.name == "post_randomize")) {
+        auto &body = fn.getBody();
+        if (body.kind == slang::ast::StatementKind::List) {
+          auto &list = body.as<slang::ast::StatementList>();
+          isUserCallback = !list.list.empty();
+        } else if (body.kind == slang::ast::StatementKind::Block) {
+          auto &block = body.as<slang::ast::BlockStatement>();
+          auto &inner = block.body;
+          if (inner.kind == slang::ast::StatementKind::List) {
+            auto &list = inner.as<slang::ast::StatementList>();
+            isUserCallback = !list.list.empty();
+          } else if (inner.kind != slang::ast::StatementKind::Empty) {
+            isUserCallback = true;
+          }
+        } else if (body.kind != slang::ast::StatementKind::Empty &&
+                   body.kind != slang::ast::StatementKind::Invalid) {
+          isUserCallback = true;
+        }
+      }
+      if (!isUserCallback) {
+        LLVM_DEBUG(llvm::dbgs() << "        Skipping builtin method\n");
+        static bool remarkEmitted = false;
+        if (remarkEmitted)
+          return success();
 
-      mlir::emitRemark(classLowering.op.getLoc())
-          << "Class builtin functions (needed for randomization, constraints, "
-             "and covergroups) are not yet supported and will be dropped "
-             "during lowering.";
-      remarkEmitted = true;
-      return success();
+        mlir::emitRemark(classLowering.op.getLoc())
+            << "Class builtin functions (needed for randomization, "
+               "constraints, "
+               "and covergroups) are not yet supported and will be dropped "
+               "during lowering.";
+        remarkEmitted = true;
+        return success();
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "        User-defined " << fn.name << " - converting\n");
     }
 
     // Use fn.isVirtual() which checks not only the Virtual flag but also
@@ -4732,6 +4835,13 @@ struct ClassDeclVisitor {
       LLVM_DEBUG(llvm::dbgs() << "        FAILED: declareFunction returned null\n");
       return failure();
     }
+
+    // User-defined pre/post_randomize are referenced implicitly via
+    // moore.call_pre/post_randomize (which uses class type, not function
+    // symbol). Mark them non-private so SymbolDCE doesn't remove them.
+    if (fn.name == "pre_randomize" || fn.name == "post_randomize")
+      SymbolTable::setSymbolVisibility(lowering->op,
+                                       SymbolTable::Visibility::Public);
 
     LLVM_DEBUG(llvm::dbgs() << "        Converting function body\n");
     if (failed(context.convertFunction(fn))) {
