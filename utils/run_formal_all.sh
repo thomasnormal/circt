@@ -88,6 +88,8 @@ Options:
   --resume-from-lane-state
                          Reuse completed lane rows from --lane-state-tsv
   --reset-lane-state     Reset/truncate --lane-state-tsv before running
+  --merge-lane-state-tsv FILE
+                         Merge lane-state rows from FILE (repeatable)
   --include-lane-regex REGEX
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
@@ -163,6 +165,7 @@ JSON_SUMMARY_FILE=""
 LANE_STATE_TSV=""
 RESUME_FROM_LANE_STATE=0
 RESET_LANE_STATE=0
+declare -a MERGE_LANE_STATE_TSVS=()
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -286,6 +289,8 @@ while [[ $# -gt 0 ]]; do
       RESUME_FROM_LANE_STATE=1; shift ;;
     --reset-lane-state)
       RESET_LANE_STATE=1; shift ;;
+    --merge-lane-state-tsv)
+      MERGE_LANE_STATE_TSVS+=("$2"); shift 2 ;;
     --include-lane-regex)
       INCLUDE_LANE_REGEX="$2"; shift 2 ;;
     --exclude-lane-regex)
@@ -343,6 +348,10 @@ if [[ "$RESET_LANE_STATE" == "1" && -z "$LANE_STATE_TSV" ]]; then
   echo "--reset-lane-state requires --lane-state-tsv" >&2
   exit 1
 fi
+if [[ "${#MERGE_LANE_STATE_TSVS[@]}" -gt 0 && -z "$LANE_STATE_TSV" ]]; then
+  echo "--merge-lane-state-tsv requires --lane-state-tsv" >&2
+  exit 1
+fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
   echo "--resume-from-lane-state and --reset-lane-state are mutually exclusive" >&2
   exit 1
@@ -355,6 +364,12 @@ if [[ "$RESUME_FROM_LANE_STATE" == "1" && ! -f "$LANE_STATE_TSV" ]]; then
   echo "lane state file not found for resume: $LANE_STATE_TSV" >&2
   exit 1
 fi
+for merge_lane_state_file in "${MERGE_LANE_STATE_TSVS[@]}"; do
+  if [[ ! -r "$merge_lane_state_file" ]]; then
+    echo "merge lane state file not readable: $merge_lane_state_file" >&2
+    exit 1
+  fi
+done
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
       ! -r "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
   echo "expectations dry-run report HMAC key file not readable: $EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" >&2
@@ -558,6 +573,7 @@ PY
 fi
 
 declare -A LANE_STATE_ROW_BY_ID=()
+declare -A LANE_STATE_SOURCE_BY_ID=()
 declare -a LANE_STATE_ORDER=()
 LANE_STATE_ACTIVE_CONFIG_HASH=""
 
@@ -595,10 +611,53 @@ compute_lane_state_config_hash() {
 lane_state_register_row() {
   local lane_id="$1"
   local row="$2"
+  local source_ref="$3"
   if [[ -z "${LANE_STATE_ROW_BY_ID[$lane_id]+_}" ]]; then
     LANE_STATE_ORDER+=("$lane_id")
   fi
   LANE_STATE_ROW_BY_ID["$lane_id"]="$row"
+  LANE_STATE_SOURCE_BY_ID["$lane_id"]="$source_ref"
+}
+
+lane_state_merge_row() {
+  local lane_id="$1"
+  local row="$2"
+  local source_ref="$3"
+  local existing_row="${LANE_STATE_ROW_BY_ID[$lane_id]-}"
+  if [[ -z "$existing_row" ]]; then
+    lane_state_register_row "$lane_id" "$row" "$source_ref"
+    return
+  fi
+  local old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_config_hash
+  IFS=$'\t' read -r old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_config_hash <<< "$existing_row"
+  local new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_config_hash
+  IFS=$'\t' read -r new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_config_hash <<< "$row"
+
+  if [[ -n "$old_config_hash" && -n "$new_config_hash" && "$old_config_hash" != "$new_config_hash" ]]; then
+    echo "conflicting lane state config hash for lane ${lane_id}: ${LANE_STATE_SOURCE_BY_ID[$lane_id]} has ${old_config_hash}, ${source_ref} has ${new_config_hash}" >&2
+    exit 1
+  fi
+
+  if [[ -z "$old_config_hash" && -n "$new_config_hash" ]]; then
+    lane_state_register_row "$lane_id" "$row" "$source_ref"
+    return
+  fi
+  if [[ -n "$old_config_hash" && -z "$new_config_hash" ]]; then
+    return
+  fi
+
+  if [[ "$new_updated_at_utc" > "$old_updated_at_utc" ]]; then
+    lane_state_register_row "$lane_id" "$row" "$source_ref"
+    return
+  fi
+  if [[ "$new_updated_at_utc" < "$old_updated_at_utc" ]]; then
+    return
+  fi
+
+  if [[ "$existing_row" != "$row" ]]; then
+    echo "conflicting lane state row for lane ${lane_id}: ${LANE_STATE_SOURCE_BY_ID[$lane_id]} and ${source_ref} share updated_at_utc=${new_updated_at_utc} with different payloads" >&2
+    exit 1
+  fi
 }
 
 lane_state_write_file() {
@@ -619,7 +678,9 @@ lane_state_write_file() {
 }
 
 lane_state_load_file() {
-  if [[ -z "$LANE_STATE_TSV" || ! -f "$LANE_STATE_TSV" ]]; then
+  local lane_state_file="$1"
+  local source_label="$2"
+  if [[ ! -f "$lane_state_file" ]]; then
     return
   fi
   local line_no=0
@@ -632,26 +693,30 @@ lane_state_load_file() {
       continue
     fi
     if [[ -n "$extra" ]]; then
-      echo "invalid lane state row ${line_no}: expected 11 or 12 tab-separated fields" >&2
+      echo "invalid lane state row ${source_label}:${line_no}: expected 11 or 12 tab-separated fields" >&2
       exit 1
     fi
     if [[ -z "$suite" || -z "$mode" || -z "$updated_at_utc" ]]; then
-      echo "invalid lane state row ${line_no}: missing required fields" >&2
+      echo "invalid lane state row ${source_label}:${line_no}: missing required fields" >&2
       exit 1
     fi
     for value in "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"; do
       if ! [[ "$value" =~ ^[0-9]+$ ]]; then
-        echo "invalid lane state row ${line_no}: non-integer counters" >&2
+        echo "invalid lane state row ${source_label}:${line_no}: non-integer counters" >&2
         exit 1
       fi
     done
-    if [[ -n "$config_hash" && ! "$config_hash" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "invalid lane state row ${line_no}: invalid config_hash (expected 64 hex chars)" >&2
+    if ! [[ "$updated_at_utc" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      echo "invalid lane state row ${source_label}:${line_no}: updated_at_utc must be UTC RFC3339 timestamp" >&2
       exit 1
     fi
-    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$config_hash")"
-  done < "$LANE_STATE_TSV"
+    if [[ -n "$config_hash" && ! "$config_hash" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "invalid lane state row ${source_label}:${line_no}: invalid config_hash (expected 64 hex chars)" >&2
+      exit 1
+    fi
+    lane_state_merge_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$config_hash")" "${source_label}:${line_no}"
+  done < "$lane_state_file"
 }
 
 if [[ -n "$LANE_STATE_TSV" ]]; then
@@ -659,7 +724,13 @@ if [[ -n "$LANE_STATE_TSV" ]]; then
   if [[ "$RESET_LANE_STATE" == "1" ]]; then
     lane_state_write_file
   else
-    lane_state_load_file
+    lane_state_load_file "$LANE_STATE_TSV" "$LANE_STATE_TSV"
+  fi
+  for merge_lane_state_file in "${MERGE_LANE_STATE_TSVS[@]}"; do
+    lane_state_load_file "$merge_lane_state_file" "$merge_lane_state_file"
+  done
+  if [[ "${#MERGE_LANE_STATE_TSVS[@]}" -gt 0 ]]; then
+    lane_state_write_file
   fi
 fi
 
@@ -736,7 +807,7 @@ record_result() {
     local updated_at_utc
     updated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_ACTIVE_CONFIG_HASH")"
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_ACTIVE_CONFIG_HASH")" "current-run"
     lane_state_write_file
   fi
 }

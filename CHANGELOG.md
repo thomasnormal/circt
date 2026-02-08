@@ -33610,6 +33610,59 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Fingerprint policy is internal-only (no explicit user-visible policy version
   or migration contract yet).
 
+## Iteration 677 - February 8, 2026
+
+### Lane-State Federation/Merge Support
+
+- Added repeatable lane-state merge option in `utils/run_formal_all.sh`:
+  - `--merge-lane-state-tsv <file>`
+- Merge option semantics:
+  - requires `--lane-state-tsv`
+  - validates merge file readability
+  - imports and merges rows keyed by `lane_id`
+- Deterministic merge policy for duplicate lane rows:
+  - reject conflicting non-empty `config_hash` values for same lane
+  - prefer rows with `config_hash` over legacy hashless rows
+  - otherwise prefer newer `updated_at_utc`
+  - reject equal timestamp + different payload conflicts
+- Merged rows are persisted to target `--lane-state-tsv` so follow-on full
+  matrix runs can resume from federated worker checkpoints.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive worker-A/worker-B merge + resume replay
+    - negative merge hash-conflict detection
+  - `docs/FormalRegression.md`
+    - documented `--merge-lane-state-tsv` usage and conflict behavior
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sharded merge flow:
+  - Worker A lane-state (`sv-tests` + `verilator-verification`): PASS
+  - Worker B lane-state (`yosys/tests/sva` + `opentitan` + `avip/*`): PASS
+  - Merge build (`--merge-lane-state-tsv` x2): PASS
+  - Full resume from merged lane-state: all lanes resumed, PASS
+  - mismatch probe (`--bmc-assume-known-inputs` drift): expected FAIL with
+    config-hash mismatch diagnostic
+
+### Remaining Limitations
+
+- Checkpoint granularity is still lane-level only (no per-test resume).
+- No dedicated lane-state inspection/report utility yet for CI audits.
+- Fingerprint policy remains internal (no external compatibility version
+  contract).
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

@@ -67,12 +67,16 @@ Enable persistent lane checkpoints and resume interrupted matrix runs:
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --resume-from-lane-state
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state --merge-lane-state-tsv /tmp/formal-lanes-worker-a.tsv --merge-lane-state-tsv /tmp/formal-lanes-worker-b.tsv
 ```
 
 Lane-state semantics:
 - `--lane-state-tsv` persists per-lane counters (`total/pass/fail/xfail/xpass/error/skip`).
 - `--resume-from-lane-state` reuses matching lane rows and skips re-running those lanes.
 - `--reset-lane-state` truncates the lane-state file before the run.
+- `--merge-lane-state-tsv` merges rows from additional lane-state files
+  (repeatable). Merge conflicts on lane-id + incompatible `config_hash` fail
+  fast with a diagnostic.
 - Resume enforces a lane-state configuration fingerprint; mismatched options or
   tool context fail fast with a diagnostic and require `--reset-lane-state`.
 

@@ -18214,6 +18214,57 @@ ninja -C build circt-verilog
   - Fingerprint policy is fixed/internal; there is no user-visible compatibility
     policy versioning yet.
 
+### Iteration 677
+- Formal harness lane-state federation in `utils/run_formal_all.sh`:
+  - Added repeatable `--merge-lane-state-tsv FILE` option to import and merge
+    checkpoint rows from multiple worker lane-state files.
+  - Added merge-time validation:
+    - `--merge-lane-state-tsv` requires `--lane-state-tsv`
+    - each merge file must be readable
+    - imported rows validate field counts/types and timestamp format
+  - Added deterministic merge policy:
+    - key = `lane_id`
+    - reject conflicting non-empty `config_hash` for same lane
+    - prefer non-legacy rows (with `config_hash`) over legacy rows
+    - otherwise pick newer `updated_at_utc`; reject equal-timestamp,
+      different-payload conflicts
+  - Merged rows are persisted back into target `--lane-state-tsv`, enabling
+    follow-on full resume runs from federated worker outputs.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test` with:
+    - positive worker-A/worker-B merge + resume replay case
+    - negative merge conflict case for same lane with hash drift
+  - Existing lane-state hash mismatch and resume/reset tests remain green.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with lane-state merge usage and
+    conflict policy.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated filtered sharded merge flow:
+    - Worker A:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-merge-worker-a --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-worker-a.tsv --reset-lane-state --include-lane-regex '^(sv-tests|verilator-verification)/'`
+      - PASS
+    - Worker B:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-merge-worker-b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-worker-b.tsv --reset-lane-state --include-lane-regex '^(yosys/tests/sva|opentitan|avip/)'`
+      - PASS
+    - Merge build:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-merge-build --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-merged-workers.tsv --reset-lane-state --merge-lane-state-tsv /tmp/formal-lane-state-worker-a.tsv --merge-lane-state-tsv /tmp/formal-lane-state-worker-b.tsv --include-lane-regex '^$'`
+      - PASS
+    - Full resume from merged state:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-merge-resume --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-merged-workers.tsv --resume-from-lane-state`
+      - all lanes resumed from merged checkpoints
+    - mismatch probe:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-merge-mismatch --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --lane-state-tsv /tmp/formal-lane-state-merged-workers.tsv --resume-from-lane-state --bmc-assume-known-inputs --include-lane-regex '^sv-tests/BMC$'`
+      - expected FAIL with config-hash mismatch
+- Current limitations / debt:
+  - Checkpointing remains lane-level only; no per-test resume within a lane.
+  - No standalone merge inspection/report tool exists yet for CI artifact audit.
+  - Fingerprint policy remains internal; no explicit external compatibility
+    version contract yet.
+
 ---
 
 ## Architecture Reference
