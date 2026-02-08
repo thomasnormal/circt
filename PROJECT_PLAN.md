@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 483)
+## Current Status - February 8, 2026 (Iteration 484)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Sequence event `iff`, multi-clock event lists (codex handles this) |
+| **BMC/LEC** | Codex | Active | Landed sequence `.triggered`; next: procedural `@property`, richer multiclock proofs |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,45 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 484
+
+1. **Procedural sequence `.triggered` lowering**
+   - Extended `lib/Conversion/ImportVerilog/Expressions.cpp` so
+     `sequence_instance.triggered` lowers to `ltl.triggered` in system-call
+     lowering (alongside existing event `.triggered` support).
+   - This enables procedural timing controls like
+     `always @(posedge seq.triggered)` which previously failed with
+     `unsupported system call \`triggered\``.
+
+2. **Regression coverage**
+   - Import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceTriggeredMethodControl`.
+   - BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-triggered-posedge-sat-e2e.sv`.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog circt-bmc`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-triggered-posedge-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - Sanity:
+     - `test/Tools/circt-sim/event-triggered.sv` still simulates correctly.
+
+4. **Current limitations and best long-term next features**
+   - Slang-level limitation remains for procedural `@property` forms:
+     `always @(p)` is rejected as invalid event-expression type.
+   - High-value Slang-backed features still underused or not fully exploited in
+     our flow:
+     - procedural assertion-clock forms around property-like events (`@property`,
+       where front-end legality allows),
+     - richer sequence property methods in procedural contexts (beyond
+       `.triggered`),
+     - larger-scale multiclock equivalence harnesses with non-vacuous UNSAT
+       proofs.
 
 ### Session Summary - Iteration 483
 

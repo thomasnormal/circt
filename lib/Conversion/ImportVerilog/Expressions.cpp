@@ -8765,6 +8765,8 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                 [&]() -> Value {
                   if (isa<moore::EventType>(value.getType()))
                     return moore::EventTriggeredOp::create(builder, loc, value);
+                  if (isa<ltl::SequenceType>(value.getType()))
+                    return ltl::TriggeredOp::create(builder, loc, value);
                   return {};
                 })
           .Case("len",

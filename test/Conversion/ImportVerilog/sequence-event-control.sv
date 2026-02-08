@@ -155,3 +155,21 @@ module SequenceSignalEventListDifferentClocks;
     c <= ~c;
   end
 endmodule
+
+// Test sequence .triggered in procedural event controls.
+module SequenceTriggeredMethodControl;
+  logic clk, a, b, c;
+
+  sequence seq;
+    @(posedge clk) a ##1 b;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceTriggeredMethodControl
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK: ltl.triggered
+  // CHECK: moore.detect_event posedge
+  always @(posedge seq.triggered) begin
+    c <= ~c;
+  end
+endmodule
