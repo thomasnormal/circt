@@ -54,6 +54,20 @@ endmodule
 // CHECK: moore.past
 // CHECK-NOT: moore.procedure always
 
+module sampled_explicit_clocking_block_same_clock_in_assert(input logic clk, a);
+  clocking cb @(posedge clk); endclocking
+
+  property p;
+    @(posedge clk) $rose(a, @(cb));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_explicit_clocking_block_same_clock_in_assert
+// CHECK: moore.past
+// CHECK-NOT: moore.procedure always
+
 module sampled_past_explicit_same_clock_in_assert(input logic clk, a);
   property p;
     @(posedge clk) $past(a, 1, @(posedge clk));
@@ -63,6 +77,20 @@ module sampled_past_explicit_same_clock_in_assert(input logic clk, a);
 endmodule
 
 // CHECK-LABEL: moore.module @sampled_past_explicit_same_clock_in_assert
+// CHECK: moore.past
+// CHECK-NOT: moore.procedure always
+
+module sampled_past_explicit_clocking_block_same_clock_in_assert(input logic clk, a);
+  clocking cb @(posedge clk); endclocking
+
+  property p;
+    @(posedge clk) $past(a, 1, @(cb));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_past_explicit_clocking_block_same_clock_in_assert
 // CHECK: moore.past
 // CHECK-NOT: moore.procedure always
 
