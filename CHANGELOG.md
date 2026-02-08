@@ -1,5 +1,80 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 489 - February 8, 2026
+
+### Summary
+
+Plumbed mixed sequence/signal event-list provenance from ImportVerilog into
+`hw.module` and `verif.bmc`, with dedicated regressions and BMC/LEC/external
+revalidation.
+
+### Fixes
+
+1. **Module-level provenance accumulation for mixed event-lists**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Mixed sequence/signal lowering still emits per-wait metadata:
+     - `moore.event_sources`
+   - It now also appends module-level metadata:
+     - `moore.mixed_event_sources = [[...], ...]`
+   - This creates a stable transport channel across later lowering stages.
+
+2. **Moore-to-Core provenance propagation**
+   - Updated:
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+   - `SVModuleOp` conversion now copies:
+     - `moore.mixed_event_sources` from `moore.module` to `hw.module`.
+
+3. **LowerToBMC provenance exposure**
+   - Updated:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+   - `verif.bmc` now receives:
+     - `bmc_mixed_event_sources` copied from module metadata.
+
+4. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       - mixed-event checks now assert module-level
+         `moore.mixed_event_sources`.
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       - verifies `circt-verilog --ir-llhd` emits
+         `moore.mixed_event_sources`.
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+       - verifies `lower-to-bmc` emits `bmc_mixed_event_sources` on
+         `verif.bmc`.
+
+5. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `utils/run_sv_tests_circt_lec.sh` (`LEC_SMOKE_ONLY=1`): PASS
+     - `utils/run_verilator_verification_circt_lec.sh` (`assert_rose`): PASS
+     - `utils/run_yosys_sva_circt_lec.sh` (`basic00`): PASS
+
+### Remaining Gaps
+
+- Provenance is on `verif.bmc`, but not yet surfaced in SMT witness/counterexample
+  text.
+- Sequence-only multiclock OR lowering still lacks equivalent provenance tagging.
+- Slang/frontend still blocks direct procedural property event forms
+  (`always @(property)`), limiting long-term procedural property strategy.
+
 ## Iteration 488 - February 8, 2026
 
 ### Summary

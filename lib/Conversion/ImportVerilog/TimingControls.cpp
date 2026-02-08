@@ -257,6 +257,24 @@ static StringRef formatClockEdge(ltl::ClockEdge edge) {
   return "both";
 }
 
+static void recordMixedEventSourcesOnModule(Context &context,
+                                            ArrayAttr sources) {
+  Block *block = context.builder.getInsertionBlock();
+  if (!block)
+    return;
+  auto module = block->getParentOp()->getParentOfType<moore::SVModuleOp>();
+  if (!module || !sources)
+    return;
+
+  SmallVector<Attribute, 4> entries;
+  if (auto existing =
+          module->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
+    entries.append(existing.begin(), existing.end());
+  entries.push_back(sources);
+  module->setAttr("moore.mixed_event_sources",
+                  ArrayAttr::get(module->getContext(), entries));
+}
+
 static LogicalResult lowerClockedSequenceEventControl(
     Context &context, Location loc, Value seqValue, Value clockValue,
     ltl::ClockEdge edge,
@@ -389,7 +407,9 @@ static LogicalResult lowerClockedSequenceEventControl(
         entry += ":iff";
       sources.push_back(builder.getStringAttr(entry));
     }
-    waitOp->setAttr("moore.event_sources", builder.getArrayAttr(sources));
+    auto sourcesAttr = builder.getArrayAttr(sources);
+    waitOp->setAttr("moore.event_sources", sourcesAttr);
+    recordMixedEventSourcesOnModule(context, sourcesAttr);
   }
 
   builder.setInsertionPointToEnd(startBlock);
@@ -675,7 +695,9 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
         entry += ":iff";
       sources.push_back(builder.getStringAttr(entry));
     }
-    waitOp->setAttr("moore.event_sources", builder.getArrayAttr(sources));
+    auto sourcesAttr = builder.getArrayAttr(sources);
+    waitOp->setAttr("moore.event_sources", sourcesAttr);
+    recordMixedEventSourcesOnModule(context, sourcesAttr);
   }
 
   builder.setInsertionPointToEnd(startBlock);

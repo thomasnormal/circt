@@ -61,9 +61,11 @@ module SequenceSignalEventListControl;
   // CHECK: moore.wait_event
   // CHECK: moore.detect_event posedge
   // CHECK: moore.read %b
-  // CHECK: moore.event_sources = ["sequence", "signal{{.*}}:posedge:iff"]
   // CHECK: comb.or
   // CHECK: cf.cond_br
+  // CHECK: moore.mixed_event_sources =
+  // CHECK-SAME: "sequence"
+  // CHECK-SAME: "signal[0]:posedge:iff"
   always @(seq or posedge clk iff b) begin
     c <= ~c;
   end
@@ -151,8 +153,10 @@ module SequenceSignalEventListDifferentClocks;
   // CHECK-DAG: moore.detect_event any
   // CHECK-DAG: moore.detect_event any
   // CHECK: moore.read %b
-  // CHECK: moore.event_sources = ["sequence", "signal{{.*}}:posedge:iff"]
   // CHECK: cf.cond_br
+  // CHECK: moore.mixed_event_sources =
+  // CHECK-SAME: "sequence"
+  // CHECK-SAME: "signal[0]:posedge:iff"
   always @(seq or posedge clk2 iff b) begin
     c <= ~c;
   end
@@ -189,8 +193,10 @@ module SequenceSignalEventListNoEdge;
   // CHECK: moore.wait_event
   // CHECK-DAG: moore.detect_event any
   // CHECK-DAG: moore.detect_event any
-  // CHECK: moore.event_sources = ["sequence", "signal{{.*}}:both"]
   // CHECK: cf.cond_br
+  // CHECK: moore.mixed_event_sources =
+  // CHECK-SAME: "sequence"
+  // CHECK-SAME: "signal[0]:both"
   always @(seq or b) begin
     c <= ~c;
   end
