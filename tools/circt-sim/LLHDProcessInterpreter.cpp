@@ -7141,7 +7141,9 @@ llvm_dispatch:
   // In simulation, halt the enclosing process since it has no useful work.
   // These typically appear in processes like: ^bb1: verif.cover ... / cf.br ^bb1
   // which would spin forever if we just returned success().
-  if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op)) {
+  if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp,
+          verif::ClockedAssertOp, verif::ClockedAssumeOp,
+          verif::ClockedCoverOp>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "  Formal verification op in simulation - "
                             << "halting process\n");
     finalizeProcess(procId, /*killed=*/false);
