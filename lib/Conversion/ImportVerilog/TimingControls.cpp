@@ -382,6 +382,12 @@ static LogicalResult lowerClockedSequenceEventControl(
 static Value stripClockCasts(Value clock);
 static bool equivalentClockSignals(Value lhs, Value rhs);
 
+struct MultiClockSignalEventInfo {
+  Value clock;
+  ltl::ClockEdge edge;
+  const slang::ast::Expression *iffCondition;
+};
+
 static Value computeClockTick(OpBuilder &builder, Location loc, Value prev,
                               Value curr, ltl::ClockEdge edge) {
   auto i1Type = builder.getI1Type();
@@ -426,7 +432,9 @@ static bool isClockStutterCondition(Value condition, ArrayRef<Value> ticks) {
 static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
                                                          Location loc,
                                                          Value seqValue,
-                                                         ArrayRef<Value> clocks) {
+                                                         ArrayRef<Value> clocks,
+                                                         ArrayRef<MultiClockSignalEventInfo>
+                                                             signalEvents = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -597,6 +605,33 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   if (!acceptingMatches.empty())
     match = comb::OrOp::create(builder, loc, acceptingMatches, true);
 
+  if (!signalEvents.empty()) {
+    SmallVector<Value, 8> mixedMatches;
+    mixedMatches.push_back(match);
+    for (const auto &signalEvent : signalEvents) {
+      Value tick = clockEdgePredicate(signalEvent.clock, signalEvent.edge);
+      if (!tick)
+        return mlir::emitError(loc)
+               << "mixed sequence/signal event list references a clock that "
+                  "cannot be scheduled in multi-clock lowering";
+      Value term = tick;
+      if (signalEvent.iffCondition) {
+        Value condition =
+            context.convertRvalueExpression(*signalEvent.iffCondition);
+        condition = context.convertToBool(condition, Domain::TwoValued);
+        if (!condition)
+          return failure();
+        condition = context.convertToI1(condition);
+        if (!condition)
+          return failure();
+        term = comb::AndOp::create(builder, loc, ValueRange{term, condition},
+                                   true);
+      }
+      mixedMatches.push_back(term);
+    }
+    match = comb::OrOp::create(builder, loc, mixedMatches, true);
+  }
+
   SmallVector<Value, 12> loopArgs;
   loopArgs.reserve(numStates + numClocks);
   loopArgs.append(currClockVals.begin(), currClockVals.end());
@@ -761,6 +796,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<Value, 4> sequenceClocks;
   SmallVector<Value, 4> clockedValues;
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
+  SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
+  SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
 
   for (auto *signalCtrl : sequenceEvents) {
     if (signalCtrl->edge != slang::ast::EdgeKind::None)
@@ -832,31 +869,26 @@ lowerSequenceEventListControl(Context &context, Location loc,
     clockedValues.push_back(clockedValue);
   }
 
-  if (!sameClockAndEdge && !signalEvents.empty())
-    return mlir::emitError(loc)
-           << "event lists mixing sequence/property and signal events across "
-              "different clocks are not yet supported";
-
   for (auto *signalCtrl : signalEvents) {
     if (signalCtrl->edge == slang::ast::EdgeKind::None)
       return mlir::emitError(loc)
              << "mixed sequence/signal event lists require explicit signal "
                 "event edges";
     auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
-    if (signalEdge != *commonEdge)
-      return mlir::emitError(loc)
-             << "mixed sequence/signal event lists with non-equivalent edges "
-                "are not yet supported";
     Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
     signalClock = context.convertToI1(signalClock);
     if (!signalClock)
       return failure();
-    if (!equivalentClockSignals(commonClock, signalClock))
-      return mlir::emitError(loc)
-             << "mixed sequence/signal event lists with non-equivalent clocks "
-                "are not yet supported";
-    equivalentSignals.push_back(signalCtrl);
+    if (sameClockAndEdge &&
+        (signalEdge != *commonEdge ||
+         !equivalentClockSignals(commonClock, signalClock)))
+      sameClockAndEdge = false;
+    parsedSignalEvents.push_back(signalCtrl);
+    multiClockSignals.push_back(MultiClockSignalEventInfo{
+        signalClock, signalEdge, signalCtrl->iffCondition});
   }
+  if (sameClockAndEdge)
+    equivalentSignals = parsedSignalEvents;
 
   LogicalResult result = failure();
   if (sameClockAndEdge) {
@@ -878,8 +910,15 @@ lowerSequenceEventListControl(Context &context, Location loc,
       if (!exists)
         uniqueClocks.push_back(clock);
     }
+    for (const auto &signalEvent : multiClockSignals) {
+      bool exists = llvm::any_of(uniqueClocks, [&](Value known) {
+        return equivalentClockSignals(known, signalEvent.clock);
+      });
+      if (!exists)
+        uniqueClocks.push_back(signalEvent.clock);
+    }
     result = lowerMultiClockSequenceEventControl(context, loc, combinedSequence,
-                                                 uniqueClocks);
+                                                 uniqueClocks, multiClockSignals);
   }
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);

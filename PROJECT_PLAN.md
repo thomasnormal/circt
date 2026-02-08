@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 482)
+## Current Status - February 8, 2026 (Iteration 483)
 
 ### Test Results
 
@@ -76,6 +76,59 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 483
+
+1. **Mixed sequence/signal event-list lowering across different clocks**
+   - Extended `lib/Conversion/ImportVerilog/TimingControls.cpp` so mixed lists
+     like `@(seq or posedge clk2 iff b)` no longer require equivalent clocks.
+   - `lowerSequenceEventListControl` now:
+     - classifies mixed lists into single-clock vs multi-clock lowering paths,
+     - carries explicit signal-event entries (clock/edge/iff) into the
+       multi-clock path when clocks or edges differ.
+   - `lowerMultiClockSequenceEventControl` now combines:
+     - sequence-match wakeups from the NFA path, and
+     - direct signal-event wakeups (edge tick and optional `iff`) on any
+       participating clock.
+
+2. **Regression coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceSignalEventListDifferentClocks`.
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-multiclock-sat-e2e.sv`
+       to validate mixed sequence/signal multiclock triggering.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build-test circt-verilog circt-bmc`: PASS
+   - Targeted regressions:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-event-iff-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Procedural property event controls (`@property`) remain unsupported.
+   - Multi-clock event-list support is now broader, but we still need stronger
+     non-vacuous UNSAT multiclock equivalence harnesses for derived/non-keyable
+     clock scenarios.
+   - High-value next work:
+     - add first-class procedural `@property` wait lowering,
+     - unify mixed/sequence-only multiclock lowering with per-trigger
+       traceability diagnostics,
+     - expand cross-clock sampled-value/disable-iff interaction tests.
 
 ### Session Summary - Iteration 482
 
