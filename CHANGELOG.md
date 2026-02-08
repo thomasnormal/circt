@@ -25905,3 +25905,65 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 549 - February 8, 2026
+
+### Yosys SVA BMC History Age Retention
+
+- Added age-based retention support to `utils/run_yosys_sva_circt_bmc.sh`:
+  - new env var:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS`
+  - validated as non-negative integer.
+  - applies to both TSV and JSONL history files.
+- Retention order is now:
+  - age pruning first (using `generated_at_utc` epoch),
+  - count pruning second (`YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES`).
+- Added timestamp conversion helper with Linux/BSD date compatibility paths.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`
+- Revalidated summary lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+- Summary lit result: 8/8 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 31/31 PASS
+
+### Validation
+
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Age retention trusts `generated_at_utc`; entries with far-future timestamps
+  will not age out under current policy.
+- JSONL history checks remain regex-based and may miss malformed JSON edge
+  cases.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.
