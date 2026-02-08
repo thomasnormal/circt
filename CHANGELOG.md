@@ -1,5 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 493 - February 8, 2026
+
+### Summary
+
+Added structured event-source details (`*_event_source_details`) across
+ImportVerilog -> BMC -> SMT and extended `circt-bmc --print-counterexample`
+to estimate per-step signal-arm activity from SAT model waveforms.
+
+### Fixes
+
+1. **Structured frontend provenance details**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Event-list lowering now emits:
+     - `moore.event_source_details` on `moore.wait_event`
+     - `moore.event_source_details` at module level
+   - Detail payload includes:
+     - `kind`, `label`
+     - signal fields (`edge`, `signal_index`, `signal_name`, `iff_name`)
+     - sequence fields (`sequence_index`, `sequence_name`)
+
+2. **Details propagation through lowering**
+   - Updated:
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added propagation of:
+     - `moore.event_source_details` -> `bmc_event_source_details`
+     - `bmc_event_source_details` -> `smt.solver`
+
+3. **Counterexample activity diagnostics**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - SAT/UNKNOWN counterexample output now:
+     - still prints mixed event source sets
+     - additionally prints `estimated signal-arm activity:` lines when model
+       values and signal detail metadata are available
+   - Estimation currently supports:
+     - `posedge`, `negedge`, `both`
+     - optional `iff` guard waveform gating
+
+4. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+   - New checks verify:
+     - detail emission
+     - detail propagation
+     - activity text rendering
+
+5. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+   - Additional BMC lit checks:
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`: PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`: PASS
+     - `bmc-run-smtlib-sat-counterexample.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Activity lines are heuristic (waveform-derived), not exact wake-arm witness
+  extraction from solver constraints.
+- Sequence-arm per-step attribution is still missing.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 492 - February 8, 2026
 
 ### Summary

@@ -258,7 +258,8 @@ static StringRef formatClockEdge(ltl::ClockEdge edge) {
 }
 
 static void recordMixedEventSourcesOnModule(Context &context,
-                                            ArrayAttr sources) {
+                                            ArrayAttr sources,
+                                            ArrayAttr details = {}) {
   Block *block = context.builder.getInsertionBlock();
   if (!block)
     return;
@@ -277,13 +278,23 @@ static void recordMixedEventSourcesOnModule(Context &context,
   module->setAttr("moore.event_sources", entriesAttr);
   // Keep legacy naming for compatibility with in-flight downstream users/tests.
   module->setAttr("moore.mixed_event_sources", entriesAttr);
+  if (details) {
+    SmallVector<Attribute, 4> detailEntries;
+    if (auto existing =
+            module->getAttrOfType<ArrayAttr>("moore.event_source_details"))
+      detailEntries.append(existing.begin(), existing.end());
+    detailEntries.push_back(details);
+    module->setAttr("moore.event_source_details",
+                    ArrayAttr::get(module->getContext(), detailEntries));
+  }
 }
 
 static LogicalResult lowerClockedSequenceEventControl(
     Context &context, Location loc, Value seqValue, Value clockValue,
     ltl::ClockEdge edge,
     std::span<const slang::ast::SignalEventControl *const> signalEvents = {},
-    ArrayRef<StringAttr> sequenceSources = {}) {
+    ArrayRef<StringAttr> sequenceSources = {},
+    ArrayRef<DictionaryAttr> sequenceSourceDetails = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -404,11 +415,17 @@ static LogicalResult lowerClockedSequenceEventControl(
                            loopBlock, nextVals);
   if (!signalEvents.empty() || !sequenceSources.empty()) {
     SmallVector<Attribute, 8> sources;
+    SmallVector<Attribute, 8> details;
     if (!sequenceSources.empty()) {
       for (StringAttr source : sequenceSources)
         sources.push_back(source);
+      for (DictionaryAttr detail : sequenceSourceDetails)
+        details.push_back(detail);
     } else if (!signalEvents.empty()) {
       sources.push_back(builder.getStringAttr("sequence"));
+      details.push_back(builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("sequence")),
+           builder.getNamedAttr("label", builder.getStringAttr("sequence"))}));
     }
     for (auto [signalIdx, signalCtrl] : llvm::enumerate(signalEvents)) {
       std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
@@ -416,10 +433,30 @@ static LogicalResult lowerClockedSequenceEventControl(
       if (signalCtrl && signalCtrl->iffCondition)
         entry += ":iff";
       sources.push_back(builder.getStringAttr(entry));
+      SmallVector<NamedAttribute, 6> detailAttrs{
+          builder.getNamedAttr("kind", builder.getStringAttr("signal")),
+          builder.getNamedAttr("label", builder.getStringAttr(entry)),
+          builder.getNamedAttr("edge",
+                               builder.getStringAttr(formatClockEdge(edge))),
+          builder.getNamedAttr("signal_index",
+                               builder.getI32IntegerAttr(signalIdx))};
+      if (signalCtrl) {
+        if (auto *symRef = signalCtrl->expr.getSymbolReference())
+          detailAttrs.push_back(builder.getNamedAttr(
+              "signal_name", builder.getStringAttr(symRef->name)));
+        if (signalCtrl->iffCondition) {
+          if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
+            detailAttrs.push_back(builder.getNamedAttr(
+                "iff_name", builder.getStringAttr(iffRef->name)));
+        }
+      }
+      details.push_back(builder.getDictionaryAttr(detailAttrs));
     }
     auto sourcesAttr = builder.getArrayAttr(sources);
+    auto detailsAttr = builder.getArrayAttr(details);
     waitOp->setAttr("moore.event_sources", sourcesAttr);
-    recordMixedEventSourcesOnModule(context, sourcesAttr);
+    waitOp->setAttr("moore.event_source_details", detailsAttr);
+    recordMixedEventSourcesOnModule(context, sourcesAttr, detailsAttr);
   }
 
   builder.setInsertionPointToEnd(startBlock);
@@ -442,6 +479,7 @@ struct MultiClockSignalEventInfo {
   Value clock;
   ltl::ClockEdge edge;
   const slang::ast::Expression *iffCondition;
+  const slang::ast::Expression *expr;
 };
 
 static Value computeClockTick(OpBuilder &builder, Location loc, Value prev,
@@ -492,7 +530,9 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
                                                          ArrayRef<MultiClockSignalEventInfo>
                                                              signalEvents = {},
                                                          ArrayRef<StringAttr>
-                                                             sequenceSources = {}) {
+                                                             sequenceSources = {},
+                                                         ArrayRef<DictionaryAttr>
+                                                             sequenceSourceDetails = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -699,11 +739,17 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
                            loopBlock, loopArgs);
   if (!signalEvents.empty() || !sequenceSources.empty()) {
     SmallVector<Attribute, 8> sources;
+    SmallVector<Attribute, 8> details;
     if (!sequenceSources.empty()) {
       for (StringAttr source : sequenceSources)
         sources.push_back(source);
+      for (DictionaryAttr detail : sequenceSourceDetails)
+        details.push_back(detail);
     } else if (!signalEvents.empty()) {
       sources.push_back(builder.getStringAttr("sequence"));
+      details.push_back(builder.getDictionaryAttr(
+          {builder.getNamedAttr("kind", builder.getStringAttr("sequence")),
+           builder.getNamedAttr("label", builder.getStringAttr("sequence"))}));
     }
     for (auto [signalIdx, signalEvent] : llvm::enumerate(signalEvents)) {
       std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
@@ -711,10 +757,30 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
       if (signalEvent.iffCondition)
         entry += ":iff";
       sources.push_back(builder.getStringAttr(entry));
+      SmallVector<NamedAttribute, 6> detailAttrs{
+          builder.getNamedAttr("kind", builder.getStringAttr("signal")),
+          builder.getNamedAttr("label", builder.getStringAttr(entry)),
+          builder.getNamedAttr(
+              "edge", builder.getStringAttr(formatClockEdge(signalEvent.edge))),
+          builder.getNamedAttr("signal_index",
+                               builder.getI32IntegerAttr(signalIdx))};
+      if (signalEvent.expr) {
+        if (auto *symRef = signalEvent.expr->getSymbolReference())
+          detailAttrs.push_back(builder.getNamedAttr(
+              "signal_name", builder.getStringAttr(symRef->name)));
+      }
+      if (signalEvent.iffCondition) {
+        if (auto *iffRef = signalEvent.iffCondition->getSymbolReference())
+          detailAttrs.push_back(builder.getNamedAttr(
+              "iff_name", builder.getStringAttr(iffRef->name)));
+      }
+      details.push_back(builder.getDictionaryAttr(detailAttrs));
     }
     auto sourcesAttr = builder.getArrayAttr(sources);
+    auto detailsAttr = builder.getArrayAttr(details);
     waitOp->setAttr("moore.event_sources", sourcesAttr);
-    recordMixedEventSourcesOnModule(context, sourcesAttr);
+    waitOp->setAttr("moore.event_source_details", detailsAttr);
+    recordMixedEventSourcesOnModule(context, sourcesAttr, detailsAttr);
   }
 
   builder.setInsertionPointToEnd(startBlock);
@@ -874,6 +940,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<Value, 4> sequenceClocks;
   SmallVector<Value, 4> clockedValues;
   SmallVector<StringAttr, 4> sequenceSourceAttrs;
+  SmallVector<DictionaryAttr, 4> sequenceSourceDetailAttrs;
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
@@ -883,6 +950,15 @@ lowerSequenceEventListControl(Context &context, Location loc,
     if (signalCtrl->iffCondition)
       source += ":iff";
     sequenceSourceAttrs.push_back(builder.getStringAttr(source));
+    SmallVector<NamedAttribute, 4> detailAttrs{
+        builder.getNamedAttr("kind", builder.getStringAttr("sequence")),
+        builder.getNamedAttr("label", builder.getStringAttr(source)),
+        builder.getNamedAttr("sequence_index",
+                             builder.getI32IntegerAttr(seqIdx))};
+    if (auto *symRef = signalCtrl->expr.getSymbolReference())
+      detailAttrs.push_back(builder.getNamedAttr(
+          "sequence_name", builder.getStringAttr(symRef->name)));
+    sequenceSourceDetailAttrs.push_back(builder.getDictionaryAttr(detailAttrs));
 
     if (signalCtrl->edge != slang::ast::EdgeKind::None)
       return mlir::emitError(loc)
@@ -965,7 +1041,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
       sameClockAndEdge = false;
     parsedSignalEvents.push_back(signalCtrl);
     multiClockSignals.push_back(MultiClockSignalEventInfo{
-        signalClock, signalEdge, signalCtrl->iffCondition});
+        signalClock, signalEdge, signalCtrl->iffCondition, &signalCtrl->expr});
   }
   if (sameClockAndEdge)
     equivalentSignals = parsedSignalEvents;
@@ -973,6 +1049,10 @@ lowerSequenceEventListControl(Context &context, Location loc,
       parsedSignalEvents.empty()
           ? ArrayRef<StringAttr>(sequenceSourceAttrs)
           : ArrayRef<StringAttr>();
+  ArrayRef<DictionaryAttr> sequenceSourceDetails =
+      parsedSignalEvents.empty()
+          ? ArrayRef<DictionaryAttr>(sequenceSourceDetailAttrs)
+          : ArrayRef<DictionaryAttr>();
 
   LogicalResult result = failure();
   if (sameClockAndEdge) {
@@ -982,7 +1062,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
     result = lowerClockedSequenceEventControl(context, loc, combinedSequence,
                                               commonClock, *commonEdge,
                                               equivalentSignals,
-                                              sequenceSources);
+                                              sequenceSources,
+                                              sequenceSourceDetails);
   } else {
     Value combinedSequence = clockedInputs.front();
     if (clockedInputs.size() > 1)
@@ -1004,7 +1085,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
     }
     result = lowerMultiClockSequenceEventControl(context, loc, combinedSequence,
                                                  uniqueClocks, multiClockSignals,
-                                                 sequenceSources);
+                                                 sequenceSources,
+                                                 sequenceSourceDetails);
   }
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);

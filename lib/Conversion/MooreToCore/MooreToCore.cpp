@@ -1928,6 +1928,9 @@ struct SVModuleOpConversion : public OpConversionPattern<SVModuleOp> {
     else if (auto mixedEventSources =
                  op->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
       hwModuleOp->setAttr("moore.event_sources", mixedEventSources);
+    if (auto eventSourceDetails =
+            op->getAttrOfType<ArrayAttr>("moore.event_source_details"))
+      hwModuleOp->setAttr("moore.event_source_details", eventSourceDetails);
     if (auto eventSources = hwModuleOp->getAttrOfType<ArrayAttr>(
             "moore.event_sources"))
       hwModuleOp->setAttr("moore.mixed_event_sources", eventSources);

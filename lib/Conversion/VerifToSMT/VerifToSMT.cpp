@@ -3735,6 +3735,9 @@ struct VerifBoundedModelCheckingOpConversion
       solver->setAttr("bmc_event_sources", mixedEventSources);
       solver->setAttr("bmc_mixed_event_sources", mixedEventSources);
     }
+    if (auto eventSourceDetails =
+            op->getAttrOfType<ArrayAttr>("bmc_event_source_details"))
+      solver->setAttr("bmc_event_source_details", eventSourceDetails);
     rewriter.createBlock(&solver.getBodyRegion());
 
     auto inlineBMCBlock =
