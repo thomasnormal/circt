@@ -32802,6 +32802,57 @@ CIRCT/slang correctly enforces LRM restrictions.
   legacy rows interleaved between run segments.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 
+## Iteration 663 - February 8, 2026
+
+### Optional HMAC Authentication for Dry-Run Reports
+
+- Added `--expectations-dry-run-report-hmac-key-file <file>` to
+  `utils/run_formal_all.sh`.
+- New JSONL metadata:
+  - `run_meta.hmac_mode`: `none` | `sha256-keyfile`
+  - optional `run_end.payload_hmac_sha256` when key file is configured
+- `payload_hmac_sha256` signs the `payload_sha256` value using HMAC-SHA256.
+
+### Verifier Enhancements
+
+- Added `--hmac-key-file <file>` to
+  `utils/verify_formal_dryrun_report.py`.
+- With this flag, verifier now checks:
+  - presence of `run_end.payload_hmac_sha256`
+  - signature match against computed digest
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive HMAC verification path
+    - negative wrong-key verification path
+    - legacy-prefix + HMAC verification path
+  - `docs/FormalRegression.md`
+    - documented HMAC emit/verify options
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke + verifier:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke-v4 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v4.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v4.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v4.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v4.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v4.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v4.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke-v4.jsonl --expectations-dry-run-report-hmac-key-file /tmp/formal-dryrun-hmac-v4.key`
+  - `python3 utils/verify_formal_dryrun_report.py --hmac-key-file /tmp/formal-dryrun-hmac-v4.key /tmp/formal-dryrun-meta-smoke-v4.jsonl`:
+    - PASS
+
+### Remaining Limitations
+
+- HMAC trust still depends on external key lifecycle/rotation discipline.
+- Sample payloads remain bounded by configured limit.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

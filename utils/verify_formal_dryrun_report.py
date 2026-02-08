@@ -2,10 +2,12 @@
 """Verify run-level integrity in formal dry-run JSONL reports."""
 
 import argparse
+import hmac
 import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 def fail(message: str) -> None:
@@ -25,7 +27,9 @@ def hash_rows(rows: list[dict]) -> str:
   return digest.hexdigest()
 
 
-def verify_report(path: Path, allow_legacy_prefix: bool) -> int:
+def verify_report(
+    path: Path, allow_legacy_prefix: bool, hmac_key_bytes: Optional[bytes]
+) -> int:
   rows: list[dict] = []
   for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
     if not line.strip():
@@ -107,6 +111,19 @@ def verify_report(path: Path, allow_legacy_prefix: bool) -> int:
           f"{actual_hash}, got {expected_hash}"
       )
 
+    if hmac_key_bytes is not None:
+      actual_hmac = run_end.get("payload_hmac_sha256")
+      if not isinstance(actual_hmac, str) or not actual_hmac:
+        fail(f"{path}:{end_line}: run_end.payload_hmac_sha256 must be non-empty string")
+      expected_hmac = hmac.new(
+          hmac_key_bytes, actual_hash.encode("utf-8"), hashlib.sha256
+      ).hexdigest()
+      if actual_hmac != expected_hmac:
+        fail(
+            f"{path}:{end_line}: run_end.payload_hmac_sha256 mismatch; expected "
+            f"{expected_hmac}, got {actual_hmac}"
+        )
+
     exit_code = run_end.get("exit_code")
     if not isinstance(exit_code, int):
       fail(f"{path}:{end_line}: run_end.exit_code must be integer")
@@ -126,13 +143,28 @@ def main() -> int:
       action="store_true",
       help="Ignore leading pre-run_meta legacy rows before validating segments",
   )
+  parser.add_argument(
+      "--hmac-key-file",
+      help="Optional key file for validating run_end.payload_hmac_sha256",
+  )
   args = parser.parse_args()
 
   report_path = Path(args.report_jsonl)
   if not report_path.is_file():
     fail(f"report not found: {report_path}")
 
-  run_count = verify_report(report_path, allow_legacy_prefix=args.allow_legacy_prefix)
+  hmac_key_bytes = None
+  if args.hmac_key_file:
+    key_path = Path(args.hmac_key_file)
+    if not key_path.is_file():
+      fail(f"HMAC key file not found: {key_path}")
+    hmac_key_bytes = key_path.read_bytes()
+
+  run_count = verify_report(
+      report_path,
+      allow_legacy_prefix=args.allow_legacy_prefix,
+      hmac_key_bytes=hmac_key_bytes,
+  )
   print(f"verified dry-run report: runs={run_count}")
   return 0
 

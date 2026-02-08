@@ -269,13 +269,17 @@ Expected-failure budget file:
   operation summaries (`operation`, `target_file`, row-count metadata).
   Use `--expectations-dry-run-report-max-sample-rows <N>` to control embedded
   row samples (`output_rows_sample`, `dropped_rows_sample`) per operation.
+  Use `--expectations-dry-run-report-hmac-key-file <file>` to emit
+  `payload_hmac_sha256` in `run_end` for authenticated digest verification.
   The first row per run is `operation=run_meta` with `schema_version=1` and
   `run_id`, operation rows carry the same `run_id`, and the final row is
-  `operation=run_end` with `exit_code`, `row_count`, and `payload_sha256`.
+  `operation=run_end` with `exit_code`, `row_count`, and `payload_sha256`
+  (plus optional `payload_hmac_sha256`).
 - `python3 utils/verify_formal_dryrun_report.py <file>` verifies JSONL run
   envelopes and checks `run_end.row_count`/`run_end.payload_sha256`.
   Use `--allow-legacy-prefix` when the file contains older pre-enveloped rows
   before the first `run_meta`.
+  Use `--hmac-key-file <file>` to verify `payload_hmac_sha256`.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
