@@ -26536,3 +26536,68 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 559 - February 8, 2026
+
+### Yosys SVA BMC Future-Skew Drop Telemetry
+
+- Added structured drop-event logging for
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn`.
+- New optional output variable:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE`
+- When future-skew rows are dropped, emit JSONL event rows for:
+  - TSV history drops (`history_format="tsv"`)
+  - JSONL history drops (`history_format="jsonl"`)
+- Event payload includes:
+  - `generated_at_utc`, `reason`, `history_file`, `history_format`, `line`,
+    `row_generated_at_utc`, `run_id`
+- Added aggregate warning summary when drops occur:
+  - `dropped future-skew history rows (tsv=..., jsonl=...)`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+- New coverage verifies:
+  - drop-event JSONL is emitted for both TSV and JSONL dropped rows.
+  - aggregate drop-count warning is emitted.
+  - existing warn-policy drop behavior remains intact.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 43/43 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Drop-event telemetry is file-sink based and does not yet integrate with a
+  counters/metrics backend.
+- Parser-backed validation still depends on `python3`.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
