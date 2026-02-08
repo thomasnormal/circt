@@ -31560,3 +31560,43 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Day-window filtering assumes ISO date rows and skips malformed date entries.
 - Advanced calendar policies (timezone/business-day windows) are not yet
   implemented.
+
+## Iteration 638 - February 8, 2026
+
+### Parallel Webhook Fan-Out in Cadence Runner
+
+- Added `--webhook-fanout-mode <sequential|parallel>` to
+  `utils/run_formal_cadence.sh` (default: `sequential`).
+- In `parallel` mode, webhook endpoints are dispatched concurrently and
+  aggregated after `wait`.
+- Added `webhook_fanout_mode` to `cadence.state`.
+- Added explicit parallel dispatch marker in `cadence.log`.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - added parallel fan-out scenario with two endpoints
+    - verifies parallel log marker and both endpoint calls
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--webhook-fanout-mode` option documentation
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-par-webhook-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Parallel mode currently has no max-concurrency throttle.
+- Endpoint ordering is intentionally non-deterministic in parallel mode.

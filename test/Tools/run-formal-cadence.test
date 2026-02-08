@@ -32,6 +32,11 @@
 // RUN: chmod +x %t/utils/fake-formal-all-fail-immediate.sh %t/utils/curl-exp %t/utils/sleep
 // RUN: not sh -c 'cd %t && rm -f %t/curl-exp-call.txt %t/curl-exp-state.txt %t/sleep-exp-call.txt && cp %t/utils/curl-exp %t/utils/curl && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-webhook https://example.invalid/formal-exp --webhook-retries 2 --webhook-backoff-mode exponential --webhook-backoff-secs 2 --webhook-backoff-max-secs 20 --webhook-jitter-secs 0 --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=EXPFAILFAST
 // RUN: cat %t/sleep-exp-call.txt | FileCheck %s --check-prefix=EXPSLEEP
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf \"%%%%s\\n\" \"$@\" >> %t/curl-par-call.txt\nexit 0\n' > %t/utils/curl-par
+// RUN: chmod +x %t/utils/curl-par
+// RUN: not sh -c 'cd %t && rm -f %t/curl-par-call.txt && cp %t/utils/curl-par %t/utils/curl && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-webhook https://example.invalid/formal-p1 --on-fail-webhook https://example.invalid/formal-p2 --webhook-fanout-mode parallel --webhook-retries 0 --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=PARFAILFAST
+// RUN: cat %t/formal-cadence-results-*/cadence.log | FileCheck %s --check-prefix=PARLOG
+// RUN: cat %t/curl-par-call.txt | FileCheck %s --check-prefix=PARWEBHOOK
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
@@ -44,3 +49,7 @@
 // EXPFAILFAST: failing fast: iteration 1 failed
 // EXPSLEEP: 2
 // EXPSLEEP: 4
+// PARFAILFAST: failing fast: iteration 1 failed
+// PARLOG: posting on-fail webhooks in parallel: 2 endpoints
+// PARWEBHOOK: https://example.invalid/formal-p1
+// PARWEBHOOK: https://example.invalid/formal-p2
