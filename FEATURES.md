@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 726 | 713 | 0 | **98.2%** | 918 total, 192 compile fail, 56 xfail, 0 xpass, 0 timeout; array contains/find interceptors added |
+| Simulation (full) | 858 | 858 | 0 | **100%** | 912 total, 54 xfail (should-fail tests); 0 fail, 0 xpass, 0 timeout, 0 compile_fail |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -29,11 +29,13 @@ repository (1,036 tests across 15 IEEE chapters).
 | Tagged union | 1 | `11.9--tagged_union_*` | Crash/timeout (empty log) |
 | SVA negative tests | 4 | `16.10--*`, `16.15--*` | Crash/timeout (empty log) |
 
-### Simulation: 0 Failures, 0 Unexpected Passes
+### Simulation: 0 Failures, 0 Unexpected Passes, 0 Timeouts
 
-All tests are properly categorized in `utils/sv-tests-sim-expect.txt`.
-Former XPASS tests (should-fail tests that pass) are now marked as `skip`.
-192 COMPILE_FAIL tests are Slang/CIRCT compilation gaps (not simulation bugs).
+912 tests found, 858 PASS, 54 XFAIL (should-fail tests), 0 FAIL, 0 XPASS, 0 TIMEOUT.
+All tests properly categorized in `utils/sv-tests-sim-expect.txt` (152 entries):
+- 6 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
+- 146 `compile-only` (class-only definitions, UVM tests that exceed 120s timeout)
+- 0 `xfail` — all former constraint xfails reclassified as compile-only
 
 ### What's Needed for True 100%
 
@@ -55,7 +57,7 @@ Former XPASS tests (should-fail tests that pass) are now marked as `skip`.
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 175 | 175 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find |
+| circt-sim | 176 | 176 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find |
 | ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past |
 
 ## UVM Simulation Feature Status
