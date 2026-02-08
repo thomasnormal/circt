@@ -1285,6 +1285,11 @@ struct ModuleVisitor : public BaseVisitor {
         if (!initial)
           return failure();
       }
+    } else {
+      // No explicit initializer -- check for struct field defaults
+      // (IEEE 1800-2017 §7.2.1).
+      initial = context.synthesizeStructFieldDefaults(
+          varNode.getDeclaredType()->getType(), loweredType, loc);
     }
 
     auto varOp = moore::VariableOp::create(

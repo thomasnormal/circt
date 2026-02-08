@@ -239,6 +239,11 @@ struct Context {
                                 Type requiredType = {});
   Value convertLvalueExpression(const slang::ast::Expression &expr);
 
+  // Synthesize a struct initial value from field defaults (IEEE 1800-2017
+  // §7.2.1). Returns null if the type is not a struct or has no field defaults.
+  Value synthesizeStructFieldDefaults(const slang::ast::Type &slangType,
+                                      Type mooreType, Location loc);
+
   // Match a pattern against a value and return the match result (boolean).
   FailureOr<Value> matchPattern(const slang::ast::Pattern &pattern, Value value,
                                 const slang::ast::Type &targetType,
