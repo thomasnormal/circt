@@ -24073,3 +24073,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Expected-outcome rows are static text baselines; no diff tooling yet.
 - xprop-profile pass-mode failures remain tracked as expected failures.
+
+---
+
+## Iteration 521 - February 8, 2026
+
+### Yosys SVA BMC Expectation-Diff Tooling
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with matrix-diff controls:
+  - `EXPECT_DIFF_BASELINE`
+  - `EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED`
+  - `EXPECT_DIFF_FAIL_ON_CHANGE`
+  - `EXPECT_DIFF_FILE`
+- Added deterministic delta reporting against baseline expectation rows:
+  - `EXPECT_DIFF_ADDED`
+  - `EXPECT_DIFF_REMOVED`
+  - `EXPECT_DIFF_CHANGED`
+- Added `expect-diff summary` to report row-level delta counts.
+- Diff failure policy:
+  - when `EXPECT_DIFF_FAIL_ON_CHANGE=1`, any added/removed/changed row
+    increments harness failures.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+- Revalidated existing harness tests:
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 5/5 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Diffing currently compares declared matrices only; there is no generated
+  observed-outcome snapshot artifact yet.
+- xprop-profile pass-mode failures remain baseline-tracked pending semantic
+  fixes.

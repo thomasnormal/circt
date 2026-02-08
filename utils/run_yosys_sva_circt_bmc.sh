@@ -39,6 +39,10 @@ EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/yosys-sva-bmc-expected.txt}"
 # Backward-compatible fallback for legacy xfail-only rows.
 XFAIL_FILE="${XFAIL_FILE:-$SCRIPT_DIR/yosys-sva-bmc-xfail.txt}"
 ALLOW_XPASS="${ALLOW_XPASS:-0}"
+EXPECT_DIFF_BASELINE="${EXPECT_DIFF_BASELINE:-}"
+EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED="${EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED:-}"
+EXPECT_DIFF_FAIL_ON_CHANGE="${EXPECT_DIFF_FAIL_ON_CHANGE:-0}"
+EXPECT_DIFF_FILE="${EXPECT_DIFF_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -61,12 +65,17 @@ total=0
 skipped=0
 xfails=0
 xpasses=0
+expect_diff_added=0
+expect_diff_removed=0
+expect_diff_changed=0
 
 declare -A expected_cases
 load_expected_cases() {
-  local file="$1"
-  local default_expected="${2:-}"
-  [[ -f "$file" ]] || return
+  local map_name="$1"
+  local file="$2"
+  local default_expected="${3:-}"
+  local -n out_map="$map_name"
+  [[ -f "$file" ]] || return 0
   while IFS=$'\t' read -r test mode profile expected; do
     [[ -z "$test" || "$test" =~ ^# ]] && continue
     [[ -z "$mode" ]] && mode="*"
@@ -84,15 +93,78 @@ load_expected_cases() {
         continue
         ;;
     esac
-    expected_cases["$test|$mode|$profile"]="$expected"
+    out_map["$test|$mode|$profile"]="$expected"
   done < "$file"
+  return 0
 }
 
 # Load legacy xfail rows first, then let EXPECT_FILE override where needed.
 if [[ -n "$XFAIL_FILE" ]]; then
-  load_expected_cases "$XFAIL_FILE" "xfail"
+  load_expected_cases expected_cases "$XFAIL_FILE" "xfail"
 fi
-load_expected_cases "$EXPECT_FILE"
+load_expected_cases expected_cases "$EXPECT_FILE"
+
+write_expect_diff_line() {
+  local line="$1"
+  echo "$line"
+  if [[ -n "$EXPECT_DIFF_FILE" ]]; then
+    echo "$line" >> "$EXPECT_DIFF_FILE"
+  fi
+}
+
+emit_expectation_diff() {
+  local baseline_file="$1"
+  local baseline_default="$2"
+  local -A baseline_cases=()
+  local -a added_lines=()
+  local -a removed_lines=()
+  local -a changed_lines=()
+
+  if [[ ! -f "$baseline_file" ]]; then
+    echo "warning: EXPECT_DIFF_BASELINE file not found: $baseline_file" >&2
+    expect_diff_changed=1
+    return
+  fi
+  load_expected_cases baseline_cases "$baseline_file" "$baseline_default"
+
+  local key
+  for key in "${!expected_cases[@]}"; do
+    if [[ -z "${baseline_cases["$key"]+x}" ]]; then
+      added_lines+=("$key -> ${expected_cases["$key"]}")
+    elif [[ "${baseline_cases["$key"]}" != "${expected_cases["$key"]}" ]]; then
+      changed_lines+=("$key ${baseline_cases["$key"]} -> ${expected_cases["$key"]}")
+    fi
+  done
+  for key in "${!baseline_cases[@]}"; do
+    if [[ -z "${expected_cases["$key"]+x}" ]]; then
+      removed_lines+=("$key (was ${baseline_cases["$key"]})")
+    fi
+  done
+
+  expect_diff_added=${#added_lines[@]}
+  expect_diff_removed=${#removed_lines[@]}
+  expect_diff_changed=${#changed_lines[@]}
+
+  if [[ -n "$EXPECT_DIFF_FILE" ]]; then
+    : > "$EXPECT_DIFF_FILE"
+  fi
+  write_expect_diff_line "expect-diff summary: added=$expect_diff_added, removed=$expect_diff_removed, changed=$expect_diff_changed"
+  if ((${#added_lines[@]} > 0)); then
+    while IFS= read -r line; do
+      write_expect_diff_line "EXPECT_DIFF_ADDED: $line"
+    done < <(printf '%s\n' "${added_lines[@]}" | sort)
+  fi
+  if ((${#removed_lines[@]} > 0)); then
+    while IFS= read -r line; do
+      write_expect_diff_line "EXPECT_DIFF_REMOVED: $line"
+    done < <(printf '%s\n' "${removed_lines[@]}" | sort)
+  fi
+  if ((${#changed_lines[@]} > 0)); then
+    while IFS= read -r line; do
+      write_expect_diff_line "EXPECT_DIFF_CHANGED: $line"
+    done < <(printf '%s\n' "${changed_lines[@]}" | sort)
+  fi
+}
 
 case_profile() {
   if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
@@ -278,6 +350,14 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   run_case "$sv" pass
   run_case "$sv" fail
 done
+
+if [[ -n "$EXPECT_DIFF_BASELINE" ]]; then
+  emit_expectation_diff "$EXPECT_DIFF_BASELINE" "$EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED"
+  if [[ "$EXPECT_DIFF_FAIL_ON_CHANGE" == "1" ]] && \
+      ((expect_diff_added > 0 || expect_diff_removed > 0 || expect_diff_changed > 0)); then
+    failures=$((failures + 1))
+  fi
+fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
 exit "$failures"
