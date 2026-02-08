@@ -11654,6 +11654,69 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 548
+- Yosys SVA BMC JSONL numeric type-validation by section:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` JSONL history checks to
+    validate numeric fields per object section instead of global key matching.
+  - Added strict per-section validation:
+    - `test_summary`:
+      - `total`, `failures`, `xfail`, `xpass`, `skipped`
+    - `mode_summary`:
+      - `total`, `pass`, `fail`, `xfail`, `xpass`, `epass`, `efail`,
+        `unskip`, `skipped`, `skip_pass`, `skip_fail`, `skip_expected`,
+        `skip_unexpected`
+    - `skip_reasons`:
+      - `vhdl`, `fail_no_macro`, `no_property`, `other`
+  - Added stricter JSONL metadata checks:
+    - non-empty `run_id`
+    - `generated_at_utc` format validation
+    - section object extraction validation.
+- Regression tests:
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`:
+    - added failing case where `test_summary.total` is a quoted string
+      instead of a number.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 7/7 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 30/30 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - JSONL checks are regex-based and may not reject all malformed JSON forms
+    (for example duplicate keys or escaped-string edge cases).
+  - Legacy-migrated JSONL rows still use synthetic timestamp metadata.
+  - Retention remains count-based; no age/time-window mode yet.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Move JSONL schema/type validation to a real JSON parser path.
+  - Add age/time-based history retention policies.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
