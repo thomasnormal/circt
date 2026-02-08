@@ -7534,45 +7534,67 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
               parentRef.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
         if (castOp.getInputs().size() == 1) {
           Value input = castOp.getInputs()[0];
-          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
-            unsigned parentWidth = getTypeWidth(parentRef.getType());
-            unsigned loadSize = (parentWidth + 7) / 8;
+          // Find memory block - try alloca first, then address-based lookup.
+          // This handles both alloca-backed refs (local variables) and
+          // GEP-backed refs (class properties like JTAG coverage fields).
+          unsigned parentWidth = getTypeWidth(parentRef.getType());
+          unsigned loadSize = (parentWidth + 7) / 8;
+          MemoryBlock *block = nullptr;
+          uint64_t blockOffset = 0;
 
-            MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+            block = findMemoryBlock(procId, allocaOp);
             if (!block) {
               auto &state = processStates[procId];
               auto it = state.memoryBlocks.find(allocaOp.getResult());
               if (it != state.memoryBlocks.end())
                 block = &it->second;
             }
+          }
 
-            if (!block || !block->initialized) {
-              setValue(procId, probeOp.getResult(),
-                      InterpretedValue::makeX(resultWidth));
-              return success();
+          // Fallback: use address-based lookup for GEP and other pointers
+          if (!block) {
+            InterpretedValue ptrVal = getValue(procId, input);
+            if (!ptrVal.isX() && ptrVal.getUInt64() != 0) {
+              block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId,
+                                               &blockOffset);
             }
+          }
 
-            // Read the full value from memory
-            APInt fullVal = APInt::getZero(parentWidth);
-            for (unsigned i = 0; i < loadSize && i < block->data.size(); ++i) {
-              unsigned insertPos = i * 8;
-              unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
-              if (bitsToInsert > 0 && insertPos < parentWidth) {
-                APInt byteVal(bitsToInsert,
-                              block->data[i] & ((1u << bitsToInsert) - 1));
-                fullVal.insertBits(byteVal, insertPos);
-              }
-            }
-
-            // Extract the requested bit range
-            APInt extractedVal = fullVal.extractBits(resultWidth, totalBitOffset);
-            setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  Probe sig.extract alloca: bits ["
-                       << totalBitOffset << ":" << (totalBitOffset + resultWidth)
-                       << "] = " << extractedVal.getZExtValue() << "\n");
+          if (!block || !block->initialized) {
+            setValue(procId, probeOp.getResult(),
+                    InterpretedValue::makeX(resultWidth));
             return success();
           }
+
+          if (blockOffset + loadSize > block->size) {
+            setValue(procId, probeOp.getResult(),
+                    InterpretedValue::makeX(resultWidth));
+            return success();
+          }
+
+          // Read the full value from memory
+          APInt fullVal = APInt::getZero(parentWidth);
+          for (unsigned i = 0; i < loadSize && i < block->data.size(); ++i) {
+            unsigned insertPos = i * 8;
+            unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
+            if (bitsToInsert > 0 && insertPos < parentWidth) {
+              APInt byteVal(bitsToInsert,
+                            block->data[blockOffset + i] &
+                                ((1u << bitsToInsert) - 1));
+              fullVal.insertBits(byteVal, insertPos);
+            }
+          }
+
+          // Extract the requested bit range
+          APInt extractedVal = fullVal.extractBits(resultWidth, totalBitOffset);
+          setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Probe sig.extract memory: bits ["
+                     << totalBitOffset << ":" << (totalBitOffset + resultWidth)
+                     << "] offset " << blockOffset
+                     << " = " << extractedVal.getZExtValue() << "\n");
+          return success();
         }
       }
 
@@ -7594,6 +7616,54 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
           setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
         }
         return success();
+      }
+
+      // Handle memory-backed !llhd.ref (e.g., from GEP into a class object
+      // via unrealized_conversion_cast). The runtime value of parentRef
+      // contains the memory address.
+      {
+        InterpretedValue parentPtrVal = getValue(procId, parentRef);
+        if (!parentPtrVal.isX() && parentPtrVal.getUInt64() != 0) {
+          uint64_t addr = parentPtrVal.getUInt64();
+          uint64_t blockOffset = 0;
+          MemoryBlock *block =
+              findMemoryBlockByAddress(addr, procId, &blockOffset);
+          if (block) {
+            unsigned parentWidth = getTypeWidth(parentRef.getType());
+            unsigned loadSize = (parentWidth + 7) / 8;
+
+            if (blockOffset + loadSize <= block->size) {
+              if (!block->initialized) {
+                setValue(procId, probeOp.getResult(),
+                        InterpretedValue::makeX(resultWidth));
+              } else {
+                APInt fullVal = APInt::getZero(parentWidth);
+                for (unsigned i = 0; i < loadSize; ++i) {
+                  unsigned insertPos = i * 8;
+                  unsigned bitsToInsert =
+                      std::min(8u, parentWidth - insertPos);
+                  if (bitsToInsert > 0 && insertPos < parentWidth) {
+                    APInt byteVal(bitsToInsert,
+                                  block->data[blockOffset + i] &
+                                      ((1u << bitsToInsert) - 1));
+                    fullVal.insertBits(byteVal, insertPos);
+                  }
+                }
+                APInt extractedVal =
+                    fullVal.extractBits(resultWidth, totalBitOffset);
+                setValue(procId, probeOp.getResult(),
+                         InterpretedValue(extractedVal));
+              }
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Probe sig.extract memory-backed ref: bits ["
+                         << totalBitOffset << ":"
+                         << (totalBitOffset + resultWidth)
+                         << "] at addr 0x"
+                         << llvm::format_hex(addr, 0) << "\n");
+              return success();
+            }
+          }
+        }
       }
 
       LLVM_DEBUG(llvm::dbgs()
@@ -7843,76 +7913,92 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               parentRef.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
         if (castOp.getInputs().size() == 1) {
           Value input = castOp.getInputs()[0];
-          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
-            InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+          // Find memory block - try alloca first, then address-based lookup.
+          // This handles both alloca-backed refs (local variables) and
+          // GEP-backed refs (class properties like JTAG coverage fields).
+          InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+          MemoryBlock *block = nullptr;
+          uint64_t blockOffset = 0;
 
-            MemoryBlock *block = findMemoryBlock(procId, allocaOp);
+          if (auto allocaOp = input.getDefiningOp<LLVM::AllocaOp>()) {
+            block = findMemoryBlock(procId, allocaOp);
             if (!block) {
               auto &state = processStates[procId];
               auto it = state.memoryBlocks.find(allocaOp.getResult());
               if (it != state.memoryBlocks.end())
                 block = &it->second;
             }
-
-            if (!block) {
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  Drive to sig.extract alloca failed - "
-                            "memory not found\n");
-              return failure();
-            }
-
-            // Read-modify-write: read parent value, modify bits, write back
-            unsigned parentWidth = getTypeWidth(parentRef.getType());
-            unsigned storeSize = (parentWidth + 7) / 8;
-
-            if (storeSize > block->size) {
-              LLVM_DEBUG(llvm::dbgs()
-                         << "  Drive to sig.extract: out of bounds\n");
-              return failure();
-            }
-
-            // Read current value from memory
-            APInt currentVal = APInt::getZero(parentWidth);
-            for (unsigned i = 0; i < storeSize && i < block->data.size();
-                 ++i) {
-              unsigned insertPos = i * 8;
-              unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
-              if (bitsToInsert > 0 && insertPos < parentWidth) {
-                APInt byteVal(bitsToInsert,
-                              block->data[i] & ((1u << bitsToInsert) - 1));
-                currentVal.insertBits(byteVal, insertPos);
-              }
-            }
-
-            // Insert the drive value at the bit offset
-            unsigned extractWidth = driveVal.getWidth();
-            if (!driveVal.isX()) {
-              APInt insertVal = driveVal.getAPInt();
-              if (insertVal.getBitWidth() != extractWidth)
-                insertVal = insertVal.zextOrTrunc(extractWidth);
-              currentVal.insertBits(insertVal, totalBitOffset);
-            }
-
-            // Write back to memory
-            for (unsigned i = 0; i < storeSize; ++i) {
-              unsigned extractPos = i * 8;
-              unsigned bitsToExtract = std::min(8u, parentWidth - extractPos);
-              if (bitsToExtract > 0 && extractPos < parentWidth) {
-                block->data[i] = static_cast<uint8_t>(
-                    currentVal.extractBits(bitsToExtract, extractPos)
-                        .getZExtValue());
-              }
-            }
-            block->initialized = true;
-
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  Drive to sig.extract alloca: bit " << totalBitOffset
-                       << " = "
-                       << (driveVal.isX() ? "X"
-                                          : std::to_string(driveVal.getUInt64()))
-                       << "\n");
-            return success();
           }
+
+          // Fallback: use address-based lookup for GEP and other pointers
+          if (!block) {
+            InterpretedValue ptrVal = getValue(procId, input);
+            if (!ptrVal.isX() && ptrVal.getUInt64() != 0) {
+              block = findMemoryBlockByAddress(ptrVal.getUInt64(), procId,
+                                               &blockOffset);
+            }
+          }
+
+          if (!block) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive to sig.extract failed - "
+                          "memory not found\n");
+            return failure();
+          }
+
+          // Read-modify-write: read parent value, modify bits, write back
+          unsigned parentWidth = getTypeWidth(parentRef.getType());
+          unsigned storeSize = (parentWidth + 7) / 8;
+
+          if (blockOffset + storeSize > block->size) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Drive to sig.extract: out of bounds\n");
+            return failure();
+          }
+
+          // Read current value from memory
+          APInt currentVal = APInt::getZero(parentWidth);
+          for (unsigned i = 0; i < storeSize && i < block->data.size();
+               ++i) {
+            unsigned insertPos = i * 8;
+            unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
+            if (bitsToInsert > 0 && insertPos < parentWidth) {
+              APInt byteVal(bitsToInsert,
+                            block->data[blockOffset + i] &
+                                ((1u << bitsToInsert) - 1));
+              currentVal.insertBits(byteVal, insertPos);
+            }
+          }
+
+          // Insert the drive value at the bit offset
+          unsigned extractWidth = driveVal.getWidth();
+          if (!driveVal.isX() &&
+              totalBitOffset + extractWidth <= parentWidth) {
+            APInt insertVal = driveVal.getAPInt();
+            if (insertVal.getBitWidth() != extractWidth)
+              insertVal = insertVal.zextOrTrunc(extractWidth);
+            currentVal.insertBits(insertVal, totalBitOffset);
+          }
+
+          // Write back to memory
+          for (unsigned i = 0; i < storeSize; ++i) {
+            unsigned extractPos = i * 8;
+            unsigned bitsToExtract = std::min(8u, parentWidth - extractPos);
+            if (bitsToExtract > 0 && extractPos < parentWidth) {
+              block->data[blockOffset + i] = static_cast<uint8_t>(
+                  currentVal.extractBits(bitsToExtract, extractPos)
+                      .getZExtValue());
+            }
+          }
+          block->initialized = true;
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Drive to sig.extract memory: bit " << totalBitOffset
+                     << " offset " << blockOffset << " = "
+                     << (driveVal.isX() ? "X"
+                                        : std::to_string(driveVal.getUInt64()))
+                     << "\n");
+          return success();
         }
       }
 
@@ -7960,6 +8046,71 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             }));
 
         return success();
+      }
+
+      // Handle memory-backed !llhd.ref (e.g., from GEP into a class object
+      // via unrealized_conversion_cast). The runtime value of parentRef
+      // contains the memory address. Do read-modify-write at the bit offset.
+      {
+        InterpretedValue parentPtrVal = getValue(procId, parentRef);
+        if (!parentPtrVal.isX() && parentPtrVal.getUInt64() != 0) {
+          uint64_t addr = parentPtrVal.getUInt64();
+          uint64_t blockOffset = 0;
+          MemoryBlock *block =
+              findMemoryBlockByAddress(addr, procId, &blockOffset);
+          if (block) {
+            InterpretedValue driveVal = getValue(procId, driveOp.getValue());
+            unsigned parentWidth = getTypeWidth(parentRef.getType());
+            unsigned storeSize = (parentWidth + 7) / 8;
+
+            if (blockOffset + storeSize <= block->size) {
+              // Read current value from memory
+              APInt currentVal = APInt::getZero(parentWidth);
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned insertPos = i * 8;
+                unsigned bitsToInsert =
+                    std::min(8u, parentWidth - insertPos);
+                if (bitsToInsert > 0 && insertPos < parentWidth) {
+                  APInt byteVal(bitsToInsert,
+                                block->data[blockOffset + i] &
+                                    ((1u << bitsToInsert) - 1));
+                  currentVal.insertBits(byteVal, insertPos);
+                }
+              }
+
+              // Insert drive value at the bit offset
+              unsigned extractWidth = driveVal.getWidth();
+              if (!driveVal.isX() &&
+                  totalBitOffset + extractWidth <= parentWidth) {
+                APInt insertVal = driveVal.getAPInt();
+                if (insertVal.getBitWidth() != extractWidth)
+                  insertVal = insertVal.zextOrTrunc(extractWidth);
+                currentVal.insertBits(insertVal, totalBitOffset);
+              }
+
+              // Write back to memory
+              for (unsigned i = 0; i < storeSize; ++i) {
+                unsigned extractPos = i * 8;
+                unsigned bitsToExtract =
+                    std::min(8u, parentWidth - extractPos);
+                if (bitsToExtract > 0 && extractPos < parentWidth) {
+                  block->data[blockOffset + i] = static_cast<uint8_t>(
+                      currentVal.extractBits(bitsToExtract, extractPos)
+                          .getZExtValue());
+                } else {
+                  block->data[blockOffset + i] = 0;
+                }
+              }
+              block->initialized = !driveVal.isX();
+
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Drive to sig.extract memory-backed ref: bit "
+                         << totalBitOffset << " at addr 0x"
+                         << llvm::format_hex(addr, 0) << "\n");
+              return success();
+            }
+          }
+        }
       }
 
       LLVM_DEBUG(llvm::dbgs()
@@ -11279,6 +11430,17 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   if (forkJoinManager.hasActiveChildren(procId)) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
+
+    // Even though the process is deferred, we must still signal termination
+    // to the main simulation loop. Without this, UVM_FATAL -> die() ->
+    // sim.terminate gets deferred indefinitely when forked children are stuck
+    // waiting for events that will never arrive (e.g., missing BFMs in
+    // HVL-only AVIPs like AXI4Lite). The main loop's control.shouldContinue()
+    // must return false to prevent an infinite hang.
+    terminationRequested = true;
+    if (terminateCallback) {
+      terminateCallback(success, verbose);
+    }
 
     // Suspend the process instead of terminating - it will be resumed when
     // all children complete (via the fork/join completion mechanism)
