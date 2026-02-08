@@ -189,7 +189,7 @@ while IFS= read -r -d '' sv; do
   # Build circt-verilog command
   cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
     -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
-  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
+  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && ! [[ "$tags" =~ uvm ]]; then
     cmd+=("--no-uvm-auto-include")
   fi
   if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
@@ -216,7 +216,7 @@ while IFS= read -r -d '' sv; do
     # Also handles cross-top-level hierarchical paths (e.g. $printtimescale(mod0.m))
     cmd_notop=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
       -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
-    if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
+    if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && ! [[ "$tags" =~ uvm ]]; then
       cmd_notop+=("--no-uvm-auto-include")
     fi
     if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
