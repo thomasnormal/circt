@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 497)
+## Current Status - February 8, 2026 (Iteration 498)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed anchor-based disambiguation for suffix-name activity parsing; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed step-0 sequence arm activity reporting in counterexamples; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,51 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 498
+
+1. **Step-0 sequence-arm activity reporting**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Sequence arm activity is now evaluated from step `0` (unsuffixed model
+     state), while signal arms continue to start at step `1` due edge
+     transition requirements.
+   - This fixes missing activity output when models only contain unsuffixed
+     sequence values.
+
+2. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-sequence-step0.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`
+   - New regression checks:
+     - sequence arm activity at `step 0`
+     - fired-arm-by-step summary including `step 0`
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Arm attribution remains model-derived rather than explicit solver witness
+     extraction.
+   - Complex internal expression naming remains best-effort.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit dedicated arm witness signals in lowering and print those directly,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 497
 
