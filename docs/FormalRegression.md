@@ -48,6 +48,12 @@ Use a trailing baseline window for trend-aware strict gates:
 utils/run_formal_all.sh --strict-gate --baseline-window 7
 ```
 
+Restrict baseline history to a time window (in days from latest suite baseline):
+
+```bash
+utils/run_formal_all.sh --strict-gate --baseline-window 7 --baseline-window-days 30
+```
+
 Fail only on specific gate classes:
 
 ```bash

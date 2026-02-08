@@ -16715,6 +16715,34 @@ ninja -C build circt-verilog
   - Notification fan-out still uses sequential endpoint delivery (no parallel
     dispatch).
 
+### Iteration 637
+- Duration-window baseline gating in `utils/run_formal_all.sh`:
+  - Added `--baseline-window-days N` (default `0`, disabled).
+  - When enabled, strict-gate history per `(suite, mode)` is filtered to rows
+    within `N` days of that suite/mode latest baseline date.
+  - Works with existing `--baseline-window N` count-window semantics:
+    - first apply day-based filter
+    - then apply trailing count-window selection.
+  - Added parser validation for non-negative integer `--baseline-window-days`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - added `out-window-days` scenario showing
+      `--baseline-window-days 30` avoids legacy baseline poisoning while
+      preserving `--baseline-window` behavior.
+- Documentation:
+  - Updated `docs/FormalRegression.md` strict-gate usage examples with
+    `--baseline-window-days`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Duration filtering currently anchors to latest baseline date per suite/mode
+    and expects ISO dates; malformed date rows are dropped from day-window
+    filtering.
+  - No explicit calendar-policy controls (business-day windows, timezone policy
+    knobs, etc.) yet.
+
 ---
 
 ## Architecture Reference

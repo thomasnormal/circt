@@ -20,6 +20,9 @@ Options:
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
+  --baseline-window-days N
+                         Limit baseline comparison to rows within N days of the
+                         suite/mode latest baseline date (default: 0, disabled)
   --fail-on-new-xpass    Fail when xpass count increases vs baseline
   --fail-on-passrate-regression
                          Fail when pass-rate decreases vs baseline
@@ -60,6 +63,7 @@ UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
 BASELINE_WINDOW=1
+BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 JSON_SUMMARY_FILE=""
@@ -116,6 +120,8 @@ while [[ $# -gt 0 ]]; do
       STRICT_GATE=1; shift ;;
     --baseline-window)
       BASELINE_WINDOW="$2"; shift 2 ;;
+    --baseline-window-days)
+      BASELINE_WINDOW_DAYS="$2"; shift 2 ;;
     --fail-on-new-xpass)
       FAIL_ON_NEW_XPASS=1; shift ;;
     --fail-on-passrate-regression)
@@ -137,6 +143,10 @@ if [[ -z "$OUT_DIR" ]]; then
 fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
+  exit 1
+fi
+if ! [[ "$BASELINE_WINDOW_DAYS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --baseline-window-days: expected non-negative integer" >&2
   exit 1
 fi
 
@@ -631,10 +641,12 @@ fi
 if [[ "$FAIL_ON_NEW_XPASS" == "1" || "$FAIL_ON_PASSRATE_REGRESSION" == "1" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
+  BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
   FAIL_ON_NEW_XPASS="$FAIL_ON_NEW_XPASS" \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
+import datetime as dt
 import os
 import re
 from pathlib import Path
@@ -692,6 +704,7 @@ fail_on_new_xpass = os.environ.get("FAIL_ON_NEW_XPASS", "0") == "1"
 fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0") == "1"
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
+baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
 
 gate_errors = []
 for key, current_row in summary.items():
@@ -702,10 +715,34 @@ for key, current_row in summary.items():
             gate_errors.append(f"{suite} {mode}: missing baseline row")
         continue
     history_rows.sort(key=lambda r: r.get("date", ""))
+    if baseline_window_days > 0:
+        parsed_dates = []
+        for row in history_rows:
+            try:
+                parsed_dates.append(dt.date.fromisoformat(row.get("date", "")))
+            except Exception:
+                parsed_dates.append(None)
+        valid_dates = [d for d in parsed_dates if d is not None]
+        if valid_dates:
+            latest_date = max(valid_dates)
+            cutoff = latest_date - dt.timedelta(days=baseline_window_days)
+            filtered_rows = []
+            for row, row_date in zip(history_rows, parsed_dates):
+                if row_date is None:
+                    continue
+                if cutoff <= row_date <= latest_date:
+                    filtered_rows.append(row)
+            history_rows = filtered_rows
     if strict_gate and len(history_rows) < baseline_window:
         gate_errors.append(
             f"{suite} {mode}: insufficient baseline history ({len(history_rows)} < {baseline_window})"
         )
+        continue
+    if not history_rows:
+        if strict_gate:
+            gate_errors.append(
+                f"{suite} {mode}: no baseline rows remain after baseline-window-days={baseline_window_days} filtering"
+            )
         continue
     compare_rows = history_rows[-baseline_window:]
     parsed_counts = [parse_result_summary(row.get("result", "")) for row in compare_rows]
