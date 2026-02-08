@@ -12570,6 +12570,68 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 564
+- Yosys SVA BMC stale-lock identity hardening (PID reuse):
+  - Added lock owner identity metadata at lock acquisition:
+    - `pid`
+    - `pid_start_jiffies` (from `/proc/<pid>/stat` when available)
+    - `owner_nonce`
+    - `acquired_at_utc`
+  - Added helper routines:
+    - `pid_start_jiffies` (reads Linux process start tick)
+    - `generate_lock_owner_nonce`
+  - Stale reclaim logic now disambiguates PID reuse:
+    - if owner pid is alive and current `pid_start_jiffies` matches recorded
+      value -> lock is treated as active (no reclaim)
+    - if owner pid is alive but start tick differs -> treated as stale/reused
+      pid and eligible for reclaim
+    - if identity cannot be disambiguated, behavior remains conservative
+      (no reclaim)
+  - Existing stale-age and timeout policy behavior remains unchanged.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-lock-stale.test`:
+    - seeds stale lockdir with a live pid + mismatched `pid_start_jiffies`.
+    - verifies reclaim warning appears in stderr.
+    - retains timeout and invalid-stale-value coverage.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 47/47 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - PID-start identity checks are Linux `/proc` dependent and may be unavailable
+    on non-Linux hosts.
+  - Stale detection is still age-threshold based and sensitive to coarse mtime.
+  - Drop-event schema still lacks stable event IDs for dedup/merge.
+  - Parser-backed validation still depends on `python3`.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add boot-id/session provenance in owner metadata for stronger identity
+    checks.
+  - Add per-reason/per-source aggregate counters in summary JSON output.
+  - Add stable event IDs and optional compression/rotation policy.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
