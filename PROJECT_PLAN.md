@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 470)
+## Current Status - February 7, 2026 (Iteration 471)
 
 ### Test Results
 
@@ -46,6 +46,57 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 471
+
+1. **Clock-source-aware 4-state knownness in VerifToSMT**
+   - Extended BMC conversion so 4-state inputs identified as clock sources
+     (`bmc_clock_sources` / `bmc_reg_clock_sources`) are constrained to known
+     even without global `--assume-known-inputs`.
+   - Updated unconstrained-input warning logic to ignore register/state
+     arguments (`num_regs` tail args) and avoid warning on clock-source-only
+     4-state inputs.
+
+2. **Regression coverage**
+   - Added `test/Tools/circt-bmc/bmc-clock-inputs-known-default-warning.mlir`.
+   - This locks that clock-source-only 4-state inputs do not emit the generic
+     unconstrained 4-state input warning by default.
+   - Kept `test/Tools/circt-bmc/bmc-assume-known-inputs-warning.mlir` coverage
+     to ensure non-clock 4-state inputs still warn without
+     `--assume-known-inputs`.
+
+3. **Validation**
+   - Lit:
+     - `test/Tools/circt-bmc/bmc-clock-inputs-known-default-warning.mlir`: PASS
+     - `test/Tools/circt-bmc/bmc-assume-known-inputs-warning.mlir`: PASS
+     - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`: PASS
+     - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`: PASS
+     - `test/Tools/circt-bmc/lower-to-bmc-multiclock.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - `verilator-verification` BMC (`assert_rose`) with
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+   - Targeted gap check:
+     - `verilator-verification` BMC (`assert_rose`) **without**
+       `BMC_ASSUME_KNOWN_INPUTS=1`: still FAIL
+       (`BMC_RESULT=SAT`), but the spurious unconstrained-input warning is now
+       removed.
+
+4. **Current limitations and best long-term next features**
+   - Main remaining BMC gap: remove `assert_rose` dependence on
+     `--assume-known-inputs` by fixing 4-state temporal/sample-state semantics
+     (not just top-level clock knownness).
+   - OpenTitan LEC still requires `XPROP_ONLY` acceptance; stronger
+     initialization/X correlation remains the top LEC correctness item.
+   - Upstream divergence is still large and we need a planned integration window
+     to reduce merge risk while concurrent agents continue landing changes.
 
 ### Session Summary - Iteration 470
 
