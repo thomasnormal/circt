@@ -4434,6 +4434,60 @@ def format_context_presence_clause(clause):
     return ", ".join(parts)
 
 
+def validate_context_presence_clause_comparator_key_types(clause, key_specs, field_name: str):
+    def require_integer_key(key, op_field):
+        key_spec = key_specs.get(key)
+        if key_spec is None:
+            fail(
+                f"error: invalid {op_field}: comparator key '{key}' must be declared in schema keys with integer type"
+            )
+        if key_spec["type"] != "integer":
+            fail(
+                f"error: invalid {op_field}: comparator key '{key}' must be declared with integer type"
+            )
+
+    int_lt_pairs = clause["int_lt_pairs"]
+    if int_lt_pairs is not None:
+        for lhs, rhs in int_lt_pairs:
+            require_integer_key(lhs, f"{field_name}.int_lt")
+            require_integer_key(rhs, f"{field_name}.int_lt")
+    int_le_pairs = clause["int_le_pairs"]
+    if int_le_pairs is not None:
+        for lhs, rhs in int_le_pairs:
+            require_integer_key(lhs, f"{field_name}.int_le")
+            require_integer_key(rhs, f"{field_name}.int_le")
+    int_gt_pairs = clause["int_gt_pairs"]
+    if int_gt_pairs is not None:
+        for lhs, rhs in int_gt_pairs:
+            require_integer_key(lhs, f"{field_name}.int_gt")
+            require_integer_key(rhs, f"{field_name}.int_gt")
+    int_ge_pairs = clause["int_ge_pairs"]
+    if int_ge_pairs is not None:
+        for lhs, rhs in int_ge_pairs:
+            require_integer_key(lhs, f"{field_name}.int_ge")
+            require_integer_key(rhs, f"{field_name}.int_ge")
+    int_lt_const_pairs = clause["int_lt_const_pairs"]
+    if int_lt_const_pairs is not None:
+        for lhs, _ in int_lt_const_pairs:
+            require_integer_key(lhs, f"{field_name}.int_lt_const")
+    int_le_const_pairs = clause["int_le_const_pairs"]
+    if int_le_const_pairs is not None:
+        for lhs, _ in int_le_const_pairs:
+            require_integer_key(lhs, f"{field_name}.int_le_const")
+    int_gt_const_pairs = clause["int_gt_const_pairs"]
+    if int_gt_const_pairs is not None:
+        for lhs, _ in int_gt_const_pairs:
+            require_integer_key(lhs, f"{field_name}.int_gt_const")
+    int_ge_const_pairs = clause["int_ge_const_pairs"]
+    if int_ge_const_pairs is not None:
+        for lhs, _ in int_ge_const_pairs:
+            require_integer_key(lhs, f"{field_name}.int_ge_const")
+    int_between_ranges = clause["int_between_ranges"]
+    if int_between_ranges is not None:
+        for key, _, _ in int_between_ranges:
+            require_integer_key(key, f"{field_name}.int_between")
+
+
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
     field_name = (
         "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON"
@@ -4655,6 +4709,20 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "requires_keys": requires_keys,
             "requires_when_regex": requires_when_regex,
         }
+    if all_of_clauses is not None:
+        for idx, clause in enumerate(all_of_clauses):
+            validate_context_presence_clause_comparator_key_types(
+                clause,
+                key_specs,
+                f"{field_name}.all_of[{idx}]",
+            )
+    if any_of_clauses is not None:
+        for idx, clause in enumerate(any_of_clauses):
+            validate_context_presence_clause_comparator_key_types(
+                clause,
+                key_specs,
+                f"{field_name}.any_of[{idx}]",
+            )
     return {
         "allow_unknown_keys": allow_unknown_keys,
         "validate_merged_context": validate_merged_context,
