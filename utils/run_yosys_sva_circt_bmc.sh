@@ -3227,9 +3227,44 @@ def parse_selector_clause_array(payload, field_name: str):
         "row_generated_at_utc_min",
         "row_generated_at_utc_max",
     }
-    combinator_keys = {"all_of", "any_of", "not"}
+    combinator_keys = {"all_of", "any_of", "not", "at_least", "at_most", "exactly"}
 
     def parse_selector_expression(expr, expr_field_name: str):
+        def parse_cardinality_spec(value, spec_field_name: str):
+            if not isinstance(value, dict) or not value:
+                fail(
+                    f"error: invalid {spec_field_name}: expected non-empty object"
+                )
+            unknown_keys = sorted(set(value.keys()) - {"count", "of"})
+            if unknown_keys:
+                fail(
+                    f"error: invalid {spec_field_name}: unknown key '{unknown_keys[0]}'"
+                )
+            if "count" not in value or "of" not in value:
+                fail(
+                    f"error: invalid {spec_field_name}: expected keys 'count' and 'of'"
+                )
+            count = value["count"]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                fail(
+                    f"error: invalid {spec_field_name}.count: expected non-negative integer"
+                )
+            of_payload = value["of"]
+            if not isinstance(of_payload, list) or not of_payload:
+                fail(
+                    f"error: invalid {spec_field_name}.of: expected non-empty JSON array"
+                )
+            expressions = []
+            for of_index, of_expr in enumerate(of_payload, start=1):
+                expressions.append(
+                    parse_selector_expression(of_expr, f"{spec_field_name}.of[{of_index}]")
+                )
+            if count > len(expressions):
+                fail(
+                    f"error: invalid {spec_field_name}.count: exceeds number of expressions"
+                )
+            return {"count": count, "expressions": expressions}
+
         if not isinstance(expr, dict) or not expr:
             fail(
                 f"error: invalid {expr_field_name}: expected non-empty object"
@@ -3303,12 +3338,33 @@ def parse_selector_clause_array(payload, field_name: str):
                 expr["not"], f"{expr_field_name}.not"
             )
 
+        at_least_spec = None
+        if "at_least" in expr:
+            at_least_spec = parse_cardinality_spec(
+                expr["at_least"], f"{expr_field_name}.at_least"
+            )
+
+        at_most_spec = None
+        if "at_most" in expr:
+            at_most_spec = parse_cardinality_spec(
+                expr["at_most"], f"{expr_field_name}.at_most"
+            )
+
+        exactly_spec = None
+        if "exactly" in expr:
+            exactly_spec = parse_cardinality_spec(
+                expr["exactly"], f"{expr_field_name}.exactly"
+            )
+
         has_base_predicate = bool(base_keys.intersection(expr.keys()))
         if (
             not has_base_predicate
             and all_of_expressions is None
             and any_of_expressions is None
             and not_expression is None
+            and at_least_spec is None
+            and at_most_spec is None
+            and exactly_spec is None
         ):
             fail(
                 f"error: invalid {expr_field_name}: expected selector predicates or combinators"
@@ -3342,6 +3398,9 @@ def parse_selector_clause_array(payload, field_name: str):
             "all_of_expressions": all_of_expressions,
             "any_of_expressions": any_of_expressions,
             "not_expression": not_expression,
+            "at_least_spec": at_least_spec,
+            "at_most_spec": at_most_spec,
+            "exactly_spec": exactly_spec,
         }
 
     clauses = []
@@ -3763,6 +3822,27 @@ def selected_for_rewrite(
             checks.append(any(selector_expression_matches(child) for child in expr["any_of_expressions"]))
         if expr["not_expression"] is not None:
             checks.append(not selector_expression_matches(expr["not_expression"]))
+        if expr["at_least_spec"] is not None:
+            match_count = sum(
+                1
+                for child in expr["at_least_spec"]["expressions"]
+                if selector_expression_matches(child)
+            )
+            checks.append(match_count >= expr["at_least_spec"]["count"])
+        if expr["at_most_spec"] is not None:
+            match_count = sum(
+                1
+                for child in expr["at_most_spec"]["expressions"]
+                if selector_expression_matches(child)
+            )
+            checks.append(match_count <= expr["at_most_spec"]["count"])
+        if expr["exactly_spec"] is not None:
+            match_count = sum(
+                1
+                for child in expr["exactly_spec"]["expressions"]
+                if selector_expression_matches(child)
+            )
+            checks.append(match_count == expr["exactly_spec"]["count"])
         return bool(checks) and all(checks)
 
     if rewrite_selector_clauses is not None:
@@ -3812,6 +3892,18 @@ def selector_expression_uses_row_generated_at(expr) -> bool:
     if expr["not_expression"] is not None:
         if selector_expression_uses_row_generated_at(expr["not_expression"]):
             return True
+    if expr["at_least_spec"] is not None:
+        for child in expr["at_least_spec"]["expressions"]:
+            if selector_expression_uses_row_generated_at(child):
+                return True
+    if expr["at_most_spec"] is not None:
+        for child in expr["at_most_spec"]["expressions"]:
+            if selector_expression_uses_row_generated_at(child):
+                return True
+    if expr["exactly_spec"] is not None:
+        for child in expr["exactly_spec"]["expressions"]:
+            if selector_expression_uses_row_generated_at(child):
+                return True
     return False
 
 
