@@ -3924,6 +3924,37 @@ def parse_bool_expression(expr, field_name: str):
     if op == "has":
         validate_context_key_name(payload, f"{field_name}.has")
         return ("has", payload)
+    if op in {"eq_const", "ne_const"}:
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 2
+            or not isinstance(payload[0], str)
+        ):
+            fail(
+                f"error: invalid {field_name}.{op}: expected [key, literal]"
+            )
+        key = payload[0]
+        validate_context_key_name(key, f"{field_name}.{op}[0]")
+        literal_type, literal_value = parse_context_scalar_literal(
+            payload[1], f"{field_name}.{op}[1]"
+        )
+        return (op, key, literal_type, literal_value)
+    if op == "regex":
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 2
+            or not isinstance(payload[0], str)
+            or not isinstance(payload[1], str)
+            or not payload[1]
+        ):
+            fail(
+                f"error: invalid {field_name}.regex: expected [key, non-empty pattern]"
+            )
+        key = payload[0]
+        pattern = payload[1]
+        validate_context_key_name(key, f"{field_name}.regex[0]")
+        compile_clause_regex(pattern, f"{field_name}.regex[1]")
+        return ("regex", key, pattern)
     if op in {"all", "any"}:
         if not isinstance(payload, list) or not payload:
             fail(
@@ -3963,6 +3994,38 @@ def evaluate_bool_expression(expr, context):
         return lhs_value != rhs_value
     if kind == "has":
         return expr[1] in context
+    if kind in {"eq_const", "ne_const"}:
+        key = expr[1]
+        literal_type = expr[2]
+        literal_value = expr[3]
+        if key not in context:
+            return False
+        context_value = context[key]
+        if literal_type == "integer":
+            parsed_value = parse_context_integer(context_value)
+        elif literal_type == "boolean":
+            parsed_value = parse_context_boolean(context_value)
+        else:
+            if isinstance(context_value, str):
+                parsed_value = context_value
+            else:
+                parsed_value = format_context_scalar(context_value)
+        if parsed_value is None:
+            return False
+        if kind == "eq_const":
+            return parsed_value == literal_value
+        return parsed_value != literal_value
+    if kind == "regex":
+        key = expr[1]
+        pattern = expr[2]
+        if key not in context:
+            return False
+        context_value = context[key]
+        if isinstance(context_value, str):
+            haystack = context_value
+        else:
+            haystack = format_context_scalar(context_value)
+        return re.search(pattern, haystack) is not None
     if kind == "all":
         return all(evaluate_bool_expression(child, context) for child in expr[1])
     if kind == "any":
@@ -3990,6 +4053,14 @@ def format_bool_expression(expr):
         )
     if kind == "has":
         return f"has({expr[1]})"
+    if kind in {"eq_const", "ne_const"}:
+        op_symbol = "==" if kind == "eq_const" else "!="
+        return (
+            f"{expr[1]}{op_symbol}"
+            f"{format_context_scalar_literal(expr[2], expr[3])}"
+        )
+    if kind == "regex":
+        return f"regex({expr[1]}, {json.dumps(expr[2])})"
     if kind in {"all", "any"}:
         return (
             f"{kind}("
@@ -4001,18 +4072,31 @@ def format_bool_expression(expr):
     return "<invalid-bool-expr>"
 
 
-def collect_bool_expression_integer_keys(expr, out_keys):
+def validate_bool_expression_key_types(expr, require_integer_key, require_key_type):
     kind = expr[0]
     if kind == "cmp":
-        collect_int_expression_keys(expr[1], out_keys)
-        collect_int_expression_keys(expr[3], out_keys)
+        expr_keys = set()
+        collect_int_expression_keys(expr[1], expr_keys)
+        collect_int_expression_keys(expr[3], expr_keys)
+        for expr_key in sorted(expr_keys):
+            require_integer_key(expr_key)
+        return
+    if kind in {"eq_const", "ne_const"}:
+        require_key_type(expr[1], expr[2])
+        return
+    if kind == "regex":
+        require_key_type(expr[1], "string")
         return
     if kind in {"all", "any"}:
         for child in expr[1]:
-            collect_bool_expression_integer_keys(child, out_keys)
+            validate_bool_expression_key_types(
+                child, require_integer_key, require_key_type
+            )
         return
     if kind == "not":
-        collect_bool_expression_integer_keys(expr[1], out_keys)
+        validate_bool_expression_key_types(
+            expr[1], require_integer_key, require_key_type
+        )
 
 
 def parse_context_presence_clause(payload, field_name: str):
@@ -4850,6 +4934,37 @@ def parse_context_integer(value):
     return None
 
 
+def parse_context_boolean(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+    return None
+
+
+def parse_context_scalar_literal(value, field_name: str):
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, int):
+        return ("integer", value)
+    if isinstance(value, str):
+        return ("string", value)
+    fail(
+        f"error: invalid {field_name}: expected scalar literal"
+    )
+
+
+def format_context_scalar_literal(value_type: str, value):
+    if value_type == "string":
+        return json.dumps(value)
+    if value_type == "boolean":
+        return "true" if value else "false"
+    return str(value)
+
+
 def is_context_presence_clause_satisfied(context, clause):
     keys_all = clause["keys_all"]
     if keys_all is not None:
@@ -5283,6 +5398,17 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
                 f"error: invalid {op_field}: comparator key '{key}' must be declared with integer type"
             )
 
+    def require_key_type(key, expected_type, op_field):
+        key_spec = key_specs.get(key)
+        if key_spec is None:
+            fail(
+                f"error: invalid {op_field}: comparator key '{key}' must be declared in schema keys with {expected_type} type"
+            )
+        if key_spec["type"] != expected_type:
+            fail(
+                f"error: invalid {op_field}: comparator key '{key}' must be declared with {expected_type} type"
+            )
+
     int_lt_pairs = clause["int_lt_pairs"]
     if int_lt_pairs is not None:
         for lhs, rhs in int_lt_pairs:
@@ -5366,10 +5492,13 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
     bool_expr_terms = clause["bool_expr_terms"]
     if bool_expr_terms is not None:
         for bool_expr in bool_expr_terms:
-            expr_keys = set()
-            collect_bool_expression_integer_keys(bool_expr, expr_keys)
-            for expr_key in sorted(expr_keys):
-                require_integer_key(expr_key, f"{field_name}.bool_expr")
+            validate_bool_expression_key_types(
+                bool_expr,
+                lambda key: require_integer_key(key, f"{field_name}.bool_expr"),
+                lambda key, expected_type: require_key_type(
+                    key, expected_type, f"{field_name}.bool_expr"
+                ),
+            )
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):

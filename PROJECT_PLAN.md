@@ -15635,6 +15635,77 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 612
+- Yosys SVA BMC typed scalar operators inside `bool_expr`:
+  - Extended `bool_expr` node set with scalar-focused predicates:
+    - `eq_const`: `[key, literal]` for typed equality
+    - `ne_const`: `[key, literal]` for typed inequality
+    - `regex`: `[key, pattern]` for string regex matching
+  - Added scalar literal parsing/formatting helpers for:
+    - `string`, `integer`, `boolean`
+  - Added bool parsing/evaluation helper support:
+    - canonical boolean parsing for `"true"/"false"` and native booleans
+  - `regex` patterns are now validated at parse time.
+  - Extended bool-expression formatting:
+    - renders scalar literals with type-aware representation
+    - renders regex predicates in diagnostics
+- Schema-time type enforcement improvements:
+  - `bool_expr.eq_const` / `bool_expr.ne_const` now require the referenced key
+    to be declared with the literal's type in schema keys.
+  - `bool_expr.regex` now requires referenced key declared with `string` type.
+  - Existing `bool_expr.cmp` integer key enforcement remains intact.
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive merged schema case exercising `eq_const` and `regex`
+    - `eq_const` type mismatch rejection
+    - `regex` type mismatch rejection
+  - Kept existing `bool_expr` mismatch and malformed-op tests to guard
+    compatibility.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - `bool_expr` scalar support is key-vs-literal only; key-vs-key typed string
+    / bool comparisons are not first-class nodes yet.
+  - `regex` currently supports pattern matching only (no flags/options node).
+  - `int_expr` arithmetic semantics (`div`/`mod`) remain implicit and
+    non-versioned.
+  - Expression normalization and complexity limits are still missing.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Add typed key-vs-key scalar comparison nodes and typed scalar expression
+    leaves inside `bool_expr`.
+  - Add schema-versioned arithmetic semantics profile for integer operators.
+  - Add expression canonicalization and explicit complexity budgets.
+  - Build reusable/importable selector/profile libraries over the unified AST.
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference

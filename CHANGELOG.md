@@ -30191,3 +30191,76 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Expression normalization and complexity controls are still missing.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 612 - February 8, 2026
+
+### Yosys SVA BMC Typed Scalar Bool-Expression Operators
+
+- Extended `bool_expr` node set with typed scalar operators:
+  - `eq_const`: `[key, literal]`
+  - `ne_const`: `[key, literal]`
+  - `regex`: `[key, pattern]`
+- Added scalar literal parsing/formatting support for:
+  - `string`, `integer`, `boolean`
+- Added canonical bool-value parsing (`true`/`false`) for route context
+  comparisons in bool-expression evaluation.
+- Added parse-time regex validation for `bool_expr.regex`.
+- Extended bool-expression diagnostics formatting to render scalar-literal and
+  regex predicates clearly.
+
+### Schema-Type Validation
+
+- Added schema parse-time key type enforcement for new bool operators:
+  - `eq_const` / `ne_const` require key declared with matching literal type.
+  - `regex` requires key declared with `string` type.
+- Retained `bool_expr.cmp` integer key enforcement via integer-expression key
+  extraction.
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive merged schema case now exercises `eq_const` and `regex`
+    - `eq_const` type mismatch rejection
+    - `regex` type mismatch rejection
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- `bool_expr` scalar support is currently key-vs-literal only; key-vs-key
+  typed scalar comparison nodes are not yet available.
+- Regex handling currently omits explicit flags/options in the AST schema.
+- Integer `div`/`mod` semantics remain implicit and not schema-versioned.
+- Expression normalization and complexity controls are still missing.
+- OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
+  `aes_sbox_canright`.
