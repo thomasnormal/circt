@@ -66,6 +66,8 @@ EXPECT_FORMAT_FILES="${EXPECT_FORMAT_FILES:-}"
 EXPECT_FORMAT_DIFF_FILE="${EXPECT_FORMAT_DIFF_FILE:-}"
 EXPECT_FORMAT_REWRITE_MALFORMED="${EXPECT_FORMAT_REWRITE_MALFORMED:-0}"
 EXPECT_FORMAT_MALFORMED_FIX_FILE="${EXPECT_FORMAT_MALFORMED_FIX_FILE:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE:-0}"
+EXPECT_FORMAT_UNFIXABLE_FILE="${EXPECT_FORMAT_UNFIXABLE_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -92,6 +94,7 @@ expect_diff_added=0
 expect_diff_removed=0
 expect_diff_changed=0
 lint_issues=0
+format_unfixable_issues=0
 
 declare -A expected_cases
 declare -A observed_cases
@@ -119,6 +122,13 @@ case "$EXPECT_FORMAT_REWRITE_MALFORMED" in
   0|1) ;;
   *)
     echo "invalid EXPECT_FORMAT_REWRITE_MALFORMED: $EXPECT_FORMAT_REWRITE_MALFORMED (expected 0|1)" >&2
+    exit 1
+    ;;
+esac
+case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" in
+  0|1) ;;
+  *)
+    echo "invalid EXPECT_FORMAT_FAIL_ON_UNFIXABLE: $EXPECT_FORMAT_FAIL_ON_UNFIXABLE (expected 0|1)" >&2
     exit 1
     ;;
 esac
@@ -163,6 +173,10 @@ fi
 if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_MALFORMED_FIX_FILE" ]]; then
   : > "$EXPECT_FORMAT_MALFORMED_FIX_FILE"
   printf 'file\toriginal\tsuggested\treason\tapplied\n' >> "$EXPECT_FORMAT_MALFORMED_FIX_FILE"
+fi
+if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
+  : > "$EXPECT_FORMAT_UNFIXABLE_FILE"
+  printf 'file\tline\treason\n' >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
 fi
 
 emit_expect_lint() {
@@ -557,6 +571,20 @@ emit_malformed_fix_suggestion() {
   return 0
 }
 
+emit_unfixable_format_issue() {
+  local file="$1"
+  local line="$2"
+  local reason="$3"
+  if [[ -z "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\n' \
+    "$(sanitize_tsv_field "$file")" \
+    "$(sanitize_tsv_field "$line")" \
+    "$(sanitize_tsv_field "$reason")" >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
+  return 0
+}
+
 suggest_malformed_expectation_row() {
   local raw_line="$1"
   local default_expected="$2"
@@ -722,6 +750,7 @@ format_expectation_file() {
   local malformed=0
   local malformed_suggested=0
   local malformed_fixed=0
+  local malformed_unfixable=0
   local allow_auto_omit=0
   local suggestion reason suggest_pair applied
   local -a comment_lines=()
@@ -780,6 +809,8 @@ format_expectation_file() {
         emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
       else
         malformed_lines+=("$trimmed")
+        malformed_unfixable=$((malformed_unfixable + 1))
+        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite"
       fi
       continue
     fi
@@ -805,6 +836,8 @@ format_expectation_file() {
         emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
       else
         malformed_lines+=("$trimmed")
+        malformed_unfixable=$((malformed_unfixable + 1))
+        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite"
       fi
       continue
     fi
@@ -842,7 +875,7 @@ format_expectation_file() {
     fi
   fi
   append_expect_format_diff "$diff_file" "$file" "$changed"
-  echo "$changed|$rows|$malformed|$malformed_suggested|$malformed_fixed"
+  echo "$changed|$rows|$malformed|$malformed_suggested|$malformed_fixed|$malformed_unfixable"
   return 0
 }
 
@@ -850,9 +883,10 @@ run_expectation_formatter() {
   local mode="$1"
   local -a files=()
   local -a defaults=()
-  local i file default_expected result changed rows malformed malformed_suggested malformed_fixed
+  local i file default_expected result changed rows malformed malformed_suggested malformed_fixed malformed_unfixable
   local changed_files=0
   local file_count=0
+  local unfixable_total=0
 
   resolve_expect_format_files files defaults
   if [[ -n "$EXPECT_FORMAT_DIFF_FILE" ]]; then
@@ -865,7 +899,7 @@ run_expectation_formatter() {
     [[ -z "$file" || "$file" == "/dev/null" ]] && continue
     file_count=$((file_count + 1))
     result="$(format_expectation_file "$file" "$default_expected" "$mode" "$((i + 1))")"
-    IFS='|' read -r changed rows malformed malformed_suggested malformed_fixed <<<"$result"
+    IFS='|' read -r changed rows malformed malformed_suggested malformed_fixed malformed_unfixable <<<"$result"
     if [[ "$changed" == "SKIP" ]]; then
       echo "EXPECT_FORMAT: mode=$mode file=$file rows=0 malformed=0 changed=0 missing=1"
       continue
@@ -873,9 +907,15 @@ run_expectation_formatter() {
     if [[ "$changed" == "1" ]]; then
       changed_files=$((changed_files + 1))
     fi
-    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed malformed_suggested=${malformed_suggested:-0} malformed_fixed=${malformed_fixed:-0}"
+    unfixable_total=$((unfixable_total + ${malformed_unfixable:-0}))
+    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed malformed_suggested=${malformed_suggested:-0} malformed_fixed=${malformed_fixed:-0} malformed_unfixable=${malformed_unfixable:-0}"
   done
-  echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files"
+  format_unfixable_issues="$unfixable_total"
+  echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files malformed_unfixable=$unfixable_total"
+  if [[ "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" == "1" ]] && ((unfixable_total > 0)); then
+    echo "EXPECT_FORMAT_STRICT: unfixable=$unfixable_total fail=1"
+    failures=$((failures + 1))
+  fi
   return 0
 }
 

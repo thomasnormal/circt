@@ -10916,6 +10916,66 @@ ninja -C build circt-verilog
   - Normalize skip accounting to explicit mode-level metrics in summary.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 536
+- Yosys SVA BMC strict non-recoverable malformed policy + diagnostics:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE` (`0` or `1`)
+    - `EXPECT_FORMAT_UNFIXABLE_FILE`
+  - Added non-recoverable malformed diagnostics in formatter:
+    - emits machine-readable entries for lines with no canonical rewrite
+      candidate.
+    - TSV columns:
+      - `file`
+      - `line`
+      - `reason`
+  - Extended formatter summaries:
+    - per-file:
+      - `malformed_unfixable=<n>`
+    - aggregate:
+      - `EXPECT_FORMAT: mode=<...> files=<n> changed=<n> malformed_unfixable=<n>`
+  - Added strict CI enforcement:
+    - when `EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1` and unfixable rows remain,
+      harness increments failure count and emits:
+      - `EXPECT_FORMAT_STRICT: unfixable=<n> fail=1`
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-format-strict.test`:
+    - validates strict failure on non-recoverable malformed rows
+    - validates unfixable diagnostics artifact contents.
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 19/19 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Strict mode is global per run; there is no scoped policy (for example only
+    specific files or profiles).
+  - Formatter still normalizes comments into a header block instead of
+    preserving row-local anchors.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add scoped strict policies (`file`/`profile` selectors) for incremental CI
+    rollout.
+  - Preserve row-local comment anchors through canonical formatting.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
