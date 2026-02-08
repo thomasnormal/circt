@@ -337,7 +337,8 @@ static llvm::StringSet<> collectEventWaveNames(ModuleOp module) {
         auto detail = dyn_cast<DictionaryAttr>(detailAttr);
         if (!detail)
           continue;
-        for (StringRef field : {"signal_name", "sequence_name", "iff_name"}) {
+        for (StringRef field :
+             {"signal_name", "sequence_name", "iff_name", "witness_name"}) {
           if (auto nameAttr = dyn_cast_or_null<StringAttr>(detail.get(field)))
             names.insert(nameAttr.getValue());
         }
@@ -395,6 +396,7 @@ static void printMixedEventSources(
     ModuleOp module,
     const llvm::StringMap<std::string> *modelValues = nullptr) {
   bool printedHeader = false;
+  bool hasWitnessActivity = false;
   unsigned maxStep = 0;
   WaveTable waves;
   llvm::StringSet<> anchorNames;
@@ -456,47 +458,64 @@ static void printMixedEventSources(
         if (!kindAttr)
           continue;
         StringRef kind = kindAttr.getValue();
+        bool useWitness = false;
         const StepMap *armWave = nullptr;
         StringRef signalEdge;
-        if (kind == "signal") {
-          auto signalNameAttr =
-              dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
-          auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
-          if (!signalNameAttr || !edgeAttr)
+        if (auto witnessNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("witness_name"))) {
+          auto witnessIt = waves.find(witnessNameAttr.getValue().str());
+          if (witnessIt != waves.end()) {
+            armWave = &witnessIt->second;
+            useWitness = true;
+            hasWitnessActivity = true;
+          }
+        }
+        if (!armWave) {
+          if (kind == "signal") {
+            auto signalNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
+            auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
+            if (!signalNameAttr || !edgeAttr)
+              continue;
+            auto signalIt = waves.find(signalNameAttr.getValue().str());
+            if (signalIt == waves.end())
+              continue;
+            armWave = &signalIt->second;
+            signalEdge = edgeAttr.getValue();
+          } else if (kind == "sequence") {
+            auto sequenceNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
+            if (!sequenceNameAttr)
+              continue;
+            auto sequenceIt = waves.find(sequenceNameAttr.getValue().str());
+            if (sequenceIt == waves.end())
+              continue;
+            armWave = &sequenceIt->second;
+          } else {
             continue;
-          auto signalIt = waves.find(signalNameAttr.getValue().str());
-          if (signalIt == waves.end())
-            continue;
-          armWave = &signalIt->second;
-          signalEdge = edgeAttr.getValue();
-        } else if (kind == "sequence") {
-          auto sequenceNameAttr =
-              dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
-          if (!sequenceNameAttr)
-            continue;
-          auto sequenceIt = waves.find(sequenceNameAttr.getValue().str());
-          if (sequenceIt == waves.end())
-            continue;
-          armWave = &sequenceIt->second;
-        } else {
-          continue;
+          }
         }
         const StepMap *iffWave = nullptr;
-        if (auto iffNameAttr =
-                dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
-          auto iffIt = waves.find(iffNameAttr.getValue().str());
-          if (iffIt != waves.end())
-            iffWave = &iffIt->second;
+        if (!useWitness) {
+          if (auto iffNameAttr =
+                  dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
+            auto iffIt = waves.find(iffNameAttr.getValue().str());
+            if (iffIt != waves.end())
+              iffWave = &iffIt->second;
+          }
         }
         StringRef label = kind;
         if (auto detailLabel =
                 dyn_cast_or_null<StringAttr>(detail.get("label")))
           label = detailLabel.getValue();
         SmallVector<unsigned, 8> activeSteps;
-        unsigned startStep = kind == "sequence" ? 0 : 1;
+        unsigned startStep = useWitness || kind == "sequence" ? 0 : 1;
         for (unsigned step = startStep; step <= maxStep; ++step) {
           bool armFired = false;
-          if (kind == "signal") {
+          if (useWitness) {
+            auto currIt = armWave->find(step);
+            armFired = currIt != armWave->end() && currIt->second;
+          } else if (kind == "signal") {
             auto prevIt = armWave->find(step - 1);
             auto currIt = armWave->find(step);
             if (prevIt == armWave->end() || currIt == armWave->end())
@@ -524,7 +543,9 @@ static void printMixedEventSources(
           activeArmsByStep[step].push_back(label.str());
         }
         if (!printedActivityHeader) {
-          llvm::errs() << "\nestimated event-arm activity:\n";
+          llvm::errs() << (hasWitnessActivity ? "\nevent-arm activity:\n"
+                                              : "\nestimated event-arm "
+                                                "activity:\n");
           printedActivityHeader = true;
         }
         llvm::errs() << "  [" << i << "][" << j << "] " << label << " ->";
@@ -543,7 +564,9 @@ static void printMixedEventSources(
       }
       if (!activeArmsByStep.empty()) {
         if (!printedByStepHeader) {
-          llvm::errs() << "\nestimated fired arms by step:\n";
+          llvm::errs() << (hasWitnessActivity ? "\nfired arms by step:\n"
+                                              : "\nestimated fired arms by "
+                                                "step:\n");
           printedByStepHeader = true;
         }
         for (const auto &stepAndArms : activeArmsByStep) {

@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 499 - February 8, 2026
+
+### Summary
+
+Added witness-aware SAT counterexample arm reporting so `circt-bmc` can use
+explicit solver witness waveforms when available, instead of always inferring
+activity from reconstructed signal transitions.
+
+### Fixes
+
+1. **Witness-aware activity decoding**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - `bmc_event_source_details.witness_name` is now recognized during
+     counterexample rendering.
+   - If witness waveforms are present in the model:
+     - arm activity is taken directly from witness values,
+     - output headers become:
+       - `event-arm activity:`
+       - `fired arms by step:`
+   - Existing inferred behavior is preserved as fallback when no witness is
+     available.
+
+2. **Witness-name parsing stability**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Wave-table anchor collection now includes `witness_name`, preventing
+     suffix-step splitting ambiguities for witness symbols.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-activity.mlir`
+   - New checks verify witness-driven arm activity and per-step summaries.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Witness extraction is still not emitted end-to-end from lowering for all arm
+  kinds; this iteration adds the consumer-side path.
+- Arms without witness symbols still rely on model-derived estimation.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 498 - February 8, 2026
 
 ### Summary
