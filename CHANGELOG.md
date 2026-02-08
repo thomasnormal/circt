@@ -25186,3 +25186,135 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Comment placement is still header-normalized rather than row-local.
 - Skip accounting remains mixed test-level/mode-level in summaries.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 538 - February 8, 2026
+
+### Yosys SVA BMC Strict Malformed Reason Selectors
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER`
+- Added reason-category strict scoping:
+  - strict malformed failure selection now supports file/profile/reason
+    dimensions.
+  - reason matching supports comma-separated wildcard patterns.
+- Extended strict status and diagnostics:
+  - `EXPECT_FORMAT_STRICT` now reports `reason_filter=<...>`.
+  - unfixable artifact remains machine-readable and now tracks strict selection
+    per row for scoped auditing.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-format-strict-reason.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-format-strict.test`
+  - `test/Tools/run-yosys-sva-bmc-format-strict-scope.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 21/21 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Strict selection is reason-aware but still lacks first-class policy bundles
+  and severity tiers.
+- Comment placement is still header-normalized rather than row-local.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 539 - February 8, 2026
+
+### Yosys SVA BMC Strict Policy Bundles and Severity Tiers
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY`
+    - `custom|all|syntax-only|semantic-only|error-only|warning-only`
+  - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_SEVERITY_FILTER`
+- Added unfixable reason categorization:
+  - `syntax-too-few-fields`
+  - `semantic-missing-default-expected`
+  - `semantic-invalid-expected-token`
+  - `policy-auto-omit-not-allowed`
+  - `no-canonical-rewrite` fallback
+- Added severity tier mapping:
+  - `error`: syntax/non-canonical categories
+  - `warning`: semantic/policy categories
+- Added policy-aware strict scoping:
+  - strict selection now evaluates file/profile/reason/severity.
+  - policy bundles provide default reason/severity filters when explicit
+    filters are unset.
+- Extended strict diagnostics:
+  - strict status now includes:
+    - `policy=<...>`
+    - `severity_filter=<...>`
+  - unfixable TSV now includes:
+    - `severity`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-format-strict-policy.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-format-strict.test`
+  - `test/Tools/run-yosys-sva-bmc-format-strict-scope.test`
+  - `test/Tools/run-yosys-sva-bmc-format-strict-reason.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 22/22 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Severity tiers are currently coarse (`error` vs `warning`) and not tied to
+  deeper parser provenance.
+- Comment placement is still header-normalized rather than row-local.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

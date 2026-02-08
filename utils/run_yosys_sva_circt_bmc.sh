@@ -70,6 +70,9 @@ EXPECT_FORMAT_FAIL_ON_UNFIXABLE="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE:-0}"
 EXPECT_FORMAT_UNFIXABLE_FILE="${EXPECT_FORMAT_UNFIXABLE_FILE:-}"
 EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-}"
 EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_SEVERITY_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_SEVERITY_FILTER:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY:-custom}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -134,6 +137,44 @@ case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" in
     exit 1
     ;;
 esac
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY,,}"
+case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
+  custom|all|syntax-only|semantic-only|error-only|warning-only) ;;
+  *)
+    echo "invalid EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY: $EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY (expected custom|all|syntax-only|semantic-only|error-only|warning-only)" >&2
+    exit 1
+    ;;
+esac
+strict_unfixable_bundle_reason_filter=""
+strict_unfixable_bundle_severity_filter=""
+case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
+  syntax-only)
+    strict_unfixable_bundle_reason_filter="syntax-*"
+    strict_unfixable_bundle_severity_filter="error"
+    ;;
+  semantic-only)
+    strict_unfixable_bundle_reason_filter="semantic-*,policy-*"
+    strict_unfixable_bundle_severity_filter="warning"
+    ;;
+  error-only)
+    strict_unfixable_bundle_severity_filter="error"
+    ;;
+  warning-only)
+    strict_unfixable_bundle_severity_filter="warning"
+    ;;
+  custom|all)
+    ;;
+esac
+STRICT_UNFIXABLE_FILE_FILTER="$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER"
+STRICT_UNFIXABLE_PROFILE_FILTER="$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER"
+STRICT_UNFIXABLE_REASON_FILTER="$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER"
+STRICT_UNFIXABLE_SEVERITY_FILTER="$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_SEVERITY_FILTER"
+if [[ -z "$STRICT_UNFIXABLE_REASON_FILTER" && -n "$strict_unfixable_bundle_reason_filter" ]]; then
+  STRICT_UNFIXABLE_REASON_FILTER="$strict_unfixable_bundle_reason_filter"
+fi
+if [[ -z "$STRICT_UNFIXABLE_SEVERITY_FILTER" && -n "$strict_unfixable_bundle_severity_filter" ]]; then
+  STRICT_UNFIXABLE_SEVERITY_FILTER="$strict_unfixable_bundle_severity_filter"
+fi
 EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS// /}"
 if [[ -n "$EXPECT_LINT_APPLY_ACTIONS" ]]; then
   local_actions_csv=",$EXPECT_LINT_APPLY_ACTIONS,"
@@ -178,7 +219,7 @@ if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_MALFORMED_FIX_F
 fi
 if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
   : > "$EXPECT_FORMAT_UNFIXABLE_FILE"
-  printf 'file\tline\treason\tprofile\tstrict_selected\n' >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
+  printf 'file\tline\treason\tseverity\tprofile\tstrict_selected\n' >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
 fi
 
 emit_expect_lint() {
@@ -577,15 +618,17 @@ emit_unfixable_format_issue() {
   local file="$1"
   local line="$2"
   local reason="$3"
-  local profile="$4"
-  local strict_selected="$5"
+  local severity="$4"
+  local profile="$5"
+  local strict_selected="$6"
   if [[ -z "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
     return 0
   fi
-  printf '%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$(sanitize_tsv_field "$file")" \
     "$(sanitize_tsv_field "$line")" \
     "$(sanitize_tsv_field "$reason")" \
+    "$(sanitize_tsv_field "$severity")" \
     "$(sanitize_tsv_field "$profile")" \
     "$strict_selected" >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
   return 0
@@ -620,19 +663,79 @@ infer_malformed_profile() {
   printf '%s' "$profile"
 }
 
+classify_unfixable_reason() {
+  local raw_line="$1"
+  local default_expected="$2"
+  local allow_auto_omit="${3:-0}"
+  local -a toks=()
+  local expected
+  read -r -a toks <<<"$raw_line"
+  if ((${#toks[@]} < 2)); then
+    echo "syntax-too-few-fields"
+    return 0
+  fi
+  if ((${#toks[@]} == 2 || ${#toks[@]} == 3)); then
+    if [[ -z "$default_expected" ]]; then
+      echo "semantic-missing-default-expected"
+      return 0
+    fi
+  fi
+  if ((${#toks[@]} >= 4)); then
+    expected="$(trim_whitespace "${toks[3]}")"
+    expected="${expected,,}"
+    case "$expected" in
+      pass|fail|xfail|skip) ;;
+      omit|auto)
+        if [[ "$allow_auto_omit" != "1" ]]; then
+          echo "policy-auto-omit-not-allowed"
+          return 0
+        fi
+        ;;
+      *)
+        echo "semantic-invalid-expected-token"
+        return 0
+        ;;
+    esac
+  fi
+  echo "no-canonical-rewrite"
+  return 0
+}
+
+classify_unfixable_severity() {
+  local reason="$1"
+  case "$reason" in
+    syntax-*|no-canonical-*) echo "error" ;;
+    semantic-*|policy-*) echo "warning" ;;
+    *) echo "error" ;;
+  esac
+  return 0
+}
+
 strict_unfixable_scope_matches() {
   local file="$1"
   local profile="$2"
+  local reason="$3"
+  local severity="$4"
   local base
   base="$(basename "$file")"
-  if [[ -n "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER" ]]; then
-    if ! csv_pattern_match "$file" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER" && \
-       ! csv_pattern_match "$base" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER"; then
+  if [[ -n "$STRICT_UNFIXABLE_FILE_FILTER" ]]; then
+    if ! csv_pattern_match "$file" "$STRICT_UNFIXABLE_FILE_FILTER" && \
+       ! csv_pattern_match "$base" "$STRICT_UNFIXABLE_FILE_FILTER"; then
       return 1
     fi
   fi
-  if [[ -n "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER" ]]; then
-    if ! csv_pattern_match "$profile" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER"; then
+  if [[ -n "$STRICT_UNFIXABLE_PROFILE_FILTER" ]]; then
+    if ! csv_pattern_match "$profile" "$STRICT_UNFIXABLE_PROFILE_FILTER"; then
+      return 1
+    fi
+  fi
+  if [[ -n "$STRICT_UNFIXABLE_REASON_FILTER" ]]; then
+    if ! csv_pattern_match "$reason" "$STRICT_UNFIXABLE_REASON_FILTER"; then
+      return 1
+    fi
+  fi
+  if [[ -n "$STRICT_UNFIXABLE_SEVERITY_FILTER" ]]; then
+    if ! csv_pattern_match "$severity" "$STRICT_UNFIXABLE_SEVERITY_FILTER"; then
       return 1
     fi
   fi
@@ -807,7 +910,7 @@ format_expectation_file() {
   local malformed_unfixable=0
   local malformed_unfixable_strict=0
   local allow_auto_omit=0
-  local inferred_profile strict_selected
+  local inferred_profile strict_selected unfix_reason unfix_severity
   local suggestion reason suggest_pair applied
   local -a comment_lines=()
   local -a row_lines=()
@@ -866,13 +969,15 @@ format_expectation_file() {
       else
         malformed_lines+=("$trimmed")
         malformed_unfixable=$((malformed_unfixable + 1))
+        unfix_reason="$(classify_unfixable_reason "$trimmed" "$default_expected" "$allow_auto_omit")"
+        unfix_severity="$(classify_unfixable_severity "$unfix_reason")"
         inferred_profile="$(infer_malformed_profile "$trimmed")"
         strict_selected=0
-        if strict_unfixable_scope_matches "$file" "$inferred_profile"; then
+        if strict_unfixable_scope_matches "$file" "$inferred_profile" "$unfix_reason" "$unfix_severity"; then
           strict_selected=1
           malformed_unfixable_strict=$((malformed_unfixable_strict + 1))
         fi
-        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite" "$inferred_profile" "$strict_selected"
+        emit_unfixable_format_issue "$file" "$trimmed" "$unfix_reason" "$unfix_severity" "$inferred_profile" "$strict_selected"
       fi
       continue
     fi
@@ -899,13 +1004,15 @@ format_expectation_file() {
       else
         malformed_lines+=("$trimmed")
         malformed_unfixable=$((malformed_unfixable + 1))
+        unfix_reason="$(classify_unfixable_reason "$trimmed" "$default_expected" "$allow_auto_omit")"
+        unfix_severity="$(classify_unfixable_severity "$unfix_reason")"
         inferred_profile="$(infer_malformed_profile "$trimmed")"
         strict_selected=0
-        if strict_unfixable_scope_matches "$file" "$inferred_profile"; then
+        if strict_unfixable_scope_matches "$file" "$inferred_profile" "$unfix_reason" "$unfix_severity"; then
           strict_selected=1
           malformed_unfixable_strict=$((malformed_unfixable_strict + 1))
         fi
-        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite" "$inferred_profile" "$strict_selected"
+        emit_unfixable_format_issue "$file" "$trimmed" "$unfix_reason" "$unfix_severity" "$inferred_profile" "$strict_selected"
       fi
       continue
     fi
@@ -984,10 +1091,10 @@ run_expectation_formatter() {
   echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files malformed_unfixable=$unfixable_total malformed_unfixable_strict=$unfixable_strict_total"
   if [[ "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" == "1" ]]; then
     if ((unfixable_strict_total > 0)); then
-      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=$unfixable_strict_total fail=1 file_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-*} profile_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-*}"
+      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=$unfixable_strict_total fail=1 policy=$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY file_filter=${STRICT_UNFIXABLE_FILE_FILTER:-*} profile_filter=${STRICT_UNFIXABLE_PROFILE_FILTER:-*} reason_filter=${STRICT_UNFIXABLE_REASON_FILTER:-*} severity_filter=${STRICT_UNFIXABLE_SEVERITY_FILTER:-*}"
       failures=$((failures + 1))
     else
-      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=0 fail=0 file_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-*} profile_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-*}"
+      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=0 fail=0 policy=$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY file_filter=${STRICT_UNFIXABLE_FILE_FILTER:-*} profile_filter=${STRICT_UNFIXABLE_PROFILE_FILTER:-*} reason_filter=${STRICT_UNFIXABLE_REASON_FILTER:-*} severity_filter=${STRICT_UNFIXABLE_SEVERITY_FILTER:-*}"
     fi
   fi
   return 0

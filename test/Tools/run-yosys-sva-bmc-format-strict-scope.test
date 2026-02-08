@@ -17,10 +17,10 @@
 
 // CHECK: EXPECT_FORMAT: mode=dry-run file={{.*xfail.txt}} rows=0 malformed=1 changed=0 malformed_suggested=0 malformed_fixed=0 malformed_unfixable=1 malformed_unfixable_strict=0
 // CHECK: EXPECT_FORMAT: mode=dry-run files=1 changed=0 malformed_unfixable=1 malformed_unfixable_strict=0
-// CHECK: EXPECT_FORMAT_STRICT: unfixable_total=1 scoped=0 fail=0 file_filter=* profile_filter=xprop
+// CHECK: EXPECT_FORMAT_STRICT: unfixable_total=1 scoped=0 fail=0 policy=custom file_filter=* profile_filter=xprop reason_filter=* severity_filter=*
 // CHECK: PASS(pass): simple
 // CHECK: SKIP(fail-no-macro): simple
 // CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 
-// UNFIX: file|line|reason|profile|strict_selected
-// UNFIX: {{.*xfail.txt}}|foo pass known maybe trailing|no-canonical-rewrite|known|0
+// UNFIX: file|line|reason|severity|profile|strict_selected
+// UNFIX: {{.*xfail.txt}}|foo pass known maybe trailing|semantic-invalid-expected-token|warning|known|0

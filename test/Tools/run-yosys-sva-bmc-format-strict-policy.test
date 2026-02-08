@@ -1,0 +1,38 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'simple\t*\t*\tpass\nbadline\nfoo pass known maybe trailing\n' > %t/expect.txt
+
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run \
+// RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
+// RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY=error-only \
+// RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-error.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=ERRORPOL
+// RUN: sed 's/\t/|/g' %t/unfixable-error.tsv | FileCheck %s --check-prefix=ERRORPOL-UNFIX
+
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run \
+// RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
+// RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY=semantic-only \
+// RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-semantic.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=SEMPOL
+// RUN: sed 's/\t/|/g' %t/unfixable-semantic.tsv | FileCheck %s --check-prefix=SEMPOL-UNFIX
+
+// ERRORPOL: EXPECT_FORMAT_STRICT: unfixable_total=2 scoped=1 fail=1 policy=error-only file_filter=* profile_filter=* reason_filter=* severity_filter=error
+// ERRORPOL: yosys SVA summary: 1 tests, failures=1, xfail=0, xpass=0, skipped=0
+// ERRORPOL-UNFIX: file|line|reason|severity|profile|strict_selected
+// ERRORPOL-UNFIX-DAG: {{.*expect.txt}}|badline|syntax-too-few-fields|error|unknown|1
+// ERRORPOL-UNFIX-DAG: {{.*expect.txt}}|foo pass known maybe trailing|semantic-invalid-expected-token|warning|known|0
+
+// SEMPOL: EXPECT_FORMAT_STRICT: unfixable_total=2 scoped=1 fail=1 policy=semantic-only file_filter=* profile_filter=* reason_filter=semantic-*,policy-* severity_filter=warning
+// SEMPOL: yosys SVA summary: 1 tests, failures=1, xfail=0, xpass=0, skipped=0
+// SEMPOL-UNFIX: file|line|reason|severity|profile|strict_selected
+// SEMPOL-UNFIX-DAG: {{.*expect.txt}}|badline|syntax-too-few-fields|error|unknown|0
+// SEMPOL-UNFIX-DAG: {{.*expect.txt}}|foo pass known maybe trailing|semantic-invalid-expected-token|warning|known|1
