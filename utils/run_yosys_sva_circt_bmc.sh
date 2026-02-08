@@ -38,6 +38,7 @@ YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -168,6 +169,10 @@ case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
     exit 1
     ;;
 esac
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES: $YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES (expected non-negative integer)" >&2
+  exit 1
+fi
 strict_unfixable_bundle_reason_filter=""
 strict_unfixable_bundle_severity_filter=""
 case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
@@ -1852,6 +1857,47 @@ emit_mode_summary_outputs() {
     "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
     "$mode_skip_reason_no_property" "$mode_skip_reason_other"
 
+  trim_history_tsv() {
+    local file="$1"
+    local max_entries="$2"
+    local -a lines=()
+    local header
+    local start i rows
+    ((max_entries > 0)) || return 0
+    [[ -f "$file" ]] || return 0
+    mapfile -t lines < "$file"
+    ((${#lines[@]} > 0)) || return 0
+    header="${lines[0]}"
+    rows=$(( ${#lines[@]} - 1 ))
+    if ((rows <= max_entries)); then
+      return 0
+    fi
+    : > "$file"
+    printf '%s\n' "$header" >> "$file"
+    start=$(( ${#lines[@]} - max_entries ))
+    for ((i = start; i < ${#lines[@]}; ++i)); do
+      printf '%s\n' "${lines[$i]}" >> "$file"
+    done
+  }
+
+  trim_history_jsonl() {
+    local file="$1"
+    local max_entries="$2"
+    local -a lines=()
+    local start i
+    ((max_entries > 0)) || return 0
+    [[ -f "$file" ]] || return 0
+    mapfile -t lines < "$file"
+    if ((${#lines[@]} <= max_entries)); then
+      return 0
+    fi
+    : > "$file"
+    start=$(( ${#lines[@]} - max_entries ))
+    for ((i = start; i < ${#lines[@]}; ++i)); do
+      printf '%s\n' "${lines[$i]}" >> "$file"
+    done
+  }
+
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" ]]; then
     : > "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
     printf '%s\n' "$tsv_header" >> "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
@@ -1863,6 +1909,7 @@ emit_mode_summary_outputs() {
       printf '%s\n' "$tsv_header" >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE"
     fi
     printf '%s\n' "$tsv_row" >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE"
+    trim_history_tsv "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES"
   fi
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" ]]; then
@@ -1916,6 +1963,7 @@ emit_mode_summary_outputs() {
         "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
         "$mode_skip_reason_no_property" "$mode_skip_reason_other"
     } >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
+    trim_history_jsonl "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES"
   fi
 }
 
