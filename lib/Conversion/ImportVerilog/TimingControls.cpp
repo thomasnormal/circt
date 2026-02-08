@@ -380,7 +380,9 @@ static LogicalResult lowerClockedSequenceEventControl(
 }
 
 static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
-                                               const slang::ast::Expression &expr) {
+                                               const slang::ast::Expression &expr,
+                                               const slang::ast::Expression *iffExpr) {
+  OpBuilder &builder = context.builder;
   const slang::ast::Expression *assertionExpr = &expr;
   if (auto symRef = expr.getSymbolReference()) {
     if (symRef->kind == slang::ast::SymbolKind::Sequence ||
@@ -418,6 +420,17 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
            << "sequence event control requires a clocking event";
 
   Value seqValue = clockOp.getInput();
+  if (iffExpr) {
+    Value condition = context.convertRvalueExpression(*iffExpr);
+    condition = context.convertToBool(condition, Domain::TwoValued);
+    if (!condition)
+      return failure();
+    condition = context.convertToI1(condition);
+    if (!condition)
+      return failure();
+    seqValue = ltl::AndOp::create(builder, loc,
+                                  SmallVector<Value, 2>{seqValue, condition});
+  }
   Value clockValue = clockOp.getClock();
   auto edge = clockOp.getEdge();
   auto result =
@@ -466,6 +479,7 @@ static bool equivalentClockSignals(Value lhs, Value rhs) {
 static LogicalResult
 lowerSequenceEventListControl(Context &context, Location loc,
                               const slang::ast::EventListControl &ctrl) {
+  OpBuilder &builder = context.builder;
   if (ctrl.events.empty())
     return mlir::emitError(loc) << "empty event list control";
 
@@ -494,8 +508,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
 
   for (auto *signalCtrl : sequenceEvents) {
-    if (signalCtrl->edge != slang::ast::EdgeKind::None ||
-        signalCtrl->iffCondition)
+    if (signalCtrl->edge != slang::ast::EdgeKind::None)
       return mlir::emitError(loc)
              << "sequence event controls in event lists do not support edge "
                 "qualifiers";
@@ -546,7 +559,19 @@ lowerSequenceEventListControl(Context &context, Location loc,
                 "clocks are not yet supported";
     }
 
-    sequenceInputs.push_back(clockOp.getInput());
+    Value sequenceInput = clockOp.getInput();
+    if (signalCtrl->iffCondition) {
+      Value condition = context.convertRvalueExpression(*signalCtrl->iffCondition);
+      condition = context.convertToBool(condition, Domain::TwoValued);
+      if (!condition)
+        return failure();
+      condition = context.convertToI1(condition);
+      if (!condition)
+        return failure();
+      sequenceInput = ltl::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{sequenceInput, condition});
+    }
+    sequenceInputs.push_back(sequenceInput);
     clockedValues.push_back(clockedValue);
   }
 
@@ -571,7 +596,6 @@ lowerSequenceEventListControl(Context &context, Location loc,
     equivalentSignals.push_back(signalCtrl);
   }
 
-  OpBuilder &builder = context.builder;
   Value combinedSequence = sequenceInputs.front();
   if (sequenceInputs.size() > 1)
     combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
@@ -801,11 +825,11 @@ static LogicalResult handleRoot(Context &context,
     }
 
     if (isAssertionEventControl(signalCtrl.expr)) {
-      if (signalCtrl.edge != slang::ast::EdgeKind::None ||
-          signalCtrl.iffCondition)
+      if (signalCtrl.edge != slang::ast::EdgeKind::None)
         return mlir::emitError(loc)
                << "sequence event controls do not support edge qualifiers";
-      return lowerSequenceEventControl(context, loc, signalCtrl.expr);
+      return lowerSequenceEventControl(context, loc, signalCtrl.expr,
+                                       signalCtrl.iffCondition);
     }
 
     auto waitOp = moore::WaitEventOp::create(builder, loc);

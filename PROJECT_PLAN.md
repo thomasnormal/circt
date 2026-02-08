@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 479)
+## Current Status - February 8, 2026 (Iteration 480)
 
 ### Test Results
 
@@ -46,6 +46,55 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 480
+
+1. **Added `iff` support for sequence event controls**
+   - Extended
+     `lib/Conversion/ImportVerilog/TimingControls.cpp` to support:
+     - `@(seq iff cond)`
+     - sequence event-list entries with `iff` qualifiers, e.g.
+       `@(seq1 iff c1 or seq2 iff c2)`.
+   - Lowering now gates sequence matches with the sampled `iff` condition using
+     LTL `and` before NFA/event-loop lowering.
+
+2. **Regression and end-to-end coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with:
+       - `SequenceEventControlWithIff`
+       - `SequenceEventListControlWithIff`
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-iff-unsat-e2e.sv`
+       validating `always @(s iff en)` against sampled reference behavior.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog circt-bmc`: PASS
+   - Lit/targeted:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+   - Direct BMC:
+     - `sva-sequence-event-iff-unsat-e2e.sv`: `UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `UNSAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Different-clock event lists are still unsupported for sequence OR forms and
+     mixed sequence/signal forms.
+   - Mixed sequence/signal lists with non-equivalent edges remain unsupported.
+   - Procedural property event controls (`@property`) remain unsupported.
+   - High-value Slang/SVA features to prioritize next:
+     - different-clock sequence/property event-list semantics,
+     - property-event procedural waits with robust finite-trace semantics,
+     - stronger match-item side-effect and sampled-value composition coverage.
 
 ### Session Summary - Iteration 479
 

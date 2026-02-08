@@ -67,3 +67,48 @@ module SequenceSignalEventListControl;
     c <= ~c;
   end
 endmodule
+
+// Test sequence event control with iff guard: @(seq iff en)
+module SequenceEventControlWithIff;
+  logic clk, a, en, b;
+
+  sequence seq;
+    @(posedge clk) a;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceEventControlWithIff
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK: moore.detect_event posedge
+  // CHECK: moore.read %en
+  // CHECK: comb.and
+  // CHECK: cf.cond_br
+  always @(seq iff en) begin
+    b <= ~b;
+  end
+endmodule
+
+// Test sequence event-list entries with iff guards.
+module SequenceEventListControlWithIff;
+  logic clk, a, b, en1, en2, c;
+
+  sequence seq1;
+    @(posedge clk) a;
+  endsequence
+
+  sequence seq2;
+    @(posedge clk) b;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceEventListControlWithIff
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK: moore.detect_event posedge
+  // CHECK: moore.read %en1
+  // CHECK: moore.read %en2
+  // CHECK: comb.or
+  // CHECK: cf.cond_br
+  always @(seq1 iff en1 or seq2 iff en2) begin
+    c <= ~c;
+  end
+endmodule
