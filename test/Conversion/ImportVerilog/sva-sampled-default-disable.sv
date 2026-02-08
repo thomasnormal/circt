@@ -41,3 +41,15 @@ endmodule
 // CHECK-LABEL: moore.module @sampled_explicit_clock_in_assert
 // CHECK: moore.procedure always
 // CHECK: moore.wait_event
+
+module sampled_explicit_same_clock_in_assert(input logic clk, a);
+  property p;
+    @(posedge clk) $rose(a, @(posedge clk));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_explicit_same_clock_in_assert
+// CHECK: moore.past
+// CHECK-NOT: moore.procedure always

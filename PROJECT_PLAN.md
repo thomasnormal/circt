@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 472)
+## Current Status - February 8, 2026 (Iteration 473)
 
 ### Test Results
 
@@ -46,6 +46,54 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 473
+
+1. **Explicit same-clock sampled-value skew fix**
+   - Extended sampled-value lowering in
+     `lib/Conversion/ImportVerilog/AssertionExpr.cpp` to recognize when an
+     explicit sampled-value clocking argument is structurally equivalent to the
+     enclosing assertion clock (`TimingControl` and signal-event equivalence).
+   - In those equivalent-clock cases (with no enable/disable controls), we now
+     use direct `moore.past` lowering instead of helper-procedure sampled
+     state, eliminating a one-cycle skew.
+
+2. **Regression coverage**
+   - Added `test/Tools/circt-bmc/sva-rose-explicit-same-clock-nonoverlap-unsat-e2e.sv`.
+   - Extended `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+     with `sampled_explicit_same_clock_in_assert` coverage.
+
+3. **Validation**
+   - Targeted checks:
+     - `/tmp/rose_explicit_sameclk.sv` direct
+       `circt-verilog | circt-bmc`: `BMC_RESULT=UNSAT`
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+   - Lit:
+     - `test/Conversion/ImportVerilog/sva-value-change.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+     - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`: PASS
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`) without
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Explicit-clock sampled values with genuinely different clock domains and
+     with disable/enable controls still use helper-procedure sampled state;
+     this is now the main temporal-semantics hardening target.
+   - We should build stronger cross-clock sampled-value equivalence tests
+     (including `|=>`, ranged delays, and disable-iff interactions).
+   - OpenTitan LEC still requires `XPROP_ONLY` acceptance; stronger
+     initialization/X correlation remains the top LEC correctness item.
+   - Upstream divergence remains large; we still need a planned sync window.
 
 ### Session Summary - Iteration 472
 
