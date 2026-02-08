@@ -53,3 +53,29 @@ endmodule
 // CHECK-LABEL: moore.module @sampled_explicit_same_clock_in_assert
 // CHECK: moore.past
 // CHECK-NOT: moore.procedure always
+
+module sampled_past_explicit_same_clock_in_assert(input logic clk, a);
+  property p;
+    @(posedge clk) $past(a, 1, @(posedge clk));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_past_explicit_same_clock_in_assert
+// CHECK: moore.past
+// CHECK-NOT: moore.procedure always
+
+module sampled_past_explicit_same_clock_with_disable(input logic clk, reset, a);
+  default disable iff (reset);
+
+  property p;
+    @(posedge clk) $past(a, 1, @(posedge clk));
+  endproperty
+
+  assert property (p);
+endmodule
+
+// CHECK-LABEL: moore.module @sampled_past_explicit_same_clock_with_disable
+// CHECK: moore.procedure always
+// CHECK: moore.wait_event
