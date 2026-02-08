@@ -16340,6 +16340,47 @@ ninja -C build circt-verilog
   - `run_formal_all.sh` gating is local-script level; not yet enforced in CI
     policy wiring.
 
+### Iteration 624
+- sv-tests BMC smoke classification fix for simulation-negative tests:
+  - Updated `utils/run_sv_tests_circt_bmc.sh` to avoid forcing `XFAIL` in
+    smoke mode for `:type: simulation` tests with `:should_fail_because:`.
+  - Simulation-negative tests now keep PASS/FAIL classification semantics in
+    smoke mode (PASS on expected violation path) instead of unconditional XFAIL.
+- Regression coverage:
+  - Extended `test/Tools/run-sv-tests-bmc-simfail.test` with smoke-mode checks.
+  - New assertions ensure smoke and non-smoke modes both classify the fixture as
+    `PASS` (not `XFAIL`).
+- Validation status:
+  - `bash -n utils/run_sv_tests_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test` -> PASS
+  - Real sv-tests confirmation:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.10--property-local-var-fail|16.10--sequence-local-var-fail|16.15--property-disable-iff-fail' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=3 pass=3 fail=0 xfail=0 xpass=0 error=0
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=26 pass=26 fail=0 xfail=0 xpass=0 error=0 skip=1002
+  - Ongoing external cadence smoke (post-fix):
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=23 pass=23 fail=0 error=0 skip=1005
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+- Current limitations / debt:
+  - This closes smoke-mode reporting for the 3 chapter-16 cases, but full
+    non-smoke parity work (multi-clock/X-prop/proof-strength) remains.
+
 ---
 
 ## Architecture Reference

@@ -30981,3 +30981,56 @@ CIRCT/slang correctly enforces LRM restrictions.
   not yet implemented.
 - Strict-gate compares only against latest baseline snapshot.
 - CI integration for strict-gate policy enforcement is pending.
+
+## Iteration 624 - February 8, 2026
+
+### sv-tests BMC Smoke Classification Fix
+
+- Updated `utils/run_sv_tests_circt_bmc.sh` smoke-mode handling for
+  `:type: simulation` negative tests (`:should_fail_because:`).
+- In smoke mode, simulation-negative tests no longer get forced to `XFAIL`.
+- They now retain PASS/FAIL semantics used by non-smoke BMC classification.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-sv-tests-bmc-simfail.test`
+    - added smoke-mode assertion to ensure expected PASS behavior
+    - verifies no `XFAIL` regression for simulation-negative fixtures
+
+### Validation
+
+- `bash -n utils/run_sv_tests_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test`:
+    - PASS
+- Real sv-tests checks:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.10--property-local-var-fail|16.10--sequence-local-var-fail|16.15--property-disable-iff-fail' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=3 pass=3 fail=0 xfail=0 xpass=0 error=0
+  - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0 skip=1002
+- External cadence smoke (post-fix):
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=23 pass=23 fail=0 error=0 skip=1005
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- This change addresses smoke-mode accounting for these cases; remaining parity
+  gaps are primarily semantic/modeling depth (multi-clock, 4-state/X-prop,
+  proof strength, and LEC XPROP caveats).

@@ -384,7 +384,7 @@ while IFS= read -r -d '' sv; do
     fi
   fi
 
-  if [[ "$BMC_SMOKE_ONLY" == "1" && "$should_fail" == "1" ]]; then
+  if [[ "$BMC_SMOKE_ONLY" == "1" && "$should_fail" == "1" && "$expect_bmc_violation" != "1" ]]; then
     result="XFAIL"
     xfail=$((xfail + 1))
     printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
