@@ -356,6 +356,28 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
+  OUT_DIR="$OUT_DIR" \
+  DATE_STR="$DATE_STR" \
+  EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+report_path = Path(os.environ["EXPECTATIONS_DRY_RUN_REPORT_JSONL"])
+report_path.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "operation": "run_meta",
+    "schema_version": 1,
+    "date": os.environ.get("DATE_STR", ""),
+    "out_dir": os.environ.get("OUT_DIR", ""),
+}
+with report_path.open("a", encoding="utf-8") as f:
+  f.write(json.dumps(payload, sort_keys=True) + "\n")
+PY
+fi
+
 run_suite() {
   local name="$1"; shift
   local log="$OUT_DIR/${name}.log"

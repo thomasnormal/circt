@@ -267,6 +267,7 @@ Expected-failure budget file:
   rewriting expectation files.
 - `--expectations-dry-run-report-jsonl <file>` appends JSON Lines dry-run
   operation summaries (`operation`, `target_file`, row-count metadata).
+  The first row per run is `operation=run_meta` with `schema_version=1`.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
