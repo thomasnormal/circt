@@ -17469,6 +17469,34 @@ ninja -C build circt-verilog
   - JSONL output is still append-only and not grouped by run UUID.
   - Operation rows remain summary-only (no per-row textual diff payload).
 
+### Iteration 657
+- Dry-run JSONL run grouping via `run_id`:
+  - Added per-invocation `run_id` generation in `utils/run_formal_all.sh`.
+  - `run_id` is emitted in:
+    - `run_meta` JSONL row
+    - all dry-run operation rows (`prune_*` / `refresh_*`)
+  - This enables grouping operation rows by invocation in append-only report
+    files.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` now validates `run_id` is present on `run_meta`.
+- Documentation:
+  - Updated `docs/FormalRegression.md` to note all JSONL rows carry the same
+    per-run `run_id`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke verification:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+      - report contains `run_meta` + operation rows with shared `run_id`
+      - lanes: `sv-tests`/`verilator-verification`/`yosys`/`opentitan` PASS,
+        AVIP `axi4Lite_avip` known FAIL
+- Current limitations / debt:
+  - JSONL is still append-only and has no explicit end-of-run marker.
+  - Operation rows remain summary-only (no row-level textual diff data).
+
 ---
 
 ## Architecture Reference

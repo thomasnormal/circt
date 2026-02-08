@@ -95,6 +95,7 @@ USAGE
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
+RUN_ID="${DATE_STR}-$$-$(date +%H%M%S)"
 OUT_DIR=""
 SV_TESTS_DIR="${HOME}/sv-tests"
 VERILATOR_DIR="${HOME}/verilator-verification"
@@ -359,6 +360,7 @@ mkdir -p "$OUT_DIR"
 if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
   OUT_DIR="$OUT_DIR" \
   DATE_STR="$DATE_STR" \
+  EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   python3 - <<'PY'
 import json
@@ -371,6 +373,7 @@ payload = {
     "operation": "run_meta",
     "schema_version": 1,
     "date": os.environ.get("DATE_STR", ""),
+    "run_id": os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", ""),
     "out_dir": os.environ.get("OUT_DIR", ""),
 }
 with report_path.open("a", encoding="utf-8") as f:
@@ -717,6 +720,7 @@ if [[ -n "$EXPECTED_FAILURES_FILE" || \
   FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
   FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE" \
   PRUNE_EXPECTED_FAILURES_DROP_UNUSED="$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" \
@@ -733,6 +737,7 @@ expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
 fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURES_FILE", "")
 prune_drop_unused = (
@@ -746,6 +751,8 @@ expected_summary_path = out_dir / "expected-failures-summary.tsv"
 def emit_dry_run_report(payload):
   if dry_run_report_jsonl_path is None:
     return
+  payload = dict(payload)
+  payload.setdefault("run_id", dry_run_run_id)
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
@@ -956,6 +963,7 @@ if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   SUMMARY_FILE="$OUT_DIR/summary.tsv" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX" \
@@ -970,6 +978,7 @@ from pathlib import Path
 summary_path = Path(os.environ["SUMMARY_FILE"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 suite_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX", "")
@@ -978,6 +987,8 @@ mode_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX",
 def emit_dry_run_report(payload):
   if dry_run_report_jsonl_path is None:
     return
+  payload = dict(payload)
+  payload.setdefault("run_id", dry_run_run_id)
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
@@ -1068,6 +1079,7 @@ if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
   FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
   FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" \
@@ -1087,6 +1099,7 @@ fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == 
 fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_FILE", "")
 prune_path = Path(prune_file_raw) if prune_file_raw else None
@@ -1105,6 +1118,8 @@ unexpected_path = out_dir / "unexpected-failure-cases.tsv"
 def emit_dry_run_report(payload):
   if dry_run_report_jsonl_path is None:
     return
+  payload = dict(payload)
+  payload.setdefault("run_id", dry_run_run_id)
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
@@ -1494,6 +1509,7 @@ fi
 if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
@@ -1513,6 +1529,7 @@ from pathlib import Path
 out_dir = Path(os.environ["OUT_DIR"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
@@ -1533,6 +1550,8 @@ id_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX"
 def emit_dry_run_report(payload):
   if dry_run_report_jsonl_path is None:
     return
+  payload = dict(payload)
+  payload.setdefault("run_id", dry_run_run_id)
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
