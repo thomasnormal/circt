@@ -9844,6 +9844,40 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Handle class-level srandom(seed) calls.
+  // MooreToCore emits empty stub functions @srandom_NNNN for class srandom().
+  // We intercept them here to actually seed the global RNG.
+  if ((calleeName == "srandom" || calleeName.starts_with("srandom_")) &&
+      callOp.getNumOperands() >= 1 && callOp.getNumResults() == 0) {
+    int32_t seed = static_cast<int32_t>(
+        getValue(procId, callOp.getOperand(0)).getUInt64());
+    std::srand(static_cast<unsigned>(seed));
+    LLVM_DEBUG(llvm::dbgs() << "  func.call @" << calleeName
+                            << ": seeding RNG with " << seed << "\n");
+    return success();
+  }
+
+  // Handle class-level get_randstate()/set_randstate() stubs.
+  if ((calleeName == "get_randstate" ||
+       calleeName.starts_with("get_randstate_")) &&
+      callOp.getNumResults() >= 1) {
+    if (isa<LLVM::LLVMStructType>(callOp.getResult(0).getType())) {
+      setValue(procId, callOp.getResult(0), InterpretedValue(0ULL, 128));
+    } else {
+      setValue(procId, callOp.getResult(0), InterpretedValue(0ULL, 64));
+    }
+    LLVM_DEBUG(llvm::dbgs() << "  func.call @" << calleeName
+                            << ": returning stub state\n");
+    return success();
+  }
+  if ((calleeName == "set_randstate" ||
+       calleeName.starts_with("set_randstate_")) &&
+      callOp.getNumResults() == 0) {
+    LLVM_DEBUG(llvm::dbgs() << "  func.call @" << calleeName
+                            << ": stub (ignored)\n");
+    return success();
+  }
+
   bool isGetRoot = calleeName == "m_uvm_get_root";
   if (isGetRoot) {
     ++uvmGetRootDepth;
@@ -17455,17 +17489,34 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // Helper to build state keys for rand_mode/constraint_mode maps.
+    auto makeStateKey = [&](Value classPtrOp, Value nameOp) -> std::string {
+      uint64_t classAddr = getValue(procId, classPtrOp).getUInt64();
+      const char *name = readCStringFromPtr(nameOp);
+      return std::to_string(classAddr) + ":" + (name ? name : "");
+    };
+
     // ---- __moore_is_rand_enabled ----
     // Signature: (classPtr: ptr, propertyName: ptr) -> i32
     if (calleeName == "__moore_is_rand_enabled") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        // Default: all random variables are enabled (return 1).
-        // The runtime tracks rand_mode state keyed by (classPtr, propertyName).
-        // Since we can't easily bridge interpreter memory for the C-string
-        // property name, we stub to the default enabled state.
-        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_is_rand_enabled() = 1\n");
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        // Check "disable all" flag first
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        auto allIt = randModeState.find(allKey);
+        if (allIt != randModeState.end() && allIt->second == 0) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_is_rand_enabled() = 0 (all disabled)\n");
+        } else {
+          std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+          auto it = randModeState.find(key);
+          int32_t mode = (it != randModeState.end()) ? it->second : 1;
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(static_cast<uint64_t>(mode), 32));
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  llvm.call: __moore_is_rand_enabled() = " << mode << "\n");
+        }
       }
       return success();
     }
@@ -17473,10 +17524,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_rand_mode_get ----
     // Signature: (classPtr: ptr, propertyName: ptr) -> i32
     if (calleeName == "__moore_rand_mode_get") {
-      if (callOp.getNumResults() >= 1) {
-        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        auto it = randModeState.find(key);
+        int32_t mode = (it != randModeState.end()) ? it->second : 1;
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(mode), 32));
         LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_rand_mode_get() = 1\n");
+                   << "  llvm.call: __moore_rand_mode_get() = " << mode << "\n");
       }
       return success();
     }
@@ -17484,10 +17539,117 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_rand_mode_set ----
     // Signature: (classPtr: ptr, propertyName: ptr, mode: i32) -> i32
     if (calleeName == "__moore_rand_mode_set") {
-      if (callOp.getNumResults() >= 1) {
-        setValue(procId, callOp.getResult(), InterpretedValue(1ULL, 32));
+      if (callOp.getNumOperands() >= 3) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        int32_t mode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int32_t prevMode = 1;
+        auto it = randModeState.find(key);
+        if (it != randModeState.end())
+          prevMode = it->second;
+        randModeState[key] = mode;
+        if (callOp.getNumResults() >= 1)
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(static_cast<uint64_t>(prevMode), 32));
         LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.call: __moore_rand_mode_set() = 1\n");
+                   << "  llvm.call: __moore_rand_mode_set(" << mode
+                   << ") prev=" << prevMode << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_rand_mode_enable_all ----
+    if (calleeName == "__moore_rand_mode_enable_all") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        randModeState[allKey] = 1;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_rand_mode_enable_all()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_rand_mode_disable_all ----
+    if (calleeName == "__moore_rand_mode_disable_all") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        randModeState[allKey] = 0;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_rand_mode_disable_all()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_is_constraint_enabled ----
+    // Signature: (classPtr: ptr, constraintName: ptr) -> i32
+    if (calleeName == "__moore_is_constraint_enabled") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        auto it = constraintModeState.find(key);
+        int32_t mode = (it != constraintModeState.end()) ? it->second : 1;
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(mode), 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_is_constraint_enabled() = " << mode << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_constraint_mode_get ----
+    // Signature: (classPtr: ptr, constraintName: ptr) -> i32
+    if (calleeName == "__moore_constraint_mode_get") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        auto it = constraintModeState.find(key);
+        int32_t mode = (it != constraintModeState.end()) ? it->second : 1;
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(mode), 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_constraint_mode_get() = " << mode << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_constraint_mode_set ----
+    // Signature: (classPtr: ptr, constraintName: ptr, mode: i32) -> i32
+    if (calleeName == "__moore_constraint_mode_set") {
+      if (callOp.getNumOperands() >= 3) {
+        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+        int32_t mode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int32_t prevMode = 1;
+        auto it = constraintModeState.find(key);
+        if (it != constraintModeState.end())
+          prevMode = it->second;
+        constraintModeState[key] = mode;
+        if (callOp.getNumResults() >= 1)
+          setValue(procId, callOp.getResult(),
+                   InterpretedValue(static_cast<uint64_t>(prevMode), 32));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_constraint_mode_set(" << mode
+                   << ") prev=" << prevMode << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_constraint_mode_enable_all ----
+    if (calleeName == "__moore_constraint_mode_enable_all") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        constraintModeState[allKey] = 1;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_constraint_mode_enable_all()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_constraint_mode_disable_all ----
+    if (calleeName == "__moore_constraint_mode_disable_all") {
+      if (callOp.getNumOperands() >= 1) {
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        constraintModeState[allKey] = 0;
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_constraint_mode_disable_all()\n");
       }
       return success();
     }
