@@ -16686,6 +16686,35 @@ ninja -C build circt-verilog
     (AVIP/OpenTitan); core suite runners still rely on their existing env/args.
   - Lane overrides are single-path each; no prioritized fallback list exists.
 
+### Iteration 636
+- Formal cadence webhook retry policy generalization:
+  - Added `--webhook-backoff-mode fixed|exponential` (default `fixed`).
+  - Added `--webhook-backoff-max-secs` cap for retry delay.
+  - Added `--webhook-jitter-secs` for randomized delay spread.
+  - Retained existing `--webhook-retries` + `--webhook-backoff-secs` controls.
+  - Added telemetry in `cadence.state`:
+    - `webhook_backoff_mode`
+    - `webhook_backoff_max_secs`
+    - `webhook_jitter_secs`
+  - Retry loop now logs computed `webhook_retry_sleep_secs=<n>`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - new exponential-retry scenario with deterministic fake `curl` and fake
+      `sleep`
+    - verifies exponential sequence (`2`, `4`) for retries.
+- Documentation:
+  - Updated `docs/FormalRegression.md` webhook option list with
+    backoff-mode/max/jitter controls.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+- Current limitations / debt:
+  - Backoff uses simple exponential growth with optional additive jitter; it
+    does not yet support policy profiles (e.g., decorrelated jitter).
+  - Notification fan-out still uses sequential endpoint delivery (no parallel
+    dispatch).
+
 ---
 
 ## Architecture Reference

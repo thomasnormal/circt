@@ -21,8 +21,15 @@ Options:
   --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
                          (repeatable; can specify multiple endpoints)
   --webhook-retries N    Retry count per webhook endpoint (default: 0)
+  --webhook-backoff-mode MODE
+                         Retry backoff mode: fixed | exponential (default: fixed)
   --webhook-backoff-secs N
                          Sleep between webhook retries in seconds (default: 5)
+  --webhook-backoff-max-secs N
+                         Max backoff sleep in seconds (default: 300)
+  --webhook-jitter-secs N
+                         Add random jitter [0,N] seconds to webhook retry sleeps
+                         (default: 0)
   --webhook-timeout-secs N
                          Per-webhook HTTP timeout in seconds (default: 15)
   --run-formal-all PATH  Path to run_formal_all.sh
@@ -45,7 +52,10 @@ RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
 WEBHOOK_RETRIES=0
+WEBHOOK_BACKOFF_MODE="fixed"
 WEBHOOK_BACKOFF_SECS=5
+WEBHOOK_BACKOFF_MAX_SECS=300
+WEBHOOK_JITTER_SECS=0
 WEBHOOK_TIMEOUT_SECS=15
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
@@ -71,8 +81,14 @@ while [[ $# -gt 0 ]]; do
       ON_FAIL_WEBHOOKS+=("$2"); shift 2 ;;
     --webhook-retries)
       WEBHOOK_RETRIES="$2"; shift 2 ;;
+    --webhook-backoff-mode)
+      WEBHOOK_BACKOFF_MODE="$2"; shift 2 ;;
     --webhook-backoff-secs)
       WEBHOOK_BACKOFF_SECS="$2"; shift 2 ;;
+    --webhook-backoff-max-secs)
+      WEBHOOK_BACKOFF_MAX_SECS="$2"; shift 2 ;;
+    --webhook-jitter-secs)
+      WEBHOOK_JITTER_SECS="$2"; shift 2 ;;
     --webhook-timeout-secs)
       WEBHOOK_TIMEOUT_SECS="$2"; shift 2 ;;
     --run-formal-all)
@@ -123,8 +139,20 @@ if ! [[ "$WEBHOOK_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --webhook-retries: expected non-negative integer" >&2
   exit 1
 fi
+if [[ "$WEBHOOK_BACKOFF_MODE" != "fixed" && "$WEBHOOK_BACKOFF_MODE" != "exponential" ]]; then
+  echo "invalid --webhook-backoff-mode: expected fixed or exponential" >&2
+  exit 1
+fi
 if ! [[ "$WEBHOOK_BACKOFF_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --webhook-backoff-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$WEBHOOK_BACKOFF_MAX_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --webhook-backoff-max-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$WEBHOOK_JITTER_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --webhook-jitter-secs: expected non-negative integer" >&2
   exit 1
 fi
 if ! [[ "$WEBHOOK_TIMEOUT_SECS" =~ ^[0-9]+$ ]] || [[ "$WEBHOOK_TIMEOUT_SECS" == "0" ]]; then
@@ -169,7 +197,10 @@ echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
 echo "on_fail_webhooks=$on_fail_webhooks_csv" >> "$STATE_FILE"
 echo "webhook_retries=$WEBHOOK_RETRIES" >> "$STATE_FILE"
+echo "webhook_backoff_mode=$WEBHOOK_BACKOFF_MODE" >> "$STATE_FILE"
 echo "webhook_backoff_secs=$WEBHOOK_BACKOFF_SECS" >> "$STATE_FILE"
+echo "webhook_backoff_max_secs=$WEBHOOK_BACKOFF_MAX_SECS" >> "$STATE_FILE"
+echo "webhook_jitter_secs=$WEBHOOK_JITTER_SECS" >> "$STATE_FILE"
 echo "webhook_timeout_secs=$WEBHOOK_TIMEOUT_SECS" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
@@ -273,10 +304,28 @@ post_fail_webhook() {
         | tee -a "$CADENCE_LOG"
       return 1
     fi
+    local retry_index="$attempt"
+    local sleep_secs="$WEBHOOK_BACKOFF_SECS"
+    if [[ "$WEBHOOK_BACKOFF_MODE" == "exponential" && "$retry_index" -gt 1 ]]; then
+      local exp_mul=1
+      local step=1
+      while [[ "$step" -lt "$retry_index" ]]; do
+        exp_mul=$((exp_mul * 2))
+        step=$((step + 1))
+      done
+      sleep_secs=$((WEBHOOK_BACKOFF_SECS * exp_mul))
+    fi
+    if [[ "$sleep_secs" -gt "$WEBHOOK_BACKOFF_MAX_SECS" ]]; then
+      sleep_secs="$WEBHOOK_BACKOFF_MAX_SECS"
+    fi
+    if [[ "$WEBHOOK_JITTER_SECS" -gt 0 ]]; then
+      sleep_secs=$((sleep_secs + (RANDOM % (WEBHOOK_JITTER_SECS + 1))))
+    fi
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook attempt failed with exit code $curl_ec (retrying): $webhook_url" \
       | tee -a "$CADENCE_LOG"
-    if [[ "$WEBHOOK_BACKOFF_SECS" -gt 0 ]]; then
-      sleep "$WEBHOOK_BACKOFF_SECS"
+    if [[ "$sleep_secs" -gt 0 ]]; then
+      echo "webhook_retry_sleep_secs=$sleep_secs" | tee -a "$CADENCE_LOG"
+      sleep "$sleep_secs"
     fi
   done
 }

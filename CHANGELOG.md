@@ -31481,3 +31481,46 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Lane-specific overrides are currently implemented for optional lanes
   (AVIP/OpenTitan) only.
 - Per-lane fallback chains (multiple candidate binaries) are not yet supported.
+
+## Iteration 636 - February 8, 2026
+
+### Formal Cadence Exponential Webhook Backoff
+
+- Extended webhook retry controls in `utils/run_formal_cadence.sh`:
+  - `--webhook-backoff-mode fixed|exponential` (default: `fixed`)
+  - `--webhook-backoff-max-secs <n>`
+  - `--webhook-jitter-secs <n>`
+- Existing controls remain active:
+  - `--webhook-retries`
+  - `--webhook-backoff-secs`
+  - `--webhook-timeout-secs`
+- Added retry telemetry/state fields:
+  - `webhook_backoff_mode`
+  - `webhook_backoff_max_secs`
+  - `webhook_jitter_secs`
+- Added retry-delay logging in cadence log:
+  - `webhook_retry_sleep_secs=<n>`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - added deterministic exponential-retry scenario with fake `curl`/`sleep`
+    - verifies expected exponential sleep sequence (`2`, `4`)
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - documents webhook backoff mode/max/jitter options
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+
+### Remaining Limitations
+
+- Backoff policy currently supports fixed and basic exponential modes only.
+- Webhook fan-out remains sequential rather than parallel.
