@@ -26,6 +26,12 @@
 // RUN: cat %t/hook-call.txt | FileCheck %s --check-prefix=HOOK
 // RUN: cat %t/curl-call.txt | FileCheck %s --check-prefix=WEBHOOK
 // RUN: sh -c 'count=$(grep -c "^call=" %t/curl-call.txt); test "$count" -eq 3'
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 3\n' > %t/utils/fake-formal-all-fail-immediate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE=%t/curl-exp-state.txt\ncount=0\nif [[ -f \"$STATE\" ]]; then count=$(cat \"$STATE\"); fi\ncount=$((count + 1))\necho \"$count\" > \"$STATE\"\nprintf \"exp_call=%%%%s\\n\" \"$count\" >> %t/curl-exp-call.txt\nprintf \"%%%%s\\n\" \"$@\" >> %t/curl-exp-call.txt\nif [[ \"$count\" -le 2 ]]; then\n  exit 7\nfi\n' > %t/utils/curl-exp
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf \"%%%%s\\n\" \"$1\" >> %t/sleep-exp-call.txt\n' > %t/utils/sleep
+// RUN: chmod +x %t/utils/fake-formal-all-fail-immediate.sh %t/utils/curl-exp %t/utils/sleep
+// RUN: not sh -c 'cd %t && rm -f %t/curl-exp-call.txt %t/curl-exp-state.txt %t/sleep-exp-call.txt && cp %t/utils/curl-exp %t/utils/curl && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-webhook https://example.invalid/formal-exp --webhook-retries 2 --webhook-backoff-mode exponential --webhook-backoff-secs 2 --webhook-backoff-max-secs 20 --webhook-jitter-secs 0 --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=EXPFAILFAST
+// RUN: cat %t/sleep-exp-call.txt | FileCheck %s --check-prefix=EXPSLEEP
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
@@ -35,3 +41,6 @@
 // WEBHOOK: formal_cadence_failure
 // WEBHOOK: https://example.invalid/formal-a
 // WEBHOOK: https://example.invalid/formal-b
+// EXPFAILFAST: failing fast: iteration 1 failed
+// EXPSLEEP: 2
+// EXPSLEEP: 4

@@ -95,7 +95,10 @@ Webhook options:
 
 - `--on-fail-webhook <url>` can be specified multiple times.
 - `--webhook-retries <n>` controls retries per endpoint.
+- `--webhook-backoff-mode <fixed|exponential>` controls retry timing policy.
 - `--webhook-backoff-secs <n>` controls retry backoff delay.
+- `--webhook-backoff-max-secs <n>` caps retry backoff delay.
+- `--webhook-jitter-secs <n>` adds random jitter to retry delay.
 - `--webhook-timeout-secs <n>` controls per-request timeout.
 
 ## Inputs and Suites
