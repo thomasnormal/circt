@@ -9763,10 +9763,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     };
 
     if (calleeName.contains("::set")) {
-      // Signature: (self, inst_name, field_name, scope, value, accessor, pool, cntxt)
+      // Signature: (self, cntxt, inst_name, field_name, value, accessor, pool, cntxt_ptr)
       if (callOp.getNumOperands() >= 5) {
-        std::string instName = readStringFromStructVal(callOp.getOperand(1));
-        std::string fieldName = readStringFromStructVal(callOp.getOperand(2));
+        std::string instName = readStringFromStructVal(callOp.getOperand(2));
+        std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 
         // Serialize the value (arg4) to bytes
