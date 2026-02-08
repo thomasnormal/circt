@@ -15416,6 +15416,75 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 609
+- Yosys SVA BMC affine weighted comparator expressions:
+  - Added composite clause operator:
+    - `int_affine`: list of `[lhs, op, rhs_terms, rhs_const]` tuples
+      interpreted as `lhs OP (sum(coeff_i * rhs_key_i) + rhs_const)`.
+  - `rhs_terms` now supports weighted key terms:
+    - each term is `[rhs_key, coeff]`
+    - `coeff` must be a non-zero integer
+    - duplicate rhs keys are rejected per tuple
+  - Added strict parser validation:
+    - malformed affine tuple/term rejection
+    - invalid operator rejection (`op` must be `lt|le|gt|ge`)
+    - non-integer or zero coefficient rejection
+    - duplicate affine comparator rejection
+  - Added runtime evaluation and formatted diagnostics, e.g.
+    `int_affine=[attempt>=2*min_attempt+retry_margin-3]`.
+  - Extended schema-time comparator typing checks so `int_affine` keys
+    (`lhs` and every `rhs_key`) must be declared in schema `keys` with integer
+    type.
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive merged schema case including `int_affine`
+    - `int_affine` mismatch rejection
+    - invalid affine coefficient rejection
+    - undeclared affine rhs key rejection
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - `int_affine` still models only a single affine inequality per tuple and
+    cannot encode nested arithmetic/boolean expression trees.
+  - Clause DSL still lacks integer division/modulo, min/max, and explicit
+    boolean connectors within a single expression node.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Build a typed expression AST for route-context predicates (arithmetic +
+    boolean nodes with explicit precedence and static typing).
+  - Add reusable/importable selector profile libraries with parameters and
+    schema contracts.
+  - Add richer integer operators (`mod`, `div`, `min`, `max`) and controlled
+    evaluation semantics for missing keys.
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference

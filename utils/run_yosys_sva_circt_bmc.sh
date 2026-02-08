@@ -3770,6 +3770,7 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_gt_offset",
             "int_ge_offset",
             "int_linear",
+            "int_affine",
         }
     )
     if unknown_keys:
@@ -4388,6 +4389,79 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_linear_seen.add(term_key)
             int_linear_terms.append(term_key)
+    int_affine_terms = None
+    if "int_affine" in payload:
+        int_affine_raw = payload["int_affine"]
+        if not isinstance(int_affine_raw, list) or not int_affine_raw:
+            fail(
+                f"error: invalid {field_name}.int_affine: expected non-empty array"
+            )
+        int_affine_terms = []
+        int_affine_seen = set()
+        for term_index, term in enumerate(int_affine_raw):
+            term_field = f"{field_name}.int_affine[{term_index}]"
+            if (
+                not isinstance(term, list)
+                or len(term) != 4
+                or not isinstance(term[0], str)
+                or not isinstance(term[1], str)
+            ):
+                fail(
+                    f"error: invalid {term_field}: expected [lhs, op, rhs_terms, rhs_const] affine comparator"
+                )
+            lhs = term[0]
+            op = term[1].lower()
+            if op not in {"lt", "le", "gt", "ge"}:
+                fail(
+                    f"error: invalid {term_field}: expected op in {{lt, le, gt, ge}}"
+                )
+            rhs_terms_raw = term[2]
+            if not isinstance(rhs_terms_raw, list) or not rhs_terms_raw:
+                fail(
+                    f"error: invalid {term_field}: expected non-empty rhs_terms array"
+                )
+            rhs_terms = []
+            rhs_term_keys = set()
+            for rhs_term_index, rhs_term in enumerate(rhs_terms_raw):
+                rhs_term_field = f"{term_field}.rhs_terms[{rhs_term_index}]"
+                if (
+                    not isinstance(rhs_term, list)
+                    or len(rhs_term) != 2
+                    or not isinstance(rhs_term[0], str)
+                ):
+                    fail(
+                        f"error: invalid {rhs_term_field}: expected [key, coeff] weighted term"
+                    )
+                rhs_key = rhs_term[0]
+                coeff = parse_context_integer(rhs_term[1])
+                validate_context_key_name(rhs_key, rhs_term_field)
+                if coeff is None:
+                    fail(
+                        f"error: invalid {rhs_term_field}: expected integer coeff literal"
+                    )
+                if coeff == 0:
+                    fail(
+                        f"error: invalid {rhs_term_field}: coeff must be non-zero"
+                    )
+                if rhs_key in rhs_term_keys:
+                    fail(
+                        f"error: invalid {term_field}: duplicate rhs key '{rhs_key}'"
+                    )
+                rhs_term_keys.add(rhs_key)
+                rhs_terms.append((rhs_key, coeff))
+            validate_context_key_name(lhs, term_field)
+            rhs_const = parse_context_integer(term[3])
+            if rhs_const is None:
+                fail(
+                    f"error: invalid {term_field}: expected integer rhs_const literal"
+                )
+            term_key = (lhs, op, tuple(rhs_terms), rhs_const)
+            if term_key in int_affine_seen:
+                fail(
+                    f"error: invalid {field_name}.int_affine: duplicate affine comparator"
+                )
+            int_affine_seen.add(term_key)
+            int_affine_terms.append(term_key)
     if (
         keys_all is None
         and keys_any is None
@@ -4407,10 +4481,11 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_gt_offset_triples is None
         and int_ge_offset_triples is None
         and int_linear_terms is None
+        and int_affine_terms is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, or int_linear"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, or int_affine"
         )
     return {
         "keys_all": keys_all,
@@ -4431,6 +4506,7 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_gt_offset_triples": int_gt_offset_triples,
         "int_ge_offset_triples": int_ge_offset_triples,
         "int_linear_terms": int_linear_terms,
+        "int_affine_terms": int_affine_terms,
     }
 
 
@@ -4629,7 +4705,48 @@ def is_context_presence_clause_satisfied(context, clause):
                 return False
             if op == "ge" and lhs_value < rhs_total:
                 return False
+    int_affine_terms = clause["int_affine_terms"]
+    if int_affine_terms is not None:
+        for lhs, op, rhs_terms, rhs_const in int_affine_terms:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None:
+                return False
+            rhs_total = rhs_const
+            for rhs_key, coeff in rhs_terms:
+                if rhs_key not in context:
+                    return False
+                rhs_value = parse_context_integer(context[rhs_key])
+                if rhs_value is None:
+                    return False
+                rhs_total += coeff * rhs_value
+            if op == "lt" and lhs_value >= rhs_total:
+                return False
+            if op == "le" and lhs_value > rhs_total:
+                return False
+            if op == "gt" and lhs_value <= rhs_total:
+                return False
+            if op == "ge" and lhs_value < rhs_total:
+                return False
     return True
+
+
+def format_int_affine_rhs_expr(rhs_terms, rhs_const):
+    rhs_expr = ""
+    for rhs_key, coeff in rhs_terms:
+        abs_coeff = abs(coeff)
+        term = rhs_key if abs_coeff == 1 else f"{abs_coeff}*{rhs_key}"
+        if not rhs_expr:
+            rhs_expr = term if coeff > 0 else f"-{term}"
+        else:
+            rhs_expr += f"+{term}" if coeff > 0 else f"-{term}"
+    if rhs_const != 0:
+        if not rhs_expr:
+            rhs_expr = str(rhs_const)
+        else:
+            rhs_expr += f"{rhs_const:+d}"
+    return rhs_expr if rhs_expr else "0"
 
 
 def format_context_presence_clause(clause):
@@ -4766,6 +4883,14 @@ def format_context_presence_clause(clause):
                 rhs_expr += f"{rhs_const:+d}"
             linear_parts.append(f"{lhs}{op_symbol[op]}{rhs_expr}")
         parts.append("int_linear=[" + ", ".join(linear_parts) + "]")
+    int_affine_terms = clause["int_affine_terms"]
+    if int_affine_terms is not None:
+        op_symbol = {"lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+        affine_parts = []
+        for lhs, op, rhs_terms, rhs_const in int_affine_terms:
+            rhs_expr = format_int_affine_rhs_expr(rhs_terms, rhs_const)
+            affine_parts.append(f"{lhs}{op_symbol[op]}{rhs_expr}")
+        parts.append("int_affine=[" + ", ".join(affine_parts) + "]")
     return ", ".join(parts)
 
 
@@ -4847,6 +4972,12 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
             require_integer_key(lhs, f"{field_name}.int_linear")
             for rhs_key in rhs_keys:
                 require_integer_key(rhs_key, f"{field_name}.int_linear")
+    int_affine_terms = clause["int_affine_terms"]
+    if int_affine_terms is not None:
+        for lhs, _, rhs_terms, _ in int_affine_terms:
+            require_integer_key(lhs, f"{field_name}.int_affine")
+            for rhs_key, _ in rhs_terms:
+                require_integer_key(rhs_key, f"{field_name}.int_affine")
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
