@@ -1848,6 +1848,8 @@ emit_mode_summary_outputs() {
   tsv_header='schema_version	run_id	generated_at_utc	test_total	test_failures	test_xfail	test_xpass	test_skipped	mode_total	mode_pass	mode_fail	mode_xfail	mode_xpass	mode_epass	mode_efail	mode_unskip	mode_skipped	mode_skip_pass	mode_skip_fail	mode_skip_expected	mode_skip_unexpected	skip_reason_vhdl	skip_reason_fail-no-macro	skip_reason_no-property	skip_reason_other'
   local legacy_tsv_header
   legacy_tsv_header='test_total	test_failures	test_xfail	test_xpass	test_skipped	mode_total	mode_pass	mode_fail	mode_xfail	mode_xpass	mode_epass	mode_efail	mode_unskip	mode_skipped	mode_skip_pass	mode_skip_fail	mode_skip_expected	mode_skip_unexpected	skip_reason_vhdl	skip_reason_fail-no-macro	skip_reason_no-property	skip_reason_other'
+  local tsv_columns=25
+  local legacy_tsv_columns=22
   local tsv_row
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
@@ -1858,6 +1860,88 @@ emit_mode_summary_outputs() {
     "$mode_skipped_expected" "$mode_skipped_unexpected" \
     "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
     "$mode_skip_reason_no_property" "$mode_skip_reason_other"
+
+  is_non_negative_int() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9]+$ ]]
+  }
+
+  validate_history_tsv_row() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    local -a cols=()
+    local i
+    IFS=$'\t' read -r -a cols <<<"$line"
+    if ((${#cols[@]} != tsv_columns)); then
+      echo "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE row in $file at line $lineno: expected $tsv_columns columns" >&2
+      exit 1
+    fi
+    if ! is_non_negative_int "${cols[0]}"; then
+      echo "error: invalid schema_version in $file at line $lineno: ${cols[0]}" >&2
+      exit 1
+    fi
+    if [[ -z "${cols[1]}" ]]; then
+      echo "error: empty run_id in $file at line $lineno" >&2
+      exit 1
+    fi
+    if [[ ! "${cols[2]}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      echo "error: invalid generated_at_utc in $file at line $lineno: ${cols[2]}" >&2
+      exit 1
+    fi
+    for ((i = 3; i < tsv_columns; ++i)); do
+      if ! is_non_negative_int "${cols[$i]}"; then
+        echo "error: invalid numeric field in $file at line $lineno: column $((i + 1)) value '${cols[$i]}'" >&2
+        exit 1
+      fi
+    done
+  }
+
+  validate_legacy_tsv_row() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    local -a cols=()
+    local i
+    IFS=$'\t' read -r -a cols <<<"$line"
+    if ((${#cols[@]} != legacy_tsv_columns)); then
+      echo "error: invalid legacy YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE row in $file at line $lineno: expected $legacy_tsv_columns columns" >&2
+      exit 1
+    fi
+    for ((i = 0; i < legacy_tsv_columns; ++i)); do
+      if ! is_non_negative_int "${cols[$i]}"; then
+        echo "error: invalid numeric field in legacy row $file line $lineno: column $((i + 1)) value '${cols[$i]}'" >&2
+        exit 1
+      fi
+    done
+  }
+
+  validate_history_jsonl_line() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    local key
+    if [[ "$line" != \{* || "$line" != *\} ]]; then
+      echo "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line in $file at line $lineno: expected JSON object" >&2
+      exit 1
+    fi
+    if ! printf '%s\n' "$line" | grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*"[0-9]+"'; then
+      echo "error: invalid JSONL schema_version in $file at line $lineno" >&2
+      exit 1
+    fi
+    for key in run_id generated_at_utc test_summary mode_summary skip_reasons; do
+      if ! printf '%s\n' "$line" | grep -Eq "\"$key\"[[:space:]]*:"; then
+        echo "error: missing key '$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
+        exit 1
+      fi
+    done
+    for key in total failures xfail xpass skipped pass fail epass efail unskip skip_pass skip_fail skip_expected skip_unexpected vhdl fail_no_macro no_property other; do
+      if ! printf '%s\n' "$line" | grep -Eq "\"$key\"[[:space:]]*:"; then
+        echo "error: missing summary field '$key' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $lineno" >&2
+        exit 1
+      fi
+    done
+  }
 
   trim_history_tsv() {
     local file="$1"
@@ -1891,6 +1975,10 @@ emit_mode_summary_outputs() {
     mapfile -t lines < "$file"
     ((${#lines[@]} > 0)) || return 0
     if [[ "${lines[0]}" == "$tsv_header" ]]; then
+      for ((i = 1; i < ${#lines[@]}; ++i)); do
+        [[ -z "${lines[$i]}" ]] && continue
+        validate_history_tsv_row "${lines[$i]}" "$file" "$((i + 1))"
+      done
       return 0
     fi
     if [[ "${lines[0]}" == "$legacy_tsv_header" ]]; then
@@ -1898,6 +1986,7 @@ emit_mode_summary_outputs() {
       printf '%s\n' "$tsv_header" >> "$file"
       for ((i = 1; i < ${#lines[@]}; ++i)); do
         [[ -z "${lines[$i]}" ]] && continue
+        validate_legacy_tsv_row "${lines[$i]}" "$file" "$((i + 1))"
         printf '0\tlegacy-%d\t1970-01-01T00:00:00Z\t%s\n' "$i" "${lines[$i]}" >> "$file"
       done
       return 0
@@ -1910,7 +1999,7 @@ emit_mode_summary_outputs() {
     local file="$1"
     local -a lines=()
     local i
-    local line payload
+    local line payload migrated
     [[ -f "$file" ]] || return 0
     [[ -s "$file" ]] || return 0
     mapfile -t lines < "$file"
@@ -1920,6 +2009,7 @@ emit_mode_summary_outputs() {
       line="${lines[$i]}"
       [[ -z "$line" ]] && continue
       if [[ "$line" == *\"schema_version\"* ]]; then
+        validate_history_jsonl_line "$line" "$file" "$((i + 1))"
         printf '%s\n' "$line" >> "$file"
         continue
       fi
@@ -1929,10 +2019,12 @@ emit_mode_summary_outputs() {
       fi
       payload="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*\{//; s/\}[[:space:]]*$//')"
       if [[ -n "$payload" ]]; then
-        printf '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z",%s}\n' "$((i + 1))" "$payload" >> "$file"
+        printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z",%s}' "$((i + 1))" "$payload"
       else
-        printf '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z"}\n' "$((i + 1))" >> "$file"
+        printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z"}' "$((i + 1))"
       fi
+      validate_history_jsonl_line "$migrated" "$file" "$((i + 1))"
+      printf '%s\n' "$migrated" >> "$file"
     done
   }
 
