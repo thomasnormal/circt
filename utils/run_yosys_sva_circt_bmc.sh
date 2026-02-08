@@ -208,10 +208,77 @@ lint_unknown_tests_for_map() {
   done < <(printf '%s\n' "${keys[@]}" | sort)
 }
 
+lookup_match_key_for_tuple() {
+  local map_name="$1"
+  local test="$2"
+  local mode="$3"
+  local profile="$4"
+  local -n map_ref="$map_name"
+  local key
+  for key in \
+    "$test|$mode|$profile" \
+    "$test|$mode|*" \
+    "$test|*|$profile" \
+    "$test|*|*" \
+    "*|$mode|$profile" \
+    "*|$mode|*" \
+    "*|*|$profile" \
+    "*|*|*"; do
+    if [[ -n "${map_ref["$key"]+x}" ]]; then
+      echo "$key"
+      return
+    fi
+  done
+  echo ""
+}
+
+lint_shadowed_patterns_for_map() {
+  local map_name="$1"
+  local label="$2"
+  local -n map_ref="$map_name"
+  local -a tests=()
+  local -a keys=()
+  local -A possible_hits=()
+  local test mode profile matched key
+
+  for test in "${!suite_tests[@]}"; do
+    tests+=("$test")
+  done
+  if ((${#tests[@]} == 0)); then
+    return
+  fi
+  for key in "${!map_ref[@]}"; do
+    keys+=("$key")
+    possible_hits["$key"]=0
+  done
+  if ((${#keys[@]} == 0)); then
+    return
+  fi
+
+  for test in "${tests[@]}"; do
+    for mode in pass fail; do
+      for profile in known xprop; do
+        matched="$(lookup_match_key_for_tuple "$map_name" "$test" "$mode" "$profile")"
+        if [[ -n "$matched" ]]; then
+          possible_hits["$matched"]=$((possible_hits["$matched"] + 1))
+        fi
+      done
+    done
+  done
+
+  while IFS= read -r key; do
+    if [[ "$key" == *"*"* ]] && [[ "${possible_hits["$key"]}" -eq 0 ]]; then
+      emit_expect_lint "shadowed" "$label wildcard key $key is never selected for suite matrix"
+    fi
+  done < <(printf '%s\n' "${keys[@]}" | sort)
+}
+
 if [[ "$EXPECT_LINT" == "1" ]]; then
   populate_suite_tests
   lint_unknown_tests_for_map expected_cases "EXPECT_FILE"
   lint_unknown_tests_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
+  lint_shadowed_patterns_for_map expected_cases "EXPECT_FILE"
+  lint_shadowed_patterns_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
   echo "EXPECT_LINT_SUMMARY: issues=$lint_issues"
 fi
 
