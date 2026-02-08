@@ -186,6 +186,23 @@
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto > %t/auto-route-import-registry.out
 // RUN: cat %t/drop-events-auto-route-import-registry.jsonl | FileCheck %s --check-prefix=AUTOREGISTRYIMPORT
 
+// RUN: printf '{"regex_defs":{"shared_night":{"pattern":"^night$","flags":"i"}},"int_arithmetic_presets":{"tz_shared":{"div_mode":"trunc_zero","mod_mode":"trunc_zero"}}}\n' > %t/auto-route-schema-import-shared-leaf.json
+// RUN: printf '{"imports":["%t/auto-route-schema-import-shared-leaf.json"]}\n' > %t/auto-route-schema-import-shared-a.json
+// RUN: printf '{"imports":["%t/auto-route-schema-import-shared-leaf.json"]}\n' > %t/auto-route-schema-import-shared-b.json
+// RUN: printf '{"schema_version":"1","event_id":"drop-auto-import-shared","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-import-shared.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other"}\n' > %t/drop-events-auto-route-import-shared.jsonl
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-import-shared.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON='{"attempt":-3,"flavor":"NIGHT"}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"1","allow_unknown_keys":true,"imports":["%t/auto-route-schema-import-shared-a.json","%t/auto-route-schema-import-shared-b.json"],"int_arithmetic_ref":"tz_shared","keys":{"attempt":{"type":"integer","required":true},"flavor":{"type":"string","required":true}},"all_of":[{"int_expr":[[{"div":["attempt",2]},"eq",-1],[{"mod":["attempt",2]},"eq",-1]],"bool_expr":[{"regex_ref":["flavor","shared_night"]}]}]}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON='{"ctx_import_shared":[{"history_file_list":"legacy-auto-import-shared.tsv"}]}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON='{"ctx_import_shared_route":{"profile_list":["ctx_import_shared"],"when":{"context_regex":{"attempt":"^-3$","flavor":"^NIGHT$"}}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto > %t/auto-route-import-shared.out
+// RUN: cat %t/drop-events-auto-route-import-shared.jsonl | FileCheck %s --check-prefix=AUTOSHAREDIMPORT
+
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-missing-routes.jsonl
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
@@ -865,6 +882,7 @@
 // AUTOIMPORT: {"schema_version":"1","event_id":"drop-auto-import","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-import.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 // AUTONESTEDIMPORT: {"schema_version":"1","event_id":"drop-auto-import-nested","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-import-nested.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 // AUTOREGISTRYIMPORT: {"schema_version":"1","event_id":"drop-auto-import-registry","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-import-registry.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
+// AUTOSHAREDIMPORT: {"schema_version":"1","event_id":"drop-auto-import-shared","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-import-shared.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 
 // MISSINGROUTES: error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE=required requires YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON
 // NOMATCH: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: no route matched auto context

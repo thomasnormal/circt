@@ -31111,3 +31111,46 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Cadence runner currently lacks built-in retention/pruning for old run
   directories.
 - Notification hooks for failures are not yet integrated.
+
+## Iteration 627 - February 8, 2026
+
+### Yosys SVA BMC Shared-Import Dedup and Parse Caching
+
+- Improved route-context schema import parsing in
+  `utils/run_yosys_sva_circt_bmc.sh`:
+  - deduplicate shared imports by canonicalized file path within one schema
+    parse closure
+  - cache parsed import payloads by canonicalized path to avoid duplicate
+    reads/parses
+  - preserve import-cycle diagnostics; repeated shared references become no-op
+    after first load
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - added positive shared import fan-in case (`AUTOSHAREDIMPORT`) where two
+      parent modules import the same leaf module
+
+### Documentation
+
+- Updated:
+  - `docs/SVA_BMC_LEC_PLAN.md`
+    - import merge rules now explicitly describe canonical-path dedup semantics
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+
+### Remaining Limitations
+
+- Import dedup and payload caching are currently scoped to a single schema
+  parse closure; no cross-run persistent module cache exists yet.
+- Import registry policy remains minimal (schema-version match only) without
+  richer compatibility-version negotiation.

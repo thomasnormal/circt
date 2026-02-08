@@ -16435,6 +16435,33 @@ ninja -C build circt-verilog
     run directories.
   - Notification hooks (e.g., webhook/email) are not yet integrated.
 
+### Iteration 627
+- Yosys SVA BMC route-context import dedup + cache hardening:
+  - Updated recursive import parsing in `utils/run_yosys_sva_circt_bmc.sh` to
+    deduplicate shared imports by canonicalized file path within one schema
+    parse closure.
+  - Added payload cache keyed by canonicalized path to avoid duplicate file
+    reads/parses across shared import fan-in.
+  - Kept cycle detection behavior unchanged; duplicate references are treated as
+    no-op after first load.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with a positive shared-leaf import fan-in case (`AUTOSHAREDIMPORT`) that
+    imports the same leaf module via two parents.
+- Documentation:
+  - Updated `docs/SVA_BMC_LEC_PLAN.md` import merge rules to explicitly state
+    canonical-path shared import dedup semantics.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+- Current limitations / debt:
+  - Import dedup is parse-closure scoped only; there is no cross-run persistent
+    module cache.
+  - Import model still lacks registry version constraints beyond schema-version
+    matching and does not yet provide registry-level compatibility policy hooks.
+
 ---
 
 ## Architecture Reference
