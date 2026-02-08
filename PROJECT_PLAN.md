@@ -9688,7 +9688,7 @@ ninja -C build circt-verilog
     retire fallback text parsing.
   - Encode full grouping-tree fidelity beyond outer-wrapper depth.
 
-### Iteration 473
+### Iteration 515
 - Structured cast domain provenance from Slang:
   - ImportVerilog now emits `<prefix>_cast_four_state` for integral
     `ConversionExpression` wrappers using Slang type-domain information.
