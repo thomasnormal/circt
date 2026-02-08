@@ -48,6 +48,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMAR
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND:-auto}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS:-30}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS:-300}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
@@ -201,6 +202,10 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS" =~ ^[0-9]+$ ]
 fi
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS (expected non-negative integer)" >&2
+  exit 1
+fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS (expected non-negative integer)" >&2
   exit 1
 fi
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY,,}"
@@ -1927,6 +1932,7 @@ emit_mode_summary_outputs() {
   local drop_events_lock_file="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE"
   local drop_events_lock_backend="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND"
   local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
+  local drop_events_lock_stale_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS"
   local drop_events_lock_warned=0
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] && [[ -z "$drop_events_lock_file" ]]; then
     drop_events_lock_file="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE}.lock"
@@ -2104,6 +2110,53 @@ PY
     printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
   }
 
+  lockdir_mtime_epoch() {
+    local path="$1"
+    local epoch
+    if epoch="$(stat -c %Y "$path" 2>/dev/null)"; then
+      printf '%s\n' "$epoch"
+      return 0
+    fi
+    if epoch="$(stat -f %m "$path" 2>/dev/null)"; then
+      printf '%s\n' "$epoch"
+      return 0
+    fi
+    return 1
+  }
+
+  maybe_reclaim_stale_lockdir() {
+    local lock_dir="$1"
+    local stale_secs="$2"
+    ((stale_secs > 0)) || return 1
+    [[ -d "$lock_dir" ]] || return 1
+    local now_epoch
+    local dir_epoch
+    local age_secs
+    local owner_file owner_pid
+    if ! now_epoch="$(date -u +%s 2>/dev/null)"; then
+      return 1
+    fi
+    if ! dir_epoch="$(lockdir_mtime_epoch "$lock_dir")"; then
+      return 1
+    fi
+    age_secs=$((now_epoch - dir_epoch))
+    ((age_secs >= stale_secs)) || return 1
+    owner_file="${lock_dir}/owner"
+    owner_pid=""
+    if [[ -f "$owner_file" ]]; then
+      owner_pid="$(sed -nE 's/^pid=([0-9]+)$/\1/p' "$owner_file" | head -n 1)"
+    fi
+    if [[ -n "$owner_pid" ]] && kill -0 "$owner_pid" 2>/dev/null; then
+      return 1
+    fi
+    rm -rf "$lock_dir" 2>/dev/null || return 1
+    if ((drop_events_lock_warned == 0)); then
+      echo "warning: reclaimed stale drop-event lock directory $lock_dir (age=${age_secs}s)" >&2
+      drop_events_lock_warned=1
+    fi
+    return 0
+  }
+
   with_drop_events_lock() {
     local lock_file="$1"
     shift
@@ -2144,6 +2197,7 @@ PY
         lock_dir="${lock_file}.d"
         start_epoch="$(date -u +%s)"
         while ! mkdir "$lock_dir" 2>/dev/null; do
+          maybe_reclaim_stale_lockdir "$lock_dir" "$drop_events_lock_stale_secs" || true
           now_epoch="$(date -u +%s)"
           if ((now_epoch - start_epoch >= drop_events_lock_timeout_secs)); then
             echo "error: timed out acquiring drop-event lock directory $lock_dir after ${drop_events_lock_timeout_secs}s" >&2
@@ -2151,8 +2205,13 @@ PY
           fi
           sleep 0.1
         done
+        {
+          printf 'pid=%d\n' "$$"
+          printf 'acquired_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "${lock_dir}/owner" 2>/dev/null || true
         "$@"
         status=$?
+        rm -f "${lock_dir}/owner" 2>/dev/null || true
         rmdir "$lock_dir" 2>/dev/null || true
         return $status
         ;;
