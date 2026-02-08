@@ -5,21 +5,22 @@
 // RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
 // RUN: printf 'simple\t*\t*\tpass\n' > %t/expect.txt
 // RUN: printf 'foo pass known maybe trailing\n' > %t/xfail.txt
-// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=%t/xfail.txt \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run \
 // RUN:   EXPECT_FORMAT_FILES=XFAIL_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
+// RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER=xprop \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable.tsv \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
 // RUN: sed 's/\t/|/g' %t/unfixable.tsv | FileCheck %s --check-prefix=UNFIX
 
-// CHECK: EXPECT_FORMAT: mode=dry-run file={{.*xfail.txt}} rows=0 malformed=1 changed=0 malformed_suggested=0 malformed_fixed=0 malformed_unfixable=1
-// CHECK: EXPECT_FORMAT: mode=dry-run files=1 changed=0 malformed_unfixable=1
-// CHECK: EXPECT_FORMAT_STRICT: unfixable_total=1 scoped=1 fail=1 file_filter=* profile_filter=*
+// CHECK: EXPECT_FORMAT: mode=dry-run file={{.*xfail.txt}} rows=0 malformed=1 changed=0 malformed_suggested=0 malformed_fixed=0 malformed_unfixable=1 malformed_unfixable_strict=0
+// CHECK: EXPECT_FORMAT: mode=dry-run files=1 changed=0 malformed_unfixable=1 malformed_unfixable_strict=0
+// CHECK: EXPECT_FORMAT_STRICT: unfixable_total=1 scoped=0 fail=0 file_filter=* profile_filter=xprop
 // CHECK: PASS(pass): simple
 // CHECK: SKIP(fail-no-macro): simple
-// CHECK: yosys SVA summary: 1 tests, failures=1, xfail=0, xpass=0, skipped=0
+// CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 
 // UNFIX: file|line|reason|profile|strict_selected
-// UNFIX: {{.*xfail.txt}}|foo pass known maybe trailing|no-canonical-rewrite|known|1
+// UNFIX: {{.*xfail.txt}}|foo pass known maybe trailing|no-canonical-rewrite|known|0
