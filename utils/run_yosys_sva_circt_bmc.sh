@@ -3902,6 +3902,24 @@ def parse_context_int_arithmetic(value, field_name: str):
     return arithmetic
 
 
+def parse_context_int_arithmetic_presets(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    presets = {}
+    for preset_name, preset_spec in value.items():
+        validate_context_key_name(preset_name, field_name)
+        preset_field = f"{field_name}.{preset_name}"
+        presets[preset_name] = parse_context_int_arithmetic(
+            preset_spec,
+            preset_field,
+        )
+    return presets
+
+
 def evaluate_int_division(lhs_value: int, rhs_value: int, div_mode: str):
     if rhs_value == 0:
         return None
@@ -4428,6 +4446,7 @@ def parse_context_presence_clause(
     field_name: str,
     regex_defs=None,
     expr_limits=None,
+    int_arithmetic_presets=None,
 ):
     if expr_limits is None:
         expr_limits = DEFAULT_CONTEXT_EXPR_LIMITS
@@ -4439,6 +4458,7 @@ def parse_context_presence_clause(
         set(payload.keys())
         - {
             "int_arithmetic",
+            "int_arithmetic_ref",
             "keys_all",
             "keys_any",
             "equals",
@@ -4472,6 +4492,22 @@ def parse_context_presence_clause(
             payload["int_arithmetic"],
             f"{field_name}.int_arithmetic",
         )
+    if "int_arithmetic_ref" in payload:
+        if clause_int_arithmetic is not None:
+            fail(
+                f"error: invalid {field_name}: cannot set both int_arithmetic and int_arithmetic_ref"
+            )
+        int_arithmetic_ref = payload["int_arithmetic_ref"]
+        validate_context_key_name(int_arithmetic_ref, f"{field_name}.int_arithmetic_ref")
+        if not int_arithmetic_presets:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_ref: int_arithmetic_presets are not configured"
+            )
+        clause_int_arithmetic = int_arithmetic_presets.get(int_arithmetic_ref)
+        if clause_int_arithmetic is None:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_ref: unknown int arithmetic preset '{int_arithmetic_ref}'"
+            )
     keys_all = None
     if "keys_all" in payload:
         keys_all_raw = payload["keys_all"]
@@ -5918,6 +5954,8 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "regex_defs",
             "limits",
             "int_arithmetic",
+            "int_arithmetic_ref",
+            "int_arithmetic_presets",
             "all_of",
             "any_of",
         }
@@ -5958,10 +5996,33 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         payload.get("limits"),
         f"{field_name}.limits",
     )
+    int_arithmetic_presets = parse_context_int_arithmetic_presets(
+        payload.get("int_arithmetic_presets"),
+        f"{field_name}.int_arithmetic_presets",
+    )
     int_arithmetic = parse_context_int_arithmetic(
         payload.get("int_arithmetic"),
         f"{field_name}.int_arithmetic",
     )
+    if "int_arithmetic_ref" in payload:
+        if "int_arithmetic" in payload:
+            fail(
+                f"error: invalid {field_name}: cannot set both int_arithmetic and int_arithmetic_ref"
+            )
+        int_arithmetic_ref = payload["int_arithmetic_ref"]
+        validate_context_key_name(
+            int_arithmetic_ref,
+            f"{field_name}.int_arithmetic_ref",
+        )
+        if not int_arithmetic_presets:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_ref: int_arithmetic_presets are not configured"
+            )
+        int_arithmetic = int_arithmetic_presets.get(int_arithmetic_ref)
+        if int_arithmetic is None:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_ref: unknown int arithmetic preset '{int_arithmetic_ref}'"
+            )
     all_of_clauses = None
     if "all_of" in payload:
         all_of_raw = payload["all_of"]
@@ -5977,6 +6038,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                     f"{field_name}.all_of[{idx}]",
                     regex_defs,
                     expr_limits,
+                    int_arithmetic_presets,
                 )
             )
     any_of_clauses = None
@@ -5994,6 +6056,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                     f"{field_name}.any_of[{idx}]",
                     regex_defs,
                     expr_limits,
+                    int_arithmetic_presets,
                 )
             )
     key_specs = {}
