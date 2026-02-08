@@ -153,6 +153,8 @@
 // DRYRUNREPORT: "operation": "refresh_expected_failure_cases"
 // DRYRUNREPORT: "exit_code": 0
 // DRYRUNREPORT-SAME: "operation": "run_end"
+// DRYRUNREPORT-SAME: "payload_sha256":
+// DRYRUNREPORT-SAME: "row_count": 3
 // DRYRUNREPORT-SAME: "run_id":
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
 // JSONCASE: "expected_failure_cases"

@@ -366,19 +366,43 @@ emit_expectations_dry_run_run_end() {
     EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
     EXPECTATIONS_DRY_RUN_EXIT_CODE="$exit_code" \
     python3 - <<'PY'
+import hashlib
 import json
 import os
 from pathlib import Path
 
 report_path = Path(os.environ["EXPECTATIONS_DRY_RUN_REPORT_JSONL"])
 report_path.parent.mkdir(parents=True, exist_ok=True)
+run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
+rows_for_run = []
+if report_path.exists():
+  for line in report_path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line:
+      continue
+    try:
+      row = json.loads(line)
+    except Exception:
+      continue
+    if row.get("run_id", "") == run_id:
+      rows_for_run.append(row)
+
+digest = hashlib.sha256()
+for row in rows_for_run:
+  digest.update(
+      json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  )
+  digest.update(b"\n")
+
 payload = {
     "operation": "run_end",
     "schema_version": 1,
     "date": os.environ.get("DATE_STR", ""),
-    "run_id": os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", ""),
+    "run_id": run_id,
     "out_dir": os.environ.get("OUT_DIR", ""),
     "exit_code": int(os.environ.get("EXPECTATIONS_DRY_RUN_EXIT_CODE", "0")),
+    "row_count": len(rows_for_run),
+    "payload_sha256": digest.hexdigest(),
 }
 with report_path.open("a", encoding="utf-8") as f:
   f.write(json.dumps(payload, sort_keys=True) + "\n")
