@@ -11831,6 +11831,68 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 551
+- Yosys SVA BMC parser-backed JSONL validation mode:
+  - Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR` with modes:
+    - `auto` (default): use `python3` parser validation when available,
+      otherwise fallback to regex validation.
+    - `python`: require `python3` and perform strict JSON parsing/validation.
+    - `regex`: preserve existing regex-only validation path.
+  - Added config validation for
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR`.
+  - Added strict parser-backed validation for JSONL lines:
+    - JSON decode / object type validation.
+    - top-level key checks and schema-version validation.
+    - section-object checks (`test_summary`, `mode_summary`, `skip_reasons`).
+    - per-field integer/non-negative validation with section-qualified errors.
+- Regression tests:
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`:
+    - added malformed JSON syntax negative case under parser mode.
+    - added invalid validator mode negative case.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 8/8 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 31/31 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Parser-backed validation currently depends on `python3` availability in
+    `auto`/`python` modes; parser behavior falls back to regex in `auto` when
+    `python3` is missing.
+  - Future-skew guardrail remains opt-in by default.
+  - Legacy-migrated JSONL rows still use synthetic timestamp metadata.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Promote parser-backed validation to default-required mode with a clear
+    compatibility migration.
+  - Promote future-skew guardrail to safer default with migration.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

@@ -41,6 +41,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-0}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -183,6 +184,14 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; t
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS (expected non-negative integer)" >&2
   exit 1
 fi
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR" in
+  auto|python|regex) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python|regex)" >&2
+    exit 1
+    ;;
+esac
 strict_unfixable_bundle_reason_filter=""
 strict_unfixable_bundle_severity_filter=""
 case "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY" in
@@ -1860,6 +1869,18 @@ emit_mode_summary_outputs() {
   legacy_tsv_header='test_total	test_failures	test_xfail	test_xpass	test_skipped	mode_total	mode_pass	mode_fail	mode_xfail	mode_xpass	mode_epass	mode_efail	mode_unskip	mode_skipped	mode_skip_pass	mode_skip_fail	mode_skip_expected	mode_skip_unexpected	skip_reason_vhdl	skip_reason_fail-no-macro	skip_reason_no-property	skip_reason_other'
   local tsv_columns=25
   local legacy_tsv_columns=22
+  local json_validator_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR"
+  if [[ "$json_validator_mode" == "auto" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+      json_validator_mode="python"
+    else
+      json_validator_mode="regex"
+    fi
+  fi
+  if [[ "$json_validator_mode" == "python" ]] && ! command -v python3 >/dev/null 2>&1; then
+    echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=python requires python3 in PATH" >&2
+    exit 1
+  fi
   local tsv_row
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
@@ -1926,10 +1947,84 @@ emit_mode_summary_outputs() {
     done
   }
 
+  validate_history_jsonl_line_python() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    python3 - "$file" "$lineno" "$line" <<'PY'
+import json
+import re
+import sys
+
+file = sys.argv[1]
+lineno = sys.argv[2]
+line = sys.argv[3]
+
+def fail(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    obj = json.loads(line)
+except Exception:
+    fail(f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+
+if not isinstance(obj, dict):
+    fail(f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line in {file} at line {lineno}: expected JSON object")
+
+schema = obj.get("schema_version")
+if isinstance(schema, bool):
+    fail(f"error: invalid JSONL schema_version in {file} at line {lineno}")
+if isinstance(schema, int):
+    if schema < 0:
+        fail(f"error: invalid JSONL schema_version in {file} at line {lineno}")
+elif isinstance(schema, str):
+    if not schema.isdigit():
+        fail(f"error: invalid JSONL schema_version in {file} at line {lineno}")
+else:
+    fail(f"error: invalid JSONL schema_version in {file} at line {lineno}")
+
+run_id = obj.get("run_id")
+if not isinstance(run_id, str) or not run_id:
+    fail(f"error: invalid run_id in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+
+generated_at_utc = obj.get("generated_at_utc")
+if not isinstance(generated_at_utc, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", generated_at_utc):
+    fail(f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+
+required_top = ["run_id", "generated_at_utc", "test_summary", "mode_summary", "skip_reasons"]
+for key in required_top:
+    if key not in obj:
+        fail(f"error: missing key '{key}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+
+required_sections = {
+    "test_summary": ["total", "failures", "xfail", "xpass", "skipped"],
+    "mode_summary": ["total", "pass", "fail", "xfail", "xpass", "epass", "efail", "unskip", "skipped", "skip_pass", "skip_fail", "skip_expected", "skip_unexpected"],
+    "skip_reasons": ["vhdl", "fail_no_macro", "no_property", "other"],
+}
+
+for section, fields in required_sections.items():
+    payload = obj.get(section)
+    if not isinstance(payload, dict):
+        fail(f"error: invalid object '{section}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    for field in fields:
+        field_name = f"{section}.{field}"
+        if field not in payload:
+            fail(f"error: missing summary field '{field_name}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+        value = payload[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            fail(f"error: invalid numeric summary field '{field_name}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+PY
+  }
+
   validate_history_jsonl_line() {
     local line="$1"
     local file="$2"
     local lineno="$3"
+    if [[ "$json_validator_mode" == "python" ]]; then
+      validate_history_jsonl_line_python "$line" "$file" "$lineno"
+      return 0
+    fi
     local key
     local section
     local section_payload

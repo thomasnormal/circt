@@ -26030,3 +26030,73 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 551 - February 8, 2026
+
+### Yosys SVA BMC Parser-Backed JSONL Validation Mode
+
+- Added new validator selector:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR`
+  - accepted values: `auto|python|regex`
+- Behavior:
+  - `auto`:
+    - uses strict `python3` JSON parsing when available, otherwise regex.
+  - `python`:
+    - requires `python3`, fails fast if unavailable.
+  - `regex`:
+    - keeps legacy regex-only validation.
+- Added parser-backed JSONL validation path:
+  - JSON decode + object type checks.
+  - top-level key checks.
+  - section object checks and non-negative integer field checks.
+  - section-qualified diagnostic messages for missing/invalid fields.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`
+- Added negative tests:
+  - malformed JSON syntax rejected in parser mode.
+  - invalid `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR` rejected.
+- Revalidated summary lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+- Summary lit result: 8/8 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 31/31 PASS
+
+### Validation
+
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Parser-backed validation still depends on `python3` in `auto|python` modes;
+  `auto` falls back to regex when unavailable.
+- Future-skew guardrail remains opt-in by default.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.
