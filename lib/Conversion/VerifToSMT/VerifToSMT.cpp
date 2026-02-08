@@ -5940,13 +5940,74 @@ struct VerifBoundedModelCheckingOpConversion
         }
         return failure();
       };
-      auto evalSubExprAsValue = [&](const ResolvedNamedBoolExpr &subexpr)
+      auto evalSubExprAsValue = [&](auto &selfValue,
+                                    const ResolvedNamedBoolExpr &subexpr)
           -> FailureOr<Value> {
-        if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Arg)
+        switch (subexpr.kind) {
+        case ResolvedNamedBoolExpr::Kind::Arg:
           return evalArgValue(subexpr.argIndex, subexpr.argSlice);
-        if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Const)
+        case ResolvedNamedBoolExpr::Kind::Const:
           return Value(
               smt::BoolConstantOp::create(builder, loc, subexpr.constValue));
+        case ResolvedNamedBoolExpr::Kind::Not:
+        case ResolvedNamedBoolExpr::Kind::ReduceAnd:
+        case ResolvedNamedBoolExpr::Kind::ReduceOr:
+        case ResolvedNamedBoolExpr::Kind::ReduceXor:
+        case ResolvedNamedBoolExpr::Kind::ReduceNand:
+        case ResolvedNamedBoolExpr::Kind::ReduceNor:
+        case ResolvedNamedBoolExpr::Kind::ReduceXnor:
+        case ResolvedNamedBoolExpr::Kind::Implies:
+        case ResolvedNamedBoolExpr::Kind::Iff: {
+          auto boolOr = self(self, builder, values, subexpr);
+          if (failed(boolOr))
+            return failure();
+          return *boolOr;
+        }
+        case ResolvedNamedBoolExpr::Kind::BitwiseNot: {
+          auto operandOr = selfValue(selfValue, *subexpr.lhs);
+          if (failed(operandOr))
+            return failure();
+          Value operand = *operandOr;
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(operand.getType())) {
+            if (bvTy.getWidth() == 0)
+              return failure();
+            return Value(smt::BVNotOp::create(builder, loc, operand));
+          }
+          if (isa<smt::BoolType>(operand.getType()))
+            return Value(smt::NotOp::create(builder, loc, operand));
+          return failure();
+        }
+        case ResolvedNamedBoolExpr::Kind::And:
+        case ResolvedNamedBoolExpr::Kind::Or:
+        case ResolvedNamedBoolExpr::Kind::Xor: {
+          auto lhsOr = selfValue(selfValue, *subexpr.lhs);
+          auto rhsOr = selfValue(selfValue, *subexpr.rhs);
+          if (failed(lhsOr) || failed(rhsOr))
+            return failure();
+          Value lhs = *lhsOr;
+          Value rhs = *rhsOr;
+          if (lhs.getType() != rhs.getType())
+            return failure();
+          if (isa<smt::BoolType>(lhs.getType())) {
+            if (subexpr.kind == ResolvedNamedBoolExpr::Kind::And)
+              return Value(smt::AndOp::create(builder, loc, lhs, rhs));
+            if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Or)
+              return Value(smt::OrOp::create(builder, loc, lhs, rhs));
+            return Value(smt::DistinctOp::create(builder, loc, lhs, rhs));
+          }
+          if (isa<smt::BitVectorType>(lhs.getType())) {
+            if (subexpr.kind == ResolvedNamedBoolExpr::Kind::And)
+              return Value(smt::BVAndOp::create(builder, loc, lhs, rhs));
+            if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Or)
+              return Value(smt::BVOrOp::create(builder, loc, lhs, rhs));
+            return Value(smt::BVXOrOp::create(builder, loc, lhs, rhs));
+          }
+          return failure();
+        }
+        case ResolvedNamedBoolExpr::Kind::Eq:
+        case ResolvedNamedBoolExpr::Kind::Ne:
+          return failure();
+        }
         return failure();
       };
       switch (expr.kind) {
@@ -6043,8 +6104,8 @@ struct VerifBoundedModelCheckingOpConversion
       }
       case ResolvedNamedBoolExpr::Kind::Eq:
       case ResolvedNamedBoolExpr::Kind::Ne: {
-        auto lhsValueOr = evalSubExprAsValue(*expr.lhs);
-        auto rhsValueOr = evalSubExprAsValue(*expr.rhs);
+        auto lhsValueOr = evalSubExprAsValue(evalSubExprAsValue, *expr.lhs);
+        auto rhsValueOr = evalSubExprAsValue(evalSubExprAsValue, *expr.rhs);
         if (succeeded(lhsValueOr) && succeeded(rhsValueOr)) {
           Value lhsValue = *lhsValueOr;
           Value rhsValue = *rhsValueOr;
