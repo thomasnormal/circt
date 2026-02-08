@@ -31524,3 +31524,39 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Backoff policy currently supports fixed and basic exponential modes only.
 - Webhook fan-out remains sequential rather than parallel.
+
+## Iteration 637 - February 8, 2026
+
+### Duration-Window Strict Gating in `run_formal_all.sh`
+
+- Added `--baseline-window-days <n>` (default: `0`, disabled).
+- Baseline comparison now supports two-stage history selection per suite/mode:
+  - day-window filter relative to suite/mode latest baseline date
+  - trailing row-count window via existing `--baseline-window`
+- Added CLI validation for non-negative `--baseline-window-days`.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added `out-window-days` scenario
+    - verifies day-window filtering avoids stale baseline poisoning while
+      preserving count-window behavior
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added strict-gate example with `--baseline-window-days`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Day-window filtering assumes ISO date rows and skips malformed date entries.
+- Advanced calendar policies (timezone/business-day windows) are not yet
+  implemented.
