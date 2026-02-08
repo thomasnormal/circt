@@ -30,8 +30,8 @@
 //
 // WARNERR: warning: dropped history rows (future_skew: tsv=0, jsonl=0; age_retention: tsv=0, jsonl=0; max_entries: tsv=1, jsonl=1)
 //
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old"}
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old"}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
 //
 // JSONSUMMARY: "drop_events_summary": {
 // JSONSUMMARY: "future_skew": 0

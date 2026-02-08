@@ -13386,6 +13386,75 @@ ninja -C build circt-verilog
   - Add drop-events log rotation/compression policy hooks.
   - Continue semantic retirement of xprop expected-failure rows.
 
+### Iteration 577
+- Yosys SVA BMC drop-events per-event hash provenance:
+  - Added per-event metadata fields to
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE` rows:
+    - `id_hash_mode`
+    - `id_hash_algorithm`
+    - `id_hash_version`
+  - New rows now carry the same effective hash provenance metadata already
+    emitted in summary JSON/JSONL, enabling per-row forensic correlation
+    without requiring the enclosing run summary.
+- Drop-events migration and validation hardening:
+  - Extended drop-events JSONL migration path to:
+    - validate optional `id_hash_mode/id_hash_algorithm/id_hash_version`
+    - preserve valid values in canonicalized rows
+    - synthesize metadata when `event_id` is derived for legacy rows that
+      lacked an `event_id`
+  - Added explicit error reporting for invalid optional metadata keys.
+- Regression tests:
+  - Updated:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-id-hash-crc32.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+  - Added negative coverage in migration test for invalid
+    `id_hash_algorithm`.
+  - Focused lit result:
+    - 6/6 PASS for updated drop-event tests.
+- Additional validation:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-sim/apint-width-normalization.mlir`:
+    PASS after rebuilding `circt-sim`.
+  - OpenTitan sim smoke:
+    - `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`: PASS
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`: PASS
+  - External matrix (smoke profile):
+    - `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 failures=0 xpass=1 skipped=2
+    - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 pass=14 fail=0 error=0 skip=2
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+    - `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=23 pass=23 fail=0 error=0 skip=1005
+    - `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`:
+      PASS
+- Current limitations / debt:
+  - Drop-event rows now include hash provenance, but legacy rows with existing
+    `event_id` may still omit metadata until rewritten.
+  - Drop-events and summary JSON validation still rely on Python for strict
+    duplicate-key and syntax diagnostics.
+  - The formal harness remains broad-script driven; richer per-suite
+    machine-readable result schemas would improve triage automation.
+  - xprop-profile expected failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add a shell/native strict JSON validator path to remove Python dependency
+    for routine retention/migration operations.
+  - Add explicit provenance migration policy controls
+    (`preserve|infer|rewrite`) for legacy drop-event rows.
+  - Move harness result emission toward unified JSON summaries across
+    yosys/sv-tests/verilator/opentitan/avip flows.
+  - Continue semantic fixes to retire expected-failure baselines.
+
 ---
 
 ## Architecture Reference

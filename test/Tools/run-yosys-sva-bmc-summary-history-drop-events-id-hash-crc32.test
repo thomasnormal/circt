@@ -21,4 +21,4 @@
 //
 // RUN: cat %t/drop-events.jsonl | FileCheck %s --check-prefix=DROP
 //
-// DROP: {"schema_version":"1","event_id":"drop-2493518441","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":1,"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old"}
+// DROP: {"schema_version":"1","event_id":"drop-2493518441","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"max_entries","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":1,"row_generated_at_utc":"2025-01-01T00:00:00Z","run_id":"run-old","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}

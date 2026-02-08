@@ -88,8 +88,8 @@
 
 // DROP-NOT: "run_id":"legacy"
 // DROP-NOT: "run_id":"run-future-1"
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
 
 // BADENTRIES: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES: bogus (expected non-negative integer)
 // BADBACKEND: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND: bogus (expected auto|flock|mkdir|none)
