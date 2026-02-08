@@ -14826,6 +14826,125 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 599
+- Yosys SVA BMC merged-context schema validation:
+  - Added schema mode key:
+    - `validate_merged_context` in
+      `...REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`
+  - When enabled, schema validation runs on effective auto-route context
+    (built-in inferred fields + registry overrides) before route matching.
+  - Unknown-key and required-key checks now apply to effective context under
+    strict merged validation.
+- Schema expressiveness upgrades:
+  - Added per-key constraints:
+    - `enum`: non-empty allowed-value set
+    - `min` / `max`: integer range constraints
+  - Constraints compose with existing `type`, `required`, and `regex`.
+  - Added strict validation for:
+    - invalid enum shape/type values
+    - invalid min/max usage (non-integer type or bad bounds)
+    - `min > max`
+- Context parsing updates:
+  - Introduced scalar canonicalization for unknown-but-allowed schema keys
+    (string/int/bool to stable string forms) while keeping type checks for
+    schema-managed keys.
+  - Added shared helpers for key-name/type/constraint validation to keep
+    diagnostics consistent between registry-only and merged-context checks.
+- Regression tests:
+  - Expanded:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+      with:
+      - positive merged typed-schema route match using
+        `validate_merged_context=true`
+      - schema-version mismatch rejection
+      - missing required key rejection
+      - type mismatch rejection
+      - unknown key rejection under strict schema mode
+  - Existing tests for context/priority/CI matching remain in the same file.
+  - Focused lit run:
+    - 11/11 PASS (`rewrite-profile-route-auto`, `rewrite-profile-routes`,
+      `rewrite-macros`, `rewrite-cardinality`, `rewrite-profile-layers`,
+      `rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Merged-context schema coverage is opt-in (`validate_merged_context`), not
+    enforced by default.
+  - Constraint model still lacks composite operators and cross-field
+    dependencies.
+  - Selector macros are non-parameterized and local to one JSON payload.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+- Long-term features to prioritize:
+  - Add cross-field/composite constraint operators in context schemas.
+  - Add parameterized/importable selector macro libraries.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
+### Iteration 600
+- Yosys SVA BMC merged-context typed schema fix:
+  - Fixed a regression where typed route-context values (`integer`/`boolean`)
+    were converted to strings before merged-context schema validation.
+  - Added output-format control to context-map validation:
+    - merged-mode parse keeps typed scalars
+    - final effective-context validation canonicalizes to stable strings for
+      route regex matching.
+  - Required-key checks are now deferred from raw
+    `...REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON` to merged effective
+    context when `validate_merged_context=true`.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=200 --timeout=120`
+      -> PASS
+    - `LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - OpenTitan AES S-Box LEC for `aes_sbox_canright` still needs
+    `LEC_ACCEPT_XPROP_ONLY=1` (diag `XPROP_ONLY`).
+  - Merged-context schema validation remains opt-in.
+  - Context schema still lacks cross-field/composite constraints.
+
 ---
 
 ## Architecture Reference

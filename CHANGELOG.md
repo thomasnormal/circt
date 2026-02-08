@@ -29299,3 +29299,141 @@ CIRCT/slang correctly enforces LRM restrictions.
   ranges, or composite constraints yet.
 - Selector macros are non-parameterized and local to one JSON policy payload.
 - jtag compatibility currently relies on import-time rewrite shims.
+
+## Iteration 599 - February 8, 2026
+
+### Yosys SVA BMC Merged-Context Schema Validation
+
+- Added schema mode key:
+  - `validate_merged_context` in
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`
+- When enabled, schema validation runs on the effective auto-route context
+  (built-ins + registry overrides) before route matching.
+- Required/unknown key checks now apply to merged context under strict mode.
+
+### Schema Expressiveness Upgrades
+
+- Added per-key constraints:
+  - `enum` (non-empty allowed-value set)
+  - `min` / `max` (integer range bounds)
+- `enum` and range constraints compose with existing `type`, `required`, and
+  `regex`.
+- Added strict diagnostics for:
+  - invalid enum shape/type values
+  - invalid min/max usage
+  - invalid min/max ordering (`min > max`)
+
+### Context Validation Internals
+
+- Added shared validation helpers for context keys and values to keep
+  diagnostics consistent.
+- Unknown-but-allowed schema keys now accept scalar values and are canonicalized
+  to stable strings (string/int/bool).
+- Schema-managed keys preserve strict type checks and apply all configured
+  constraints.
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive merged typed-schema route match
+    - schema-version mismatch rejection
+    - missing required-key rejection
+    - type mismatch rejection
+    - strict unknown-key rejection
+- Focused lit run:
+  - 11/11 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-routes.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Merged-context validation is opt-in and not enforced by default.
+- Schema constraints still lack cross-field/composite operators.
+- Selector macros are non-parameterized and local to one JSON policy payload.
+- jtag compatibility currently relies on import-time rewrite shims.
+
+## Iteration 600 - February 8, 2026
+
+### Yosys SVA BMC Merged-Context Typed Parsing Fix
+
+- Fixed a merged-context validation regression in
+  `utils/run_yosys_sva_circt_bmc.sh` where schema-managed integer / boolean
+  context values were canonicalized to strings too early.
+- Added output-format control for context map validation so merged-mode parsing
+  can preserve typed scalars until effective-context schema validation runs.
+- Deferred required-key enforcement for registry-only context input when
+  `validate_merged_context=true`; required checks now occur on effective merged
+  context as intended.
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=200 --timeout=120`:
+    - PASS
+  - `LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- OpenTitan AES S-Box LEC still reports `XPROP_ONLY` on `aes_sbox_canright`
+  without `LEC_ACCEPT_XPROP_ONLY=1`.
+- Merged-context schema validation remains opt-in.
+- Schema constraints still lack cross-field/composite operators.
