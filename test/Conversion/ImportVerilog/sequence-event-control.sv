@@ -288,3 +288,30 @@ module SequenceSignalEventListStructuredInvertedReduction;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for dynamic bit/part selects.
+module SequenceSignalEventListStructuredDynamicSelect;
+  logic clk, q;
+  logic [7:0] bus;
+  logic [2:0] i, j;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredDynamicSelect
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_name = "bus"
+  // CHECK-DAG: signal_dyn_index_name = "i"
+  // CHECK-DAG: signal_dyn_sign = 1 : i32
+  // CHECK-DAG: signal_dyn_offset = 0 : i32
+  // CHECK-DAG: signal_dyn_width = 1 : i32
+  // CHECK-DAG: iff_name = "bus"
+  // CHECK-DAG: iff_dyn_index_name = "j"
+  // CHECK-DAG: iff_dyn_sign = 1 : i32
+  // CHECK-DAG: iff_dyn_offset = 0 : i32
+  // CHECK-DAG: iff_dyn_width = 2 : i32
+  always @(seq or posedge bus[i] iff bus[j +: 2]) begin
+    q <= ~q;
+  end
+endmodule

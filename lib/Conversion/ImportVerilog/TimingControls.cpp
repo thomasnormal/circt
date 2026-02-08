@@ -279,6 +279,10 @@ struct StructuredEventExprInfo {
   StringRef baseName;
   std::optional<unsigned> lsb;
   std::optional<unsigned> msb;
+  std::optional<StringRef> dynIndexName;
+  std::optional<int32_t> dynSign;
+  std::optional<int32_t> dynOffset;
+  std::optional<unsigned> dynWidth;
   std::optional<StringRef> reduction;
 };
 
@@ -330,64 +334,93 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
   }
 
   if (auto *element = expr.as_if<slang::ast::ElementSelectExpression>()) {
-    if (info.lsb || info.msb)
+    if (info.lsb || info.msb || info.dynIndexName)
       return false;
     auto index = getConstInt32(element->selector());
-    if (!index)
-      return false;
     auto range = element->value().type->getFixedRange();
-    int32_t bit = range.translateIndex(*index);
-    if (bit < 0)
-      return false;
-    info.lsb = static_cast<unsigned>(bit);
-    info.msb = static_cast<unsigned>(bit);
-    return extractStructuredEventExprInfo(element->value(), info);
+    if (index) {
+      int32_t bit = range.translateIndex(*index);
+      if (bit < 0)
+        return false;
+      info.lsb = static_cast<unsigned>(bit);
+      info.msb = static_cast<unsigned>(bit);
+      return extractStructuredEventExprInfo(element->value(), info);
+    }
+    if (auto *symRef = element->selector().getSymbolReference()) {
+      info.dynIndexName = symRef->name;
+      info.dynWidth = 1;
+      if (range.isLittleEndian()) {
+        info.dynSign = 1;
+        info.dynOffset = -range.lower();
+      } else {
+        info.dynSign = -1;
+        info.dynOffset = range.upper();
+      }
+      return extractStructuredEventExprInfo(element->value(), info);
+    }
+    return false;
   }
 
   if (auto *rangeSelect = expr.as_if<slang::ast::RangeSelectExpression>()) {
-    if (info.lsb || info.msb)
+    if (info.lsb || info.msb || info.dynIndexName)
       return false;
     auto left = getConstInt32(rangeSelect->left());
     auto right = getConstInt32(rangeSelect->right());
-    if (!left || !right)
-      return false;
-
     auto range = rangeSelect->value().type->getFixedRange();
-    int32_t lsbIndex = 0;
-    uint64_t width = 0;
     switch (rangeSelect->getSelectionKind()) {
-    case RangeSelectionKind::Simple:
-      lsbIndex = *right;
-      width = static_cast<uint64_t>(
-                  std::abs(static_cast<int64_t>(*left) -
-                           static_cast<int64_t>(*right))) +
-              1;
-      break;
-    case RangeSelectionKind::IndexedUp:
-      if (*right <= 0)
+    case RangeSelectionKind::Simple: {
+      if (!left || !right)
         return false;
-      width = static_cast<uint64_t>(*right);
-      lsbIndex = range.isLittleEndian() ? *left : (*left + *right - 1);
-      break;
-    case RangeSelectionKind::IndexedDown:
-      if (*right <= 0)
+      int32_t lsbIndex = *right;
+      uint64_t width = static_cast<uint64_t>(
+                           std::abs(static_cast<int64_t>(*left) -
+                                    static_cast<int64_t>(*right))) +
+                       1;
+      if (width == 0)
         return false;
-      width = static_cast<uint64_t>(*right);
-      lsbIndex = range.isLittleEndian() ? (*left - *right + 1) : *left;
-      break;
+      int32_t lsb = range.translateIndex(lsbIndex);
+      if (lsb < 0)
+        return false;
+      uint64_t msb = static_cast<uint64_t>(lsb) + width - 1;
+      if (msb > std::numeric_limits<unsigned>::max())
+        return false;
+      info.lsb = static_cast<unsigned>(lsb);
+      info.msb = static_cast<unsigned>(msb);
+      return extractStructuredEventExprInfo(rangeSelect->value(), info);
     }
-    if (width == 0)
-      return false;
+    case RangeSelectionKind::IndexedUp:
+    case RangeSelectionKind::IndexedDown: {
+      if (!right || *right <= 0)
+        return false;
+      auto *indexSym = rangeSelect->left().getSymbolReference();
+      if (!indexSym)
+        return false;
+      int64_t width = *right;
+      int64_t a = 1;
+      int64_t b = 0;
+      if (rangeSelect->getSelectionKind() == RangeSelectionKind::IndexedUp) {
+        if (!range.isLittleEndian())
+          b += width - 1;
+      } else {
+        if (range.isLittleEndian())
+          b -= width - 1;
+      }
 
-    int32_t lsb = range.translateIndex(lsbIndex);
-    if (lsb < 0)
-      return false;
-    uint64_t msb = static_cast<uint64_t>(lsb) + width - 1;
-    if (msb > std::numeric_limits<unsigned>::max())
-      return false;
-    info.lsb = static_cast<unsigned>(lsb);
-    info.msb = static_cast<unsigned>(msb);
-    return extractStructuredEventExprInfo(rangeSelect->value(), info);
+      int64_t sign = range.isLittleEndian() ? a : -a;
+      int64_t offset = range.isLittleEndian() ? b - range.lower()
+                                              : range.upper() - b;
+      if ((sign != 1 && sign != -1) ||
+          offset < std::numeric_limits<int32_t>::min() ||
+          offset > std::numeric_limits<int32_t>::max())
+        return false;
+
+      info.dynIndexName = indexSym->name;
+      info.dynSign = static_cast<int32_t>(sign);
+      info.dynOffset = static_cast<int32_t>(offset);
+      info.dynWidth = static_cast<unsigned>(width);
+      return extractStructuredEventExprInfo(rangeSelect->value(), info);
+    }
+    }
   }
 
   if (auto *symRef = expr.getSymbolReference()) {
@@ -424,6 +457,15 @@ static bool maybeAddStructuredEventExprAttrs(
   if (info.lsb && info.msb) {
     addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
     addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
+  }
+  if (info.dynIndexName && info.dynSign && info.dynOffset && info.dynWidth) {
+    addAttrIfMissing(keyFor("dyn_index_name"),
+                     builder.getStringAttr(*info.dynIndexName));
+    addAttrIfMissing(keyFor("dyn_sign"), builder.getI32IntegerAttr(*info.dynSign));
+    addAttrIfMissing(keyFor("dyn_offset"),
+                     builder.getI32IntegerAttr(*info.dynOffset));
+    addAttrIfMissing(keyFor("dyn_width"),
+                     builder.getI32IntegerAttr(*info.dynWidth));
   }
   if (info.reduction)
     addAttrIfMissing(keyFor("reduction"), builder.getStringAttr(*info.reduction));

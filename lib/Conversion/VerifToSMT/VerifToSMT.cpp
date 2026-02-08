@@ -180,6 +180,10 @@ struct ResolvedNamedBoolExpr {
   struct ArgSlice {
     unsigned lsb = 0;
     unsigned msb = 0;
+    std::optional<unsigned> dynamicIndexArg;
+    int32_t dynamicIndexSign = 1;
+    int32_t dynamicIndexOffset = 0;
+    unsigned dynamicWidth = 0;
   };
   enum class Kind {
     Arg,
@@ -721,6 +725,23 @@ static bool resolveStructuredExprFromDetail(
   bool hasSliceAttrs = static_cast<bool>(lsbAttr) || static_cast<bool>(msbAttr);
   if (hasSliceAttrs && (!lsbAttr || !msbAttr))
     return false;
+  auto dynIndexNameAttr =
+      dyn_cast_or_null<StringAttr>(detail.get(key("dyn_index_name")));
+  auto dynSignAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("dyn_sign")));
+  auto dynOffsetAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("dyn_offset")));
+  auto dynWidthAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("dyn_width")));
+  bool hasDynSliceAttrs = static_cast<bool>(dynIndexNameAttr) ||
+                          static_cast<bool>(dynSignAttr) ||
+                          static_cast<bool>(dynOffsetAttr) ||
+                          static_cast<bool>(dynWidthAttr);
+  if (hasDynSliceAttrs &&
+      (!dynIndexNameAttr || !dynSignAttr || !dynOffsetAttr || !dynWidthAttr))
+    return false;
+  if (hasDynSliceAttrs && hasSliceAttrs)
+    return false;
 
   std::optional<ResolvedNamedBoolExpr::ArgSlice> argSlice;
   if (lsbAttr && msbAttr) {
@@ -730,6 +751,29 @@ static bool resolveStructuredExprFromDetail(
       return false;
     argSlice = ResolvedNamedBoolExpr::ArgSlice{static_cast<unsigned>(lsb),
                                                 static_cast<unsigned>(msb)};
+  }
+  if (hasDynSliceAttrs) {
+    if (dynIndexNameAttr.getValue().empty())
+      return false;
+    auto dynIndexIt = inputNameToArgIndex.find(dynIndexNameAttr.getValue());
+    if (dynIndexIt == inputNameToArgIndex.end() ||
+        dynIndexIt->second >= numNonStateArgs)
+      return false;
+    int64_t sign = dynSignAttr.getInt();
+    int64_t offset = dynOffsetAttr.getInt();
+    int64_t width = dynWidthAttr.getInt();
+    if ((sign != 1 && sign != -1) || width <= 0 || width > (1 << 20))
+      return false;
+    if (offset < std::numeric_limits<int32_t>::min() ||
+        offset > std::numeric_limits<int32_t>::max())
+      return false;
+
+    ResolvedNamedBoolExpr::ArgSlice dynSlice;
+    dynSlice.dynamicIndexArg = dynIndexIt->second;
+    dynSlice.dynamicIndexSign = static_cast<int32_t>(sign);
+    dynSlice.dynamicIndexOffset = static_cast<int32_t>(offset);
+    dynSlice.dynamicWidth = static_cast<unsigned>(width);
+    argSlice = dynSlice;
   }
 
   auto reductionAttr =
@@ -5419,6 +5463,54 @@ struct VerifBoundedModelCheckingOpConversion
         Value value = values[argIndex];
         if (!slice)
           return value;
+        auto materializeAsSMTBV = [&](Value input, unsigned width)
+            -> FailureOr<Value> {
+          auto targetTy = smt::BitVectorType::get(builder.getContext(), width);
+          Value bv = input;
+          if (!isa<smt::BitVectorType>(bv.getType())) {
+            bv = typeConverter->materializeTargetConversion(builder, loc, targetTy,
+                                                            input);
+            if (!bv)
+              return failure();
+          }
+          auto bvTy = dyn_cast<smt::BitVectorType>(bv.getType());
+          if (!bvTy)
+            return failure();
+          if (bvTy.getWidth() == width)
+            return bv;
+          if (bvTy.getWidth() > width)
+            return Value(smt::ExtractOp::create(builder, loc, targetTy, 0, bv));
+          unsigned padWidth = width - bvTy.getWidth();
+          auto zeroPad =
+              smt::BVConstantOp::create(builder, loc, APInt(padWidth, 0));
+          return Value(smt::ConcatOp::create(builder, loc, zeroPad, bv));
+        };
+        if (slice->dynamicIndexArg) {
+          if (*slice->dynamicIndexArg >= values.size())
+            return failure();
+          auto baseTy = dyn_cast<smt::BitVectorType>(value.getType());
+          if (!baseTy || slice->dynamicWidth == 0 ||
+              slice->dynamicWidth > baseTy.getWidth())
+            return failure();
+          auto indexBvOr =
+              materializeAsSMTBV(values[*slice->dynamicIndexArg], baseTy.getWidth());
+          if (failed(indexBvOr))
+            return failure();
+          Value shift = *indexBvOr;
+          if (slice->dynamicIndexSign == -1)
+            shift = smt::BVNegOp::create(builder, loc, shift);
+          if (slice->dynamicIndexOffset != 0) {
+            auto offset = smt::BVConstantOp::create(
+                builder, loc,
+                APInt(baseTy.getWidth(), slice->dynamicIndexOffset, true));
+            shift = smt::BVAddOp::create(builder, loc, shift, offset);
+          }
+          Value shifted = smt::BVLShrOp::create(builder, loc, value, shift);
+          auto extractTy =
+              smt::BitVectorType::get(builder.getContext(), slice->dynamicWidth);
+          return Value(
+              smt::ExtractOp::create(builder, loc, extractTy, 0, shifted));
+        }
         unsigned lsb = slice->lsb;
         unsigned msb = slice->msb;
         if (lsb > msb)

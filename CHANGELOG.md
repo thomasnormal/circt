@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 510 - February 8, 2026
+
+### Summary
+
+Closed the indexed dynamic-select gap for event-arm witness synthesis by
+carrying structured Slang metadata for `[i]` / `[i +: w]` / `[i -: w]` through
+to VerifToSMT evaluation.
+
+### Fixes
+
+1. **Structured dynamic select metadata in ImportVerilog**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Structured extraction now emits dynamic-slice attrs:
+     - `<prefix>_dyn_index_name`
+     - `<prefix>_dyn_sign`
+     - `<prefix>_dyn_offset`
+     - `<prefix>_dyn_width`
+   - Applies to dynamic bit-selects and indexed part-selects.
+
+2. **Dynamic slice resolution/evaluation in VerifToSMT**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Structured resolver now consumes `*_dyn_*` attrs and resolves index names
+     to argument indices.
+   - Witness evaluation now performs dynamic extraction using:
+     - sign/offset index transform,
+     - `smt.bv.lshr`,
+     - `smt.bv.extract`.
+   - Handles narrower index widths via explicit zero-extension with
+     `smt.bv.concat` before shift arithmetic.
+
+3. **Regression coverage updates**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-structured.mlir`
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New checks validate frontend `*_dyn_*` attr emission and backend witness
+     lowering for dynamic indexed slices in both SMT-LIB and runtime modes.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt circt-verilog`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witness-dynamic-slice-structured.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-structured.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS (7/7)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- We still depend on attrs + parser fallback; canonical Slang expression graph
+  propagation is not yet end-to-end.
+- Casts, concatenation/replication, and richer expression arithmetic around
+  dynamic indices remain unsupported in structured witness lowering.
+- `always @(property)`/procedural-property diagnostics still need richer origin
+  metadata.
+
 ## Iteration 509 - February 8, 2026
 
 ### Summary
