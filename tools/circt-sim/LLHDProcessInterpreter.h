@@ -227,6 +227,11 @@ struct ProcessExecutionState {
   /// SSA value map: maps MLIR Values to their interpreted runtime values.
   llvm::DenseMap<mlir::Value, InterpretedValue> valueMap;
 
+  /// For ref-typed block arguments, track the concrete incoming SSA value
+  /// selected by the most recent branch transfer. This preserves reference
+  /// provenance (e.g., llhd.sig.array_get) across block argument boundaries.
+  llvm::DenseMap<mlir::BlockArgument, mlir::Value> refBlockArgSources;
+
   /// Memory model for LLVM dialect operations.
   /// Maps pointer values to their allocated memory blocks.
   llvm::DenseMap<mlir::Value, MemoryBlock> memoryBlocks;

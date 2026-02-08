@@ -3672,6 +3672,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     for (auto [arg, val] :
          llvm::zip(state.currentBlock->getArguments(), state.destOperands)) {
       state.valueMap[arg] = val;
+      if (isa<llhd::RefType>(arg.getType()))
+        state.refBlockArgSources.erase(arg);
     }
 
     state.waiting = false;
@@ -4299,6 +4301,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     for (auto [arg, operand] : llvm::zip(statePtr->currentBlock->getArguments(),
                                           branchOp.getDestOperands())) {
       statePtr->valueMap[arg] = getValue(procId, operand);
+      if (isa<llhd::RefType>(arg.getType()))
+        statePtr->refBlockArgSources[arg] = operand;
+      else
+        statePtr->refBlockArgSources.erase(arg);
       if (isa<llhd::RefType>(arg.getType())) {
         if (SignalId sigId = resolveSignalId(operand))
           valueToSignal[arg] = sigId;
@@ -4322,6 +4328,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
            llvm::zip(statePtr->currentBlock->getArguments(),
                      condBranchOp.getTrueDestOperands())) {
         statePtr->valueMap[arg] = getValue(procId, operand);
+        if (isa<llhd::RefType>(arg.getType()))
+          statePtr->refBlockArgSources[arg] = operand;
+        else
+          statePtr->refBlockArgSources.erase(arg);
         if (isa<llhd::RefType>(arg.getType())) {
           if (SignalId sigId = resolveSignalId(operand))
             valueToSignal[arg] = sigId;
@@ -4337,6 +4347,10 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
            llvm::zip(statePtr->currentBlock->getArguments(),
                      condBranchOp.getFalseDestOperands())) {
         statePtr->valueMap[arg] = getValue(procId, operand);
+        if (isa<llhd::RefType>(arg.getType()))
+          statePtr->refBlockArgSources[arg] = operand;
+        else
+          statePtr->refBlockArgSources.erase(arg);
         if (isa<llhd::RefType>(arg.getType())) {
           if (SignalId sigId = resolveSignalId(operand))
             valueToSignal[arg] = sigId;
@@ -6992,7 +7006,46 @@ llvm_dispatch:
 
 LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                                                       llhd::ProbeOp probeOp) {
+  auto *statePtr = (procId == activeProcessId && activeProcessState)
+                       ? activeProcessState
+                       : &processStates[procId];
+  auto remapRefBlockArgSource = [&](Value &ref) {
+    llvm::SmallVector<Value, 4> visited;
+    while (auto arg = dyn_cast<BlockArgument>(ref)) {
+      if (!isa<llhd::RefType>(arg.getType()))
+        break;
+      bool seen = false;
+      for (Value visitedValue : visited) {
+        if (visitedValue == ref) {
+          seen = true;
+          break;
+        }
+      }
+      if (seen)
+        break;
+      visited.push_back(ref);
+
+      auto srcIt = statePtr->refBlockArgSources.find(arg);
+      if (srcIt != statePtr->refBlockArgSources.end() &&
+          srcIt->second != ref) {
+        ref = srcIt->second;
+        continue;
+      }
+
+      Value mappedValue;
+      InstanceId mappedInstance = activeInstanceId;
+      if (lookupInputMapping(arg, mappedValue, mappedInstance) &&
+          mappedValue != ref) {
+        ScopedInstanceContext scope(*this, mappedInstance);
+        ref = mappedValue;
+        continue;
+      }
+      break;
+    }
+  };
+
   Value signal = probeOp.getSignal();
+  remapRefBlockArgSource(signal);
   while (auto muxOp = signal.getDefiningOp<comb::MuxOp>()) {
     InterpretedValue cond = getValue(procId, muxOp.getCond());
     if (cond.isX()) {
@@ -7001,6 +7054,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       return success();
     }
     signal = cond.getUInt64() != 0 ? muxOp.getTrueValue() : muxOp.getFalseValue();
+    remapRefBlockArgSource(signal);
   }
 
   // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
@@ -7012,6 +7066,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
       return success();
     }
     signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
+    remapRefBlockArgSource(signal);
   }
 
   // Get the signal ID for the probed signal
@@ -7626,9 +7681,48 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                       llhd::DriveOp driveOp) {
+  auto *statePtr = (procId == activeProcessId && activeProcessState)
+                       ? activeProcessState
+                       : &processStates[procId];
+  auto remapRefBlockArgSource = [&](Value &ref) {
+    llvm::SmallVector<Value, 4> visited;
+    while (auto arg = dyn_cast<BlockArgument>(ref)) {
+      if (!isa<llhd::RefType>(arg.getType()))
+        break;
+      bool seen = false;
+      for (Value visitedValue : visited) {
+        if (visitedValue == ref) {
+          seen = true;
+          break;
+        }
+      }
+      if (seen)
+        break;
+      visited.push_back(ref);
+
+      auto srcIt = statePtr->refBlockArgSources.find(arg);
+      if (srcIt != statePtr->refBlockArgSources.end() &&
+          srcIt->second != ref) {
+        ref = srcIt->second;
+        continue;
+      }
+
+      Value mappedValue;
+      InstanceId mappedInstance = activeInstanceId;
+      if (lookupInputMapping(arg, mappedValue, mappedInstance) &&
+          mappedValue != ref) {
+        ScopedInstanceContext scope(*this, mappedInstance);
+        ref = mappedValue;
+        continue;
+      }
+      break;
+    }
+  };
+
   // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
   // by evaluating the condition and selecting the appropriate ref.
   Value signal = driveOp.getSignal();
+  remapRefBlockArgSource(signal);
   while (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
     InterpretedValue cond = getValue(procId, selectOp.getCondition());
     if (cond.isX()) {
@@ -7636,6 +7730,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       return success(); // Cannot determine which signal to drive
     }
     signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
+    remapRefBlockArgSource(signal);
   }
 
   // Get the signal ID
