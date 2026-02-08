@@ -43,6 +43,8 @@ EXPECT_DIFF_BASELINE="${EXPECT_DIFF_BASELINE:-}"
 EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED="${EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED:-}"
 EXPECT_DIFF_FAIL_ON_CHANGE="${EXPECT_DIFF_FAIL_ON_CHANGE:-0}"
 EXPECT_DIFF_FILE="${EXPECT_DIFF_FILE:-}"
+EXPECT_DIFF_TSV_FILE="${EXPECT_DIFF_TSV_FILE:-}"
+EXPECT_DIFF_JSON_FILE="${EXPECT_DIFF_JSON_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -112,6 +114,14 @@ write_expect_diff_line() {
   fi
 }
 
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
+}
+
 emit_expectation_diff() {
   local baseline_file="$1"
   local baseline_default="$2"
@@ -119,6 +129,9 @@ emit_expectation_diff() {
   local -a added_lines=()
   local -a removed_lines=()
   local -a changed_lines=()
+  local -a added_keys=()
+  local -a removed_keys=()
+  local -a changed_keys=()
 
   if [[ ! -f "$baseline_file" ]]; then
     echo "warning: EXPECT_DIFF_BASELINE file not found: $baseline_file" >&2
@@ -131,13 +144,16 @@ emit_expectation_diff() {
   for key in "${!expected_cases[@]}"; do
     if [[ -z "${baseline_cases["$key"]+x}" ]]; then
       added_lines+=("$key -> ${expected_cases["$key"]}")
+      added_keys+=("$key")
     elif [[ "${baseline_cases["$key"]}" != "${expected_cases["$key"]}" ]]; then
       changed_lines+=("$key ${baseline_cases["$key"]} -> ${expected_cases["$key"]}")
+      changed_keys+=("$key")
     fi
   done
   for key in "${!baseline_cases[@]}"; do
     if [[ -z "${expected_cases["$key"]+x}" ]]; then
       removed_lines+=("$key (was ${baseline_cases["$key"]})")
+      removed_keys+=("$key")
     fi
   done
 
@@ -163,6 +179,83 @@ emit_expectation_diff() {
     while IFS= read -r line; do
       write_expect_diff_line "EXPECT_DIFF_CHANGED: $line"
     done < <(printf '%s\n' "${changed_lines[@]}" | sort)
+  fi
+
+  if [[ -n "$EXPECT_DIFF_TSV_FILE" ]]; then
+    : > "$EXPECT_DIFF_TSV_FILE"
+    printf 'kind\ttest\tmode\tprofile\told\tnew\n' >> "$EXPECT_DIFF_TSV_FILE"
+    if ((${#added_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        local test mode profile
+        IFS='|' read -r test mode profile <<<"$key"
+        printf 'added\t%s\t%s\t%s\t\t%s\n' \
+          "$test" "$mode" "$profile" "${expected_cases["$key"]}" >> "$EXPECT_DIFF_TSV_FILE"
+      done < <(printf '%s\n' "${added_keys[@]}" | sort)
+    fi
+    if ((${#removed_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        local test mode profile
+        IFS='|' read -r test mode profile <<<"$key"
+        printf 'removed\t%s\t%s\t%s\t%s\t\n' \
+          "$test" "$mode" "$profile" "${baseline_cases["$key"]}" >> "$EXPECT_DIFF_TSV_FILE"
+      done < <(printf '%s\n' "${removed_keys[@]}" | sort)
+    fi
+    if ((${#changed_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        local test mode profile
+        IFS='|' read -r test mode profile <<<"$key"
+        printf 'changed\t%s\t%s\t%s\t%s\t%s\n' \
+          "$test" "$mode" "$profile" "${baseline_cases["$key"]}" "${expected_cases["$key"]}" \
+          >> "$EXPECT_DIFF_TSV_FILE"
+      done < <(printf '%s\n' "${changed_keys[@]}" | sort)
+    fi
+  fi
+
+  if [[ -n "$EXPECT_DIFF_JSON_FILE" ]]; then
+    : > "$EXPECT_DIFF_JSON_FILE"
+    local -a json_entries=()
+    local test mode profile old_val new_val
+    if ((${#added_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        IFS='|' read -r test mode profile <<<"$key"
+        old_val=""
+        new_val="${expected_cases["$key"]}"
+        json_entries+=("    {\"kind\":\"added\",\"test\":\"$(json_escape "$test")\",\"mode\":\"$(json_escape "$mode")\",\"profile\":\"$(json_escape "$profile")\",\"old\":\"$(json_escape "$old_val")\",\"new\":\"$(json_escape "$new_val")\"}")
+      done < <(printf '%s\n' "${added_keys[@]}" | sort)
+    fi
+    if ((${#removed_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        IFS='|' read -r test mode profile <<<"$key"
+        old_val="${baseline_cases["$key"]}"
+        new_val=""
+        json_entries+=("    {\"kind\":\"removed\",\"test\":\"$(json_escape "$test")\",\"mode\":\"$(json_escape "$mode")\",\"profile\":\"$(json_escape "$profile")\",\"old\":\"$(json_escape "$old_val")\",\"new\":\"$(json_escape "$new_val")\"}")
+      done < <(printf '%s\n' "${removed_keys[@]}" | sort)
+    fi
+    if ((${#changed_keys[@]} > 0)); then
+      while IFS= read -r key; do
+        IFS='|' read -r test mode profile <<<"$key"
+        old_val="${baseline_cases["$key"]}"
+        new_val="${expected_cases["$key"]}"
+        json_entries+=("    {\"kind\":\"changed\",\"test\":\"$(json_escape "$test")\",\"mode\":\"$(json_escape "$mode")\",\"profile\":\"$(json_escape "$profile")\",\"old\":\"$(json_escape "$old_val")\",\"new\":\"$(json_escape "$new_val")\"}")
+      done < <(printf '%s\n' "${changed_keys[@]}" | sort)
+    fi
+
+    {
+      printf '{\n'
+      printf '  "summary": {"added": %d, "removed": %d, "changed": %d},\n' \
+        "$expect_diff_added" "$expect_diff_removed" "$expect_diff_changed"
+      printf '  "entries": [\n'
+      local i
+      for i in "${!json_entries[@]}"; do
+        if (( i + 1 < ${#json_entries[@]} )); then
+          printf '%s,\n' "${json_entries[$i]}"
+        else
+          printf '%s\n' "${json_entries[$i]}"
+        fi
+      done
+      printf '  ]\n'
+      printf '}\n'
+    } > "$EXPECT_DIFF_JSON_FILE"
   fi
 }
 

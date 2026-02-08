@@ -24132,3 +24132,59 @@ CIRCT/slang correctly enforces LRM restrictions.
   observed-outcome snapshot artifact yet.
 - xprop-profile pass-mode failures remain baseline-tracked pending semantic
   fixes.
+
+---
+
+## Iteration 522 - February 8, 2026
+
+### Yosys SVA BMC Machine-Readable Expectation Diff Artifacts
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_DIFF_TSV_FILE`
+  - `EXPECT_DIFF_JSON_FILE`
+- Added deterministic artifact emission for expectation diffs:
+  - TSV columns:
+    - `kind`, `test`, `mode`, `profile`, `old`, `new`
+  - JSON schema:
+    - `summary` with `added`, `removed`, `changed`
+    - `entries[]` rows with `kind`, `test`, `mode`, `profile`, `old`, `new`
+- Kept existing text diff reporting and `EXPECT_DIFF_FAIL_ON_CHANGE` behavior.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 6/6 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- No observed-outcome snapshot generation yet for baseline regeneration flows.
+- xprop-profile pass-mode expected failures are still tracked, not retired.
