@@ -29837,3 +29837,68 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Composite clauses still cannot express non-integer ordering predicates.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 607 - February 8, 2026
+
+### Yosys SVA BMC Arithmetic Comparator Offsets
+
+- Extended composite clause model with arithmetic key-vs-key comparators:
+  - `int_lt_offset`, `int_le_offset`, `int_gt_offset`, `int_ge_offset`
+    over `[lhs, rhs, delta]` triples, interpreted as
+    `lhs OP (rhs + delta)`.
+- Added strict parser diagnostics for offset metadata:
+  - malformed triple shape/type
+  - non-integer `delta` literal rejection
+  - duplicate triple rejection
+- Added clause formatting for unsatisfied diagnostics:
+  - e.g. `int_ge_offset=[attempt>=min_attempt+2]`.
+- Extended schema parse-time comparator key-type checks so offset comparators
+  require declared integer keys for both operands.
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive merged schema case now includes `int_ge_offset`
+    - `int_ge_offset` mismatch rejection
+    - malformed `int_ge_offset` delta rejection
+    - undeclared `int_ge_offset` key rejection
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=200 --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Arithmetic comparators currently support only a single RHS key plus integer
+  literal offset.
+- Composite clauses still lack a typed expression DSL for multi-term arithmetic.
+- OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
+  `aes_sbox_canright`.

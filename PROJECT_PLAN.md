@@ -15292,6 +15292,67 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 607
+- Yosys SVA BMC arithmetic comparator expressions (offset triples):
+  - Added composite clause operators:
+    - `int_lt_offset`, `int_le_offset`, `int_gt_offset`, `int_ge_offset`
+      over `[lhs, rhs, delta]` triples interpreted as
+      `lhs OP (rhs + delta)`.
+  - Added strict parser validation for offset triples:
+    - malformed triple shape/type
+    - non-integer `delta` rejection
+    - duplicate triple rejection
+  - Added clause formatting for offset diagnostics, e.g.
+    `int_ge_offset=[attempt>=min_attempt+2]`.
+  - Extended schema-time comparator key-type enforcement so offset operators
+    also require declared integer keys for both `lhs` and `rhs`.
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive merged schema case including `int_ge_offset`
+    - `int_ge_offset` mismatch rejection
+    - malformed `int_ge_offset` delta rejection
+    - undeclared `int_ge_offset` key rejection
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=200 --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Composite arithmetic predicates are limited to a single RHS key plus integer
+    offset.
+  - No boolean composition over arithmetic subexpressions beyond existing clause
+    combinators.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Introduce a typed expression DSL for composite clauses (multi-term
+    arithmetic, nested predicates).
+  - Add reusable/importable selector macro libraries with parameters.
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference
