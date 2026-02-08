@@ -15969,6 +15969,69 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 617
+- Yosys SVA BMC schema-versioned integer arithmetic semantics for `div`/`mod`:
+  - Added optional schema-level `int_arithmetic` object:
+    - `div_mode`: `floor` | `trunc_zero`
+    - `mod_mode`: `floor` | `trunc_zero`
+  - Default semantics preserve existing behavior:
+    - `div_mode=floor`
+    - `mod_mode=floor`
+  - Evaluation changes:
+    - `int_expr` now evaluates `div`/`mod` via configured arithmetic semantics.
+    - `bool_expr.cmp` inherits the same semantics for nested int expressions.
+- Robustness and diagnostics:
+  - Added explicit parser validation for arithmetic mode fields with
+    field-qualified errors.
+  - Kept divide/mod-by-zero behavior unchanged (`None` / unsatisfied clause).
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive route-context schema case validating `trunc_zero` behavior on
+      negative operands (`-3 / 2 == -1`, `-3 % 2 == -1`)
+    - negative schema parse case for invalid `int_arithmetic.div_mode`
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+- Current limitations / debt:
+  - Arithmetic semantics are configured per schema, not per-clause/per-profile.
+  - No schema-version gating yet for arithmetic mode defaults or future mode
+    additions.
+  - Regex definitions remain local to one schema payload; no shared import
+    mechanism.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Add schema-version-driven arithmetic defaulting and compatibility checks.
+  - Add per-clause override hooks for arithmetic semantics where needed.
+  - Add importable selector/profile schema modules (regex + limit + arithmetic
+    presets).
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference
