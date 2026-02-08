@@ -1,6 +1,6 @@
 // RUN: circt-bmc -b 2 --run-smtlib --z3-path=%S/Inputs/fake-z3-sat-model-witness-activity.sh --print-counterexample --module top %s 2>&1 | FileCheck %s
 
-hw.module @top(in %in: i1, in %en: i1, out out: i1) attributes {initial_values = [], moore.event_source_details = [[{edge = "both", iff_name = "en", kind = "signal", label = "signal[0]:both:iff", signal_index = 0 : i32, signal_name = "in", witness_name = "arm_witness"}]], moore.event_sources = [["signal[0]:both:iff"]], num_regs = 0 : i32} {
+hw.module @top(in %in: i1, in %en: i1, out out: i1) attributes {initial_values = [], moore.event_source_details = [[{edge = "both", iff_name = "en", kind = "signal", label = "signal[0]:both:iff", signal_index = 0 : i32, signal_name = "in"}]], moore.event_sources = [["signal[0]:both:iff"]], num_regs = 0 : i32} {
   verif.assert %in : i1
   hw.output %in : i1
 }

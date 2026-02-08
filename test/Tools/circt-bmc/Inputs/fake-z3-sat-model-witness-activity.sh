@@ -23,9 +23,9 @@ if [[ "$want_model" == "1" ]] && grep -q "(get-model)" "$file"; then
   (define-fun en () (_ BitVec 1) #b1)
   (define-fun en_0 () (_ BitVec 1) #b1)
   (define-fun en_1 () (_ BitVec 1) #b1)
-  (define-fun arm_witness () (_ BitVec 1) #b0)
-  (define-fun arm_witness_0 () (_ BitVec 1) #b1)
-  (define-fun arm_witness_1 () (_ BitVec 1) #b0)
+  (define-fun event_arm_witness_0_0 () Bool false)
+  (define-fun event_arm_witness_0_0_0 () Bool true)
+  (define-fun event_arm_witness_0_0_1 () Bool false)
 )
 MODEL
 fi

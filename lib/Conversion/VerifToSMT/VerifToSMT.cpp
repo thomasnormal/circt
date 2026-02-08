@@ -2974,6 +2974,12 @@ struct VerifBoundedModelCheckingOpConversion
     } else {
       inputNamePrefixes.assign(originalArgCount, StringAttr{});
     }
+    DenseMap<StringRef, unsigned> inputNameToArgIndex;
+    for (auto [idx, nameAttr] : llvm::enumerate(inputNamePrefixes)) {
+      if (!nameAttr || nameAttr.getValue().empty())
+        continue;
+      inputNameToArgIndex.try_emplace(nameAttr.getValue(), idx);
+    }
 
     auto maybeAssertKnown = [&](size_t argIndex, Type originalTy, Value smtVal,
                                 OpBuilder &builder) {
@@ -4416,6 +4422,123 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<std::optional<unsigned>> finalCheckClockPos;
     resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps);
 
+    struct SignalArmWitnessInfo {
+      StringAttr witnessName;
+      unsigned signalArgIndex = 0;
+      std::optional<unsigned> iffArgIndex;
+      ltl::ClockEdge edge = ltl::ClockEdge::Both;
+    };
+    SmallVector<SignalArmWitnessInfo> signalArmWitnesses;
+    if (auto eventSourceDetails =
+            op->getAttrOfType<ArrayAttr>("bmc_event_source_details")) {
+      auto parseEdge = [&](StringRef edgeText)
+          -> std::optional<ltl::ClockEdge> {
+        if (edgeText == "posedge")
+          return ltl::ClockEdge::Pos;
+        if (edgeText == "negedge")
+          return ltl::ClockEdge::Neg;
+        if (edgeText == "both")
+          return ltl::ClockEdge::Both;
+        return std::nullopt;
+      };
+
+      size_t numNonStateArgs =
+          oldCircuitInputTy.size() - numRegs - totalDelaySlots -
+          totalNFAStateSlots;
+      DenseMap<uint64_t, StringAttr> witnessByArm;
+      for (auto [setIdx, detailSetAttr] : llvm::enumerate(eventSourceDetails)) {
+        auto detailSet = dyn_cast<ArrayAttr>(detailSetAttr);
+        if (!detailSet)
+          continue;
+        for (auto [armIdx, detailAttr] : llvm::enumerate(detailSet)) {
+          auto detail = dyn_cast<DictionaryAttr>(detailAttr);
+          if (!detail)
+            continue;
+          auto kindAttr = dyn_cast_or_null<StringAttr>(detail.get("kind"));
+          if (!kindAttr || kindAttr.getValue() != "signal")
+            continue;
+
+          auto signalNameAttr =
+              dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
+          auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
+          if (!signalNameAttr || !edgeAttr)
+            continue;
+          auto edge = parseEdge(edgeAttr.getValue());
+          if (!edge)
+            continue;
+          auto signalIt = inputNameToArgIndex.find(signalNameAttr.getValue());
+          if (signalIt == inputNameToArgIndex.end() ||
+              signalIt->second >= numNonStateArgs)
+            continue;
+
+          std::optional<unsigned> iffArgIndex;
+          if (auto iffNameAttr =
+                  dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
+            auto iffIt = inputNameToArgIndex.find(iffNameAttr.getValue());
+            if (iffIt == inputNameToArgIndex.end() ||
+                iffIt->second >= numNonStateArgs)
+              continue;
+            iffArgIndex = iffIt->second;
+          }
+
+          auto witnessName = rewriter.getStringAttr(
+              (Twine("event_arm_witness_") + Twine(setIdx) + "_" +
+               Twine(armIdx))
+                  .str());
+          signalArmWitnesses.push_back(
+              SignalArmWitnessInfo{witnessName, signalIt->second, iffArgIndex,
+                                   *edge});
+          uint64_t key = (static_cast<uint64_t>(setIdx) << 32) | armIdx;
+          witnessByArm[key] = witnessName;
+        }
+      }
+
+      if (!witnessByArm.empty()) {
+        SmallVector<Attribute> rewrittenDetailSets;
+        rewrittenDetailSets.reserve(eventSourceDetails.size());
+        for (auto [setIdx, detailSetAttr] :
+             llvm::enumerate(eventSourceDetails)) {
+          auto detailSet = dyn_cast<ArrayAttr>(detailSetAttr);
+          if (!detailSet) {
+            rewrittenDetailSets.push_back(detailSetAttr);
+            continue;
+          }
+          SmallVector<Attribute> rewrittenDetails;
+          rewrittenDetails.reserve(detailSet.size());
+          for (auto [armIdx, detailAttr] : llvm::enumerate(detailSet)) {
+            auto detail = dyn_cast<DictionaryAttr>(detailAttr);
+            if (!detail) {
+              rewrittenDetails.push_back(detailAttr);
+              continue;
+            }
+            uint64_t key = (static_cast<uint64_t>(setIdx) << 32) | armIdx;
+            auto witnessIt = witnessByArm.find(key);
+            if (witnessIt == witnessByArm.end()) {
+              rewrittenDetails.push_back(detailAttr);
+              continue;
+            }
+            SmallVector<NamedAttribute> attrs(detail.begin(), detail.end());
+            bool replaced = false;
+            for (auto &namedAttr : attrs) {
+              if (namedAttr.getName().getValue() == "witness_name") {
+                namedAttr = rewriter.getNamedAttr("witness_name",
+                                                  witnessIt->second);
+                replaced = true;
+                break;
+              }
+            }
+            if (!replaced)
+              attrs.push_back(
+                  rewriter.getNamedAttr("witness_name", witnessIt->second));
+            rewrittenDetails.push_back(rewriter.getDictionaryAttr(attrs));
+          }
+          rewrittenDetailSets.push_back(rewriter.getArrayAttr(rewrittenDetails));
+        }
+        solver->setAttr("bmc_event_source_details",
+                        rewriter.getArrayAttr(rewrittenDetailSets));
+      }
+    }
+
     if (!risingClocksOnly) {
       for (auto &info : delayInfos) {
         if (info.clockName || info.clockValue) {
@@ -4580,6 +4703,23 @@ struct VerifBoundedModelCheckingOpConversion
     }
     inputDecls.push_back(constFalse); // wasViolated?
 
+    auto toSMTBool = [&](Value value) -> FailureOr<Value> {
+      if (isa<smt::BoolType>(value.getType()))
+        return value;
+      if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
+        if (bvTy.getWidth() != 1) {
+          op.emitError("event-arm witness lowering expects i1-compatible "
+                       "signal values");
+          return failure();
+        }
+        auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+        return Value(smt::EqOp::create(rewriter, loc, value, one));
+      }
+      op.emitError("event-arm witness lowering expects bool or bv<1> "
+                   "signal values");
+      return failure();
+    };
+
     auto ignoreAssertionsUntilAttr =
         op->getAttrOfType<IntegerAttr>("ignore_asserts_until");
     std::optional<uint64_t> ignoreAssertionsUntilValue;
@@ -4605,6 +4745,14 @@ struct VerifBoundedModelCheckingOpConversion
 
       size_t numCircuitArgs = circuitInputTy.size();
       size_t numBMCStateArgs = numRegs + totalDelaySlots + totalNFAStateSlots;
+      auto boolTy = smt::BoolType::get(rewriter.getContext());
+      for (const auto &witness : signalArmWitnesses) {
+        auto initWitnessDecl =
+            smt::DeclareFunOp::create(rewriter, loc, boolTy, witness.witnessName);
+        auto initWitnessEq = smt::EqOp::create(rewriter, loc, initWitnessDecl,
+                                               constFalse);
+        smt::AssertOp::create(rewriter, loc, initWitnessEq);
+      }
       SmallVector<Value> iterArgs = inputDecls;
       SmallVector<SmallVector<Value>> lassoStateHistory;
       SmallVector<SmallVector<Value>> lassoFinalCheckSampleHistory;
@@ -5081,6 +5229,52 @@ struct VerifBoundedModelCheckingOpConversion
           }
           nonRegIdx++;
           argIndex++;
+        }
+
+        for (const auto &witness : signalArmWitnesses) {
+          if (witness.signalArgIndex >= numNonStateArgs ||
+              witness.signalArgIndex >= newDecls.size() ||
+              witness.signalArgIndex >= iterRange.size())
+            continue;
+
+          auto prevBoolOr = toSMTBool(iterRange[witness.signalArgIndex]);
+          auto currBoolOr = toSMTBool(newDecls[witness.signalArgIndex]);
+          if (failed(prevBoolOr) || failed(currBoolOr))
+            return failure();
+          Value prevBool = *prevBoolOr;
+          Value currBool = *currBoolOr;
+
+          Value fired;
+          switch (witness.edge) {
+          case ltl::ClockEdge::Pos: {
+            auto notPrev = smt::NotOp::create(rewriter, loc, prevBool);
+            fired = smt::AndOp::create(rewriter, loc, notPrev, currBool);
+            break;
+          }
+          case ltl::ClockEdge::Neg: {
+            auto notCurr = smt::NotOp::create(rewriter, loc, currBool);
+            fired = smt::AndOp::create(rewriter, loc, prevBool, notCurr);
+            break;
+          }
+          case ltl::ClockEdge::Both:
+            fired = smt::DistinctOp::create(rewriter, loc, prevBool, currBool);
+            break;
+          }
+
+          if (witness.iffArgIndex &&
+              *witness.iffArgIndex < numNonStateArgs &&
+              *witness.iffArgIndex < newDecls.size()) {
+            auto iffBoolOr = toSMTBool(newDecls[*witness.iffArgIndex]);
+            if (failed(iffBoolOr))
+              return failure();
+            fired = smt::AndOp::create(rewriter, loc, *iffBoolOr, fired);
+          }
+
+          auto witnessDecl = smt::DeclareFunOp::create(rewriter, loc, boolTy,
+                                                       witness.witnessName);
+          auto witnessEq =
+              smt::EqOp::create(rewriter, loc, witnessDecl, fired);
+          smt::AssertOp::create(rewriter, loc, witnessEq);
         }
 
         if (clockIndexes.size() >= 1) {
