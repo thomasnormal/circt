@@ -31600,3 +31600,41 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Parallel mode currently has no max-concurrency throttle.
 - Endpoint ordering is intentionally non-deterministic in parallel mode.
+
+## Iteration 639 - February 8, 2026
+
+### Parallel Webhook Fan-Out Throttling
+
+- Added `--webhook-max-parallel <n>` to `utils/run_formal_cadence.sh`
+  (default: `8`).
+- Applies when `--webhook-fanout-mode=parallel` to cap concurrent webhook
+  workers.
+- Added CLI validation for positive max-parallel values.
+- Added state telemetry:
+  - `webhook_max_parallel` in `cadence.state`
+- Updated parallel-mode cadence log banner to include effective
+  `max_parallel=<n>`.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - parallel fan-out scenario now uses `--webhook-max-parallel 1`
+    - validates parallel-mode log banner includes `(max_parallel=1)`
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--webhook-max-parallel` option description
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+
+### Remaining Limitations
+
+- Throttling currently uses simple FIFO wait behavior (no adaptive scheduling).
+- Endpoint completion ordering remains non-deterministic in parallel mode.
