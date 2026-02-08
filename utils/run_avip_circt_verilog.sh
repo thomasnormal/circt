@@ -167,6 +167,20 @@ def is_spi_avip(avip_root: pathlib.Path, filelists):
             return True
     return False
 
+def is_jtag_avip(avip_root: pathlib.Path, filelists):
+    if avip_root and "jtag" in avip_root.name.lower():
+        return True
+    for fl in filelists:
+        if "jtag" in fl.name.lower():
+            return True
+        try:
+            text = fl.read_text()
+        except OSError:
+            continue
+        if "jtag" in text.lower():
+            return True
+    return False
+
 def drop_nested_block_comments(text: str):
     lines = text.splitlines()
     out = []
@@ -202,6 +216,26 @@ def rewrite_spi_text(path: pathlib.Path, text: str):
     if path.name == "SpiSimpleFdRandTest.sv":
         new_text = re.sub(r"randomize\\(\\)\\s*with\\s*\\{[^}]*\\}",
                           "randomize()", text, flags=re.S)
+        if new_text != text:
+            text = new_text
+            changed = True
+    return text, changed
+
+def rewrite_jtag_text(path: pathlib.Path, text: str):
+    changed = False
+    if path.name == "JtagControllerDeviceAgentBfm.sv":
+        new_text = text.replace(
+            "bind jtagControllerDeviceMonitorBfm ",
+            "bind JtagControllerDeviceMonitorBfm ",
+        )
+        if new_text != text:
+            text = new_text
+            changed = True
+    if path.name == "JtagTargetDeviceDriverBfm.sv":
+        new_text = text.replace(
+            "registerBank[instructionRegister]",
+            "registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]",
+        )
         if new_text != text:
             text = new_text
             changed = True
@@ -290,6 +324,28 @@ if needs_spi:
         except OSError:
             continue
         new_text, changed = rewrite_spi_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+
+needs_jtag = is_jtag_avip(avip_dir, filelists)
+if needs_jtag:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in (
+            "JtagControllerDeviceAgentBfm.sv",
+            "JtagTargetDeviceDriverBfm.sv",
+        ):
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_jtag_text(path, text)
         if not changed:
             continue
         tmp_path = tmp_dir / path.name

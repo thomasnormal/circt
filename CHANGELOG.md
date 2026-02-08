@@ -28030,3 +28030,69 @@ CIRCT/slang correctly enforces LRM restrictions.
 - xprop-profile expected failures remain baseline-tracked.
 - Slang compatibility gaps remain for `jtag_avip` enum conversion and
   bind/defparam virtual-interface interactions.
+
+## Iteration 582 - February 8, 2026
+
+### AVIP JTAG Compatibility Rewrites
+
+- Extended `utils/run_avip_circt_verilog.sh` with jtag-specific compatibility
+  rewrites (applied to temporary files under `.avip_tmp`):
+  - `JtagControllerDeviceAgentBfm.sv`:
+    - rewrites bind target from instance-form to type-form:
+      `bind JtagControllerDeviceMonitorBfm ...`
+  - `JtagTargetDeviceDriverBfm.sv`:
+    - rewrites `registerBank[instructionRegister]` to explicit enum-cast index:
+      `registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]`
+- This unblocks `jtag_avip` compilation in current flow without mutating vendor
+  sources.
+
+### Test Coverage
+
+- Added fixture files:
+  - `test/Tools/Inputs/avip-mini-jtag/sim/JtagCompile.f`
+  - `test/Tools/Inputs/avip-mini-jtag/src/hdlTop/jtagControllerDeviceAgentBfm/JtagControllerDeviceAgentBfm.sv`
+  - `test/Tools/Inputs/avip-mini-jtag/src/hdlTop/jtagTargetDeviceAgentBfm/JtagTargetDeviceDriverBfm.sv`
+- Added test:
+  - `test/Tools/run-avip-circt-verilog-jtag-rewrites.test`
+    - verifies rewritten temporary files are used
+    - verifies bind-target normalization
+    - verifies enum-cast indexing rewrite
+- Focused lit run:
+  - 5/5 PASS:
+    - `run-avip-circt-verilog-jtag-rewrites.test`
+    - `run-avip-circt-verilog-axi4lite.test`
+    - `run-avip-circt-verilog-filelist-updir.test`
+    - `run-avip-circt-verilog-ir-hw.test`
+    - `circt-verilog/avip-timescale-default.test`
+
+### Validation
+
+- Drop-events focused lit suite:
+  - 4/4 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.7--sequence$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
+- xprop-profile expected failures remain baseline-tracked.

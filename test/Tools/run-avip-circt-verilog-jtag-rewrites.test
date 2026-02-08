@@ -1,0 +1,15 @@
+// RUN: env CIRCT_VERILOG=%S/Inputs/avip-mini-axi4lite/print_args.sh \
+// RUN:   OUT=%t.log %S/../../utils/run_avip_circt_verilog.sh \
+// RUN:   %S/Inputs/avip-mini-jtag %S/Inputs/avip-mini-jtag/sim/JtagCompile.f
+// RUN: cat %t.log | FileCheck %s --check-prefix=ARGS
+// RUN: driver_tmp=$(grep -F '/.avip_tmp/JtagTargetDeviceDriverBfm.sv' %t.log | head -n1) && test -n "$driver_tmp" && cat "$driver_tmp" | FileCheck %s --check-prefix=DRIVER
+// RUN: agent_tmp=$(grep -F '/.avip_tmp/JtagControllerDeviceAgentBfm.sv' %t.log | head -n1) && test -n "$agent_tmp" && cat "$agent_tmp" | FileCheck %s --check-prefix=AGENT
+
+// ARGS: .avip_tmp/JtagControllerDeviceAgentBfm.sv
+// ARGS: .avip_tmp/JtagTargetDeviceDriverBfm.sv
+
+// DRIVER: registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]
+// DRIVER-NOT: registerBank[instructionRegister]
+
+// AGENT: bind JtagControllerDeviceMonitorBfm JtagControllerDeviceAssertions
+// AGENT-NOT: bind jtagControllerDeviceMonitorBfm JtagControllerDeviceAssertions
