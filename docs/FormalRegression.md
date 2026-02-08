@@ -80,6 +80,23 @@ Lane-state semantics:
 - Resume enforces a lane-state configuration fingerprint; mismatched options or
   tool context fail fast with a diagnostic and require `--reset-lane-state`.
 
+Inspect and validate lane-state artifacts (single or federated files):
+
+```bash
+python3 utils/inspect_formal_lane_state.py /tmp/formal-lanes.tsv --print-lanes
+python3 utils/inspect_formal_lane_state.py /tmp/formal-lanes-worker-a.tsv /tmp/formal-lanes-worker-b.tsv --require-config-hash --require-single-config-hash --require-lane sv-tests/BMC --json-out /tmp/formal-lanes-summary.json
+```
+
+Inspector semantics:
+- Validates lane-state row shape and field types using the same schema rules as
+  `run_formal_all.sh`.
+- Merges duplicate lane rows with the same precedence policy used by the
+  harness (`config_hash` compatibility + `updated_at_utc` tie-break behavior).
+- Supports CI gating for required lane coverage and hash policy:
+  - `--require-config-hash`
+  - `--require-single-config-hash`
+  - `--require-lane <lane_id>` (repeatable)
+
 Lane-id format:
 - `sv-tests/BMC`
 - `sv-tests/LEC`

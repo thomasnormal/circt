@@ -18265,6 +18265,53 @@ ninja -C build circt-verilog
   - Fingerprint policy remains internal; no explicit external compatibility
     version contract yet.
 
+### Iteration 678
+- Formal lane-state audit utility for CI artifact inspection:
+  - Added new standalone utility:
+    - `utils/inspect_formal_lane_state.py`
+  - Supports one or more lane-state TSV inputs and validates row schema:
+    - required fields (`lane_id`, `suite`, `mode`, counters, timestamp)
+    - counters as non-negative integers
+    - `updated_at_utc` RFC3339 UTC format
+    - optional `config_hash` as 64 lowercase hex chars
+  - Implements the same lane merge precedence policy as
+    `utils/run_formal_all.sh`:
+    - key = `lane_id`
+    - reject conflicting non-empty `config_hash`
+    - prefer rows with `config_hash` over legacy hashless rows
+    - otherwise prefer newer `updated_at_utc`; reject equal-timestamp
+      conflicting payloads
+  - Adds CI-oriented gating options:
+    - `--require-config-hash`
+    - `--require-single-config-hash`
+    - `--require-lane <lane_id>` (repeatable)
+  - Emits deterministic human-readable summaries and optional machine-readable
+    JSON via `--json-out`.
+- Regression coverage:
+  - Added `test/Tools/run-formal-lane-state-inspect.test` covering:
+    - positive merge/summary/json case from two worker lane-state files
+    - negative hash conflict for same lane
+    - negative missing-hash policy failure
+    - negative required-lane-missing failure
+    - negative multi-hash policy failure
+- Documentation:
+  - Updated `docs/FormalRegression.md` with lane-state inspector usage and
+    semantics.
+- Validation status:
+  - `python3 -m py_compile utils/inspect_formal_lane_state.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-lane-state-inspect.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 5/5 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated filtered sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-inspect-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-inspect-smoke.tsv --reset-lane-state` -> PASS
+    - `python3 utils/inspect_formal_lane_state.py /tmp/formal-lane-inspect-smoke.tsv --require-config-hash --require-single-config-hash --require-lane sv-tests/BMC --require-lane sv-tests/LEC --require-lane verilator-verification/BMC --require-lane yosys/tests/sva/BMC --require-lane opentitan/LEC --json-out /tmp/formal-lane-inspect-smoke-summary.json` -> PASS
+- Current limitations / debt:
+  - Inspector currently enforces policy at lane row granularity only (no
+    per-test expected-case reconciliation).
+  - No signed provenance chain for lane-state files yet.
+  - Resume granularity in harness remains lane-level only.
+
 ---
 
 ## Architecture Reference
