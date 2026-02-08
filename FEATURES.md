@@ -100,7 +100,7 @@ to commercial simulators like Cadence Xcelium.
 | Coverage collection | WORKS | Covergroup/coverpoint sampling + reporting via MooreRuntime; implicit sample() evaluates coverpoint expressions; 4-state value extraction |
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
-| DPI-C imports | PARTIAL | Some intercepted, most stubbed |
+| DPI-C imports | PARTIAL | Some intercepted, most stubbed; UVM regex DPI (`uvm_re_comp/exec/free`) uses `std::regex` for full POSIX extended regex support |
 | `config_db` | WORKS | `config_db_implementation_t::set/get/exists` intercepted with in-memory key-value store |
 | `process::suspend/resume` | WORKS | Lowered in ImportVerilog; interpreter suspends process execution and resumes on `resume()` call |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
@@ -118,8 +118,8 @@ to commercial simulators like Cadence Xcelium.
 | I2S | Runs | Runs* | Runs* | `I2sBaseTest` at ~200 ns; *bind assertions need slang fix |
 | I3C | Runs | Runs | Runs | `i3c_base_test` at ~200 ns; pullup/wire/generate all work |
 | SPI | Runs | Runs* | Runs* | `SpiBaseTest` at ~800 ns; *bind assertions need slang fix |
-| AXI4Lite | Runs | N/A | N/A | `Axi4LiteBaseTest` at ~500 ns; has UVM_ERROR UVM/DPI/REGEX (regex DPI not implemented) |
-| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; has UVM_ERROR UVM/DPI/REGEX |
+| AXI4Lite | Runs* | N/A | N/A | `Axi4LiteBaseTest`; *exits early due to vtable dispatch gap in `uvm_task_phase::m_traverse` |
+| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; DPI/REGEX errors eliminated by `std::regex` |
 
 ## Key Fixes History
 
@@ -170,3 +170,4 @@ to commercial simulators like Cadence Xcelium.
 | Queue ops on fixed arrays | Add `UnpackedArrayType` to 5 MooreToCore patterns with `llhd::ProbeOp`/`llhd::DriveOp` for `!llhd.ref<!hw.array>` |
 | Parameterized interface dedup | Use `hasSameType()` for deduplication; different parameterizations get separate MLIR declarations |
 | Bounded delta polling (RUNPHSTIME fix) | Use delta steps for first 1000 polls, then 1ps fallback; eliminates UVM_FATAL [RUNPHSTIME] in all AVIPs |
+| UVM regex DPI (`std::regex`) | Replace manual pattern matcher with `std::regex` for full POSIX extended regex; eliminates UVM_ERROR DPI/REGEX in AXI4Lite/JTAG |
