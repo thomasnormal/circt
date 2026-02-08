@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 475)
+## Current Status - February 8, 2026 (Iteration 476)
 
 ### Test Results
 
@@ -46,6 +46,57 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 476
+
+1. **Fixed `always @(cb)` concurrent assertion hoisting**
+   - Resolved a bug where concurrent assertions inside timed statements with
+     clocking-block event controls failed with:
+     `unsupported arbitrary symbol reference 'cb'`.
+   - Root cause: assertion hoisting used the raw `SignalEventControl` expression
+     (`cb`) as a clock signal instead of canonicalizing to the clocking block's
+     underlying event signal.
+   - Updated both:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp` to canonicalize
+       `currentAssertionClock` through clocking blocks / single-event lists.
+     - `lib/Conversion/ImportVerilog/Statements.cpp` to canonicalize hoisted
+       assertion clocks before building `verif.clocked_assert/assume/cover`.
+
+2. **Regression coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/clocking-event-wait.sv`
+       with `test_clocking_event_assert` to lock `always @(cb)` + concurrent
+       assertion lowering.
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-clocking-block-procedural-assert-unsat-e2e.sv`
+       (`always @(cb) assert property ($past(val) != val);`).
+
+3. **Validation**
+   - Targeted repro:
+     - `/tmp/sva_stmt_cb.sv` now imports successfully (previously errored).
+   - Lit:
+     - `test/Conversion/ImportVerilog/clocking-event-wait.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+   - Direct BMC:
+     - `sva-clocking-block-procedural-assert-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Still unsupported/underused Slang areas with high long-term value:
+     - sequence/property event controls as procedural events (`@seq`, `@prop`)
+     - richer assertion match-item subroutine side effects beyond no-op stubs
+     - broader cross-clock sampled-value semantics with disable/enable/ranges.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in broader flows;
+     initialization/X correlation remains the top LEC correctness item.
+   - Upstream divergence remains large; we still need a planned sync window.
 
 ### Session Summary - Iteration 475
 
