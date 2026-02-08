@@ -9972,6 +9972,63 @@ ninja -C build circt-verilog
   - Continue four-state value/unknown propagation unification in witness
     cast/slice lowering.
 
+### Iteration 521
+- Yosys SVA BMC expectation-diff tooling:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with baseline-diff controls:
+    - `EXPECT_DIFF_BASELINE` (matrix file to diff against)
+    - `EXPECT_DIFF_BASELINE_DEFAULT_EXPECTED` (fallback expected outcome for
+      baseline rows with missing expected field)
+    - `EXPECT_DIFF_FAIL_ON_CHANGE` (when `1`, any added/removed/changed row
+      increments failures)
+    - `EXPECT_DIFF_FILE` (optional file sink for diff report)
+  - Added deterministic diff reporting:
+    - `expect-diff summary: added=<n>, removed=<n>, changed=<n>`
+    - `EXPECT_DIFF_ADDED: <key> -> <expected>`
+    - `EXPECT_DIFF_REMOVED: <key> (was <expected>)`
+    - `EXPECT_DIFF_CHANGED: <key> <old> -> <new>`
+  - Kept compatibility with legacy xfail-only data while enabling CI-friendly
+    baseline churn visibility.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-expect-diff.test`:
+    - verifies added/removed/changed reporting
+    - verifies `EXPECT_DIFF_FAIL_ON_CHANGE=1` fails the run
+  - Re-ran harness tests:
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 5/5 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Expectation diffing currently compares declared baseline matrices; it does
+    not yet emit an auto-synthesized candidate matrix from observed outcomes.
+  - xprop pass-mode failures in yosys SVA remain baseline-tracked, not
+    semantically resolved.
+  - Four-state witness unknown propagation is still approximation-based in
+    cast/slice flows.
+- Long-term features to prioritize:
+  - Add machine-readable artifacts (JSON/TSV) for expectation diffs to support
+    dashboarding and automated triage.
+  - Implement observed-outcome snapshot generation to support baseline
+    regeneration workflows.
+  - Continue semantic root-cause work to retire xprop xfails and improve
+    four-state fidelity.
+
 ---
 
 ## Architecture Reference
