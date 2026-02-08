@@ -17530,7 +17530,36 @@ ninja -C build circt-verilog
       - lanes: `sv-tests`/`verilator-verification`/`yosys`/`opentitan` PASS,
         AVIP `axi4Lite_avip` known FAIL
 - Current limitations / debt:
-  - JSONL rows are not signed and do not include row ordering/hash integrity.
+  - JSONL rows are not signed; hash chain is unauthenticated.
+  - Operation rows remain summary-only (no row-level textual diff data).
+
+### Iteration 659
+- Dry-run JSONL integrity metadata:
+  - Extended `run_end` payload in `utils/run_formal_all.sh` with:
+    - `row_count`: number of same-`run_id` rows written before `run_end`
+    - `payload_sha256`: SHA-256 digest over canonicalized prior rows for the
+      same `run_id`
+  - Hash input is stable JSON (`sort_keys=True`, compact separators) joined by
+    newline, enabling deterministic downstream verification.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` now checks `run_end` includes `payload_sha256` and
+      `row_count=3` for the dry-run scenario.
+- Documentation:
+  - Updated `docs/FormalRegression.md` to document `run_end` integrity fields
+    (`row_count`, `payload_sha256`).
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke verification:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+      - final segment rows: `run_meta`, mutator operations, `run_end`
+      - `run_end.row_count` matches prior same-run rows
+      - `run_end.payload_sha256` emitted
+- Current limitations / debt:
+  - Integrity hash is unauthenticated (no signature/trust chain).
   - Operation rows remain summary-only (no row-level textual diff data).
 
 ---
