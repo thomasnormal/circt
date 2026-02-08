@@ -32415,3 +32415,59 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Budget prune currently has no dry-run/preview mode.
 - No automated budget-value recalibration (only stale-row removal).
+
+## Iteration 654 - February 8, 2026
+
+### Global Dry-Run for Expectation Maintenance
+
+- Added `--expectations-dry-run` to `utils/run_formal_all.sh`.
+- Dry-run mode now applies uniformly to all expectation mutators:
+  - budget prune (`--prune-expected-failures-file`)
+  - budget refresh (`--refresh-expected-failures-file`)
+  - case prune (`--prune-expected-failure-cases-file`)
+  - case refresh (`--refresh-expected-failure-cases-file`)
+- Behavior:
+  - computes full refresh/prune results
+  - prints planned mutation summaries
+  - does not rewrite target expectation files
+
+### Diagnostics
+
+- Added explicit dry-run messages:
+  - `dry-run: would prune expected-failures file: ...`
+  - `dry-run: would refresh expected-failures file: ...`
+  - `dry-run: would prune expected-failure-cases file: ...`
+  - `dry-run: would refresh expected-failure-cases file: ...`
+- Existing row-count summaries remain emitted for previewed operations.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added `DRYRUNBUDGET` case: verifies budget file unchanged under dry-run
+      refresh
+    - added `DRYRUNCASE` case: verifies case file unchanged under dry-run prune
+  - `docs/FormalRegression.md`
+    - documented global dry-run option and usage
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Formal lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused tests:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke sweep with dry-run enabled across all mutators:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+    - expectation files verified unchanged by `cmp` (`DRYRUN_FILES_UNCHANGED`)
+
+### Remaining Limitations
+
+- Dry-run currently reports via console only; no structured diff artifact yet.
+- Dry-run is global, not per-operation granular.
