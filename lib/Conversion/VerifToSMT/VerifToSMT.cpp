@@ -3725,6 +3725,9 @@ struct VerifBoundedModelCheckingOpConversion
             ? smt::SolverOp::create(rewriter, loc, TypeRange{}, ValueRange{})
             : smt::SolverOp::create(rewriter, loc, rewriter.getI1Type(),
                                     ValueRange{});
+    if (auto mixedEventSources =
+            op->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources"))
+      solver->setAttr("bmc_mixed_event_sources", mixedEventSources);
     rewriter.createBlock(&solver.getBodyRegion());
 
     auto inlineBMCBlock =

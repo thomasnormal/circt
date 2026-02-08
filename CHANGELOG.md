@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 490 - February 8, 2026
+
+### Summary
+
+Extended mixed event-list provenance through Verif-to-SMT and into
+`--print-counterexample` output, so SAT/UNKNOWN traces now include explicit
+mixed wakeup-source context.
+
+### Fixes
+
+1. **Preserve mixed-event provenance on `smt.solver`**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `bmc_mixed_event_sources` on `verif.bmc` is now copied to `smt.solver`
+     during BMC lowering.
+
+2. **Expose provenance in counterexample reporting**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - `circt-bmc --print-counterexample` now prints:
+     - `mixed event sources:`
+     - indexed source sets such as
+       `sequence, signal[0]:posedge:iff`
+   - This appears for SAT/UNKNOWN runs when provenance metadata exists.
+
+3. **Regression coverage**
+   - Added conversion regression:
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+       - checks `smt.solver` carries `bmc_mixed_event_sources`.
+   - Added tool regression:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       - checks SAT output includes mixed-event provenance plus model values.
+
+4. **Validation**
+   - New/updated regressions:
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - Existing `bmc-run-smtlib-sat-counterexample.mlir`: PASS
+   - Targeted BMC/Import revalidation:
+     - `lower-to-bmc-mixed-event-sources.mlir`: PASS
+     - `sequence-event-control.sv`: PASS
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `utils/run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `utils/run_verilator_verification_circt_lec.sh` (`assert_rose`): PASS
+     - `utils/run_yosys_sva_circt_lec.sh` (`basic00`): PASS
+
+### Remaining Gaps
+
+- Provenance text currently reports source sets, but does not yet map SAT model
+  values back to which specific mixed source arm fired at a given step.
+- Sequence-only multiclock OR event-list lowering still lacks equivalent
+  provenance metadata.
+- Direct procedural `always @(property)` remains frontend-blocked by Slang.
+
 ## Iteration 489 - February 8, 2026
 
 ### Summary

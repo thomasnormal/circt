@@ -295,6 +295,37 @@ static bool hasSMTSolver(mlir::ModuleOp module) {
   return found;
 }
 
+static void printMixedEventSources(ModuleOp module) {
+  bool printedHeader = false;
+  module.walk([&](mlir::smt::SolverOp solver) {
+    auto mixedSources =
+        solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
+    if (!mixedSources || mixedSources.empty())
+      return;
+    if (!printedHeader) {
+      llvm::errs() << "mixed event sources:\n";
+      printedHeader = true;
+    }
+    for (unsigned i = 0; i < mixedSources.size(); ++i) {
+      auto sourceSet = dyn_cast<ArrayAttr>(mixedSources[i]);
+      if (!sourceSet)
+        continue;
+      llvm::errs() << "  [" << i << "] ";
+      bool first = true;
+      for (Attribute sourceAttr : sourceSet) {
+        auto source = dyn_cast<StringAttr>(sourceAttr);
+        if (!source)
+          continue;
+        if (!first)
+          llvm::errs() << ", ";
+        llvm::errs() << source.getValue();
+        first = false;
+      }
+      llvm::errs() << "\n";
+    }
+  });
+}
+
 static bool parseDefineFun(StringRef text, size_t &pos, StringRef &name,
                            StringRef &value) {
   auto skipWs = [&](size_t &p) {
@@ -747,16 +778,18 @@ runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
   }
   StringRef token = *selectedRun->token;
 
-  if (printCounterexample && (token == "sat" || token == "unknown") &&
-      !declaredNames.empty()) {
-    auto modelValues = parseZ3Model(selectedRun->combinedOutput);
-    if (!modelValues.empty()) {
-      circt_smt_print_model_header();
-      for (const auto &name : declaredNames) {
-        auto it = modelValues.find(name);
-        if (it == modelValues.end())
-          continue;
-        llvm::errs() << "  " << name << " = " << it->second << "\n";
+  if (printCounterexample && (token == "sat" || token == "unknown")) {
+    printMixedEventSources(module);
+    if (!declaredNames.empty()) {
+      auto modelValues = parseZ3Model(selectedRun->combinedOutput);
+      if (!modelValues.empty()) {
+        circt_smt_print_model_header();
+        for (const auto &name : declaredNames) {
+          auto it = modelValues.find(name);
+          if (it == modelValues.end())
+            continue;
+          llvm::errs() << "  " << name << " = " << it->second << "\n";
+        }
       }
     }
   }

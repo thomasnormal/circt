@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 489)
+## Current Status - February 8, 2026 (Iteration 490)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed provenance through `verif.bmc`; next: SMT witness plumb + sequence-only OR provenance + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed solver/counterexample provenance text; next: per-step trigger attribution + sequence-only OR provenance + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,63 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 490
+
+1. **Mixed-event provenance to SMT solver + counterexample text**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+       - `bmc_mixed_event_sources` is now propagated from `verif.bmc` to
+         `smt.solver`.
+     - `tools/circt-bmc/circt-bmc.cpp`
+       - `--print-counterexample` now emits mixed-event provenance blocks for
+         SAT/UNKNOWN runs:
+         - `mixed event sources:`
+         - `  [i] sequence, signal[j]:...`
+   - This is the first end-to-end user-visible consumption of mixed-event
+     provenance in the BMC flow.
+
+2. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+       - checks `smt.solver` preserves `bmc_mixed_event_sources`.
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       - checks SAT counterexample output includes provenance text and model
+         values.
+
+3. **Validation**
+   - New/updated regressions:
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample.mlir` (`FileCheck`): PASS
+   - Targeted BMC/Import revalidation:
+     - `lower-to-bmc-mixed-event-sources.mlir`: PASS
+     - `sequence-event-control.sv`: PASS
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `run_verilator_verification_circt_lec.sh` smoke subset: PASS
+     - `run_yosys_sva_circt_lec.sh` smoke subset: PASS
+
+4. **Current limitations and best long-term next features**
+   - Provenance now reaches solver and text output, but we still do not provide
+     per-time-step trigger attribution (which source arm fired at cycle `k`).
+   - Sequence-only multiclock OR lowering still lacks matching provenance.
+   - Procedural `always @(property)` remains blocked by frontend legality.
+   - High-value next work:
+     - add per-step trigger attribution in model/witness decode,
+     - extend provenance to sequence-only multiclock OR paths,
+     - pursue an upstream-compatible procedural property-event strategy.
 
 ### Session Summary - Iteration 489
 
