@@ -3744,6 +3744,89 @@ def validate_context_value(value, key_spec, field_name: str, format_output: bool
     return value
 
 
+def parse_context_presence_clause(payload, field_name: str):
+    if not isinstance(payload, dict) or not payload:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    unknown_keys = sorted(set(payload.keys()) - {"keys_all", "keys_any"})
+    if unknown_keys:
+        fail(
+            f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
+        )
+    keys_all = None
+    if "keys_all" in payload:
+        keys_all_raw = payload["keys_all"]
+        if not isinstance(keys_all_raw, list) or not keys_all_raw:
+            fail(
+                f"error: invalid {field_name}.keys_all: expected non-empty array"
+            )
+        keys_all = []
+        keys_all_seen = set()
+        for key in keys_all_raw:
+            validate_context_key_name(key, f"{field_name}.keys_all")
+            if key in keys_all_seen:
+                fail(
+                    f"error: invalid {field_name}.keys_all: duplicate key '{key}'"
+                )
+            keys_all_seen.add(key)
+            keys_all.append(key)
+    keys_any = None
+    if "keys_any" in payload:
+        keys_any_raw = payload["keys_any"]
+        if not isinstance(keys_any_raw, list) or not keys_any_raw:
+            fail(
+                f"error: invalid {field_name}.keys_any: expected non-empty array"
+            )
+        keys_any = []
+        keys_any_seen = set()
+        for key in keys_any_raw:
+            validate_context_key_name(key, f"{field_name}.keys_any")
+            if key in keys_any_seen:
+                fail(
+                    f"error: invalid {field_name}.keys_any: duplicate key '{key}'"
+                )
+            keys_any_seen.add(key)
+            keys_any.append(key)
+    if keys_all is None and keys_any is None:
+        fail(
+            f"error: invalid {field_name}: expected at least one of keys_all or keys_any"
+        )
+    return {
+        "keys_all": keys_all,
+        "keys_any": keys_any,
+    }
+
+
+def is_context_presence_clause_satisfied(context, clause):
+    keys_all = clause["keys_all"]
+    if keys_all is not None:
+        for key in keys_all:
+            if key not in context:
+                return False
+    keys_any = clause["keys_any"]
+    if keys_any is not None:
+        matched = False
+        for key in keys_any:
+            if key in context:
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
+def format_context_presence_clause(clause):
+    parts = []
+    keys_all = clause["keys_all"]
+    if keys_all is not None:
+        parts.append("keys_all=[" + ", ".join(keys_all) + "]")
+    keys_any = clause["keys_any"]
+    if keys_any is not None:
+        parts.append("keys_any=[" + ", ".join(keys_any) + "]")
+    return ", ".join(parts)
+
+
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
     field_name = (
         "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON"
@@ -3766,7 +3849,14 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(f"error: invalid {field_name}: expected non-empty JSON object")
     unknown_keys = sorted(
         set(payload.keys())
-        - {"schema_version", "allow_unknown_keys", "validate_merged_context", "keys"}
+        - {
+            "schema_version",
+            "allow_unknown_keys",
+            "validate_merged_context",
+            "keys",
+            "all_of",
+            "any_of",
+        }
     )
     if unknown_keys:
         fail(
@@ -3796,6 +3886,36 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(
             f"error: invalid {field_name}.keys: expected non-empty object"
         )
+    all_of_clauses = None
+    if "all_of" in payload:
+        all_of_raw = payload["all_of"]
+        if not isinstance(all_of_raw, list) or not all_of_raw:
+            fail(
+                f"error: invalid {field_name}.all_of: expected non-empty array"
+            )
+        all_of_clauses = []
+        for idx, clause in enumerate(all_of_raw):
+            all_of_clauses.append(
+                parse_context_presence_clause(
+                    clause,
+                    f"{field_name}.all_of[{idx}]",
+                )
+            )
+    any_of_clauses = None
+    if "any_of" in payload:
+        any_of_raw = payload["any_of"]
+        if not isinstance(any_of_raw, list) or not any_of_raw:
+            fail(
+                f"error: invalid {field_name}.any_of: expected non-empty array"
+            )
+        any_of_clauses = []
+        for idx, clause in enumerate(any_of_raw):
+            any_of_clauses.append(
+                parse_context_presence_clause(
+                    clause,
+                    f"{field_name}.any_of[{idx}]",
+                )
+            )
     key_specs = {}
     for context_key, key_spec in keys_payload.items():
         validate_context_key_name(context_key, f"{field_name}.keys")
@@ -3932,6 +4052,8 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         "allow_unknown_keys": allow_unknown_keys,
         "validate_merged_context": validate_merged_context,
         "key_specs": key_specs,
+        "all_of_clauses": all_of_clauses,
+        "any_of_clauses": any_of_clauses,
     }
 
 
@@ -3998,6 +4120,27 @@ def validate_selector_profile_route_context_map(
                         f"{field_name}: missing required context key '{required_key}' "
                         f"required by '{key}'"
                     )
+        all_of_clauses = schema_spec["all_of_clauses"]
+        if all_of_clauses is not None:
+            for idx, clause in enumerate(all_of_clauses):
+                if not is_context_presence_clause_satisfied(context, clause):
+                    fail(
+                        "error: invalid "
+                        f"{field_name}: unsatisfied schema all_of clause #{idx + 1} "
+                        f"({format_context_presence_clause(clause)})"
+                    )
+        any_of_clauses = schema_spec["any_of_clauses"]
+        if any_of_clauses is not None:
+            matched = False
+            for clause in any_of_clauses:
+                if is_context_presence_clause_satisfied(context, clause):
+                    matched = True
+                    break
+            if not matched:
+                fail(
+                    "error: invalid "
+                    f"{field_name}: unsatisfied schema any_of clauses"
+                )
     return context
 
 
