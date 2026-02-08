@@ -84,6 +84,10 @@ Options:
   --refresh-expected-failure-cases-include-id-regex REGEX
                          Refresh only case rows with id matching REGEX
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
+  --include-lane-regex REGEX
+                         Run only lanes whose lane-id matches REGEX
+  --exclude-lane-regex REGEX
+                         Skip lanes whose lane-id matches REGEX
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
@@ -152,6 +156,8 @@ REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX=""
 REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX=""
 REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX=""
 JSON_SUMMARY_FILE=""
+INCLUDE_LANE_REGEX=""
+EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
 BMC_RUN_SMTLIB=0
@@ -267,6 +273,10 @@ while [[ $# -gt 0 ]]; do
       REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX="$2"; shift 2 ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
+    --include-lane-regex)
+      INCLUDE_LANE_REGEX="$2"; shift 2 ;;
+    --exclude-lane-regex)
+      EXCLUDE_LANE_REGEX="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -291,6 +301,26 @@ fi
 if ! [[ "$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" =~ ^[0-9]+$ ]]; then
   echo "invalid --expectations-dry-run-report-max-sample-rows: expected non-negative integer" >&2
   exit 1
+fi
+if [[ -n "$INCLUDE_LANE_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$INCLUDE_LANE_REGEX" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --include-lane-regex: $INCLUDE_LANE_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$EXCLUDE_LANE_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$EXCLUDE_LANE_REGEX" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --exclude-lane-regex: $EXCLUDE_LANE_REGEX" >&2
+    exit 1
+  fi
 fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
       ! -r "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
@@ -507,6 +537,21 @@ run_suite() {
   return $ec
 }
 
+lane_enabled() {
+  local lane_id="$1"
+  if [[ -n "$INCLUDE_LANE_REGEX" ]]; then
+    if ! printf '%s\n' "$lane_id" | grep -Eq "$INCLUDE_LANE_REGEX"; then
+      return 1
+    fi
+  fi
+  if [[ -n "$EXCLUDE_LANE_REGEX" ]]; then
+    if printf '%s\n' "$lane_id" | grep -Eq "$EXCLUDE_LANE_REGEX"; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
 extract_kv() {
   local line="$1"
   local key="$2"
@@ -537,7 +582,7 @@ record_simple_result() {
 }
 
 # sv-tests BMC
-if [[ -d "$SV_TESTS_DIR" ]]; then
+if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
   run_suite sv-tests-bmc \
     env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
     BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
@@ -558,7 +603,7 @@ if [[ -d "$SV_TESTS_DIR" ]]; then
 fi
 
 # sv-tests LEC
-if [[ -d "$SV_TESTS_DIR" ]]; then
+if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
   run_suite sv-tests-lec \
     env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
@@ -577,7 +622,7 @@ if [[ -d "$SV_TESTS_DIR" ]]; then
 fi
 
 # verilator-verification BMC
-if [[ -d "$VERILATOR_DIR" ]]; then
+if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
   run_suite verilator-bmc \
     env OUT="$OUT_DIR/verilator-bmc-results.txt" \
     BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
@@ -598,7 +643,7 @@ if [[ -d "$VERILATOR_DIR" ]]; then
 fi
 
 # verilator-verification LEC
-if [[ -d "$VERILATOR_DIR" ]]; then
+if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
   run_suite verilator-lec \
     env OUT="$OUT_DIR/verilator-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
@@ -617,7 +662,7 @@ if [[ -d "$VERILATOR_DIR" ]]; then
 fi
 
 # yosys SVA BMC
-if [[ -d "$YOSYS_DIR" ]]; then
+if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
   # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
   # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
   # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -642,7 +687,7 @@ if [[ -d "$YOSYS_DIR" ]]; then
 fi
 
 # yosys SVA LEC
-if [[ -d "$YOSYS_DIR" ]]; then
+if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   run_suite yosys-lec \
     env OUT="$OUT_DIR/yosys-lec-results.txt" \
     LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
@@ -661,7 +706,7 @@ if [[ -d "$YOSYS_DIR" ]]; then
 fi
 
 # OpenTitan LEC (optional)
-if [[ "$WITH_OPENTITAN" == "1" ]]; then
+if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
   opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
   : > "$opentitan_case_results"
   opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
@@ -726,6 +771,10 @@ if [[ "$WITH_AVIP" == "1" ]]; then
   for avip in $AVIP_GLOB; do
     if [[ -d "$avip" ]]; then
       avip_name="$(basename "$avip")"
+      avip_lane_id="avip/${avip_name}/compile"
+      if ! lane_enabled "$avip_lane_id"; then
+        continue
+      fi
       run_suite "avip-${avip_name}" \
         env OUT="$OUT_DIR/${avip_name}-circt-verilog.log" \
         CIRCT_VERILOG="$CIRCT_VERILOG_BIN_AVIP" \

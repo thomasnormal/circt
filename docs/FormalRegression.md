@@ -54,6 +54,23 @@ Restrict baseline history to a time window (in days from latest suite baseline):
 utils/run_formal_all.sh --strict-gate --baseline-window 7 --baseline-window-days 30
 ```
 
+Shard/route a run to selected lane IDs:
+
+```bash
+utils/run_formal_all.sh --include-lane-regex '^sv-tests/(BMC|LEC)$'
+utils/run_formal_all.sh --include-lane-regex '^avip/.*/compile$' --exclude-lane-regex '^avip/spi_avip/compile$'
+```
+
+Lane-id format:
+- `sv-tests/BMC`
+- `sv-tests/LEC`
+- `verilator-verification/BMC`
+- `verilator-verification/LEC`
+- `yosys/tests/sva/BMC`
+- `yosys/tests/sva/LEC`
+- `opentitan/LEC`
+- `avip/<name>/compile`
+
 Fail only on specific gate classes:
 
 ```bash
