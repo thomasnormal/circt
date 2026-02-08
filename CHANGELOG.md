@@ -28782,3 +28782,81 @@ CIRCT/slang correctly enforces LRM restrictions.
   routing yet.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 593 - February 8, 2026
+
+### Yosys SVA BMC Reusable Selector Macros
+
+- Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON`
+  to define named selector expressions.
+- Added selector expression combinator:
+  - `macro`: `{ "macro": "<name>" }`
+- Macro references are supported in both selector clauses and selector
+  profiles and can be combined with other fields in the same expression object.
+
+### Migration Semantics
+
+- Added strict macro parsing:
+  - macros JSON must be a non-empty object
+  - macro names must match `[A-Za-z0-9][A-Za-z0-9_.-]*`
+  - macro entries must be non-empty selector expression objects
+- Added recursive macro resolution with diagnostics for:
+  - unknown macro references
+  - macro dependency cycles
+- Extended recursive selector evaluation and row timestamp dependency traversal
+  to include expanded macro expressions.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - positive macro rewrite behavior in direct selector clauses
+    - positive macro rewrite behavior in selector profiles
+    - unknown macro rejection
+    - macro cycle rejection
+    - invalid macro JSON-shape rejection
+- Focused lit run:
+  - 9/9 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Selector macros are currently non-parameterized and local to one JSON
+  policy payload.
+- Profile layering is ordered stacking only; no environment-aware policy
+  routing yet.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.

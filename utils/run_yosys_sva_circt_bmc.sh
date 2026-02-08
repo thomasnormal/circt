@@ -55,6 +55,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST="${YOSYS_
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE:-all}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST:-}"
@@ -2016,6 +2017,7 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_history_file_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST"
   local drop_events_rewrite_selector_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE"
   local drop_events_rewrite_selector_clauses_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
+  local drop_events_rewrite_selector_macros_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON"
   local drop_events_rewrite_selector_profiles_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
   local drop_events_rewrite_selector_profile_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST"
   local drop_events_rewrite_selector_profile_default_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST"
@@ -3022,7 +3024,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3049,12 +3051,13 @@ rewrite_schema_version_list_raw = sys.argv[13]
 rewrite_history_file_list_raw = sys.argv[14]
 rewrite_selector_mode = sys.argv[15]
 rewrite_selector_clauses_json_raw = sys.argv[16]
-rewrite_selector_profiles_json_raw = sys.argv[17]
-rewrite_selector_profile_list_raw = sys.argv[18]
-rewrite_selector_profile_default_list_raw = sys.argv[19]
-rewrite_selector_profile_overlay_list_raw = sys.argv[20]
-rewrite_row_generated_at_utc_min = sys.argv[21]
-rewrite_row_generated_at_utc_max = sys.argv[22]
+rewrite_selector_macros_json_raw = sys.argv[17]
+rewrite_selector_profiles_json_raw = sys.argv[18]
+rewrite_selector_profile_list_raw = sys.argv[19]
+rewrite_selector_profile_default_list_raw = sys.argv[20]
+rewrite_selector_profile_overlay_list_raw = sys.argv[21]
+rewrite_row_generated_at_utc_min = sys.argv[22]
+rewrite_row_generated_at_utc_max = sys.argv[23]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3212,7 +3215,7 @@ def compile_clause_regex(value, field_name: str):
         fail(f"error: invalid {field_name}: {value} ({ex})")
 
 
-def parse_selector_clause_array(payload, field_name: str):
+def parse_selector_clause_array(payload, field_name: str, macro_specs=None, macro_field_name=None):
     if not isinstance(payload, list) or not payload:
         fail(
             f"error: invalid {field_name}: expected non-empty JSON array"
@@ -3227,9 +3230,44 @@ def parse_selector_clause_array(payload, field_name: str):
         "row_generated_at_utc_min",
         "row_generated_at_utc_max",
     }
-    combinator_keys = {"all_of", "any_of", "not", "at_least", "at_most", "exactly"}
+    combinator_keys = {"all_of", "any_of", "not", "at_least", "at_most", "exactly", "macro"}
+    macro_specs = macro_specs or {}
+    if macro_field_name is None:
+        macro_field_name = (
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON"
+        )
+    macro_cache = {}
+    macro_state = {}
+    macro_stack = []
 
     def parse_selector_expression(expr, expr_field_name: str):
+        def resolve_macro(macro_name: str, ref_field_name: str):
+            state = macro_state.get(macro_name, 0)
+            if state == 2:
+                return macro_cache[macro_name]
+            if state == 1:
+                cycle_start = 0
+                for i, name in enumerate(macro_stack):
+                    if name == macro_name:
+                        cycle_start = i
+                        break
+                cycle_path = macro_stack[cycle_start:] + [macro_name]
+                fail(
+                    f"error: invalid {macro_field_name}: macro cycle detected ({' -> '.join(cycle_path)})"
+                )
+            raw_expr = macro_specs.get(macro_name)
+            if raw_expr is None:
+                fail(
+                    f"error: invalid {ref_field_name}: unknown macro '{macro_name}'"
+                )
+            macro_state[macro_name] = 1
+            macro_stack.append(macro_name)
+            parsed_expr = parse_selector_expression(raw_expr, f"{macro_field_name}.{macro_name}")
+            macro_stack.pop()
+            macro_state[macro_name] = 2
+            macro_cache[macro_name] = parsed_expr
+            return parsed_expr
+
         def parse_cardinality_spec(value, spec_field_name: str):
             if not isinstance(value, dict) or not value:
                 fail(
@@ -3356,6 +3394,20 @@ def parse_selector_clause_array(payload, field_name: str):
                 expr["exactly"], f"{expr_field_name}.exactly"
             )
 
+        macro_expression = None
+        if "macro" in expr:
+            macro_value = expr["macro"]
+            if not isinstance(macro_value, str) or not macro_value.strip():
+                fail(
+                    f"error: invalid {expr_field_name}.macro: expected non-empty string"
+                )
+            macro_name = macro_value.strip()
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", macro_name):
+                fail(
+                    f"error: invalid {expr_field_name}.macro: invalid macro name '{macro_name}'"
+                )
+            macro_expression = resolve_macro(macro_name, f"{expr_field_name}.macro")
+
         has_base_predicate = bool(base_keys.intersection(expr.keys()))
         if (
             not has_base_predicate
@@ -3365,6 +3417,7 @@ def parse_selector_clause_array(payload, field_name: str):
             and at_least_spec is None
             and at_most_spec is None
             and exactly_spec is None
+            and macro_expression is None
         ):
             fail(
                 f"error: invalid {expr_field_name}: expected selector predicates or combinators"
@@ -3401,6 +3454,7 @@ def parse_selector_clause_array(payload, field_name: str):
             "at_least_spec": at_least_spec,
             "at_most_spec": at_most_spec,
             "exactly_spec": exactly_spec,
+            "macro_expression": macro_expression,
         }
 
     clauses = []
@@ -3409,7 +3463,37 @@ def parse_selector_clause_array(payload, field_name: str):
     return clauses
 
 
-def parse_selector_clauses(raw: str):
+def parse_selector_macros(raw: str):
+    if not raw:
+        return {}
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON"
+    )
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(f"error: invalid {field_name}: expected JSON object")
+    if not isinstance(payload, dict) or not payload:
+        fail(f"error: invalid {field_name}: expected non-empty JSON object")
+    macros = {}
+    for macro_name, macro_expr in payload.items():
+        if not isinstance(macro_name, str) or not macro_name:
+            fail(
+                f"error: invalid {field_name}: macro names must be non-empty strings"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", macro_name):
+            fail(
+                f"error: invalid {field_name}: invalid macro name '{macro_name}'"
+            )
+        if not isinstance(macro_expr, dict) or not macro_expr:
+            fail(
+                f"error: invalid {field_name}.{macro_name}: expected non-empty object"
+            )
+        macros[macro_name] = macro_expr
+    return macros
+
+
+def parse_selector_clauses(raw: str, macro_specs):
     if not raw:
         return None
     field_name = (
@@ -3419,7 +3503,12 @@ def parse_selector_clauses(raw: str):
         payload = json.loads(raw)
     except Exception:
         fail(f"error: invalid {field_name}: expected JSON array")
-    return parse_selector_clause_array(payload, field_name)
+    return parse_selector_clause_array(
+        payload,
+        field_name,
+        macro_specs,
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON",
+    )
 
 
 def parse_selector_profile_name_list(raw: str, field_name: str):
@@ -3464,7 +3553,7 @@ def parse_selector_profile_name_list(raw: str, field_name: str):
     return names
 
 
-def parse_selector_profiles(raw: str):
+def parse_selector_profiles(raw: str, macro_specs):
     if not raw:
         return None
     field_name = (
@@ -3491,7 +3580,12 @@ def parse_selector_profiles(raw: str):
         if isinstance(profile_value, list):
             profile_specs[profile_name] = {
                 "extends": [],
-                "clauses": parse_selector_clause_array(profile_value, profile_field),
+                "clauses": parse_selector_clause_array(
+                    profile_value,
+                    profile_field,
+                    macro_specs,
+                    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON",
+                ),
             }
             continue
         if not isinstance(profile_value, dict) or not profile_value:
@@ -3540,7 +3634,10 @@ def parse_selector_profiles(raw: str):
         clauses = []
         if "clauses" in profile_value:
             clauses = parse_selector_clause_array(
-                profile_value["clauses"], f"{profile_field}.clauses"
+                profile_value["clauses"],
+                f"{profile_field}.clauses",
+                macro_specs,
+                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON",
             )
         if not extends and not clauses:
             fail(
@@ -3589,7 +3686,10 @@ def parse_selector_profiles(raw: str):
     return resolved
 
 
-rewrite_selector_clauses = parse_selector_clauses(rewrite_selector_clauses_json_raw)
+rewrite_selector_macros = parse_selector_macros(rewrite_selector_macros_json_raw)
+rewrite_selector_clauses = parse_selector_clauses(
+    rewrite_selector_clauses_json_raw, rewrite_selector_macros
+)
 rewrite_selector_profile_names = parse_selector_profile_name_list(
     rewrite_selector_profile_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST",
@@ -3602,7 +3702,9 @@ rewrite_selector_profile_overlay_names = parse_selector_profile_name_list(
     rewrite_selector_profile_overlay_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
 )
-rewrite_selector_profiles = parse_selector_profiles(rewrite_selector_profiles_json_raw)
+rewrite_selector_profiles = parse_selector_profiles(
+    rewrite_selector_profiles_json_raw, rewrite_selector_macros
+)
 rewrite_selector_profile_requests = []
 for profile_name in rewrite_selector_profile_default_names:
     rewrite_selector_profile_requests.append(
@@ -3843,6 +3945,8 @@ def selected_for_rewrite(
                 if selector_expression_matches(child)
             )
             checks.append(match_count == expr["exactly_spec"]["count"])
+        if expr["macro_expression"] is not None:
+            checks.append(selector_expression_matches(expr["macro_expression"]))
         return bool(checks) and all(checks)
 
     if rewrite_selector_clauses is not None:
@@ -3904,6 +4008,9 @@ def selector_expression_uses_row_generated_at(expr) -> bool:
         for child in expr["exactly_spec"]["expressions"]:
             if selector_expression_uses_row_generated_at(child):
                 return True
+    if expr["macro_expression"] is not None:
+        if selector_expression_uses_row_generated_at(expr["macro_expression"]):
+            return True
     return False
 
 
