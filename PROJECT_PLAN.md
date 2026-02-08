@@ -17430,6 +17430,45 @@ ninja -C build circt-verilog
   - JSONL report is append-only; no run-level envelope or schema-version field.
   - No direct diff payload (only summary counts + flags).
 
+### Iteration 656
+- Run-level metadata envelope for dry-run JSONL:
+  - Extended `--expectations-dry-run-report-jsonl` flow to emit a leading
+    `run_meta` JSONL row per invocation.
+  - `run_meta` payload fields:
+    - `operation`: `run_meta`
+    - `schema_version`: `1`
+    - `date`
+    - `out_dir`
+- Rationale and impact:
+  - Provides a stable machine-readable schema/version marker for downstream
+    parsers.
+  - Adds explicit run context so operation rows can be interpreted without
+    relying on implicit CLI invocation state.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` now verifies:
+      - `operation=run_meta`
+      - `schema_version=1`
+      - existing refresh operation rows remain present
+- Documentation:
+  - Updated `docs/FormalRegression.md` to clarify that the first JSONL row is
+    run metadata with schema version.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep with dry-run JSONL metadata:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+      - report verification:
+        - `run_meta` row present with `schema_version=1`
+- Current limitations / debt:
+  - JSONL output is still append-only and not grouped by run UUID.
+  - Operation rows remain summary-only (no per-row textual diff payload).
+
 ---
 
 ## Architecture Reference
