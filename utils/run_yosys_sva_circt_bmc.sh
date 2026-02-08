@@ -3818,7 +3818,63 @@ def validate_context_value(value, key_spec, field_name: str, format_output: bool
     return value
 
 
-def parse_int_expression(expr, field_name: str):
+DEFAULT_CONTEXT_EXPR_LIMITS = {
+    "max_int_expr_nodes": 256,
+    "max_int_expr_depth": 32,
+    "max_bool_expr_nodes": 256,
+    "max_bool_expr_depth": 32,
+}
+
+
+def create_expression_budget(max_nodes: int, max_depth: int):
+    return {"max_nodes": max_nodes, "max_depth": max_depth, "nodes": 0}
+
+
+def consume_expression_budget(budget, field_name: str, depth: int):
+    if depth > budget["max_depth"]:
+        fail(
+            f"error: invalid {field_name}: expression depth exceeds limit {budget['max_depth']}"
+        )
+    budget["nodes"] += 1
+    if budget["nodes"] > budget["max_nodes"]:
+        fail(
+            f"error: invalid {field_name}: expression node count exceeds limit {budget['max_nodes']}"
+        )
+
+
+def parse_context_expression_limits(value, field_name: str):
+    limits = dict(DEFAULT_CONTEXT_EXPR_LIMITS)
+    if value is None:
+        return limits
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    unknown_keys = sorted(set(value.keys()) - set(DEFAULT_CONTEXT_EXPR_LIMITS.keys()))
+    if unknown_keys:
+        fail(
+            f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
+        )
+    for limit_key, limit_value in value.items():
+        if (
+            not isinstance(limit_value, int)
+            or isinstance(limit_value, bool)
+            or limit_value <= 0
+        ):
+            fail(
+                f"error: invalid {field_name}.{limit_key}: expected positive integer"
+            )
+        limits[limit_key] = limit_value
+    return limits
+
+
+def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
+    if budget is None:
+        budget = create_expression_budget(
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_int_expr_nodes"],
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_int_expr_depth"],
+        )
+    consume_expression_budget(budget, field_name, depth)
     if isinstance(expr, bool):
         fail(
             f"error: invalid {field_name}: expected integer literal, context key, or expression object"
@@ -3841,7 +3897,10 @@ def parse_int_expression(expr, field_name: str):
         )
     op, payload = next(iter(expr.items()))
     if op == "neg":
-        return ("neg", parse_int_expression(payload, f"{field_name}.neg"))
+        return (
+            "neg",
+            parse_int_expression(payload, f"{field_name}.neg", budget, depth + 1),
+        )
     if op in {"add", "sub", "mul", "min", "max"}:
         if not isinstance(payload, list):
             fail(
@@ -3857,7 +3916,12 @@ def parse_int_expression(expr, field_name: str):
         operands = []
         for idx, operand in enumerate(payload):
             operands.append(
-                parse_int_expression(operand, f"{field_name}.{op}[{idx}]")
+                parse_int_expression(
+                    operand,
+                    f"{field_name}.{op}[{idx}]",
+                    budget,
+                    depth + 1,
+                )
             )
         return (op, tuple(operands))
     if op in {"div", "mod"}:
@@ -3865,8 +3929,18 @@ def parse_int_expression(expr, field_name: str):
             fail(
                 f"error: invalid {field_name}.{op}: expected [lhs, rhs] operands"
             )
-        lhs_expr = parse_int_expression(payload[0], f"{field_name}.{op}[0]")
-        rhs_expr = parse_int_expression(payload[1], f"{field_name}.{op}[1]")
+        lhs_expr = parse_int_expression(
+            payload[0],
+            f"{field_name}.{op}[0]",
+            budget,
+            depth + 1,
+        )
+        rhs_expr = parse_int_expression(
+            payload[1],
+            f"{field_name}.{op}[1]",
+            budget,
+            depth + 1,
+        )
         return (op, lhs_expr, rhs_expr)
     fail(
         f"error: invalid {field_name}: unknown int expression operator '{op}'"
@@ -3968,7 +4042,25 @@ def collect_int_expression_keys(expr, out_keys):
         collect_int_expression_keys(expr[2], out_keys)
 
 
-def parse_bool_expression(expr, field_name: str, regex_defs=None):
+def parse_bool_expression(
+    expr,
+    field_name: str,
+    regex_defs=None,
+    bool_budget=None,
+    int_budget=None,
+    depth: int = 1,
+):
+    if bool_budget is None:
+        bool_budget = create_expression_budget(
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_bool_expr_nodes"],
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_bool_expr_depth"],
+        )
+    if int_budget is None:
+        int_budget = create_expression_budget(
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_int_expr_nodes"],
+            DEFAULT_CONTEXT_EXPR_LIMITS["max_int_expr_depth"],
+        )
+    consume_expression_budget(bool_budget, field_name, depth)
     if not isinstance(expr, dict) or not expr:
         fail(
             f"error: invalid {field_name}: expected non-empty bool expression object"
@@ -3987,13 +4079,13 @@ def parse_bool_expression(expr, field_name: str, regex_defs=None):
             fail(
                 f"error: invalid {field_name}.cmp: expected [lhs_expr, op, rhs_expr]"
             )
-        lhs_expr = parse_int_expression(payload[0], f"{field_name}.cmp[0]")
+        lhs_expr = parse_int_expression(payload[0], f"{field_name}.cmp[0]", int_budget)
         cmp_op = payload[1].lower()
         if cmp_op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
             fail(
                 f"error: invalid {field_name}.cmp[1]: expected op in {{lt, le, gt, ge, eq, ne}}"
             )
-        rhs_expr = parse_int_expression(payload[2], f"{field_name}.cmp[2]")
+        rhs_expr = parse_int_expression(payload[2], f"{field_name}.cmp[2]", int_budget)
         return ("cmp", lhs_expr, cmp_op, rhs_expr)
     if op == "has":
         validate_context_key_name(payload, f"{field_name}.has")
@@ -4088,13 +4180,23 @@ def parse_bool_expression(expr, field_name: str, regex_defs=None):
                     child,
                     f"{field_name}.{op}[{idx}]",
                     regex_defs,
+                    bool_budget,
+                    int_budget,
+                    depth + 1,
                 )
             )
         return (op, tuple(children))
     if op == "not":
         return (
             "not",
-            parse_bool_expression(payload, f"{field_name}.not", regex_defs),
+            parse_bool_expression(
+                payload,
+                f"{field_name}.not",
+                regex_defs,
+                bool_budget,
+                int_budget,
+                depth + 1,
+            ),
         )
     fail(
         f"error: invalid {field_name}: unknown bool expression operator '{op}'"
@@ -4253,7 +4355,14 @@ def validate_bool_expression_key_types(
         )
 
 
-def parse_context_presence_clause(payload, field_name: str, regex_defs=None):
+def parse_context_presence_clause(
+    payload,
+    field_name: str,
+    regex_defs=None,
+    expr_limits=None,
+):
+    if expr_limits is None:
+        expr_limits = DEFAULT_CONTEXT_EXPR_LIMITS
     if not isinstance(payload, dict) or not payload:
         fail(
             f"error: invalid {field_name}: expected non-empty object"
@@ -4992,13 +5101,17 @@ def parse_context_presence_clause(payload, field_name: str, regex_defs=None):
                 fail(
                     f"error: invalid {term_field}: expected [lhs_expr, op, rhs_expr] comparator"
                 )
-            lhs_expr = parse_int_expression(term[0], f"{term_field}.lhs")
+            int_budget = create_expression_budget(
+                expr_limits["max_int_expr_nodes"],
+                expr_limits["max_int_expr_depth"],
+            )
+            lhs_expr = parse_int_expression(term[0], f"{term_field}.lhs", int_budget)
             op = term[1].lower()
             if op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
                 fail(
                     f"error: invalid {term_field}.op: expected op in {{lt, le, gt, ge, eq, ne}}"
                 )
-            rhs_expr = parse_int_expression(term[2], f"{term_field}.rhs")
+            rhs_expr = parse_int_expression(term[2], f"{term_field}.rhs", int_budget)
             term_key = (lhs_expr, op, rhs_expr)
             if term_key in int_expr_seen:
                 fail(
@@ -5016,10 +5129,20 @@ def parse_context_presence_clause(payload, field_name: str, regex_defs=None):
         bool_expr_terms = []
         bool_expr_seen = set()
         for term_index, term in enumerate(bool_expr_raw):
+            bool_budget = create_expression_budget(
+                expr_limits["max_bool_expr_nodes"],
+                expr_limits["max_bool_expr_depth"],
+            )
+            int_budget = create_expression_budget(
+                expr_limits["max_int_expr_nodes"],
+                expr_limits["max_int_expr_depth"],
+            )
             term_expr = parse_bool_expression(
                 term,
                 f"{field_name}.bool_expr[{term_index}]",
                 regex_defs,
+                bool_budget,
+                int_budget,
             )
             if term_expr in bool_expr_seen:
                 fail(
@@ -5703,6 +5826,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "validate_merged_context",
             "keys",
             "regex_defs",
+            "limits",
             "all_of",
             "any_of",
         }
@@ -5739,6 +5863,10 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         payload.get("regex_defs"),
         f"{field_name}.regex_defs",
     )
+    expr_limits = parse_context_expression_limits(
+        payload.get("limits"),
+        f"{field_name}.limits",
+    )
     all_of_clauses = None
     if "all_of" in payload:
         all_of_raw = payload["all_of"]
@@ -5753,6 +5881,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                     clause,
                     f"{field_name}.all_of[{idx}]",
                     regex_defs,
+                    expr_limits,
                 )
             )
     any_of_clauses = None
@@ -5769,6 +5898,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                     clause,
                     f"{field_name}.any_of[{idx}]",
                     regex_defs,
+                    expr_limits,
                 )
             )
     key_specs = {}
