@@ -16272,11 +16272,16 @@ struct ArrayContainsOpConversion
       // Get pointer to the array data
       Value arrayPtr = adaptor.getArray();
       if (!isa<LLVM::LLVMPointerType>(arrayPtr.getType())) {
-        // If it's not already a pointer, allocate and store
+        // If it's not already a pointer, allocate and store.
+        // Convert hw.array type to llvm.array for LLVM store compatibility.
         auto convertedArrayType = typeConverter->convertType(arrayType);
+        Type llvmArrayType = convertToLLVMType(convertedArrayType);
         auto arrayAlloca = LLVM::AllocaOp::create(
-            rewriter, loc, ptrTy, convertedArrayType, oneVal, 0);
-        LLVM::StoreOp::create(rewriter, loc, arrayPtr, arrayAlloca);
+            rewriter, loc, ptrTy, llvmArrayType, oneVal, 0);
+        Value arrayVal = UnrealizedConversionCastOp::create(
+                             rewriter, loc, llvmArrayType, arrayPtr)
+                             .getResult(0);
+        LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
         arrayPtr = arrayAlloca;
       }
 

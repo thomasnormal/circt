@@ -18736,6 +18736,399 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_array_contains ----
+    // Signature: (arr: ptr, numElems: i64, value: ptr, elemSize: i64) -> i1
+    if (calleeName == "__moore_array_contains") {
+      if (callOp.getNumOperands() >= 4 && callOp.getNumResults() >= 1) {
+        uint64_t arrAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t numElems = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t valueAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        bool result = false;
+
+        // Get raw pointers for arr and value
+        void *arrPtr = nullptr;
+        void *valuePtr = nullptr;
+        std::vector<uint8_t> arrCopy, valueCopy;
+
+        // Resolve array pointer
+        if (arrAddr >= 0x10000000000ULL ||
+            nativeMemoryBlocks.count(arrAddr)) {
+          arrPtr = reinterpret_cast<void *>(arrAddr);
+        } else if (arrAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(arrAddr, procId, &offset);
+          if (block && block->initialized) {
+            uint64_t totalBytes =
+                static_cast<uint64_t>(numElems) * static_cast<uint64_t>(elemSize);
+            if (offset + totalBytes <= block->data.size()) {
+              arrCopy.assign(block->data.begin() + offset,
+                             block->data.begin() + offset + totalBytes);
+              arrPtr = arrCopy.data();
+            }
+          }
+        }
+
+        // Resolve value pointer
+        if (valueAddr >= 0x10000000000ULL ||
+            nativeMemoryBlocks.count(valueAddr)) {
+          valuePtr = reinterpret_cast<void *>(valueAddr);
+        } else if (valueAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+          if (block && block->initialized) {
+            if (offset + static_cast<uint64_t>(elemSize) <=
+                block->data.size()) {
+              valueCopy.assign(block->data.begin() + offset,
+                               block->data.begin() + offset + elemSize);
+              valuePtr = valueCopy.data();
+            }
+          }
+        }
+
+        if (arrPtr && valuePtr) {
+          result = __moore_array_contains(arrPtr, numElems, valuePtr, elemSize);
+        }
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(1, result ? 1 : 0)));
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_contains() -> "
+                   << result << "\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_find_eq ----
+    // Signature: (array: ptr, elemSize: i64, value: ptr, mode: i32,
+    //             returnIndices: i1) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_find_eq") {
+      if (callOp.getNumOperands() >= 5 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t valueAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        int32_t mode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        bool returnIndices =
+            getValue(procId, callOp.getOperand(4)).getUInt64() != 0;
+        MooreQueue result = {nullptr, 0};
+
+        // Resolve value pointer
+        void *valuePtr = nullptr;
+        std::vector<uint8_t> valueCopy;
+        if (valueAddr >= 0x10000000000ULL ||
+            nativeMemoryBlocks.count(valueAddr)) {
+          valuePtr = reinterpret_cast<void *>(valueAddr);
+        } else if (valueAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+          if (block && block->initialized &&
+              offset + static_cast<uint64_t>(elemSize) <=
+                  block->data.size()) {
+            valueCopy.assign(block->data.begin() + offset,
+                             block->data.begin() + offset + elemSize);
+            valuePtr = valueCopy.data();
+          }
+        }
+
+        if (valuePtr) {
+          if (arrayAddr >= 0x10000000000ULL) {
+            result = __moore_array_find_eq(
+                reinterpret_cast<MooreQueue *>(arrayAddr), elemSize, valuePtr,
+                mode, returnIndices);
+          } else if (arrayAddr != 0) {
+            // Interpreter-managed memory: read queue struct {ptr, len}
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t arrLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                arrLen |= static_cast<int64_t>(
+                              queueBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+              if (arrLen > 0 && dataPtr != 0) {
+                auto nmIt = nativeMemoryBlocks.find(dataPtr);
+                bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                    (nmIt != nativeMemoryBlocks.end());
+                if (isNativeData) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = arrLen;
+                  result = __moore_array_find_eq(&tmpQ, elemSize, valuePtr,
+                                                 mode, returnIndices);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized) {
+                    std::vector<uint8_t> tmpData(arrLen * elemSize);
+                    std::memcpy(tmpData.data(),
+                                dataBlock->data.data() + dataOffset,
+                                arrLen * elemSize);
+                    MooreQueue tmpQ;
+                    tmpQ.data = tmpData.data();
+                    tmpQ.len = arrLen;
+                    result = __moore_array_find_eq(&tmpQ, elemSize, valuePtr,
+                                                   mode, returnIndices);
+                  }
+                }
+              }
+            }
+          }
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          int64_t resultElemSize = returnIndices ? 8 : elemSize;
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * resultElemSize);
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_find_eq()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_find_cmp ----
+    // Signature: (array: ptr, elemSize: i64, value: ptr, cmpMode: i32,
+    //             locatorMode: i32, returnIndices: i1) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_find_cmp") {
+      if (callOp.getNumOperands() >= 6 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        uint64_t valueAddr =
+            getValue(procId, callOp.getOperand(2)).getUInt64();
+        int32_t cmpMode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        int32_t locatorMode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(4)).getUInt64());
+        bool returnIndices =
+            getValue(procId, callOp.getOperand(5)).getUInt64() != 0;
+        MooreQueue result = {nullptr, 0};
+
+        // Resolve value pointer
+        void *valuePtr = nullptr;
+        std::vector<uint8_t> valueCopy;
+        if (valueAddr >= 0x10000000000ULL ||
+            nativeMemoryBlocks.count(valueAddr)) {
+          valuePtr = reinterpret_cast<void *>(valueAddr);
+        } else if (valueAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+          if (block && block->initialized &&
+              offset + static_cast<uint64_t>(elemSize) <=
+                  block->data.size()) {
+            valueCopy.assign(block->data.begin() + offset,
+                             block->data.begin() + offset + elemSize);
+            valuePtr = valueCopy.data();
+          }
+        }
+
+        if (valuePtr) {
+          if (arrayAddr >= 0x10000000000ULL) {
+            result = __moore_array_find_cmp(
+                reinterpret_cast<MooreQueue *>(arrayAddr), elemSize, valuePtr,
+                cmpMode, locatorMode, returnIndices);
+          } else if (arrayAddr != 0) {
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t arrLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                arrLen |= static_cast<int64_t>(
+                              queueBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+              if (arrLen > 0 && dataPtr != 0) {
+                auto nmIt = nativeMemoryBlocks.find(dataPtr);
+                bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                    (nmIt != nativeMemoryBlocks.end());
+                if (isNativeData) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = arrLen;
+                  result = __moore_array_find_cmp(&tmpQ, elemSize, valuePtr,
+                                                  cmpMode, locatorMode,
+                                                  returnIndices);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized) {
+                    std::vector<uint8_t> tmpData(arrLen * elemSize);
+                    std::memcpy(tmpData.data(),
+                                dataBlock->data.data() + dataOffset,
+                                arrLen * elemSize);
+                    MooreQueue tmpQ;
+                    tmpQ.data = tmpData.data();
+                    tmpQ.len = arrLen;
+                    result = __moore_array_find_cmp(&tmpQ, elemSize, valuePtr,
+                                                    cmpMode, locatorMode,
+                                                    returnIndices);
+                  }
+                }
+              }
+            }
+          }
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          int64_t resultElemSize = returnIndices ? 8 : elemSize;
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * resultElemSize);
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_find_cmp()\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_array_find_field_cmp ----
+    // Signature: (array: ptr, elemSize: i64, fieldOffset: i64, fieldSize: i64,
+    //             value: ptr, cmpMode: i32, locatorMode: i32,
+    //             returnIndices: i1) -> struct<(ptr, i64)>
+    if (calleeName == "__moore_array_find_field_cmp") {
+      if (callOp.getNumOperands() >= 8 && callOp.getNumResults() >= 1) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t elemSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t fieldOffset = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int64_t fieldSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        uint64_t valueAddr =
+            getValue(procId, callOp.getOperand(4)).getUInt64();
+        int32_t cmpMode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(5)).getUInt64());
+        int32_t locatorMode = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(6)).getUInt64());
+        bool returnIndices =
+            getValue(procId, callOp.getOperand(7)).getUInt64() != 0;
+        MooreQueue result = {nullptr, 0};
+
+        // Resolve value pointer
+        void *valuePtr = nullptr;
+        std::vector<uint8_t> valueCopy;
+        if (valueAddr >= 0x10000000000ULL ||
+            nativeMemoryBlocks.count(valueAddr)) {
+          valuePtr = reinterpret_cast<void *>(valueAddr);
+        } else if (valueAddr != 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
+          if (block && block->initialized &&
+              offset + static_cast<uint64_t>(fieldSize) <=
+                  block->data.size()) {
+            valueCopy.assign(block->data.begin() + offset,
+                             block->data.begin() + offset + fieldSize);
+            valuePtr = valueCopy.data();
+          }
+        }
+
+        if (valuePtr) {
+          if (arrayAddr >= 0x10000000000ULL) {
+            result = __moore_array_find_field_cmp(
+                reinterpret_cast<MooreQueue *>(arrayAddr), elemSize,
+                fieldOffset, fieldSize, valuePtr, cmpMode, locatorMode,
+                returnIndices);
+          } else if (arrayAddr != 0) {
+            uint64_t queueOffset = 0;
+            auto *queueBlock =
+                findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
+            if (queueBlock && queueBlock->initialized &&
+                queueOffset + 16 <= queueBlock->data.size()) {
+              uint64_t dataPtr = 0;
+              int64_t arrLen = 0;
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(
+                               queueBlock->data[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                arrLen |= static_cast<int64_t>(
+                              queueBlock->data[queueOffset + 8 + i])
+                          << (i * 8);
+              if (arrLen > 0 && dataPtr != 0) {
+                auto nmIt = nativeMemoryBlocks.find(dataPtr);
+                bool isNativeData = (dataPtr >= 0x10000000000ULL) ||
+                                    (nmIt != nativeMemoryBlocks.end());
+                if (isNativeData) {
+                  MooreQueue tmpQ;
+                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
+                  tmpQ.len = arrLen;
+                  result = __moore_array_find_field_cmp(
+                      &tmpQ, elemSize, fieldOffset, fieldSize, valuePtr,
+                      cmpMode, locatorMode, returnIndices);
+                } else {
+                  uint64_t dataOffset = 0;
+                  auto *dataBlock =
+                      findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
+                  if (dataBlock && dataBlock->initialized) {
+                    std::vector<uint8_t> tmpData(arrLen * elemSize);
+                    std::memcpy(tmpData.data(),
+                                dataBlock->data.data() + dataOffset,
+                                arrLen * elemSize);
+                    MooreQueue tmpQ;
+                    tmpQ.data = tmpData.data();
+                    tmpQ.len = arrLen;
+                    result = __moore_array_find_field_cmp(
+                        &tmpQ, elemSize, fieldOffset, fieldSize, valuePtr,
+                        cmpMode, locatorMode, returnIndices);
+                  }
+                }
+              }
+            }
+          }
+        }
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, ptrVal), 0);
+        packedResult.insertBits(APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          int64_t resultElemSize = returnIndices ? 8 : elemSize;
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * resultElemSize);
+        }
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_array_find_field_cmp()\n");
+      }
+      return success();
+    }
+
     // ---- __moore_display ----
     // Signature: (message_ptr: ptr) -> void
     if (calleeName == "__moore_display") {
