@@ -16462,6 +16462,29 @@ ninja -C build circt-verilog
   - Import model still lacks registry version constraints beyond schema-version
     matching and does not yet provide registry-level compatibility policy hooks.
 
+### Iteration 628
+- Formal cadence retention policy in `utils/run_formal_cadence.sh`:
+  - Added `--retain-runs N` (default `0`, keep all) to prune old run
+    directories after successful iterations.
+  - Pruning keeps newest `N` `run-*` directories and removes older ones
+    deterministically by run directory order.
+  - Added pruning events to cadence log as `pruned_run_dir=<path>`.
+  - Added `retain_runs` state metadata in `cadence.state`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test` with retention scenario:
+    - runs 3 iterations with `--retain-runs 1`
+    - verifies only one `run-*` directory remains
+    - verifies prune log emission.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `--retain-runs` usage example.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Retention policy is count-based only; age/size-based pruning is not yet
+    supported.
+  - Cadence runner still lacks failure notification hooks (webhook/email).
+
 ---
 
 ## Architecture Reference

@@ -31154,3 +31154,40 @@ CIRCT/slang correctly enforces LRM restrictions.
   parse closure; no cross-run persistent module cache exists yet.
 - Import registry policy remains minimal (schema-version match only) without
   richer compatibility-version negotiation.
+
+## Iteration 628 - February 8, 2026
+
+### Formal Cadence Retention Policy
+
+- Added `--retain-runs N` to `utils/run_formal_cadence.sh`:
+  - `0` keeps all runs (default)
+  - `N > 0` keeps only newest `N` `run-*` directories under `--out-root`
+- Pruning is applied after successful iterations and removes oldest run
+  directories deterministically.
+- Added cadence telemetry updates:
+  - `cadence.state` now records `retain_runs=<N>`
+  - `cadence.log` now records pruning events as `pruned_run_dir=<path>`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - added retention scenario for `--retain-runs 1`
+    - verifies exactly one run directory remains after 3 iterations
+    - verifies prune log emission
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--retain-runs` usage example
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Retention is currently count-based only; no age/size threshold policy exists.
+- Notification hooks for failed iterations are still not implemented.

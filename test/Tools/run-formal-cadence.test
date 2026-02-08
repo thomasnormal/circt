@@ -7,10 +7,14 @@
 // RUN: test -d %t/formal-cadence-results-*/run-0001-*
 // RUN: test -d %t/formal-cadence-results-*/run-0002-*
 // RUN: cat %t/formal-cadence-results-*/cadence.log | FileCheck %s --check-prefix=PASSLOG
+// RUN: cd %t && utils/run_formal_cadence.sh --out-root %t/formal-cadence-retain --interval-secs 0 --iterations 3 --retain-runs 1 --run-formal-all %t/utils/fake-formal-all.sh --strict-gate
+// RUN: sh -c 'count=$(find %t/formal-cadence-retain -mindepth 1 -maxdepth 1 -type d -name "run-*" | wc -l); test "$count" -eq 1'
+// RUN: cat %t/formal-cadence-retain/cadence.log | FileCheck %s --check-prefix=RETAINLOG
 //
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE_FILE=\"%t/fail-counter.txt\"\ncount=0\nif [[ -f \"$STATE_FILE\" ]]; then count=$(cat \"$STATE_FILE\"); fi\ncount=$((count + 1))\necho \"$count\" > \"$STATE_FILE\"\nif [[ \"$count\" -ge 2 ]]; then\n  echo \"forced failure\"\n  exit 3\nfi\nexit 0\n' > %t/utils/fake-formal-all-fail.sh
 // RUN: chmod +x %t/utils/fake-formal-all-fail.sh
 // RUN: not sh -c 'cd %t && utils/run_formal_cadence.sh --interval-secs 0 --iterations 3 --run-formal-all %t/utils/fake-formal-all-fail.sh --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=FAILFAST
 //
 // PASSLOG: completed_iterations=2
+// RETAINLOG: pruned_run_dir=
 // FAILFAST: failing fast: iteration 2 failed
