@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 485 - February 8, 2026
+
+### Summary
+
+Enabled mixed procedural event-lists that combine sequence events with bare
+signal events (`@(seq or sig)`), added import+BMC regression coverage, and
+reran representative external suite smoke checks.
+
+### Fixes
+
+1. **Mixed sequence/signal event-lists with no-edge signal events**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp`:
+     - removed the restriction requiring explicit signal edges in mixed
+       sequence/signal event-lists.
+   - This unblocks forms like:
+     - `always @(seq or b) ...`
+   - Lowering uses the existing multi-clock wait loop with any-change
+     triggering on the signal event.
+
+2. **Regression coverage**
+   - Import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceSignalEventListNoEdge`.
+   - BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-noedge-sat-e2e.sv`.
+
+3. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-noedge-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+   - External smoke (representative suite samples):
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Procedural property event controls (`@property`) remain unsupported in our
+  flow (direct `always @(property)` forms are rejected upstream as invalid
+  event-expression type).
+- Non-vacuous multiclock UNSAT equivalence harnesses for derived/non-keyable
+  clocks remain a high-priority long-term target.
+
 ## Iteration 484 - February 8, 2026
 
 ### Summary

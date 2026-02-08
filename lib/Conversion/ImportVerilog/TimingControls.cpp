@@ -870,10 +870,6 @@ lowerSequenceEventListControl(Context &context, Location loc,
   }
 
   for (auto *signalCtrl : signalEvents) {
-    if (signalCtrl->edge == slang::ast::EdgeKind::None)
-      return mlir::emitError(loc)
-             << "mixed sequence/signal event lists require explicit signal "
-                "event edges";
     auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
     Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
     signalClock = context.convertToI1(signalClock);
