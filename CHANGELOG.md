@@ -28280,3 +28280,67 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector dimensions compose via implicit AND only (no OR/group syntax yet).
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 586 - February 8, 2026
+
+### Yosys SVA BMC Rewrite Selector Composition Mode
+
+- Added selector composition control:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE`
+  - modes:
+    - `all` (default): AND across active selector dimensions
+    - `any`: OR across active selector dimensions
+- Composition mode applies to rewrite selection for:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite`
+- This provides practical OR-style migration rollout control without a full
+  selector expression language.
+
+### Migration Semantics
+
+- Added strict mode validation with stable diagnostics (`all|any`).
+- Refactored selector predicate evaluation to dimension checks + mode
+  composition.
+
+### Test Coverage
+
+- Expanded
+  `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+  with:
+  - `any`-mode OR behavior case
+  - invalid selector-mode rejection case
+- Focused lit run:
+  - 4/4 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - `XPASS(fail): counter [known]` (policy-level expected-known outcome)
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - failures=0, xpass=1
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.17--expect$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_past$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Selector composition supports `all|any`, but no grouped expression grammar.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.

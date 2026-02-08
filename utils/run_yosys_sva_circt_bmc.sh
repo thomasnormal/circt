@@ -53,6 +53,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX="${YOSYS
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE:-all}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2008,6 +2009,7 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_history_file_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX"
   local drop_events_rewrite_schema_version_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST"
   local drop_events_rewrite_history_file_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST"
+  local drop_events_rewrite_selector_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3010,7 +3012,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3035,8 +3037,9 @@ rewrite_schema_version_regex = sys.argv[11]
 rewrite_history_file_regex = sys.argv[12]
 rewrite_schema_version_list_raw = sys.argv[13]
 rewrite_history_file_list_raw = sys.argv[14]
-rewrite_row_generated_at_utc_min = sys.argv[15]
-rewrite_row_generated_at_utc_max = sys.argv[16]
+rewrite_selector_mode = sys.argv[15]
+rewrite_row_generated_at_utc_min = sys.argv[16]
+rewrite_row_generated_at_utc_max = sys.argv[17]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3103,6 +3106,12 @@ if id_metadata_policy not in {"preserve", "infer", "rewrite"}:
         file=sys.stderr,
     )
     sys.exit(1)
+
+if rewrite_selector_mode not in {"all", "any"}:
+    fail(
+        "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE: "
+        f"{rewrite_selector_mode} (expected all|any)"
+    )
 
 rewrite_run_id_pattern = None
 if rewrite_run_id_regex:
@@ -3298,35 +3307,28 @@ def selected_for_rewrite(
     history_file: str,
     row_generated_at_epoch,
 ) -> bool:
-    if rewrite_run_id_pattern is not None and rewrite_run_id_pattern.search(run_id) is None:
-        return False
-    if rewrite_reason_pattern is not None and rewrite_reason_pattern.search(reason) is None:
-        return False
-    if (
-        rewrite_schema_version_pattern is not None
-        and rewrite_schema_version_pattern.search(schema_version) is None
-    ):
-        return False
-    if (
-        rewrite_history_file_pattern is not None
-        and rewrite_history_file_pattern.search(history_file) is None
-    ):
-        return False
-    if rewrite_schema_version_set is not None and schema_version not in rewrite_schema_version_set:
-        return False
-    if rewrite_history_file_set is not None and history_file not in rewrite_history_file_set:
-        return False
-    if (
-        rewrite_row_generated_at_min_epoch is not None
-        and row_generated_at_epoch < rewrite_row_generated_at_min_epoch
-    ):
-        return False
-    if (
-        rewrite_row_generated_at_max_epoch is not None
-        and row_generated_at_epoch > rewrite_row_generated_at_max_epoch
-    ):
-        return False
-    return True
+    checks = []
+    if rewrite_run_id_pattern is not None:
+        checks.append(rewrite_run_id_pattern.search(run_id) is not None)
+    if rewrite_reason_pattern is not None:
+        checks.append(rewrite_reason_pattern.search(reason) is not None)
+    if rewrite_schema_version_pattern is not None:
+        checks.append(rewrite_schema_version_pattern.search(schema_version) is not None)
+    if rewrite_history_file_pattern is not None:
+        checks.append(rewrite_history_file_pattern.search(history_file) is not None)
+    if rewrite_schema_version_set is not None:
+        checks.append(schema_version in rewrite_schema_version_set)
+    if rewrite_history_file_set is not None:
+        checks.append(history_file in rewrite_history_file_set)
+    if rewrite_row_generated_at_min_epoch is not None:
+        checks.append(row_generated_at_epoch >= rewrite_row_generated_at_min_epoch)
+    if rewrite_row_generated_at_max_epoch is not None:
+        checks.append(row_generated_at_epoch <= rewrite_row_generated_at_max_epoch)
+    if not checks:
+        return True
+    if rewrite_selector_mode == "any":
+        return any(checks)
+    return all(checks)
 
 
 with open(file, "r", encoding="utf-8") as f:
