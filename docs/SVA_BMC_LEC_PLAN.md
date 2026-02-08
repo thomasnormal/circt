@@ -363,6 +363,8 @@ Top-level schema keys:
 - `keys`: typed key declarations and per-key constraints.
 - `regex_defs`: named regex patterns for `bool_expr.regex_ref`.
 - `limits`: expression guardrails (depth/node limits).
+- `import_registry`: named import-module registry (`version`, `path`,
+  optional `schema_versions` allow-list).
 - `int_arithmetic`: inline arithmetic mode (`div_mode`, `mod_mode`).
 - `int_arithmetic_presets`: named arithmetic mode map.
 - `int_arithmetic_ref`: select a named arithmetic preset as default mode.
@@ -379,6 +381,13 @@ Import module JSON contract:
 - Import payload must be a non-empty JSON object.
 - Imports may recursively import other modules.
 - Import cycles are rejected with field-qualified diagnostics.
+- `imports` supports two entry styles:
+  - path string: `"/abs/path/module.json"`
+  - registry reference: `{"module":"core","version":"1"}`
+- Registry reference validation:
+  - module must exist in `import_registry`
+  - requested `version` must match registered `version`
+  - current schema version must be listed in `schema_versions` when provided
 
 Merge and precedence rules:
 - `limits`: later imports override earlier imports; inline schema overrides all
@@ -434,6 +443,36 @@ Minimal schema example using imports + arithmetic refs:
       ],
       "bool_expr": [
         { "regex_ref": ["flavor", "night_casefold"] }
+      ]
+    }
+  ]
+}
+```
+
+Minimal schema example using import registry refs:
+
+```json
+{
+  "schema_version": "1",
+  "allow_unknown_keys": true,
+  "import_registry": {
+    "core": {
+      "version": "1",
+      "path": "/abs/path/auto-route-schema-import-core.json",
+      "schema_versions": ["1"]
+    }
+  },
+  "imports": [
+    { "module": "core", "version": "1" }
+  ],
+  "int_arithmetic_ref": "tz",
+  "keys": {
+    "attempt": { "type": "integer", "required": true }
+  },
+  "all_of": [
+    {
+      "int_expr": [
+        [{ "div": ["attempt", 2] }, "eq", -1]
       ]
     }
   ]
