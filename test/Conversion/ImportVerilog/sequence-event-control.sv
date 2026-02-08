@@ -38,9 +38,9 @@ module SequenceEventListControl;
 
   // CHECK-LABEL: moore.module @SequenceEventListControl
   // CHECK: moore.procedure always
-  // CHECK: %[[OR:.+]] = comb.or
   // CHECK: moore.wait_event
   // CHECK: moore.detect_event posedge
+  // CHECK: %[[OR:.+]] = comb.or
   // CHECK: comb.and bin %{{.+}}, %[[OR]]
   // CHECK: cf.cond_br
   always @(seq1 or seq2) begin

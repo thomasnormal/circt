@@ -296,6 +296,14 @@ static LogicalResult lowerClockedSequenceEventControl(
   for (size_t i = 0; i < numStates; ++i)
     stateArgs.push_back(loopBlock->addArgument(i1Type, loc));
 
+  // Clone sequence transition conditions into the loop body so they are
+  // re-evaluated on every wakeup, not frozen at loop entry.
+  IRMapping condMapping;
+  SmallVector<Value, 8> loopConditions;
+  loopConditions.reserve(nfa.conditions.size());
+  for (Value cond : nfa.conditions)
+    loopConditions.push_back(cloneValueIntoBlock(cond, builder, condMapping));
+
   SmallVector<SmallVector<SmallVector<Value, 4>, 4>, 8> incoming;
   incoming.resize(numStates);
   for (size_t from = 0; from < numStates; ++from) {
@@ -303,7 +311,7 @@ static LogicalResult lowerClockedSequenceEventControl(
       if (tr.isEpsilon)
         continue;
       incoming[tr.to].push_back(SmallVector<Value, 4>{
-          stateArgs[from], nfa.conditions[tr.condIndex]});
+          stateArgs[from], loopConditions[tr.condIndex]});
     }
   }
 
@@ -389,9 +397,10 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
   Value seqValue = clockOp.getInput();
   Value clockValue = clockOp.getClock();
   auto edge = clockOp.getEdge();
+  auto result =
+      lowerClockedSequenceEventControl(context, loc, seqValue, clockValue, edge);
   eraseLTLDeadOps(clockedValue);
-  return lowerClockedSequenceEventControl(context, loc, seqValue, clockValue,
-                                          edge);
+  return result;
 }
 
 static Value stripClockCasts(Value clock) {
@@ -509,11 +518,11 @@ lowerSequenceEventListControl(Context &context, Location loc,
   Value combinedSequence = sequenceInputs.front();
   if (sequenceInputs.size() > 1)
     combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
+  auto result = lowerClockedSequenceEventControl(
+      context, loc, combinedSequence, commonClock, *commonEdge);
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);
-
-  return lowerClockedSequenceEventControl(context, loc, combinedSequence,
-                                          commonClock, *commonEdge);
+  return result;
 }
 
 // Handle any of the delay control constructs.

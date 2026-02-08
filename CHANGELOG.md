@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 478 - February 8, 2026
+
+### Summary
+
+Fixed dynamic sequence-event control semantics so `always @(seq)` correctly
+re-evaluates sequence predicates on every event wakeup, and added an end-to-end
+BMC regression for the bug.
+
+### Fixes
+
+1. **Dynamic NFA condition re-evaluation in sequence event loops**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp` so sequence NFA
+     transition conditions are cloned into the loop body and used there.
+   - Previously, those conditions could be captured from definitions outside
+     the loop, effectively freezing sequence predicate values and causing
+     stale-event behavior.
+
+2. **Reference cloning hardening**
+   - Updated `cloneValueIntoBlock` to avoid cloning `!moore.ref` values into
+     nested wait regions.
+   - Prevents disconnected duplicated storage objects during sequence-event
+     lowering and keeps event reads bound to real module state.
+
+3. **Regression coverage**
+   - Added
+     `test/Tools/circt-bmc/sva-sequence-event-dynamic-equivalence-unsat-e2e.sv`.
+   - This checks that `always @(s)` behavior matches an equivalent sampled
+     `if (a)` formulation on the same clock.
+
+### Validation
+
+- Targeted repro:
+  - `/tmp/sva-seq-event-equivalence-bug.sv`: was `SAT`, now `UNSAT`.
+- Lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/ImportVerilog/clocking-event-wait.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+- Direct BMC:
+  - `sva-sequence-event-dynamic-equivalence-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - `sva-clocking-block-procedural-assert-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - BMC e2e lit tests remain unsupported in this local config (`bmc-jit`
+    feature gate), validated via direct runs.
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
 ## Iteration 477 - February 8, 2026
 
 ### Summary
