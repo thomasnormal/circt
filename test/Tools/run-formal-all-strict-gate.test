@@ -59,6 +59,9 @@
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tBMC\t__aggregate__\taggregate\tANY\t2099-06-06\tkeep_any\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-05-05\tkeep_reason\n' > %t/refresh-expected-failure-cases-any.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected-any --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases-any.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --refresh-expected-failure-cases-collapse-status-any
 // RUN: FileCheck %s --check-prefix=REFRESHANY < %t/refresh-expected-failure-cases-any.tsv
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tkeep_matched\nsv-tests\tLEC\tstale_case\tbase\tFAIL\t2099-01-01\tdrop_unmatched\nsv-tests\tLEC\tbasic02\tbase\tANY\t2000-01-01\tdrop_expired\n' > %t/prune-expected-failure-cases.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-prune-expected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/prune-expected-failure-cases.tsv --prune-expected-failure-cases-file %t/prune-expected-failure-cases.tsv --prune-expected-failure-cases-drop-unmatched --prune-expected-failure-cases-drop-expired
+// RUN: FileCheck %s --check-prefix=PRUNECASE < %t/prune-expected-failure-cases.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tknown_case\n' > %t/expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases --json-summary %t/out-expected-cases-ok/summary.json
 // RUN: FileCheck %s --check-prefix=CASEOK < %t/out-expected-cases-ok/expected-failure-cases-summary.tsv
@@ -124,6 +127,9 @@
 // REFRESHCASEFILTER-NOT: sv-tests{{[[:space:]]+}}LEC
 // REFRESHANY: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}ANY{{[[:space:]]+}}2099-06-06{{[[:space:]]+}}keep_any
 // REFRESHANY: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}ANY{{[[:space:]]+}}2099-05-05{{[[:space:]]+}}keep_reason
+// PRUNECASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}keep_matched
+// PRUNECASE-NOT: stale_case
+// PRUNECASE-NOT: drop_expired
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
 // JSONCASE: "expected_failure_cases"
 // JSONCASE: "matched_count": 1

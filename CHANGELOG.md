@@ -32310,3 +32310,57 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Refresh filtering is currently include-only (no exclude/deny filter family).
 - No prune-only workflow yet for stale unmatched/expired expected rows.
+
+## Iteration 652 - February 8, 2026
+
+### Prune Workflow for Stale Expected-Case Rows
+
+- Added in `utils/run_formal_all.sh`:
+  - `--prune-expected-failure-cases-file <file>`
+  - `--prune-expected-failure-cases-drop-unmatched`
+  - `--prune-expected-failure-cases-drop-expired`
+- Behavior:
+  - Reuses existing expected-case matching + expiry analysis.
+  - Rewrites expected-case TSV, removing stale rows according to enabled policy.
+  - If prune is enabled with no explicit drop policy, both unmatched and
+    expired drops are enabled by default.
+  - If `--expected-failure-cases-file` is omitted, prune file is used as the
+    expected-case source automatically.
+- Output diagnostics include:
+  - kept row count
+  - dropped unmatched row count
+  - dropped expired row count
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added `PRUNECASE` scenario verifying:
+      - keep matched non-expired row
+      - drop unmatched row
+      - drop expired row
+  - `docs/FormalRegression.md`
+    - documented prune workflow and default policy behavior
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Formal lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused tests:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke sweep with prune:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-prune-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-prune-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-prune-smoke.tsv --prune-expected-failure-cases-drop-unmatched --prune-expected-failure-cases-drop-expired`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+    - prune result: `kept=1 dropped_unmatched=1 dropped_expired=1`
+    - resulting file retained only `avip/axi4Lite_avip compile FAIL`
+
+### Remaining Limitations
+
+- Prune mode currently targets expected-case files only.
+- No dry-run mode yet for prune decisions.

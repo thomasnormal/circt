@@ -103,6 +103,12 @@ Refresh expected failure cases with scoped filters:
 utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-include-suite-regex '^sv-tests$' --refresh-expected-failure-cases-include-mode-regex '^BMC$' --refresh-expected-failure-cases-include-status-regex '^XFAIL$' --refresh-expected-failure-cases-include-id-regex '^__aggregate__$'
 ```
 
+Prune stale expected-case rows in-place:
+
+```bash
+utils/run_formal_all.sh --expected-failure-cases-file utils/formal-expected-failure-cases.tsv --prune-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --prune-expected-failure-cases-drop-unmatched --prune-expected-failure-cases-drop-expired
+```
+
 Run formal suites on a fixed cadence (6-hour interval example):
 
 ```bash
@@ -266,6 +272,13 @@ Expected-failure cases file:
   its `expires_on` date.
 - `--fail-on-unmatched-expected-failure-cases` fails when expected-case rows
   have no observed match (stale expectation cleanup gate).
+- `--prune-expected-failure-cases-file <file>` rewrites expected-case rows
+  after matching against observed failures.
+- `--prune-expected-failure-cases-drop-unmatched` drops rows with
+  `matched_count=0`.
+- `--prune-expected-failure-cases-drop-expired` drops rows with `expired=yes`.
+  If prune is enabled and no explicit drop policy is set, both unmatched and
+  expired drops are enabled by default.
 - `--refresh-expected-failure-cases-file <file>` rewrites expected-case rows
   from current observed fail-like cases.
 - `--refresh-expected-failure-cases-default-expires-on <YYYY-MM-DD>` sets

@@ -46,6 +46,12 @@ Options:
                          Fail when any expected case is expired by expires_on
   --fail-on-unmatched-expected-failure-cases
                          Fail when expected cases have no observed match
+  --prune-expected-failure-cases-file FILE
+                         Rewrite expected-cases file by pruning stale rows
+  --prune-expected-failure-cases-drop-unmatched
+                         Drop expected-case rows with matched_count=0
+  --prune-expected-failure-cases-drop-expired
+                         Drop expected-case rows with expired=yes
   --refresh-expected-failure-cases-file FILE
                          Rewrite expected-failure-cases TSV from current run
   --refresh-expected-failure-cases-default-expires-on YYYY-MM-DD
@@ -110,6 +116,9 @@ EXPECTED_FAILURE_CASES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURE_CASES=0
 FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
 FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=0
+PRUNE_EXPECTED_FAILURE_CASES_FILE=""
+PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED=0
+PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED=0
 REFRESH_EXPECTED_FAILURE_CASES_FILE=""
 REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON=""
 REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY=0
@@ -197,6 +206,12 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=1; shift ;;
     --fail-on-unmatched-expected-failure-cases)
       FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=1; shift ;;
+    --prune-expected-failure-cases-file)
+      PRUNE_EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
+    --prune-expected-failure-cases-drop-unmatched)
+      PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED=1; shift ;;
+    --prune-expected-failure-cases-drop-expired)
+      PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED=1; shift ;;
     --refresh-expected-failure-cases-file)
       REFRESH_EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
     --refresh-expected-failure-cases-default-expires-on)
@@ -256,6 +271,19 @@ if [[ "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_
 fi
 if [[ "$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
   echo "--fail-on-unmatched-expected-failure-cases requires --expected-failure-cases-file" >&2
+  exit 1
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURE_CASES_FILE" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
+  EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE"
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURE_CASES_FILE" && \
+      "$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" != "1" && \
+      "$PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED" != "1" ]]; then
+  PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED=1
+  PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED=1
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURE_CASES_FILE" && ! -r "$PRUNE_EXPECTED_FAILURE_CASES_FILE" ]]; then
+  echo "prune expected-failure-cases file not readable: $PRUNE_EXPECTED_FAILURE_CASES_FILE" >&2
   exit 1
 fi
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" && ! -r "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -890,13 +918,17 @@ fi
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
       "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" || \
       "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" || \
-      "$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" == "1" ]]; then
+      "$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" == "1" || \
+      -n "$PRUNE_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
   EXPECTED_FAILURE_CASES_FILE="$EXPECTED_FAILURE_CASES_FILE" \
   FAIL_ON_UNEXPECTED_FAILURE_CASES="$FAIL_ON_UNEXPECTED_FAILURE_CASES" \
   FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
   FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
+  PRUNE_EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE" \
+  PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" \
+  PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED" \
   python3 - <<'PY'
 import csv
 import datetime as dt
@@ -911,6 +943,14 @@ expected_path = Path(expected_file_raw) if expected_file_raw else None
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
+prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_FILE", "")
+prune_path = Path(prune_file_raw) if prune_file_raw else None
+prune_drop_unmatched = (
+    os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED", "0") == "1"
+)
+prune_drop_expired = (
+    os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED", "0") == "1"
+)
 today = dt.date.today()
 
 case_summary_path = out_dir / "expected-failure-cases-summary.tsv"
@@ -1207,6 +1247,56 @@ print(
     f"expired_expected={totals['expired_expected']} "
     f"unmatched_expected={totals['unmatched_expected']}"
 )
+
+if prune_path is not None:
+  if expected_path is None:
+    raise SystemExit(
+        "--prune-expected-failure-cases-file requires expected cases to be loaded"
+    )
+  pruned_rows = []
+  dropped_unmatched = 0
+  dropped_expired = 0
+  for row, summary_row in zip(expected_rows, expected_summary_rows):
+    is_unmatched = summary_row["matched_count"] == 0
+    is_expired = summary_row["expired"] == "yes"
+    drop = False
+    if prune_drop_unmatched and is_unmatched:
+      drop = True
+      dropped_unmatched += 1
+    if prune_drop_expired and is_expired:
+      drop = True
+      dropped_expired += 1
+    if drop:
+      continue
+    pruned_rows.append(
+        {
+            "suite": row["suite"],
+            "mode": row["mode"],
+            "id": row["id"],
+            "id_kind": row["id_kind"],
+            "status": row["status"],
+            "expires_on": row["expires_on"],
+            "reason": row["reason"],
+        }
+    )
+
+  prune_path.parent.mkdir(parents=True, exist_ok=True)
+  with prune_path.open("w", newline="") as f:
+    writer = csv.DictWriter(
+        f,
+        fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
+        delimiter="\t",
+    )
+    writer.writeheader()
+    for row in pruned_rows:
+      writer.writerow(row)
+
+  print(f"pruned expected-failure-cases file: {prune_path}")
+  print(
+      "pruned expected-failure-cases rows: "
+      f"kept={len(pruned_rows)} dropped_unmatched={dropped_unmatched} "
+      f"dropped_expired={dropped_expired}"
+  )
 
 if fail_on_unexpected and unexpected_observed:
   print("unexpected observed failure cases:")
