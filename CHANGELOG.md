@@ -31191,3 +31191,40 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Retention is currently count-based only; no age/size threshold policy exists.
 - Notification hooks for failed iterations are still not implemented.
+
+## Iteration 629 - February 8, 2026
+
+### Formal Cadence Failure Hooks
+
+- Added `--on-fail-hook <path>` to `utils/run_formal_cadence.sh`.
+- On iteration failure, the hook is executed before fail-fast exit with args:
+  - `<iteration> <exit_code> <run_dir> <out_root> <cadence_log> <cadence_state>`
+- Added hook path validation:
+  - non-executable hook path now hard-fails during argument validation.
+- Added cadence telemetry updates:
+  - `cadence.state` now records `on_fail_hook`
+  - `cadence.log` records hook invocation and hook-failure exit codes.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - fail-fast path now exercises `--on-fail-hook`
+    - validates hook invocation via emitted marker file
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--on-fail-hook` usage and argument contract
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Notification integration is hook-based only; built-in webhook/email adapters
+  are not provided yet.
+- Retention policy remains count-based only; no size/age policy exists.

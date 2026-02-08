@@ -15,6 +15,7 @@ Options:
   --iterations N         Number of iterations to run (0=infinite, default: 0)
   --retain-runs N        Keep only newest N run-* directories (0=keep all,
                          default: 0)
+  --on-fail-hook PATH    Executable hook invoked on iteration failure
   --run-formal-all PATH  Path to run_formal_all.sh
                          (default: utils/run_formal_all.sh)
   --strict-gate          Enable strict gate checks (default)
@@ -32,6 +33,7 @@ OUT_ROOT="${PWD}/formal-cadence-results-${DATE_STR}"
 INTERVAL_SECS=21600
 ITERATIONS=0
 RETAIN_RUNS=0
+ON_FAIL_HOOK=""
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
 
@@ -47,6 +49,8 @@ while [[ $# -gt 0 ]]; do
       ITERATIONS="$2"; shift 2 ;;
     --retain-runs)
       RETAIN_RUNS="$2"; shift 2 ;;
+    --on-fail-hook)
+      ON_FAIL_HOOK="$2"; shift 2 ;;
     --run-formal-all)
       RUN_FORMAL_ALL="$2"; shift 2 ;;
     --strict-gate)
@@ -87,6 +91,10 @@ if [[ ! -x "$RUN_FORMAL_ALL" ]]; then
   echo "run_formal_all script not executable: $RUN_FORMAL_ALL" >&2
   exit 1
 fi
+if [[ -n "$ON_FAIL_HOOK" && ! -x "$ON_FAIL_HOOK" ]]; then
+  echo "on-fail hook not executable: $ON_FAIL_HOOK" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_ROOT"
 CADENCE_LOG="$OUT_ROOT/cadence.log"
@@ -96,6 +104,7 @@ echo "start_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"
 echo "interval_secs=$INTERVAL_SECS" >> "$STATE_FILE"
 echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
 echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
+echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
 
@@ -128,6 +137,35 @@ prune_old_runs() {
   done
 }
 
+invoke_fail_hook() {
+  local iteration="$1"
+  local exit_code="$2"
+  local run_dir="$3"
+  if [[ -z "$ON_FAIL_HOOK" ]]; then
+    return 0
+  fi
+
+  local hook_ts
+  hook_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "[$hook_ts] invoking on-fail hook: $ON_FAIL_HOOK" | tee -a "$CADENCE_LOG"
+
+  set +e
+  "$ON_FAIL_HOOK" \
+    "$iteration" \
+    "$exit_code" \
+    "$run_dir" \
+    "$OUT_ROOT" \
+    "$CADENCE_LOG" \
+    "$STATE_FILE" >> "$CADENCE_LOG" 2>&1
+  local hook_ec=$?
+  set -e
+
+  if [[ "$hook_ec" -ne 0 ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail hook failed with exit code $hook_ec" \
+      | tee -a "$CADENCE_LOG"
+  fi
+}
+
 iteration=0
 while true; do
   iteration=$((iteration + 1))
@@ -156,6 +194,7 @@ while true; do
   echo "last_run_dir=$run_dir" >> "$STATE_FILE"
 
   if [[ "$ec" -ne 0 ]]; then
+    invoke_fail_hook "$iteration" "$ec" "$run_dir"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] failing fast: iteration $iteration failed" \
       | tee -a "$CADENCE_LOG"
     exit "$ec"
