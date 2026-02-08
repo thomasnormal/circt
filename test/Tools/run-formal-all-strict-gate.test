@@ -73,18 +73,19 @@
 // RUN: FileCheck %s --check-prefix=DRYRUNCASE < %t/dryrun-prune-expected-failure-cases.tsv
 // RUN: rm -f %t/dryrun-report.jsonl
 // RUN: printf 'dryrun-test-key\n' > %t/dryrun-hmac.key
-// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-report --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/dryrun-refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --expectations-dry-run --expectations-dry-run-report-jsonl %t/dryrun-report.jsonl --expectations-dry-run-report-hmac-key-file %t/dryrun-hmac.key
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-report --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/dryrun-refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --expectations-dry-run --expectations-dry-run-report-jsonl %t/dryrun-report.jsonl --expectations-dry-run-report-hmac-key-file %t/dryrun-hmac.key --expectations-dry-run-report-hmac-key-id lit-key-1
 // RUN: FileCheck %s --check-prefix=DRYRUNREPORT < %t/dryrun-report.jsonl
-// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac.key %t/dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFY
+// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac.key --expected-hmac-key-id lit-key-1 %t/dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFY
 // RUN: cp %t/dryrun-report.jsonl %t/dryrun-report-bad.jsonl
 // RUN: sed -i 's/"row_count": 3/"row_count": 99/' %t/dryrun-report-bad.jsonl
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py %t/dryrun-report-bad.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYBAD
 // RUN: printf 'wrong-key\n' > %t/dryrun-hmac-bad.key
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac-bad.key %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYHMACBAD
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac.key --expected-hmac-key-id wrong-key-id %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYIDBAD
 // RUN: printf '{"operation":"refresh_expected_failures","target_file":"legacy.tsv"}\n' > %t/dryrun-report-legacy-prefix.jsonl
 // RUN: cat %t/dryrun-report.jsonl >> %t/dryrun-report-legacy-prefix.jsonl
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py %t/dryrun-report-legacy-prefix.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYLEGACYBAD
-// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --allow-legacy-prefix --hmac-key-file %t/dryrun-hmac.key %t/dryrun-report-legacy-prefix.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYLEGACY
+// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --allow-legacy-prefix --hmac-key-file %t/dryrun-hmac.key --expected-hmac-key-id lit-key-1 %t/dryrun-report-legacy-prefix.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYLEGACY
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tknown_case\n' > %t/expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases --json-summary %t/out-expected-cases-ok/summary.json
 // RUN: FileCheck %s --check-prefix=CASEOK < %t/out-expected-cases-ok/expected-failure-cases-summary.tsv
@@ -157,7 +158,8 @@
 // PRUNECASE-NOT: stale_case
 // PRUNECASE-NOT: drop_expired
 // DRYRUNCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}stale_case{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}dry_keep_stale
-// DRYRUNREPORT: "hmac_mode": "sha256-keyfile"
+// DRYRUNREPORT: "hmac_key_id": "lit-key-1"
+// DRYRUNREPORT-SAME: "hmac_mode": "sha256-keyfile"
 // DRYRUNREPORT-SAME: "operation": "run_meta"
 // DRYRUNREPORT-SAME: "report_sample_rows_limit": 5
 // DRYRUNREPORT-SAME: "run_id":
@@ -167,6 +169,7 @@
 // DRYRUNREPORT: "operation": "refresh_expected_failure_cases"
 // DRYRUNREPORT-SAME: "output_rows_sample":
 // DRYRUNREPORT: "exit_code": 0
+// DRYRUNREPORT-SAME: "hmac_key_id": "lit-key-1"
 // DRYRUNREPORT-SAME: "operation": "run_end"
 // DRYRUNREPORT-SAME: "payload_hmac_sha256":
 // DRYRUNREPORT-SAME: "payload_sha256":
@@ -175,6 +178,7 @@
 // DRYRUNVERIFY: verified dry-run report: runs=1
 // DRYRUNVERIFYBAD: error: {{.*}}run_end.row_count=99 does not match observed rows=3
 // DRYRUNVERIFYHMACBAD: error: {{.*}}run_end.payload_hmac_sha256 mismatch
+// DRYRUNVERIFYKEYIDBAD: error: {{.*}}run_meta.hmac_key_id mismatch
 // DRYRUNVERIFYLEGACYBAD: error: {{.*}}expected operation=run_meta
 // DRYRUNVERIFYLEGACY: verified dry-run report: runs=1
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case

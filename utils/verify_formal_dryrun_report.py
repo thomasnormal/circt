@@ -28,7 +28,10 @@ def hash_rows(rows: list[dict]) -> str:
 
 
 def verify_report(
-    path: Path, allow_legacy_prefix: bool, hmac_key_bytes: Optional[bytes]
+    path: Path,
+    allow_legacy_prefix: bool,
+    hmac_key_bytes: Optional[bytes],
+    expected_hmac_key_id: Optional[str],
 ) -> int:
   rows: list[dict] = []
   for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -66,6 +69,16 @@ def verify_report(
     run_id = row.get("run_id")
     if not isinstance(run_id, str) or not run_id:
       fail(f"{path}:{line_no}: run_meta must include non-empty run_id")
+    run_meta_hmac_key_id = row.get("hmac_key_id")
+    if run_meta_hmac_key_id is None:
+      run_meta_hmac_key_id = ""
+    if not isinstance(run_meta_hmac_key_id, str):
+      fail(f"{path}:{line_no}: run_meta.hmac_key_id must be string")
+    if expected_hmac_key_id is not None and run_meta_hmac_key_id != expected_hmac_key_id:
+      fail(
+          f"{path}:{line_no}: run_meta.hmac_key_id mismatch; expected "
+          f"'{expected_hmac_key_id}', got '{run_meta_hmac_key_id}'"
+      )
 
     segment = [row]
     idx += 1
@@ -123,6 +136,21 @@ def verify_report(
             f"{path}:{end_line}: run_end.payload_hmac_sha256 mismatch; expected "
             f"{expected_hmac}, got {actual_hmac}"
         )
+    run_end_hmac_key_id = run_end.get("hmac_key_id")
+    if run_end_hmac_key_id is None:
+      run_end_hmac_key_id = ""
+    if not isinstance(run_end_hmac_key_id, str):
+      fail(f"{path}:{end_line}: run_end.hmac_key_id must be string")
+    if run_end_hmac_key_id != run_meta_hmac_key_id:
+      fail(
+          f"{path}:{end_line}: run_end.hmac_key_id mismatch; expected "
+          f"'{run_meta_hmac_key_id}', got '{run_end_hmac_key_id}'"
+      )
+    if expected_hmac_key_id is not None and run_end_hmac_key_id != expected_hmac_key_id:
+      fail(
+          f"{path}:{end_line}: run_end.hmac_key_id mismatch; expected "
+          f"'{expected_hmac_key_id}', got '{run_end_hmac_key_id}'"
+      )
 
     exit_code = run_end.get("exit_code")
     if not isinstance(exit_code, int):
@@ -147,6 +175,10 @@ def main() -> int:
       "--hmac-key-file",
       help="Optional key file for validating run_end.payload_hmac_sha256",
   )
+  parser.add_argument(
+      "--expected-hmac-key-id",
+      help="Optional expected hmac_key_id for run_meta/run_end rows",
+  )
   args = parser.parse_args()
 
   report_path = Path(args.report_jsonl)
@@ -164,6 +196,7 @@ def main() -> int:
       report_path,
       allow_legacy_prefix=args.allow_legacy_prefix,
       hmac_key_bytes=hmac_key_bytes,
+      expected_hmac_key_id=args.expected_hmac_key_id,
   )
   print(f"verified dry-run report: runs={run_count}")
   return 0

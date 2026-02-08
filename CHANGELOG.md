@@ -32853,6 +32853,81 @@ CIRCT/slang correctly enforces LRM restrictions.
 - HMAC trust still depends on external key lifecycle/rotation discipline.
 - Sample payloads remain bounded by configured limit.
 
+## Iteration 664 - February 8, 2026
+
+### Dry-Run HMAC Key-ID Emission and Enforcement
+
+- Added `--expectations-dry-run-report-hmac-key-id <id>` to
+  `utils/run_formal_all.sh`.
+- New behavior when HMAC key file mode is enabled:
+  - `run_meta.hmac_key_id` is emitted
+  - `run_end.hmac_key_id` is emitted
+- Added strict CLI validation:
+  - `--expectations-dry-run-report-hmac-key-id` now requires
+    `--expectations-dry-run-report-hmac-key-file`.
+
+### Verifier Key-ID Checks
+
+- Added `--expected-hmac-key-id <id>` to
+  `utils/verify_formal_dryrun_report.py`.
+- Verifier now enforces:
+  - `run_meta.hmac_key_id` type and optional expected value
+  - `run_end.hmac_key_id` type
+  - `run_end.hmac_key_id == run_meta.hmac_key_id`
+  - optional expected value match on both rows when provided
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive key-id emit + verify path
+    - negative wrong expected key-id rejection
+    - legacy-prefix verification with expected key-id
+    - fixed `DRYRUNREPORT` FileCheck ordering for deterministic JSON key order
+  - `docs/FormalRegression.md`
+    - documented key-id emit/verify options
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - FAIL (existing `circt-verilog` MLIR verifier failure in current workspace)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - FAIL (same failure mode)
+
+### Remaining Limitations
+
+- `hmac_key_id` is metadata only and does not implement key lifecycle policy.
+- HMAC trust still depends on external key handling and rotation discipline.
+- AVIP compile failures currently indicate an unrelated `circt-verilog` MLIR
+  verifier regression in this workspace.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

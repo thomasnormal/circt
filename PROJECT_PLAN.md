@@ -17681,6 +17681,57 @@ ninja -C build circt-verilog
   - HMAC trust still depends on external key lifecycle/rotation discipline.
   - Sample payloads remain bounded by configured limit.
 
+### Iteration 664
+- Dry-run HMAC key identity plumbing:
+  - Added `--expectations-dry-run-report-hmac-key-id ID` to
+    `utils/run_formal_all.sh`.
+  - When set with HMAC key file mode:
+    - `run_meta` emits `hmac_key_id`
+    - `run_end` emits `hmac_key_id`
+  - Added CLI guard:
+    - `--expectations-dry-run-report-hmac-key-id` requires
+      `--expectations-dry-run-report-hmac-key-file`.
+- Verifier enforcement:
+  - Added `--expected-hmac-key-id ID` to
+    `utils/verify_formal_dryrun_report.py`.
+  - Verifier now checks:
+    - `run_meta.hmac_key_id` type + optional expected value
+    - `run_end.hmac_key_id` type
+    - `run_end.hmac_key_id == run_meta.hmac_key_id`
+    - optional expected value match on both rows when configured
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive key-id emit + verify path
+    - negative wrong expected key-id rejection
+    - legacy-prefix verify path with expected key-id
+  - Fixed `DRYRUNREPORT` FileCheck key ordering to match deterministic
+    JSON key order.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with key-id emit/verify options.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Filtered external sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright` -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip` -> FAIL (existing `circt-verilog` MLIR verifier failure in current workspace)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip` -> FAIL (same failure mode)
+- Current limitations / debt:
+  - Key identity is string metadata only; there is no embedded key rotation or
+    trust policy.
+  - HMAC verification still depends on external key distribution discipline.
+  - Current workspace has an unrelated AVIP compile regression in
+    `circt-verilog` (MLIR verifier failure).
+
 ---
 
 ## Architecture Reference
