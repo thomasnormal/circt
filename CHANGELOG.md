@@ -23092,3 +23092,56 @@ CIRCT/slang correctly enforces LRM restrictions.
   `interpretOperation` diagnostics during run.
 - Structured event metadata still lacks full binary-expression trees; complex
   boolean compositions continue to rely on text-expression fallback.
+
+---
+
+## Iteration 461 - February 8, 2026
+
+### Structured Binary Event Expressions for Witness Lowering
+
+- Extended structured event metadata extraction in ImportVerilog to support
+  recursive binary nodes for event-arm expressions:
+  - `and`, `or`, `xor`, `eq`, `ne`
+  - Encoded as:
+    - `<prefix>_bin_op`
+    - `<prefix>_lhs_*`
+    - `<prefix>_rhs_*`
+- Extended VerifToSMT structured resolution to consume recursive binary
+  metadata and build `ResolvedNamedBoolExpr` trees, removing text-parser
+  dependence for these expressions in event-arm witness generation.
+- Preserved compatibility with existing leaf structured metadata and fallback
+  text expressions.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-binary-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Existing expression module now checks structured binary attributes.
+    - Added dedicated structured binary expression module.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (11 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured event metadata still does not encode unary logical-not (`!`) as a
+  first-class structured node.
+- Structured event metadata still does not fully model all event-expression
+  operators / precedence families; some terms still require text fallback.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.

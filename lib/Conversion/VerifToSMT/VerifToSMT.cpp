@@ -890,12 +890,85 @@ static bool resolveStructuredExprFromDetail(
     const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
     size_t numNonStateArgs, std::optional<unsigned> &argIndex,
     std::unique_ptr<ResolvedNamedBoolExpr> &resolvedExpr) {
+  argIndex.reset();
+  resolvedExpr.reset();
   auto key = [&](StringRef suffix) {
     std::string key = prefix.str();
     key += "_";
     key += suffix.str();
     return key;
   };
+  auto parseBoolLikeAttr = [&](StringRef suffix) -> std::optional<bool> {
+    Attribute any = detail.get(key(suffix));
+    if (!any)
+      return false;
+    if (auto boolAttr = dyn_cast<BoolAttr>(any))
+      return boolAttr.getValue();
+    if (isa<UnitAttr>(any))
+      return true;
+    return std::nullopt;
+  };
+  auto materializeArgNode = [&](unsigned sourceIndex,
+                                std::optional<ResolvedNamedBoolExpr::ArgSlice>
+                                    argSlice) {
+    auto argNode = std::make_unique<ResolvedNamedBoolExpr>();
+    argNode->kind = ResolvedNamedBoolExpr::Kind::Arg;
+    argNode->argIndex = sourceIndex;
+    argNode->argSlice = argSlice;
+    return argNode;
+  };
+  auto moveArgOrExprToNode = [&](std::optional<unsigned> &index,
+                                 std::unique_ptr<ResolvedNamedBoolExpr> &expr)
+      -> std::unique_ptr<ResolvedNamedBoolExpr> {
+    if (expr)
+      return std::move(expr);
+    if (!index)
+      return {};
+    return materializeArgNode(*index, std::nullopt);
+  };
+
+  auto binOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("bin_op")));
+  if (binOpAttr) {
+    std::optional<ResolvedNamedBoolExpr::Kind> binKind;
+    StringRef binOp = binOpAttr.getValue();
+    if (binOp == "and")
+      binKind = ResolvedNamedBoolExpr::Kind::And;
+    else if (binOp == "or")
+      binKind = ResolvedNamedBoolExpr::Kind::Or;
+    else if (binOp == "xor")
+      binKind = ResolvedNamedBoolExpr::Kind::Xor;
+    else if (binOp == "eq")
+      binKind = ResolvedNamedBoolExpr::Kind::Eq;
+    else if (binOp == "ne")
+      binKind = ResolvedNamedBoolExpr::Kind::Ne;
+    else
+      return false;
+
+    std::string lhsPrefix = (prefix + "_lhs").str();
+    std::string rhsPrefix = (prefix + "_rhs").str();
+    std::optional<unsigned> lhsArgIndex;
+    std::optional<unsigned> rhsArgIndex;
+    std::unique_ptr<ResolvedNamedBoolExpr> lhsExpr;
+    std::unique_ptr<ResolvedNamedBoolExpr> rhsExpr;
+    if (!resolveStructuredExprFromDetail(detail, lhsPrefix, inputNameToArgIndex,
+                                         numNonStateArgs, lhsArgIndex, lhsExpr))
+      return false;
+    if (!resolveStructuredExprFromDetail(detail, rhsPrefix, inputNameToArgIndex,
+                                         numNonStateArgs, rhsArgIndex, rhsExpr))
+      return false;
+    auto lhsNode = moveArgOrExprToNode(lhsArgIndex, lhsExpr);
+    auto rhsNode = moveArgOrExprToNode(rhsArgIndex, rhsExpr);
+    if (!lhsNode || !rhsNode)
+      return false;
+
+    auto node = std::make_unique<ResolvedNamedBoolExpr>();
+    node->kind = *binKind;
+    node->lhs = std::move(lhsNode);
+    node->rhs = std::move(rhsNode);
+    resolvedExpr = std::move(node);
+    return true;
+  }
+
   auto nameAttr =
       dyn_cast_or_null<StringAttr>(detail.get(key("name")));
   if (!nameAttr || nameAttr.getValue().empty())
@@ -966,16 +1039,10 @@ static bool resolveStructuredExprFromDetail(
 
   auto reductionAttr =
       dyn_cast_or_null<StringAttr>(detail.get(key("reduction")));
-  Attribute bitwiseNotAny = detail.get(key("bitwise_not"));
-  bool bitwiseNot = false;
-  if (bitwiseNotAny) {
-    if (auto bitwiseNotAttr = dyn_cast<BoolAttr>(bitwiseNotAny))
-      bitwiseNot = bitwiseNotAttr.getValue();
-    else if (isa<UnitAttr>(bitwiseNotAny))
-      bitwiseNot = true;
-    else
-      return false;
-  }
+  auto bitwiseNotAttr = parseBoolLikeAttr("bitwise_not");
+  if (!bitwiseNotAttr)
+    return false;
+  bool bitwiseNot = *bitwiseNotAttr;
   std::optional<ResolvedNamedBoolExpr::Kind> reductionKind;
   if (reductionAttr) {
     StringRef reduction = reductionAttr.getValue();
@@ -1000,11 +1067,8 @@ static bool resolveStructuredExprFromDetail(
     return true;
   }
 
-  auto argNode = std::make_unique<ResolvedNamedBoolExpr>();
-  argNode->kind = ResolvedNamedBoolExpr::Kind::Arg;
-  argNode->argIndex = sourceIndex;
-  argNode->argSlice = argSlice;
-  std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(argNode);
+  std::unique_ptr<ResolvedNamedBoolExpr> current =
+      materializeArgNode(sourceIndex, argSlice);
   if (bitwiseNot) {
     auto notNode = std::make_unique<ResolvedNamedBoolExpr>();
     notNode->kind = ResolvedNamedBoolExpr::Kind::BitwiseNot;
@@ -5388,6 +5452,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_name") || detail.get("iff_expr") ||
               detail.get("iff_lsb") || detail.get("iff_msb") ||
               detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
+              detail.get("iff_bin_op") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
               detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");
           (void)resolveStructuredExprFromDetail(

@@ -9124,6 +9124,50 @@ ninja -C build circt-verilog
   - Add stricter end-to-end checks that witness generation survives mixed
     `UnitAttr`/`BoolAttr` metadata producers.
 
+### Iteration 461
+- BMC/LEC structured witness coverage expansion:
+  - Added recursive structured metadata for supported binary event expressions:
+    `and`, `or`, `xor`, `eq`, `ne`.
+  - ImportVerilog now emits binary tree metadata as:
+    - `<prefix>_bin_op`
+    - `<prefix>_lhs_*`
+    - `<prefix>_rhs_*`
+  - VerifToSMT now resolves the recursive binary metadata into
+    `ResolvedNamedBoolExpr` trees for event-arm witness source / iff terms.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-binary-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+    - Existing `SequenceSignalEventListExpr` now checks structured binary attrs.
+    - Added `SequenceSignalEventListStructuredBinaryExpr`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (11 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured metadata still does not represent unary logical-not (`!`) nodes.
+  - Structured metadata still does not encode full precedence-preserving trees
+    for all SystemVerilog event-expression operators (e.g. implications,
+    case-equality families, arithmetic compares in event terms).
+  - OpenTitan `prim_fifo_sync` still reports repeated `llhd.drv`
+    `interpretOperation` diagnostics during simulation.
+- Long-term features to prioritize:
+  - Add structured unary logical-not and parenthesized grouping nodes so
+    precedence does not collapse into fallback text parsing.
+  - Extend structured binary coverage to comparison families and additional
+    operator subsets used in real UVM / OpenTitan event controls.
+  - Add negative tests for malformed structured trees to ensure deterministic
+    fallback behavior and no silent miscompilation.
+
 ---
 
 ## Architecture Reference
