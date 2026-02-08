@@ -10082,6 +10082,64 @@ ninja -C build circt-verilog
   - Continue semantic fixes to retire xprop expected-failure rows.
   - Continue first-class four-state value/unknown propagation work.
 
+### Iteration 523
+- Yosys SVA BMC observed-outcome snapshot and baseline-regeneration support:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_OBSERVED_FILE`
+    - `EXPECT_REGEN_FILE`
+  - Added deterministic observed snapshot emission:
+    - header: `test_name`, `mode`, `profile`, `observed`
+    - observed values: `pass` / `fail`
+  - Added deterministic baseline-regeneration emission:
+    - header: `test_name`, `mode`, `profile`, `expected`
+    - mapping policy:
+      - observed `pass` -> expected `pass`
+      - observed `fail` -> expected `xfail`
+  - This provides a reproducible path for regenerating harness expectation
+    baselines from measured behavior.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`:
+    - validates observed snapshot file contents
+    - validates regenerated expectation file contents
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 7/7 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Regeneration currently maps failures directly to `xfail`; it does not
+    classify between semantically expected `fail` and temporary `xfail`.
+  - Snapshot/regeneration focuses on executed cases only; skipped-case policies
+    are not yet formalized as baseline rows.
+  - xprop pass-mode failures remain unresolved semantically.
+  - Four-state witness unknown propagation remains approximation-based in
+    cast/slice paths.
+- Long-term features to prioritize:
+  - Add policy controls for regeneration (e.g. fail vs xfail classification).
+  - Integrate observed snapshots and diff artifacts into CI dashboards and
+    baseline-approval workflows.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+  - Continue first-class four-state value/unknown propagation work.
+
 ---
 
 ## Architecture Reference
