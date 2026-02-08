@@ -45,6 +45,8 @@ EXPECT_DIFF_FAIL_ON_CHANGE="${EXPECT_DIFF_FAIL_ON_CHANGE:-0}"
 EXPECT_DIFF_FILE="${EXPECT_DIFF_FILE:-}"
 EXPECT_DIFF_TSV_FILE="${EXPECT_DIFF_TSV_FILE:-}"
 EXPECT_DIFF_JSON_FILE="${EXPECT_DIFF_JSON_FILE:-}"
+EXPECT_OBSERVED_FILE="${EXPECT_OBSERVED_FILE:-}"
+EXPECT_REGEN_FILE="${EXPECT_REGEN_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -72,6 +74,7 @@ expect_diff_removed=0
 expect_diff_changed=0
 
 declare -A expected_cases
+declare -A observed_cases
 load_expected_cases() {
   local map_name="$1"
   local file="$2"
@@ -289,11 +292,61 @@ lookup_expected_case() {
   echo "pass"
 }
 
+record_observed_case() {
+  local test="$1"
+  local mode="$2"
+  local profile="$3"
+  local passed="$4"
+  local observed="fail"
+  if [[ "$passed" == "1" ]]; then
+    observed="pass"
+  fi
+  observed_cases["$test|$mode|$profile"]="$observed"
+}
+
+emit_observed_outputs() {
+  local -a keys=()
+  local key
+  for key in "${!observed_cases[@]}"; do
+    keys+=("$key")
+  done
+  if [[ -n "$EXPECT_OBSERVED_FILE" ]]; then
+    : > "$EXPECT_OBSERVED_FILE"
+    printf '# test_name\tmode\tprofile\tobserved\n' >> "$EXPECT_OBSERVED_FILE"
+    if ((${#keys[@]} > 0)); then
+      while IFS= read -r key; do
+        local test mode profile
+        IFS='|' read -r test mode profile <<<"$key"
+        printf '%s\t%s\t%s\t%s\n' \
+          "$test" "$mode" "$profile" "${observed_cases["$key"]}" >> "$EXPECT_OBSERVED_FILE"
+      done < <(printf '%s\n' "${keys[@]}" | sort)
+    fi
+  fi
+  if [[ -n "$EXPECT_REGEN_FILE" ]]; then
+    : > "$EXPECT_REGEN_FILE"
+    printf '# test_name\tmode\tprofile\texpected\n' >> "$EXPECT_REGEN_FILE"
+    printf '# generated from observed outcomes (pass->pass, fail->xfail)\n' >> "$EXPECT_REGEN_FILE"
+    if ((${#keys[@]} > 0)); then
+      while IFS= read -r key; do
+        local test mode profile expected
+        IFS='|' read -r test mode profile <<<"$key"
+        expected="xfail"
+        if [[ "${observed_cases["$key"]}" == "pass" ]]; then
+          expected="pass"
+        fi
+        printf '%s\t%s\t%s\t%s\n' \
+          "$test" "$mode" "$profile" "$expected" >> "$EXPECT_REGEN_FILE"
+      done < <(printf '%s\n' "${keys[@]}" | sort)
+    fi
+  fi
+}
+
 report_case_outcome() {
   local base="$1"
   local mode="$2"
   local passed="$3"
   local profile="$4"
+  record_observed_case "$base" "$mode" "$profile" "$passed"
   local expected
   expected="$(lookup_expected_case "$base" "$mode" "$profile")"
   case "$expected" in
@@ -450,6 +503,10 @@ if [[ -n "$EXPECT_DIFF_BASELINE" ]]; then
       ((expect_diff_added > 0 || expect_diff_removed > 0 || expect_diff_changed > 0)); then
     failures=$((failures + 1))
   fi
+fi
+
+if [[ -n "$EXPECT_OBSERVED_FILE" || -n "$EXPECT_REGEN_FILE" ]]; then
+  emit_observed_outputs
 fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
