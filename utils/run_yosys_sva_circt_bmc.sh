@@ -1965,7 +1965,19 @@ def fail(msg: str) -> None:
     raise SystemExit(1)
 
 try:
-    obj = json.loads(line)
+    def no_duplicate_object_pairs_hook(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate key '{key}'")
+            result[key] = value
+        return result
+
+    obj = json.loads(line, object_pairs_hook=no_duplicate_object_pairs_hook)
+except ValueError as ex:
+    if "duplicate key" in str(ex):
+        fail(f"error: duplicate key in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}: {ex}")
+    fail(f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
 except Exception:
     fail(f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
 
