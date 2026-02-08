@@ -57,6 +57,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE="${YOSYS_SVA_MO
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2016,6 +2018,8 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_clauses_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
   local drop_events_rewrite_selector_profiles_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
   local drop_events_rewrite_selector_profile_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST"
+  local drop_events_rewrite_selector_profile_default_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST"
+  local drop_events_rewrite_selector_profile_overlay_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3018,7 +3022,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3047,8 +3051,10 @@ rewrite_selector_mode = sys.argv[15]
 rewrite_selector_clauses_json_raw = sys.argv[16]
 rewrite_selector_profiles_json_raw = sys.argv[17]
 rewrite_selector_profile_list_raw = sys.argv[18]
-rewrite_row_generated_at_utc_min = sys.argv[19]
-rewrite_row_generated_at_utc_max = sys.argv[20]
+rewrite_selector_profile_default_list_raw = sys.argv[19]
+rewrite_selector_profile_overlay_list_raw = sys.argv[20]
+rewrite_row_generated_at_utc_min = sys.argv[21]
+rewrite_row_generated_at_utc_max = sys.argv[22]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3529,20 +3535,51 @@ rewrite_selector_profile_names = parse_selector_profile_name_list(
     rewrite_selector_profile_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST",
 )
+rewrite_selector_profile_default_names = parse_selector_profile_name_list(
+    rewrite_selector_profile_default_list_raw,
+    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST",
+)
+rewrite_selector_profile_overlay_names = parse_selector_profile_name_list(
+    rewrite_selector_profile_overlay_list_raw,
+    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
+)
 rewrite_selector_profiles = parse_selector_profiles(rewrite_selector_profiles_json_raw)
-if rewrite_selector_profile_names:
+rewrite_selector_profile_requests = []
+for profile_name in rewrite_selector_profile_default_names:
+    rewrite_selector_profile_requests.append(
+        (
+            profile_name,
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST",
+        )
+    )
+for profile_name in rewrite_selector_profile_names:
+    rewrite_selector_profile_requests.append(
+        (
+            profile_name,
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST",
+        )
+    )
+for profile_name in rewrite_selector_profile_overlay_names:
+    rewrite_selector_profile_requests.append(
+        (
+            profile_name,
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
+        )
+    )
+
+if rewrite_selector_profile_requests:
     if rewrite_selector_profiles is None:
         fail(
             "error: "
-            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST requires "
+            "selector profile lists require "
             "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
         )
     selected_profile_clauses = []
-    for profile_name in rewrite_selector_profile_names:
+    for profile_name, source_field_name in rewrite_selector_profile_requests:
         clauses = rewrite_selector_profiles.get(profile_name)
         if clauses is None:
             fail(
-                "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST: "
+                f"error: invalid {source_field_name}: "
                 f"unknown profile '{profile_name}'"
             )
         selected_profile_clauses.extend(clauses)

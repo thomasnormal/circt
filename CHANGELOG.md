@@ -28632,3 +28632,79 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Profile composition remains inheritance-only (no environment overlays yet).
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 591 - February 8, 2026
+
+### Yosys SVA BMC Profile Layering Lists
+
+- Added profile layering controls:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST`
+- Active profile resolution order is now:
+  - default list, then explicit profile list, then overlay list.
+- Unknown-profile diagnostics now name the source list variable to make policy
+  debugging direct.
+
+### Migration Semantics
+
+- Wired default/overlay profile list values through the shell-to-Python
+  migration pipeline.
+- Added generalized validation rule:
+  - any profile list usage requires
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON`.
+- Preserved backward compatibility for existing explicit profile-list behavior.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - default + explicit + overlay layering rewrite behavior
+    - missing profiles JSON rejection for default-list use
+    - duplicate default-list profile rejection
+    - unknown overlay profile rejection
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - missing-profiles diagnostic expectation
+- Focused lit run:
+  - 7/7 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Profile layering is ordered stacking only; no environment-aware policy routing
+  yet.
+- Boolean selector grammar still lacks cardinality operators and reusable
+  subexpression aliases.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
