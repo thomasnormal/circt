@@ -63,6 +63,10 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE:-off}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_PROVIDER="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_PROVIDER:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2028,8 +2032,16 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_profile_route="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE"
   local drop_events_rewrite_selector_profile_routes_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
   local drop_events_rewrite_selector_profile_route_auto_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE"
+  local drop_events_rewrite_selector_profile_route_context_ci_provider="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_PROVIDER"
+  local drop_events_rewrite_selector_profile_route_context_ci_job="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB"
+  local drop_events_rewrite_selector_profile_route_context_ci_branch="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH"
+  local drop_events_rewrite_selector_profile_route_context_ci_target="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
+  local drop_events_route_context_ci_provider=""
+  local drop_events_route_context_ci_job=""
+  local drop_events_route_context_ci_branch=""
+  local drop_events_route_context_ci_target=""
   local drop_events_id_hash_mode_effective
   local drop_events_id_hash_algorithm
   local drop_events_id_hash_version
@@ -2060,6 +2072,76 @@ emit_mode_summary_outputs() {
     esac
   }
   drop_events_id_hash_mode_effective="$(resolve_drop_events_id_hash_mode_effective)"
+  resolve_profile_route_context_ci_provider() {
+    if [[ -n "$drop_events_rewrite_selector_profile_route_context_ci_provider" ]]; then
+      printf '%s\n' "$drop_events_rewrite_selector_profile_route_context_ci_provider"
+      return
+    fi
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+      printf 'github\n'
+      return
+    fi
+    if [[ "${GITLAB_CI:-}" == "true" ]]; then
+      printf 'gitlab\n'
+      return
+    fi
+    if [[ "${BUILDKITE:-}" == "true" ]]; then
+      printf 'buildkite\n'
+      return
+    fi
+    if [[ -n "${JENKINS_URL:-}" ]]; then
+      printf 'jenkins\n'
+      return
+    fi
+    if [[ -n "${CI:-}" ]]; then
+      printf 'ci\n'
+      return
+    fi
+    printf '\n'
+  }
+  resolve_profile_route_context_ci_job() {
+    if [[ -n "$drop_events_rewrite_selector_profile_route_context_ci_job" ]]; then
+      printf '%s\n' "$drop_events_rewrite_selector_profile_route_context_ci_job"
+      return
+    fi
+    local candidate
+    for candidate in "${GITHUB_JOB:-}" "${GITHUB_WORKFLOW:-}" "${CI_JOB_NAME:-}" "${BUILDKITE_LABEL:-}" "${JOB_NAME:-}"; do
+      if [[ -n "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return
+      fi
+    done
+    printf '\n'
+  }
+  resolve_profile_route_context_ci_branch() {
+    if [[ -n "$drop_events_rewrite_selector_profile_route_context_ci_branch" ]]; then
+      printf '%s\n' "$drop_events_rewrite_selector_profile_route_context_ci_branch"
+      return
+    fi
+    local candidate
+    for candidate in "${GITHUB_REF_NAME:-}" "${CI_COMMIT_REF_NAME:-}" "${BUILDKITE_BRANCH:-}" "${GIT_BRANCH:-}" "${BRANCH_NAME:-}"; do
+      if [[ -n "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return
+      fi
+    done
+    printf '\n'
+  }
+  resolve_profile_route_context_ci_target() {
+    if [[ -n "$drop_events_rewrite_selector_profile_route_context_ci_target" ]]; then
+      printf '%s\n' "$drop_events_rewrite_selector_profile_route_context_ci_target"
+      return
+    fi
+    if [[ -n "$TEST_FILTER" ]]; then
+      printf '%s\n' "$TEST_FILTER"
+      return
+    fi
+    printf '\n'
+  }
+  drop_events_route_context_ci_provider="$(resolve_profile_route_context_ci_provider)"
+  drop_events_route_context_ci_job="$(resolve_profile_route_context_ci_job)"
+  drop_events_route_context_ci_branch="$(resolve_profile_route_context_ci_branch)"
+  drop_events_route_context_ci_target="$(resolve_profile_route_context_ci_target)"
   case "$drop_events_id_hash_mode_effective" in
     cksum)
       drop_events_id_hash_algorithm="cksum"
@@ -3030,7 +3112,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_route_context_ci_provider" "$drop_events_route_context_ci_job" "$drop_events_route_context_ci_branch" "$drop_events_route_context_ci_target" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3068,8 +3150,12 @@ rewrite_selector_profile_route_auto_mode_raw = sys.argv[24]
 rewrite_selector_context_suite_dir = sys.argv[25]
 rewrite_selector_context_test_filter = sys.argv[26]
 rewrite_selector_context_script_dir = sys.argv[27]
-rewrite_row_generated_at_utc_min = sys.argv[28]
-rewrite_row_generated_at_utc_max = sys.argv[29]
+rewrite_selector_context_ci_provider = sys.argv[28]
+rewrite_selector_context_ci_job = sys.argv[29]
+rewrite_selector_context_ci_branch = sys.argv[30]
+rewrite_selector_context_ci_target = sys.argv[31]
+rewrite_row_generated_at_utc_min = sys.argv[32]
+rewrite_row_generated_at_utc_max = sys.argv[33]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3656,7 +3742,15 @@ def parse_selector_profile_routes(raw: str):
                 )
             unknown_when_keys = sorted(
                 set(when_value.keys())
-                - {"suite_dir_regex", "test_filter_regex", "script_dir_regex"}
+                - {
+                    "suite_dir_regex",
+                    "test_filter_regex",
+                    "script_dir_regex",
+                    "ci_provider_regex",
+                    "ci_job_regex",
+                    "ci_branch_regex",
+                    "ci_target_regex",
+                }
             )
             if unknown_when_keys:
                 fail(
@@ -3689,6 +3783,46 @@ def parse_selector_profile_routes(raw: str):
                         compile_clause_regex(
                             when_value["script_dir_regex"],
                             f"{route_field}.when.script_dir_regex",
+                        ),
+                    )
+                )
+            if "ci_provider_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "ci_provider",
+                        compile_clause_regex(
+                            when_value["ci_provider_regex"],
+                            f"{route_field}.when.ci_provider_regex",
+                        ),
+                    )
+                )
+            if "ci_job_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "ci_job",
+                        compile_clause_regex(
+                            when_value["ci_job_regex"],
+                            f"{route_field}.when.ci_job_regex",
+                        ),
+                    )
+                )
+            if "ci_branch_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "ci_branch",
+                        compile_clause_regex(
+                            when_value["ci_branch_regex"],
+                            f"{route_field}.when.ci_branch_regex",
+                        ),
+                    )
+                )
+            if "ci_target_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "ci_target",
+                        compile_clause_regex(
+                            when_value["ci_target_regex"],
+                            f"{route_field}.when.ci_target_regex",
                         ),
                     )
                 )
@@ -3910,6 +4044,10 @@ elif rewrite_selector_profile_route_auto_mode != "off":
             "suite_dir": rewrite_selector_context_suite_dir,
             "test_filter": rewrite_selector_context_test_filter,
             "script_dir": rewrite_selector_context_script_dir,
+            "ci_provider": rewrite_selector_context_ci_provider,
+            "ci_job": rewrite_selector_context_ci_job,
+            "ci_branch": rewrite_selector_context_ci_branch,
+            "ci_target": rewrite_selector_context_ci_target,
         }
         auto_matches = []
         for route_name, route_spec in rewrite_selector_profile_routes.items():
