@@ -13455,6 +13455,71 @@ ninja -C build circt-verilog
     yosys/sv-tests/verilator/opentitan/avip flows.
   - Continue semantic fixes to retire expected-failure baselines.
 
+### Iteration 578
+- Yosys SVA BMC drop-events metadata migration policy:
+  - Added
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY` with:
+    - `preserve`: keep existing metadata shape for legacy rows with existing
+      `event_id`
+    - `infer` (default): backfill missing metadata from effective hash config
+      while preserving existing explicit values
+    - `rewrite`: normalize metadata to current effective hash config for all
+      rows
+  - This addresses long-term migration hygiene without forcing aggressive
+    rewrites by default.
+- Migration semantics update:
+  - Legacy rows missing `event_id` still derive deterministic IDs and always
+    gain explicit metadata provenance.
+  - Rows with existing `event_id` now follow policy-controlled metadata
+    behavior.
+  - Added explicit policy-mode validation in migration path.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+      covering `preserve|infer|rewrite` and invalid policy rejection.
+  - Updated/kept aligned:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-id-hash-crc32.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+  - Focused lit result:
+    - 7/7 PASS.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External matrix (smoke profile):
+    - `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 failures=0 xpass=1 skipped=2
+    - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 pass=14 fail=0 error=0 skip=2
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+    - `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=23 pass=23 fail=0 error=0 skip=1005
+    - `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`: PASS
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`: PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`:
+      PASS
+- Current limitations / debt:
+  - Strict duplicate-key/syntax validation for JSON migration still depends on
+    Python.
+  - Policy currently governs metadata fields only; event-ID rederivation policy
+    is still implicit (`event_id` preserved if present).
+  - Cross-harness result schemas remain partially heterogeneous.
+  - xprop-profile expected failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add explicit event-ID normalization policy controls for migration.
+  - Implement a shell/native strict JSON validation path.
+  - Unify matrix-result JSON schema across yosys/sv-tests/verilator/opentitan
+    harnesses.
+  - Continue semantic retirement of expected-failure baselines.
+
 ---
 
 ## Architecture Reference
