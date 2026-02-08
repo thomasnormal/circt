@@ -34,6 +34,8 @@ CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
+YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/yosys-sva-bmc-expected.txt}"
 # Backward-compatible fallback for legacy xfail-only rows.
@@ -1826,6 +1828,59 @@ emit_observed_outputs() {
   fi
 }
 
+emit_mode_summary_outputs() {
+  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" ]]; then
+    : > "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
+    printf 'test_total\ttest_failures\ttest_xfail\ttest_xpass\ttest_skipped\tmode_total\tmode_pass\tmode_fail\tmode_xfail\tmode_xpass\tmode_epass\tmode_efail\tmode_unskip\tmode_skipped\tmode_skip_pass\tmode_skip_fail\tmode_skip_expected\tmode_skip_unexpected\tskip_reason_vhdl\tskip_reason_fail-no-macro\tskip_reason_no-property\tskip_reason_other\n' \
+      >> "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
+    printf '%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n' \
+      "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
+      "$mode_total" "$mode_out_pass" "$mode_out_fail" "$mode_out_xfail" \
+      "$mode_out_xpass" "$mode_out_epass" "$mode_out_efail" "$mode_out_unskip" \
+      "$mode_skipped" "$mode_skipped_pass" "$mode_skipped_fail" \
+      "$mode_skipped_expected" "$mode_skipped_unexpected" \
+      "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
+      "$mode_skip_reason_no_property" "$mode_skip_reason_other" \
+      >> "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
+  fi
+
+  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" ]]; then
+    : > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"
+    {
+      printf '{\n'
+      printf '  "test_summary": {\n'
+      printf '    "total": %d,\n' "$total"
+      printf '    "failures": %d,\n' "$failures"
+      printf '    "xfail": %d,\n' "$xfails"
+      printf '    "xpass": %d,\n' "$xpasses"
+      printf '    "skipped": %d\n' "$skipped"
+      printf '  },\n'
+      printf '  "mode_summary": {\n'
+      printf '    "total": %d,\n' "$mode_total"
+      printf '    "pass": %d,\n' "$mode_out_pass"
+      printf '    "fail": %d,\n' "$mode_out_fail"
+      printf '    "xfail": %d,\n' "$mode_out_xfail"
+      printf '    "xpass": %d,\n' "$mode_out_xpass"
+      printf '    "epass": %d,\n' "$mode_out_epass"
+      printf '    "efail": %d,\n' "$mode_out_efail"
+      printf '    "unskip": %d,\n' "$mode_out_unskip"
+      printf '    "skipped": %d,\n' "$mode_skipped"
+      printf '    "skip_pass": %d,\n' "$mode_skipped_pass"
+      printf '    "skip_fail": %d,\n' "$mode_skipped_fail"
+      printf '    "skip_expected": %d,\n' "$mode_skipped_expected"
+      printf '    "skip_unexpected": %d\n' "$mode_skipped_unexpected"
+      printf '  },\n'
+      printf '  "skip_reasons": {\n'
+      printf '    "vhdl": %d,\n' "$mode_skip_reason_vhdl"
+      printf '    "fail_no_macro": %d,\n' "$mode_skip_reason_fail_no_macro"
+      printf '    "no_property": %d,\n' "$mode_skip_reason_no_property"
+      printf '    "other": %d\n' "$mode_skip_reason_other"
+      printf '  }\n'
+      printf '}\n'
+    } > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"
+  fi
+}
+
 report_case_outcome() {
   local base="$1"
   local mode="$2"
@@ -2048,6 +2103,10 @@ fi
 
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then
   failures=$((failures + 1))
+fi
+
+if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" || -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" ]]; then
+  emit_mode_summary_outputs
 fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"

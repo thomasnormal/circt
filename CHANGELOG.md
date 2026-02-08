@@ -25449,3 +25449,68 @@ CIRCT/slang correctly enforces LRM restrictions.
   policies.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 542 - February 8, 2026
+
+### Yosys SVA BMC Machine-Readable Mode Summary Artifacts
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `YOSYS_SVA_MODE_SUMMARY_TSV_FILE`
+  - `YOSYS_SVA_MODE_SUMMARY_JSON_FILE`
+- Added machine-readable summary emission:
+  - test-level counters:
+    - `test_total`, `test_failures`, `test_xfail`, `test_xpass`, `test_skipped`
+  - normalized mode-level counters:
+    - `mode_total`, `mode_pass`, `mode_fail`, `mode_xfail`, `mode_xpass`
+    - `mode_epass`, `mode_efail`, `mode_unskip`
+    - `mode_skipped`, `mode_skip_pass`, `mode_skip_fail`
+    - `mode_skip_expected`, `mode_skip_unexpected`
+    - `skip_reason_vhdl`, `skip_reason_fail-no-macro`,
+      `skip_reason_no-property`, `skip_reason_other`
+- Preserved existing text summaries for backward compatibility while enabling
+  dashboard/CI ingestion from stable TSV/JSON artifacts.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`
+- Revalidated targeted summary tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-modes.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`
+- Targeted lit result: 2/2 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 25/25 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Summary artifacts are single-run snapshots; no append/history mode yet.
+- No explicit schema version field yet for compatibility negotiation.
+- Comment-anchor policies are row-local and still lack sticky-group mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.
