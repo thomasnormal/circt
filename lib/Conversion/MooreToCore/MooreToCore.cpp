@@ -14118,8 +14118,8 @@ struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
     Type inputType = adaptor.getArray().getType();
 
     if (auto hwArrayTy = dyn_cast<hw::ArrayType>(inputType)) {
-      // Fixed array case: convert to queue-like representation
-      // Use __moore_array_max runtime function that takes (ptr, len, elem_size)
+      // Fixed array case: wrap array data in a MooreQueue struct for the
+      // runtime. Signature: (queue_ptr, elemSize, isSigned) -> queue result.
       auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i32Ty});
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_max", fnTy);
@@ -14130,7 +14130,6 @@ struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
       // Store the fixed array to an alloca
       auto arrayAlloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
-      // Cast input to LLVM type if needed
       Value arrayToStore = adaptor.getArray();
       if (llvmArrayType != inputType) {
         arrayToStore = UnrealizedConversionCastOp::create(rewriter, loc,
@@ -14145,22 +14144,43 @@ struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
       Type elemType = hwArrayTy.getElementType();
       int32_t elemSize = getTypeSizeInBytes(elemType);
 
-      auto lenConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
-                                               rewriter.getI64IntegerAttr(arrayLen));
+      // Build a queue struct {data_ptr, num_elements} on the stack
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      // Store pointer to array data
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             queueAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      // Store element count
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         queueAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(arrayLen));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+
       auto elemSizeConst = LLVM::ConstantOp::create(
-          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemSize));
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
+      // Signed comparison for signed integer types
+      bool isSigned = isa<moore::IntType>(op.getArray().getType())
+                          ? false
+                          : true; // int is signed by default in SV
+      auto isSignedConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(isSigned ? 1 : 0));
 
       auto call = LLVM::CallOp::create(
           rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
-          ValueRange{arrayAlloca, lenConst, elemSizeConst});
+          ValueRange{queueAlloca, elemSizeConst, isSignedConst});
       rewriter.replaceOp(op, call.getResult());
       return success();
     }
 
     // Queue/dynamic array case: input is already {ptr, i64} struct
     // Use __moore_array_max with (ptr, elementSize, isSigned)
-    auto i1Ty = IntegerType::get(ctx, 1);
-    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i1Ty});
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i32Ty});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_max", fnTy);
 
     // Store input to alloca and pass pointer.
@@ -14175,9 +14195,9 @@ struct QueueMaxOpConversion : public RuntimeCallConversionBase<QueueMaxOp> {
     auto elemSizeConst = LLVM::ConstantOp::create(
         rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
 
-    // Use unsigned comparison by default (isSigned = false)
+    // Signed comparison for signed integer types
     auto isSignedConst = LLVM::ConstantOp::create(
-        rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),
@@ -14209,8 +14229,8 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
     Type inputType = adaptor.getArray().getType();
 
     if (auto hwArrayTy = dyn_cast<hw::ArrayType>(inputType)) {
-      // Fixed array case: convert to queue-like representation
-      // Use __moore_array_min runtime function that takes (ptr, len, elem_size)
+      // Fixed array case: wrap array data in a MooreQueue struct for the
+      // runtime. Signature: (queue_ptr, elemSize, isSigned) -> queue result.
       auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i32Ty});
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_min", fnTy);
@@ -14221,7 +14241,6 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
       // Store the fixed array to an alloca
       auto arrayAlloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
-      // Cast input to LLVM type if needed
       Value arrayToStore = adaptor.getArray();
       if (llvmArrayType != inputType) {
         arrayToStore = UnrealizedConversionCastOp::create(rewriter, loc,
@@ -14236,22 +14255,43 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
       Type elemType = hwArrayTy.getElementType();
       int32_t elemSize = getTypeSizeInBytes(elemType);
 
-      auto lenConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
-                                               rewriter.getI64IntegerAttr(arrayLen));
+      // Build a queue struct {data_ptr, num_elements} on the stack
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      auto zero32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(0));
+      auto one32 = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI32IntegerAttr(1));
+      // Store pointer to array data
+      auto dataPtrGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                             queueAlloca, ValueRange{zero32, zero32});
+      LLVM::StoreOp::create(rewriter, loc, arrayAlloca, dataPtrGEP);
+      // Store element count
+      auto lenGEP = LLVM::GEPOp::create(rewriter, loc, ptrTy, queueTy,
+                                         queueAlloca, ValueRange{zero32, one32});
+      auto numElemsConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(arrayLen));
+      LLVM::StoreOp::create(rewriter, loc, numElemsConst, lenGEP);
+
       auto elemSizeConst = LLVM::ConstantOp::create(
-          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(elemSize));
+          rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
+      // Signed comparison for signed integer types
+      bool isSigned = isa<moore::IntType>(op.getArray().getType())
+                          ? false
+                          : true; // int is signed by default in SV
+      auto isSignedConst = LLVM::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(isSigned ? 1 : 0));
 
       auto call = LLVM::CallOp::create(
           rewriter, loc, TypeRange{queueTy}, SymbolRefAttr::get(fn),
-          ValueRange{arrayAlloca, lenConst, elemSizeConst});
+          ValueRange{queueAlloca, elemSizeConst, isSignedConst});
       rewriter.replaceOp(op, call.getResult());
       return success();
     }
 
     // Queue/dynamic array case: input is already {ptr, i64} struct
     // Use __moore_array_min with (ptr, elementSize, isSigned)
-    auto i1Ty = IntegerType::get(ctx, 1);
-    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i1Ty});
+    auto fnTy = LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i32Ty});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_array_min", fnTy);
 
     // Store input to alloca and pass pointer.
@@ -14266,9 +14306,9 @@ struct QueueMinOpConversion : public RuntimeCallConversionBase<QueueMinOp> {
     auto elemSizeConst = LLVM::ConstantOp::create(
         rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(elemSize));
 
-    // Use unsigned comparison by default (isSigned = false)
+    // Signed comparison for signed integer types
     auto isSignedConst = LLVM::ConstantOp::create(
-        rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
                                      SymbolRefAttr::get(fn),

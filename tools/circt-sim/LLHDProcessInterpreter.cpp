@@ -18239,6 +18239,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         packedResult.insertBits(APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * elemSize);
+        }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_array_max()\n");
       }
@@ -18311,6 +18315,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         packedResult.insertBits(APInt(64, lenVal), 64);
         setValue(procId, callOp.getResult(),
                  InterpretedValue(packedResult));
+        if (result.data && result.len > 0) {
+          nativeMemoryBlocks[ptrVal] =
+              static_cast<size_t>(result.len * elemSize);
+        }
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_array_min()\n");
       }
