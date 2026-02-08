@@ -13,11 +13,15 @@
 #include "circt/Support/LTLSequenceNFA.h"
 #include "slang/ast/TimingControl.h"
 #include "slang/ast/expressions/AssertionExpr.h"
+#include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "mlir/IR/IRMapping.h"
+#include <cstdlib>
+#include <limits>
 
 using namespace mlir;
 using namespace circt;
@@ -271,6 +275,153 @@ static void maybeAddEventExprAttr(OpBuilder &builder,
       builder.getNamedAttr(key, builder.getStringAttr(text)));
 }
 
+struct StructuredEventExprInfo {
+  StringRef baseName;
+  std::optional<unsigned> lsb;
+  std::optional<unsigned> msb;
+  std::optional<StringRef> reduction;
+};
+
+static std::optional<int32_t>
+getConstInt32(const slang::ast::Expression &expr) {
+  auto *constant = expr.getConstant();
+  if (!constant || !constant->isInteger())
+    return std::nullopt;
+  if (constant->integer().hasUnknown())
+    return std::nullopt;
+  return constant->integer().as<int32_t>();
+}
+
+static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
+                                           StructuredEventExprInfo &info) {
+  using slang::ast::RangeSelectionKind;
+  using slang::ast::UnaryOperator;
+
+  if (auto *unary = expr.as_if<slang::ast::UnaryExpression>()) {
+    std::optional<StringRef> reduction;
+    switch (unary->op) {
+    case UnaryOperator::BitwiseAnd:
+      reduction = "and";
+      break;
+    case UnaryOperator::BitwiseOr:
+      reduction = "or";
+      break;
+    case UnaryOperator::BitwiseXor:
+      reduction = "xor";
+      break;
+    default:
+      break;
+    }
+    if (reduction) {
+      if (info.reduction)
+        return false;
+      info.reduction = *reduction;
+      return extractStructuredEventExprInfo(unary->operand(), info);
+    }
+  }
+
+  if (auto *element = expr.as_if<slang::ast::ElementSelectExpression>()) {
+    if (info.lsb || info.msb)
+      return false;
+    auto index = getConstInt32(element->selector());
+    if (!index)
+      return false;
+    auto range = element->value().type->getFixedRange();
+    int32_t bit = range.translateIndex(*index);
+    if (bit < 0)
+      return false;
+    info.lsb = static_cast<unsigned>(bit);
+    info.msb = static_cast<unsigned>(bit);
+    return extractStructuredEventExprInfo(element->value(), info);
+  }
+
+  if (auto *rangeSelect = expr.as_if<slang::ast::RangeSelectExpression>()) {
+    if (info.lsb || info.msb)
+      return false;
+    auto left = getConstInt32(rangeSelect->left());
+    auto right = getConstInt32(rangeSelect->right());
+    if (!left || !right)
+      return false;
+
+    auto range = rangeSelect->value().type->getFixedRange();
+    int32_t lsbIndex = 0;
+    uint64_t width = 0;
+    switch (rangeSelect->getSelectionKind()) {
+    case RangeSelectionKind::Simple:
+      lsbIndex = *right;
+      width = static_cast<uint64_t>(
+                  std::abs(static_cast<int64_t>(*left) -
+                           static_cast<int64_t>(*right))) +
+              1;
+      break;
+    case RangeSelectionKind::IndexedUp:
+      if (*right <= 0)
+        return false;
+      width = static_cast<uint64_t>(*right);
+      lsbIndex = range.isLittleEndian() ? *left : (*left + *right - 1);
+      break;
+    case RangeSelectionKind::IndexedDown:
+      if (*right <= 0)
+        return false;
+      width = static_cast<uint64_t>(*right);
+      lsbIndex = range.isLittleEndian() ? (*left - *right + 1) : *left;
+      break;
+    }
+    if (width == 0)
+      return false;
+
+    int32_t lsb = range.translateIndex(lsbIndex);
+    if (lsb < 0)
+      return false;
+    uint64_t msb = static_cast<uint64_t>(lsb) + width - 1;
+    if (msb > std::numeric_limits<unsigned>::max())
+      return false;
+    info.lsb = static_cast<unsigned>(lsb);
+    info.msb = static_cast<unsigned>(msb);
+    return extractStructuredEventExprInfo(rangeSelect->value(), info);
+  }
+
+  if (auto *symRef = expr.getSymbolReference()) {
+    info.baseName = symRef->name;
+    return true;
+  }
+  return false;
+}
+
+static bool maybeAddStructuredEventExprAttrs(
+    OpBuilder &builder, SmallVectorImpl<NamedAttribute> &detailAttrs,
+    StringRef prefix, const slang::ast::Expression *expr) {
+  if (!expr)
+    return false;
+  StructuredEventExprInfo info;
+  if (!extractStructuredEventExprInfo(*expr, info) || info.baseName.empty())
+    return false;
+
+  auto addAttrIfMissing = [&](StringRef key, Attribute value) {
+    if (llvm::any_of(detailAttrs, [&](NamedAttribute namedAttr) {
+          return namedAttr.getName().strref() == key;
+        }))
+      return;
+    detailAttrs.push_back(builder.getNamedAttr(key, value));
+  };
+  auto keyFor = [&](StringRef suffix) {
+    std::string key = prefix.str();
+    key += "_";
+    key += suffix.str();
+    return key;
+  };
+
+  addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
+  if (info.lsb && info.msb) {
+    addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
+    addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
+  }
+  if (info.reduction)
+    addAttrIfMissing(keyFor("reduction"), builder.getStringAttr(*info.reduction));
+
+  return true;
+}
+
 static void recordMixedEventSourcesOnModule(Context &context,
                                             ArrayAttr sources,
                                             ArrayAttr details = {}) {
@@ -455,17 +606,13 @@ static LogicalResult lowerClockedSequenceEventControl(
           builder.getNamedAttr("signal_index",
                                builder.getI32IntegerAttr(signalIdx))};
       if (signalCtrl) {
-        if (auto *symRef = signalCtrl->expr.getSymbolReference())
-          detailAttrs.push_back(builder.getNamedAttr(
-              "signal_name", builder.getStringAttr(symRef->name)));
-        else
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "signal",
+                                              &signalCtrl->expr))
           maybeAddEventExprAttr(builder, detailAttrs, "signal_expr",
                                &signalCtrl->expr);
         if (signalCtrl->iffCondition) {
-          if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
-            detailAttrs.push_back(builder.getNamedAttr(
-                "iff_name", builder.getStringAttr(iffRef->name)));
-          else
+          if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "iff",
+                                                signalCtrl->iffCondition))
             maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
                                  signalCtrl->iffCondition);
         }
@@ -785,18 +932,14 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
           builder.getNamedAttr("signal_index",
                                builder.getI32IntegerAttr(signalIdx))};
       if (signalEvent.expr) {
-        if (auto *symRef = signalEvent.expr->getSymbolReference())
-          detailAttrs.push_back(builder.getNamedAttr(
-              "signal_name", builder.getStringAttr(symRef->name)));
-        else
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "signal",
+                                              signalEvent.expr))
           maybeAddEventExprAttr(builder, detailAttrs, "signal_expr",
                                signalEvent.expr);
       }
       if (signalEvent.iffCondition) {
-        if (auto *iffRef = signalEvent.iffCondition->getSymbolReference())
-          detailAttrs.push_back(builder.getNamedAttr(
-              "iff_name", builder.getStringAttr(iffRef->name)));
-        else
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "iff",
+                                              signalEvent.iffCondition))
           maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
                                signalEvent.iffCondition);
       }
@@ -985,17 +1128,13 @@ lowerSequenceEventListControl(Context &context, Location loc,
         builder.getNamedAttr("label", builder.getStringAttr(source)),
         builder.getNamedAttr("sequence_index",
                              builder.getI32IntegerAttr(seqIdx))};
-    if (auto *symRef = signalCtrl->expr.getSymbolReference())
-      detailAttrs.push_back(builder.getNamedAttr(
-          "sequence_name", builder.getStringAttr(symRef->name)));
-    else
+    if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "sequence",
+                                          &signalCtrl->expr))
       maybeAddEventExprAttr(builder, detailAttrs, "sequence_expr",
                            &signalCtrl->expr);
     if (signalCtrl->iffCondition) {
-      if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
-        detailAttrs.push_back(
-            builder.getNamedAttr("iff_name", builder.getStringAttr(iffRef->name)));
-      else
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, "iff",
+                                            signalCtrl->iffCondition))
         maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
                              signalCtrl->iffCondition);
     }

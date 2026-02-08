@@ -243,3 +243,28 @@ module SequenceSignalEventListExpr;
     a <= ~a;
   end
 endmodule
+
+// Test mixed sequence/signal event list with select/reduction metadata that
+// should be preserved structurally (not only as syntax text).
+module SequenceSignalEventListStructuredExpr;
+  logic clk, q;
+  logic [3:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredExpr
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_name = "bus"
+  // CHECK-DAG: signal_lsb = 2 : i32
+  // CHECK-DAG: signal_msb = 2 : i32
+  // CHECK-DAG: iff_name = "bus"
+  // CHECK-DAG: iff_reduction = "and"
+  // CHECK: moore.event_sources =
+  // CHECK-SAME: "sequence"
+  // CHECK-SAME: "signal[0]:posedge:iff"
+  always @(seq or posedge bus[2] iff (&bus)) begin
+    q <= ~q;
+  end
+endmodule

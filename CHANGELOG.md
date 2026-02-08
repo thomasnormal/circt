@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 508 - February 8, 2026
+
+### Summary
+
+Reduced Slang integration technical debt by preserving structured event
+expression semantics in ImportVerilog metadata and consuming those structured
+attrs in VerifToSMT before falling back to text parsing.
+
+### Fixes
+
+1. **Structured event-expression metadata from Slang AST**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Event-source details now preserve semantic structure when derivable:
+     - `<prefix>_name`
+     - `<prefix>_lsb`, `<prefix>_msb` for constant bit/part-selects
+     - `<prefix>_reduction` for unary reductions (`and`/`or`/`xor`)
+   - This fixes metadata loss for expressions like `bus[2]`, which previously
+     could collapse to just `signal_name = "bus"`.
+
+2. **Structured-attr resolution path in VerifToSMT**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `bmc_event_source_details` resolution now prefers structured attrs for
+     source/`iff` arms and only falls back to `*_expr` text parsing when no
+     structured encoding is available.
+   - This improves robustness and aligns witness generation more directly with
+     Slang semantic information.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-structured-metadata.mlir`
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New tests validate:
+     - structured attr emission for select/reduction event terms,
+     - witness synthesis using structured metadata.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witness-structured-metadata.mlir`: PASS
+     - `bmc-event-arm-witness-reduction.mlir`: PASS
+     - `bmc-event-arm-witness-part-select.mlir`: PASS
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Structured attrs are still an incremental bridge; there is no canonical
+  Slang expression graph/ID propagation end-to-end yet.
+- Casts, concatenation/replication, and indexed part-select (`+:`/`-:`) remain
+  unsupported in expression-backed witness synthesis.
+- Procedural/property-origin metadata is still not rich enough for robust
+  `always @(property)` diagnostics in all cases.
+
 ## Iteration 507 - February 8, 2026
 
 ### Summary
