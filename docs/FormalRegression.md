@@ -210,6 +210,8 @@ Expected-failure budget file:
 - `--expected-failures-file` expects TSV with header:
   - `suite	mode	expected_fail	expected_error	notes`
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
+- `--fail-on-unused-expected-failures` fails when expected-failures rows do not
+  match any suite/mode in current run results.
 
 Expected-failure cases file:
 
