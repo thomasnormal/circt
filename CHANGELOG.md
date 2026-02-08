@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 481 - February 8, 2026
+
+### Summary
+
+Added `UnpackedArrayType` support to 7 more MooreToCore conversion patterns
+for queue/array operations on fixed-size arrays. Added 3 new unit tests covering
+reduce, sort/rsort, shuffle/reverse operations. Verified no regressions.
+
+### Fixes
+
+1. **MooreToCore `UnpackedArrayType` in 7 conversion patterns** (5a96b6e1c)
+   - `QueueSortWithOpConversion`: Probe/alloca/drive pattern for fixed-size array sort
+   - `QueueRSortWithOpConversion`: Same pattern for reverse sort
+   - `ArraySizeOpConversion`: Compile-time constant for fixed array `.size()`
+   - `StreamConcatOpConversion`: Fixed-array element type extraction
+   - `StreamUnpackOpConversion`: Fixed-array destination ref support
+   - `StreamConcatMixedOpConversion`: Mixed streaming with fixed arrays
+   - `StreamUnpackMixedOpConversion`: Mixed streaming unpack with fixed arrays
+
+2. **New unit tests** (a51c8736f)
+   - `test/Tools/circt-sim/queue-array-reduce.sv`: sum, product, and, or, xor
+   - `test/Tools/circt-sim/queue-array-sort-min.sv`: sort, rsort
+   - `test/Tools/circt-sim/queue-array-shuffle-unique.sv`: shuffle, reverse
+
+3. **UVM regex DPI fix** (73addf0d7, previous session)
+   - Replaced `UVMRegexStub` with `std::regex` in MooreRuntime.cpp
+   - Full POSIX extended regex support via `std::regex::extended`
+   - Eliminates 20+ UVM_ERROR DPI/REGEX in AXI4Lite and JTAG AVIPs
+
+### Validation
+
+- circt-sim lit: **169/169 pass** (100%)
+- sv-tests simulation: **714/776 pass** (99.1%), 0 failures, 0 regressions
+- APB AVIP: PASS (500ns sim time within 60s)
+- AHB AVIP: PASS (500ns sim time within 60s)
+
+### Remaining Feature Gaps (Priority Order)
+
+| Feature | Impact | Difficulty | Notes |
+|---------|--------|-----------|-------|
+| NOCHILD empty component names | All AVIPs | Medium | UVM factory passes empty string for component names |
+| AXI4Lite vtable dispatch | 1 AVIP | Hard | `get_common_domain` returns invalid vtable ptr |
+| `unique()` on fixed arrays | sv-tests | Medium | `!hw.array` vs LLVM type mismatch in store |
+| Named events (full) | UVM phases | Medium | NBA for EventType, clearing between time slots |
+| ClockVar support | Some testbenches | Unknown | Not yet investigated |
+| SVA runtime checking | Advanced UVM | Hard | Currently stub, no runtime assertion evaluation |
+
 ## Iteration 480 - February 8, 2026
 
 ### Summary

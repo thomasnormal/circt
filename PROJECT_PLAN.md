@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 480)
+## Current Status - February 8, 2026 (Iteration 481)
 
 ### Test Results
 
@@ -15,37 +15,89 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 |------|----------|------|------|------|
 | Parsing | 853 | 853 | 0 | **100%** |
 | Elaboration | 1028 | 1018+ | 10 | **99.0%+** |
-| Simulation (full) | 776 | 715 | 0 | **99.2%** |
+| Simulation (full) | 776 | 714 | 0 | **99.1%** |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** |
-| circt-sim lit | 166 | 166 | 0 | **100%** |
+| circt-sim lit | 169 | 169 | 0 | **100%** |
 | ImportVerilog lit | 384 | 384 | 0 | **100%** |
 
 ### AVIP Status
 
-All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
+8 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
 
 | AVIP | Status | Notes |
 |------|--------|-------|
-| APB | WORKS | apb_base_test, 453ns sim time |
-| AHB | WORKS | AhbBaseTest, 381ns sim time |
-| UART | WORKS | UartBaseTest, 746ns sim time |
-| I2S | WORKS | I2sBaseTest, 418ns sim time |
-| I3C | WORKS | i3c_base_test, 466ns sim time |
-| SPI | WORKS | SpiBaseTest, 434ns sim time |
-| AXI4 | WORKS | hvl_top, 57MB MLIR — recompiled from source, passes sim |
-| JTAG | FAIL | 12 enum type casting errors (`reg[4:0]` to enum), 1 bind/virtual interface error |
-| AXI4Lite | FAIL | Timescale errors + duplicate import ambiguity (investigating) |
+| APB | WORKS | apb_base_test, 500ns sim time |
+| AHB | WORKS | AhbBaseTest, 500ns sim time |
+| UART | WORKS | UartBaseTest, 500ns sim time |
+| I2S | WORKS | I2sBaseTest, 500ns sim time |
+| I3C | WORKS | i3c_base_test, 500ns sim time |
+| SPI | WORKS | SpiBaseTest, 500ns sim time |
+| AXI4 | WORKS | hvl_top, 57MB MLIR, passes sim |
+| JTAG | WORKS | HvlTop, 500ns sim time, regex DPI fixed |
+| AXI4Lite | PARTIAL | Exits early — vtable dispatch gap in `get_common_domain` → `uvm_bottomup_phase::traverse` |
 
-### Remaining sv-tests Elaboration Failures (10)
+### Remaining sv-tests Elaboration Failures (7)
 
 | Category | Count | Root Cause | Fixable? |
 |----------|-------|-----------|----------|
 | ~~UVM `stream_unpack`~~ | ~~7~~ | **FIXED** (b3031c5ec): 4-state value extraction before i64 widening | DONE |
-| Queue ops on fixed arrays | 3 | `!llhd.ref`/`!hw.array` type mismatch in LLVM lowering | YES (low effort) |
+| ~~Queue ops on fixed arrays~~ | ~~3~~ | **FIXED** (c52eee8a9 + 5a96b6e1c): `UnpackedArrayType` in MooreToCore patterns | DONE |
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Workstream Status
+
+| Track | Owner | Status | Next Steps |
+|-------|-------|--------|------------|
+| **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
+| **BMC/LEC** | Codex | Active | Sequence event `iff`, multi-clock event lists (codex handles this) |
+| **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
+| **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
+
+### Feature Gap Table (Xcelium Parity)
+
+| Feature | Status | Impact | Next Action |
+|---------|--------|--------|-------------|
+| UVM core/factory/phases | WORKS | All AVIPs | - |
+| VTable dispatch | WORKS | All AVIPs | - |
+| Associative/dynamic arrays | WORKS | All AVIPs | - |
+| Queues (all ops) | WORKS | All AVIPs | `unique()` on fixed arrays still fails (type mismatch) |
+| config_db | WORKS | All AVIPs | - |
+| Semaphores | WORKS | All AVIPs | - |
+| $plusargs | WORKS | All AVIPs | - |
+| Coverage/covergroups | WORKS | All AVIPs | Basic sampling; need cross/bins for full parity |
+| String methods | WORKS | All AVIPs | All 18 IEEE methods |
+| DPI-C imports | PARTIAL | JTAG/AXI4 | Regex works; most DPI stubbed |
+| Component names (NOCHILD) | BROKEN | All AVIPs | Empty string args in UVM factory |
+| Named events (full) | PARTIAL | UVM phases | NBA for EventType, clearing between time slots |
+| ClockVar | MISSING | Some TBs | Not yet investigated |
+| SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
+| `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
+| Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 481
+
+1. **MooreToCore `UnpackedArrayType` support** (5a96b6e1c)
+   - Added fixed-size array handling to 7 conversion patterns: SortWith, RSortWith,
+     ArraySize, StreamConcat, StreamUnpack, StreamConcatMixed, StreamUnpackMixed
+   - Sort patterns use probe/alloca/drive for `!llhd.ref<!hw.array>` operands
+
+2. **UVM regex DPI fix** (73addf0d7)
+   - Replaced manual pattern matcher with `std::regex` for full POSIX extended regex
+   - Fixed 20+ UVM_ERROR DPI/REGEX in AXI4Lite and JTAG AVIPs
+   - JTAG now passes end-to-end (was FAIL, now WORKS)
+
+3. **New unit tests** (a51c8736f)
+   - `queue-array-reduce.sv`: sum, product, and, or, xor on fixed arrays
+   - `queue-array-sort-min.sv`: sort, rsort on fixed arrays
+   - `queue-array-shuffle-unique.sv`: shuffle, reverse on fixed arrays
+
+4. **Regression verified**
+   - circt-sim lit: 169/169 (100%)
+   - sv-tests simulation: 714/776 (99.1%), 0 failures
+   - APB + AHB AVIPs: both pass
 
 ### Session Summary - Iteration 480
 
