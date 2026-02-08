@@ -42,6 +42,12 @@ Enable strict baseline-aware quality gates:
 utils/run_formal_all.sh --strict-gate
 ```
 
+Use a trailing baseline window for trend-aware strict gates:
+
+```bash
+utils/run_formal_all.sh --strict-gate --baseline-window 7
+```
+
 Fail only on specific gate classes:
 
 ```bash

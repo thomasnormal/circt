@@ -18,6 +18,8 @@ Options:
   --update-baselines     Update baseline file and PROJECT_PLAN.md table
   --fail-on-diff         Fail if results differ from baseline file
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
+  --baseline-window N    Baseline rows per suite/mode used for gate comparison
+                         (default: 1, latest baseline only)
   --fail-on-new-xpass    Fail when xpass count increases vs baseline
   --fail-on-passrate-regression
                          Fail when pass-rate decreases vs baseline
@@ -47,6 +49,7 @@ Z3_BIN="${Z3_BIN:-}"
 UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
+BASELINE_WINDOW=1
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 JSON_SUMMARY_FILE=""
@@ -95,6 +98,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1; shift ;;
     --strict-gate)
       STRICT_GATE=1; shift ;;
+    --baseline-window)
+      BASELINE_WINDOW="$2"; shift 2 ;;
     --fail-on-new-xpass)
       FAIL_ON_NEW_XPASS=1; shift ;;
     --fail-on-passrate-regression)
@@ -113,6 +118,10 @@ done
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
+fi
+if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
+  echo "invalid --baseline-window: expected positive integer" >&2
+  exit 1
 fi
 if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_XPASS=1
@@ -583,6 +592,7 @@ fi
 
 if [[ "$FAIL_ON_NEW_XPASS" == "1" || "$FAIL_ON_PASSRATE_REGRESSION" == "1" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
+  BASELINE_WINDOW="$BASELINE_WINDOW" \
   FAIL_ON_NEW_XPASS="$FAIL_ON_NEW_XPASS" \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
@@ -629,7 +639,7 @@ with summary_path.open() as f:
         key = (row["suite"], row["mode"])
         summary[key] = row
 
-latest = {}
+history = {}
 with baseline_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
     for row in reader:
@@ -638,55 +648,72 @@ with baseline_path.open() as f:
         if not suite or not mode:
             continue
         key = (suite, mode)
-        latest.setdefault(key, []).append(row)
-
-for key, entries in latest.items():
-    entries.sort(key=lambda r: r.get("date", ""))
-    latest[key] = entries[-1]
+        history.setdefault(key, []).append(row)
 
 fail_on_new_xpass = os.environ.get("FAIL_ON_NEW_XPASS", "0") == "1"
 fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0") == "1"
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
+baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 
 gate_errors = []
 for key, current_row in summary.items():
-    baseline_row = latest.get(key)
     suite, mode = key
-    if baseline_row is None:
+    history_rows = history.get(key, [])
+    if not history_rows:
         if strict_gate:
             gate_errors.append(f"{suite} {mode}: missing baseline row")
         continue
-    baseline_counts = parse_result_summary(baseline_row.get("result", ""))
-    baseline_fail = read_baseline_int(baseline_row, "fail", baseline_counts)
-    baseline_error = read_baseline_int(baseline_row, "error", baseline_counts)
-    baseline_xpass = read_baseline_int(baseline_row, "xpass", baseline_counts)
+    history_rows.sort(key=lambda r: r.get("date", ""))
+    if strict_gate and len(history_rows) < baseline_window:
+        gate_errors.append(
+            f"{suite} {mode}: insufficient baseline history ({len(history_rows)} < {baseline_window})"
+        )
+        continue
+    compare_rows = history_rows[-baseline_window:]
+    parsed_counts = [parse_result_summary(row.get("result", "")) for row in compare_rows]
+    baseline_fail = min(
+        read_baseline_int(row, "fail", counts)
+        for row, counts in zip(compare_rows, parsed_counts)
+    )
+    baseline_error = min(
+        read_baseline_int(row, "error", counts)
+        for row, counts in zip(compare_rows, parsed_counts)
+    )
+    baseline_xpass = min(
+        read_baseline_int(row, "xpass", counts)
+        for row, counts in zip(compare_rows, parsed_counts)
+    )
     current_fail = int(current_row["fail"])
     current_error = int(current_row["error"])
     current_xpass = int(current_row["xpass"])
     if current_fail > baseline_fail:
         gate_errors.append(
-            f"{suite} {mode}: fail increased ({baseline_fail} -> {current_fail})"
+            f"{suite} {mode}: fail increased ({baseline_fail} -> {current_fail}, window={baseline_window})"
         )
     if current_error > baseline_error:
         gate_errors.append(
-            f"{suite} {mode}: error increased ({baseline_error} -> {current_error})"
+            f"{suite} {mode}: error increased ({baseline_error} -> {current_error}, window={baseline_window})"
         )
     if fail_on_new_xpass and current_xpass > baseline_xpass:
         gate_errors.append(
-            f"{suite} {mode}: xpass increased ({baseline_xpass} -> {current_xpass})"
+            f"{suite} {mode}: xpass increased ({baseline_xpass} -> {current_xpass}, window={baseline_window})"
         )
     if fail_on_passrate_regression:
-        baseline_row_for_rate = {
-            "total": read_baseline_int(baseline_row, "total", baseline_counts),
-            "pass": read_baseline_int(baseline_row, "pass", baseline_counts),
-            "xfail": read_baseline_int(baseline_row, "xfail", baseline_counts),
-            "skip": read_baseline_int(baseline_row, "skip", baseline_counts),
-        }
-        baseline_rate = pass_rate(baseline_row_for_rate)
+        baseline_rate = max(
+            pass_rate(
+                {
+                    "total": read_baseline_int(row, "total", counts),
+                    "pass": read_baseline_int(row, "pass", counts),
+                    "xfail": read_baseline_int(row, "xfail", counts),
+                    "skip": read_baseline_int(row, "skip", counts),
+                }
+            )
+            for row, counts in zip(compare_rows, parsed_counts)
+        )
         current_rate = pass_rate(current_row)
         if current_rate + 1e-9 < baseline_rate:
             gate_errors.append(
-                f"{suite} {mode}: pass_rate regressed ({baseline_rate:.3f} -> {current_rate:.3f})"
+                f"{suite} {mode}: pass_rate regressed ({baseline_rate:.3f} -> {current_rate:.3f}, window={baseline_window})"
             )
 
 if gate_errors:
