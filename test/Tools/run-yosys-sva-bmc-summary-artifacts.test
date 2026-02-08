@@ -34,3 +34,5 @@
 // JSON: "skip_expected": 1
 // JSON: "skip_reasons": {
 // JSON: "fail_no_macro": 1
+// JSON: "drop_events_summary": {
+// JSON: "future_skew": 0
