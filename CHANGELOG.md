@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 480 - February 8, 2026
+
+### Summary
+
+Added `iff` support for procedural sequence event controls (`@(seq iff cond)`)
+and for sequence entries in sequence event lists, with new import/BMC
+regressions and revalidated external BMC/LEC smoke coverage.
+
+### Fixes
+
+1. **Sequence event `iff` support**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp` to lower
+     sequence event controls with `iff` guards.
+   - Updated sequence event-list lowering to accept per-entry `iff` guards:
+     - `@(seq1 iff c1 or seq2 iff c2)`
+   - Implementation gates sequence expressions with sampled `iff` predicates
+     before existing NFA/event-loop lowering.
+
+2. **Regression coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with:
+       - `SequenceEventControlWithIff`
+       - `SequenceEventListControlWithIff`
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-iff-unsat-e2e.sv`
+
+3. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog circt-bmc`: PASS
+   - Lit/targeted:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+   - Direct BMC:
+     - `sva-sequence-event-iff-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
 ## Iteration 479 - February 8, 2026
 
 ### Summary
