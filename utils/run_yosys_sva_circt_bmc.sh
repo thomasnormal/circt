@@ -55,6 +55,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST="${YOSYS_
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE:-all}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2012,6 +2014,8 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_history_file_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST"
   local drop_events_rewrite_selector_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE"
   local drop_events_rewrite_selector_clauses_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
+  local drop_events_rewrite_selector_profiles_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
+  local drop_events_rewrite_selector_profile_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3014,7 +3018,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3041,8 +3045,10 @@ rewrite_schema_version_list_raw = sys.argv[13]
 rewrite_history_file_list_raw = sys.argv[14]
 rewrite_selector_mode = sys.argv[15]
 rewrite_selector_clauses_json_raw = sys.argv[16]
-rewrite_row_generated_at_utc_min = sys.argv[17]
-rewrite_row_generated_at_utc_max = sys.argv[18]
+rewrite_selector_profiles_json_raw = sys.argv[17]
+rewrite_selector_profile_list_raw = sys.argv[18]
+rewrite_row_generated_at_utc_min = sys.argv[19]
+rewrite_row_generated_at_utc_max = sys.argv[20]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3200,20 +3206,10 @@ def compile_clause_regex(value, field_name: str):
         fail(f"error: invalid {field_name}: {value} ({ex})")
 
 
-def parse_selector_clauses(raw: str):
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        fail(
-            "error: invalid "
-            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON: expected JSON array"
-        )
+def parse_selector_clause_array(payload, field_name: str):
     if not isinstance(payload, list) or not payload:
         fail(
-            "error: invalid "
-            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON: expected non-empty JSON array"
+            f"error: invalid {field_name}: expected non-empty JSON array"
         )
     allowed_keys = {
         "run_id_regex",
@@ -3227,10 +3223,7 @@ def parse_selector_clauses(raw: str):
     }
     clauses = []
     for clause_index, clause in enumerate(payload, start=1):
-        field_prefix = (
-            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
-            f"[{clause_index}]"
-        )
+        field_prefix = f"{field_name}[{clause_index}]"
         if not isinstance(clause, dict) or not clause:
             fail(
                 f"error: invalid {field_prefix}: expected non-empty object"
@@ -3297,7 +3290,116 @@ def parse_selector_clauses(raw: str):
     return clauses
 
 
+def parse_selector_clauses(raw: str):
+    if not raw:
+        return None
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
+    )
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(f"error: invalid {field_name}: expected JSON array")
+    return parse_selector_clause_array(payload, field_name)
+
+
+def parse_selector_profile_name_list(raw: str, field_name: str):
+    if not raw:
+        return []
+    if "\n" in raw or "\r" in raw:
+        fail(
+            f"error: invalid {field_name}: newline is not allowed in comma-separated list"
+        )
+    try:
+        rows = list(csv.reader([raw], skipinitialspace=True, strict=True))
+    except csv.Error as ex:
+        fail(
+            f"error: invalid {field_name}: malformed comma-separated list ({ex})"
+        )
+    if len(rows) != 1:
+        fail(
+            f"error: invalid {field_name}: malformed comma-separated list"
+        )
+    names = []
+    seen = set()
+    for token in rows[0]:
+        name = token.strip()
+        if not name:
+            fail(
+                f"error: invalid {field_name}: empty entry in comma-separated list"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            fail(
+                f"error: invalid {field_name}: invalid profile name '{name}'"
+            )
+        if name in seen:
+            fail(
+                f"error: invalid {field_name}: duplicate profile name '{name}'"
+            )
+        seen.add(name)
+        names.append(name)
+    if not names:
+        fail(
+            f"error: invalid {field_name}: empty entry in comma-separated list"
+        )
+    return names
+
+
+def parse_selector_profiles(raw: str):
+    if not raw:
+        return None
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
+    )
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(f"error: invalid {field_name}: expected JSON object")
+    if not isinstance(payload, dict) or not payload:
+        fail(f"error: invalid {field_name}: expected non-empty JSON object")
+
+    parsed = {}
+    for profile_name, profile_value in payload.items():
+        if not isinstance(profile_name, str) or not profile_name:
+            fail(
+                f"error: invalid {field_name}: profile names must be non-empty strings"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", profile_name):
+            fail(
+                f"error: invalid {field_name}: invalid profile name '{profile_name}'"
+            )
+        parsed[profile_name] = parse_selector_clause_array(
+            profile_value, f"{field_name}.{profile_name}"
+        )
+    return parsed
+
+
 rewrite_selector_clauses = parse_selector_clauses(rewrite_selector_clauses_json_raw)
+rewrite_selector_profile_names = parse_selector_profile_name_list(
+    rewrite_selector_profile_list_raw,
+    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST",
+)
+rewrite_selector_profiles = parse_selector_profiles(rewrite_selector_profiles_json_raw)
+if rewrite_selector_profile_names:
+    if rewrite_selector_profiles is None:
+        fail(
+            "error: "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST requires "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON"
+        )
+    selected_profile_clauses = []
+    for profile_name in rewrite_selector_profile_names:
+        clauses = rewrite_selector_profiles.get(profile_name)
+        if clauses is None:
+            fail(
+                "error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST: "
+                f"unknown profile '{profile_name}'"
+            )
+        selected_profile_clauses.extend(clauses)
+    if rewrite_selector_clauses is None:
+        rewrite_selector_clauses = selected_profile_clauses
+    else:
+        rewrite_selector_clauses = rewrite_selector_clauses + selected_profile_clauses
 
 rewrite_row_generated_at_min_epoch = None
 if rewrite_row_generated_at_utc_min:
