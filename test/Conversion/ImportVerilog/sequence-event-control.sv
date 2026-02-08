@@ -268,3 +268,23 @@ module SequenceSignalEventListStructuredExpr;
     q <= ~q;
   end
 endmodule
+
+// Test mixed sequence/signal event list with inverted reduction metadata.
+module SequenceSignalEventListStructuredInvertedReduction;
+  logic clk, q;
+  logic [3:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredInvertedReduction
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_name = "bus"
+  // CHECK-DAG: signal_reduction = "xnor"
+  // CHECK-DAG: iff_name = "bus"
+  // CHECK-DAG: iff_reduction = "nor"
+  always @(seq or posedge (^~bus) iff (~|bus)) begin
+    q <= ~q;
+  end
+endmodule

@@ -303,11 +303,20 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
     case UnaryOperator::BitwiseAnd:
       reduction = "and";
       break;
+    case UnaryOperator::BitwiseNand:
+      reduction = "nand";
+      break;
     case UnaryOperator::BitwiseOr:
       reduction = "or";
       break;
+    case UnaryOperator::BitwiseNor:
+      reduction = "nor";
+      break;
     case UnaryOperator::BitwiseXor:
       reduction = "xor";
+      break;
+    case UnaryOperator::BitwiseXnor:
+      reduction = "xnor";
       break;
     default:
       break;
