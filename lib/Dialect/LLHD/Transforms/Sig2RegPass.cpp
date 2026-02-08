@@ -198,6 +198,53 @@ public:
 
 #endif
 
+  /// Check if any write interval's value transitively depends on any read
+  /// interval's value (probe result). If so, promoting the signal would create
+  /// a circular dependency where reads depend on writes which depend on reads.
+  bool hasCircularDependency() const {
+    DenseSet<Value> probeResults;
+    for (const auto &interval : readIntervals)
+      probeResults.insert(interval.value);
+
+    if (probeResults.empty())
+      return false;
+
+    SmallVector<Value> worklist;
+    DenseSet<Value> visited;
+    for (const auto &interval : intervals)
+      worklist.push_back(interval.value);
+
+    while (!worklist.empty()) {
+      Value v = worklist.pop_back_val();
+      if (!visited.insert(v).second)
+        continue;
+      if (probeResults.contains(v))
+        return true;
+      auto *defOp = v.getDefiningOp();
+      if (!defOp)
+        continue;
+      for (Value operand : defOp->getOperands())
+        worklist.push_back(operand);
+      // For ops with regions (e.g. llhd.process), also collect values
+      // used inside the regions that are defined outside the op.
+      for (Region &region : defOp->getRegions()) {
+        region.walk([&](Operation *innerOp) {
+          for (Value operand : innerOp->getOperands()) {
+            if (auto *opDefOp = operand.getDefiningOp()) {
+              if (!defOp->isAncestor(opDefOp))
+                worklist.push_back(operand);
+            } else if (auto blockArg = dyn_cast<BlockArgument>(operand)) {
+              if (!defOp->isAncestor(blockArg.getOwner()->getParentOp()))
+                worklist.push_back(operand);
+            }
+          }
+        });
+      }
+    }
+
+    return false;
+  }
+
   /// Check if we can promote the entire signal according to the current
   /// limitations of the pass.
   bool isPromotable() {
@@ -228,6 +275,12 @@ public:
     Location loc = sigOp->getLoc();
     auto type = builder.getIntegerType(bw);
     val = builder.createOrFold<hw::BitcastOp>(loc, type, val);
+
+    // Check for circular dependency before applying writes. If any write
+    // value transitively depends on a probe result, use the initial value
+    // for reads to break the cycle.
+    bool circular = hasCircularDependency();
+    Value readVal = val;
 
     // Handle the writes by starting with the signal init value and injecting
     // the written values at the right offsets.
@@ -266,10 +319,14 @@ public:
     }
 
     // Handle the reads by extracting right number of bits at the right offset.
+    // If there's a circular dependency (writes depend on reads), use readVal
+    // (the initial value before writes) to break the cycle. Otherwise, use
+    // val (post-write) so reads see the driven values.
+    Value readSource = circular ? readVal : val;
     for (auto interval : readIntervals) {
       if (interval.low.isStatic()) {
         Value read = builder.createOrFold<comb::ExtractOp>(
-            loc, builder.getIntegerType(interval.bitwidth), val,
+            loc, builder.getIntegerType(interval.bitwidth), readSource,
             interval.low.min);
         read = builder.createOrFold<hw::BitcastOp>(
             loc, interval.value.getType(), read);
@@ -281,7 +338,7 @@ public:
 
       Value read = buildDynamicIndex(builder, loc, interval.low.min,
                                      interval.low.dynamic, bw);
-      read = builder.createOrFold<comb::ShrUOp>(loc, val, read);
+      read = builder.createOrFold<comb::ShrUOp>(loc, readSource, read);
       read = builder.createOrFold<comb::ExtractOp>(
           loc, builder.getIntegerType(interval.bitwidth), read, 0);
       read = builder.createOrFold<hw::BitcastOp>(loc, interval.value.getType(),
