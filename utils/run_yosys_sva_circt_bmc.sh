@@ -3694,6 +3694,56 @@ def format_context_scalar(value):
     return value
 
 
+def validate_context_key_name(key: str, field_name: str):
+    if not isinstance(key, str) or not key:
+        fail(
+            f"error: invalid {field_name}: context keys must be non-empty strings"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key):
+        fail(
+            f"error: invalid {field_name}: invalid context key '{key}'"
+        )
+
+
+def validate_context_value(value, key_spec, field_name: str, format_output: bool):
+    expected_type = key_spec["type"]
+    if expected_type == "string":
+        if not isinstance(value, str):
+            fail(
+                f"error: invalid {field_name}: expected string value"
+            )
+    elif expected_type == "integer":
+        if not isinstance(value, int) or isinstance(value, bool):
+            fail(
+                f"error: invalid {field_name}: expected integer value"
+            )
+    else:
+        if not isinstance(value, bool):
+            fail(
+                f"error: invalid {field_name}: expected boolean value"
+            )
+    if key_spec["min_value"] is not None and value < key_spec["min_value"]:
+        fail(
+            f"error: invalid {field_name}: value below minimum {key_spec['min_value']}"
+        )
+    if key_spec["max_value"] is not None and value > key_spec["max_value"]:
+        fail(
+            f"error: invalid {field_name}: value above maximum {key_spec['max_value']}"
+        )
+    formatted_value = format_context_scalar(value)
+    if key_spec["enum_values"] is not None and formatted_value not in key_spec["enum_values"]:
+        fail(
+            f"error: invalid {field_name}: value is not in configured enum"
+        )
+    if key_spec["regex"] is not None and not key_spec["regex"].search(formatted_value):
+        fail(
+            f"error: invalid {field_name}: value does not match configured regex"
+        )
+    if format_output:
+        return formatted_value
+    return value
+
+
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
     field_name = (
         "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON"
@@ -3701,13 +3751,13 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
     expected_version_field = (
         "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION"
     )
+    if not raw:
+        return None
     expected_version = expected_version_raw.strip()
     if not expected_version:
         fail(
             f"error: invalid {expected_version_field}: expected non-empty schema version"
         )
-    if not raw:
-        return None
     try:
         payload = json.loads(raw)
     except Exception:
@@ -3715,7 +3765,8 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
     if not isinstance(payload, dict) or not payload:
         fail(f"error: invalid {field_name}: expected non-empty JSON object")
     unknown_keys = sorted(
-        set(payload.keys()) - {"schema_version", "allow_unknown_keys", "keys"}
+        set(payload.keys())
+        - {"schema_version", "allow_unknown_keys", "validate_merged_context", "keys"}
     )
     if unknown_keys:
         fail(
@@ -3735,6 +3786,11 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(
             f"error: invalid {field_name}.allow_unknown_keys: expected boolean"
         )
+    validate_merged_context = payload.get("validate_merged_context", False)
+    if not isinstance(validate_merged_context, bool):
+        fail(
+            f"error: invalid {field_name}.validate_merged_context: expected boolean"
+        )
     keys_payload = payload.get("keys")
     if not isinstance(keys_payload, dict) or not keys_payload:
         fail(
@@ -3742,21 +3798,14 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         )
     key_specs = {}
     for context_key, key_spec in keys_payload.items():
-        if not isinstance(context_key, str) or not context_key:
-            fail(
-                f"error: invalid {field_name}.keys: context keys must be non-empty strings"
-            )
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", context_key):
-            fail(
-                f"error: invalid {field_name}.keys: invalid context key '{context_key}'"
-            )
+        validate_context_key_name(context_key, f"{field_name}.keys")
         key_field = f"{field_name}.keys.{context_key}"
         if not isinstance(key_spec, dict):
             fail(
                 f"error: invalid {key_field}: expected object"
             )
         unknown_spec_keys = sorted(
-            set(key_spec.keys()) - {"type", "required", "regex"}
+            set(key_spec.keys()) - {"type", "required", "regex", "enum", "min", "max"}
         )
         if unknown_spec_keys:
             fail(
@@ -3777,90 +3826,148 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             compiled_regex = compile_clause_regex(
                 key_spec["regex"], f"{key_field}.regex"
             )
+        enum_values = None
+        if "enum" in key_spec:
+            enum_raw = key_spec["enum"]
+            if not isinstance(enum_raw, list) or not enum_raw:
+                fail(
+                    f"error: invalid {key_field}.enum: expected non-empty array"
+                )
+            enum_values = set()
+            for enum_value in enum_raw:
+                enum_values.add(
+                    validate_context_value(
+                        enum_value,
+                        {
+                            "type": value_type,
+                            "min_value": None,
+                            "max_value": None,
+                            "enum_values": None,
+                            "regex": None,
+                        },
+                        f"{key_field}.enum",
+                        True,
+                    )
+                )
+        min_value = None
+        max_value = None
+        if "min" in key_spec:
+            if value_type != "integer":
+                fail(
+                    f"error: invalid {key_field}.min: only supported for integer type"
+                )
+            min_raw = key_spec["min"]
+            if not isinstance(min_raw, int) or isinstance(min_raw, bool):
+                fail(
+                    f"error: invalid {key_field}.min: expected integer"
+                )
+            min_value = min_raw
+        if "max" in key_spec:
+            if value_type != "integer":
+                fail(
+                    f"error: invalid {key_field}.max: only supported for integer type"
+                )
+            max_raw = key_spec["max"]
+            if not isinstance(max_raw, int) or isinstance(max_raw, bool):
+                fail(
+                    f"error: invalid {key_field}.max: expected integer"
+                )
+            max_value = max_raw
+        if min_value is not None and max_value is not None and min_value > max_value:
+            fail(
+                f"error: invalid {key_field}: min must be <= max"
+            )
         key_specs[context_key] = {
             "type": value_type,
             "required": required,
             "regex": compiled_regex,
+            "enum_values": enum_values,
+            "min_value": min_value,
+            "max_value": max_value,
         }
     return {
         "allow_unknown_keys": allow_unknown_keys,
+        "validate_merged_context": validate_merged_context,
         "key_specs": key_specs,
     }
 
 
-def parse_selector_profile_route_context(raw: str, schema_spec):
-    if not raw:
-        payload = {}
-    else:
-        field_name = (
-            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
-        )
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            fail(f"error: invalid {field_name}: expected JSON object")
-        if not isinstance(payload, dict):
-            fail(f"error: invalid {field_name}: expected JSON object")
+def validate_selector_profile_route_context_map(
+    payload,
+    field_name: str,
+    schema_spec,
+    enforce_required: bool,
+    enforce_unknown: bool,
+    format_output: bool,
+):
+    if not isinstance(payload, dict):
+        fail(f"error: invalid {field_name}: expected JSON object")
     context = {}
-    field_name = (
-        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
-    )
     key_specs = {}
     allow_unknown_keys = True
     if schema_spec is not None:
         key_specs = schema_spec["key_specs"]
         allow_unknown_keys = schema_spec["allow_unknown_keys"]
     for key, value in payload.items():
-        if not isinstance(key, str) or not key:
-            fail(
-                f"error: invalid {field_name}: context keys must be non-empty strings"
-            )
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key):
-            fail(
-                f"error: invalid {field_name}: invalid context key '{key}'"
-            )
+        validate_context_key_name(key, field_name)
         key_spec = key_specs.get(key)
         if key_spec is None:
-            if schema_spec is not None and not allow_unknown_keys:
+            if schema_spec is not None and enforce_unknown and not allow_unknown_keys:
                 fail(
                     f"error: invalid {field_name}.{key}: unknown context key"
                 )
-            if not isinstance(value, str):
-                fail(
-                    f"error: invalid {field_name}.{key}: expected string value"
-                )
-            context[key] = value
-            continue
-        expected_type = key_spec["type"]
-        if expected_type == "string":
-            if not isinstance(value, str):
-                fail(
-                    f"error: invalid {field_name}.{key}: expected string value"
-                )
-        elif expected_type == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                fail(
-                    f"error: invalid {field_name}.{key}: expected integer value"
-                )
-        else:
-            if not isinstance(value, bool):
-                fail(
-                    f"error: invalid {field_name}.{key}: expected boolean value"
-                )
-        formatted_value = format_context_scalar(value)
-        if key_spec["regex"] is not None:
-            if not key_spec["regex"].search(formatted_value):
-                fail(
-                    f"error: invalid {field_name}.{key}: value does not match configured regex"
-                )
-        context[key] = formatted_value
-    if schema_spec is not None:
+            if isinstance(value, str):
+                context[key] = value
+                continue
+            if isinstance(value, bool) or isinstance(value, int):
+                if format_output:
+                    context[key] = format_context_scalar(value)
+                else:
+                    context[key] = value
+                continue
+            fail(
+                f"error: invalid {field_name}.{key}: expected scalar value"
+            )
+        context[key] = validate_context_value(
+            value, key_spec, f"{field_name}.{key}", format_output
+        )
+    if schema_spec is not None and enforce_required:
         for key, key_spec in key_specs.items():
             if key_spec["required"] and key not in context:
                 fail(
                     f"error: invalid {field_name}: missing required context key '{key}'"
                 )
     return context
+
+
+def parse_selector_profile_route_context(raw: str, schema_spec):
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+    )
+    if not raw:
+        payload = {}
+    else:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            fail(f"error: invalid {field_name}: expected JSON object")
+    enforce_required = True
+    if schema_spec is not None and schema_spec["validate_merged_context"]:
+        # Built-in context fields are only available after merge, so required
+        # checks must be deferred to merged-context validation.
+        enforce_required = False
+    format_output = True
+    if schema_spec is not None and schema_spec["validate_merged_context"]:
+        # Preserve typed scalars until merged-context validation applies schema.
+        format_output = False
+    return validate_selector_profile_route_context_map(
+        payload,
+        field_name,
+        schema_spec,
+        enforce_required,
+        True,
+        format_output,
+    )
 
 
 def parse_selector_profile_routes(raw: str):
@@ -4284,6 +4391,20 @@ elif rewrite_selector_profile_route_auto_mode != "off":
         }
         for context_key, context_value in rewrite_selector_profile_route_context.items():
             auto_context[context_key] = context_value
+        if (
+            rewrite_selector_profile_route_context_schema is not None
+            and rewrite_selector_profile_route_context_schema["validate_merged_context"]
+        ):
+            auto_context = validate_selector_profile_route_context_map(
+                auto_context,
+                (
+                    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON.effective"
+                ),
+                rewrite_selector_profile_route_context_schema,
+                True,
+                True,
+                True,
+            )
         auto_matches = []
         for route_name, route_spec in rewrite_selector_profile_routes.items():
             when_conditions = route_spec["when_conditions"]
