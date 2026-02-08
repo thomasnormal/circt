@@ -2726,6 +2726,11 @@ PY
     local escaped_reason
     local escaped_event_id
     local escaped_schema_version
+    local escaped_id_hash_mode
+    local escaped_id_hash_algorithm
+    local id_hash_mode_effective_event
+    local id_hash_algorithm_event
+    local id_hash_version_event
     local event_id
     local event_line
     now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -2735,10 +2740,15 @@ PY
     escaped_run_id="$(json_escape "$run_id")"
     escaped_reason="$(json_escape "$reason")"
     escaped_schema_version="$(json_escape "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION")"
+    id_hash_mode_effective_event="${drop_events_id_hash_mode_effective:-unavailable}"
+    id_hash_algorithm_event="${drop_events_id_hash_algorithm:-unavailable}"
+    id_hash_version_event="${drop_events_id_hash_version:-0}"
+    escaped_id_hash_mode="$(json_escape "$id_hash_mode_effective_event")"
+    escaped_id_hash_algorithm="$(json_escape "$id_hash_algorithm_event")"
     event_id="$(stable_event_id "${reason}|${history_format}|${run_id}|${row_generated_at}")"
     escaped_event_id="$(json_escape "$event_id")"
-    printf -v event_line '{"schema_version":"%s","event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
-      "$escaped_schema_version" "$escaped_event_id" "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
+    printf -v event_line '{"schema_version":"%s","event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s","id_hash_mode":"%s","id_hash_algorithm":"%s","id_hash_version":%d}' \
+      "$escaped_schema_version" "$escaped_event_id" "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id" "$escaped_id_hash_mode" "$escaped_id_hash_algorithm" "$id_hash_version_event"
     with_drop_events_lock "$drop_events_lock_file" append_drop_event_line "$event_line"
   }
 
@@ -2964,7 +2974,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" <<'PY'
 import json
 import shutil
 import subprocess
@@ -2975,6 +2985,16 @@ from collections import OrderedDict
 file = sys.argv[1]
 default_schema = sys.argv[2]
 id_hash_mode = sys.argv[3]
+effective_id_hash_mode = sys.argv[4]
+effective_id_hash_algorithm = sys.argv[5]
+effective_id_hash_version_raw = sys.argv[6]
+
+try:
+    effective_id_hash_version = int(effective_id_hash_version_raw)
+except Exception:
+    effective_id_hash_version = 0
+if effective_id_hash_version < 0:
+    effective_id_hash_version = 0
 
 REQUIRED_STRING_KEYS = (
     "generated_at_utc",
@@ -2994,6 +3014,9 @@ CANONICAL_KEYS = (
     "line",
     "row_generated_at_utc",
     "run_id",
+    "id_hash_mode",
+    "id_hash_algorithm",
+    "id_hash_version",
 )
 
 
@@ -3111,6 +3134,43 @@ for lineno, line in enumerate(lines, start=1):
             obj["reason"], obj["history_format"], obj["run_id"], obj["row_generated_at_utc"]
         )
 
+    id_hash_mode_value = obj.get("id_hash_mode")
+    if id_hash_mode_value is not None:
+        if (
+            not isinstance(id_hash_mode_value, str)
+            or id_hash_mode_value not in ("auto", "cksum", "crc32", "unavailable")
+        ):
+            fail(
+                f"error: invalid key 'id_hash_mode' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+    elif not isinstance(obj.get("event_id"), str) or not obj.get("event_id"):
+        id_hash_mode_value = effective_id_hash_mode
+
+    id_hash_algorithm_value = obj.get("id_hash_algorithm")
+    if id_hash_algorithm_value is not None:
+        if (
+            not isinstance(id_hash_algorithm_value, str)
+            or id_hash_algorithm_value not in ("cksum", "crc32", "unavailable")
+        ):
+            fail(
+                f"error: invalid key 'id_hash_algorithm' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+    elif not isinstance(obj.get("event_id"), str) or not obj.get("event_id"):
+        id_hash_algorithm_value = effective_id_hash_algorithm
+
+    id_hash_version_value = obj.get("id_hash_version")
+    if id_hash_version_value is not None:
+        if (
+            isinstance(id_hash_version_value, bool)
+            or not isinstance(id_hash_version_value, int)
+            or id_hash_version_value < 0
+        ):
+            fail(
+                f"error: invalid key 'id_hash_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+    elif not isinstance(obj.get("event_id"), str) or not obj.get("event_id"):
+        id_hash_version_value = effective_id_hash_version
+
     canonical = OrderedDict()
     canonical["schema_version"] = schema_version
     canonical["event_id"] = event_id
@@ -3121,6 +3181,12 @@ for lineno, line in enumerate(lines, start=1):
     canonical["line"] = line_value
     canonical["row_generated_at_utc"] = obj["row_generated_at_utc"]
     canonical["run_id"] = obj["run_id"]
+    if id_hash_mode_value is not None:
+        canonical["id_hash_mode"] = id_hash_mode_value
+    if id_hash_algorithm_value is not None:
+        canonical["id_hash_algorithm"] = id_hash_algorithm_value
+    if id_hash_version_value is not None:
+        canonical["id_hash_version"] = id_hash_version_value
     for key, value in obj.items():
         if key not in canonical:
             canonical[key] = value

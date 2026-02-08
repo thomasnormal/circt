@@ -27717,3 +27717,68 @@ CIRCT/slang correctly enforces LRM restrictions.
   malformed-JSON diagnostics still rely on Python validation for parity.
 - Parser-backed validation still depends on `python3`.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+## Iteration 577 - February 8, 2026
+
+### Yosys SVA BMC Per-Event Drop Hash Provenance
+
+- Added per-event hash provenance fields to drop-event JSONL rows:
+  - `id_hash_mode`
+  - `id_hash_algorithm`
+  - `id_hash_version`
+- New drop events now embed hash provenance directly on each event row, not
+  only in run-level summary artifacts.
+
+### Migration / Validation
+
+- Extended drop-events migration canonicalization to:
+  - validate optional `id_hash_mode/id_hash_algorithm/id_hash_version`
+  - preserve valid optional metadata
+  - synthesize metadata when `event_id` is derived for legacy rows with missing
+    IDs
+- Added explicit migration-time error diagnostics for invalid optional metadata
+  keys.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-id-hash-crc32.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+- Added invalid optional-metadata negative coverage in drop-event migration:
+  - invalid `id_hash_algorithm` now fails with a stable diagnostic.
+- Focused lit result:
+  - 6/6 PASS.
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/circt-sim/apint-width-normalization.mlir`:
+  - PASS (after rebuilding `circt-sim`, which also fixed prior OpenTitan sim
+    parse failures seen earlier in this workspace)
+- `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`: PASS
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`: PASS
+- `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 failures=0 xpass=1 skipped=2
+- `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+- `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0 skip=1005
+- `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `aes_sbox_canright` OK
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Legacy drop-event rows with pre-existing `event_id` may still lack per-event
+  hash provenance unless rewritten.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

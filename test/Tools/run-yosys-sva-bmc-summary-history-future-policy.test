@@ -60,7 +60,7 @@
 // JSONSUMMARY: "id_hash_algorithm": "{{(cksum|crc32|unavailable)}}"
 // JSONSUMMARY: "id_hash_version": {{[0-9]+}}
 
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future"}
-// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future"}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}}}
 
 // BADPOLICY: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY: bogus (expected error|warn)
