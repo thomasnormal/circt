@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 476 - February 8, 2026
+
+### Summary
+
+Fixed concurrent assertion lowering for timed statements using clocking-block
+event controls (`always @(cb) ...`), which previously failed during assertion
+clock hoisting.
+
+### Fixes
+
+1. **Canonicalized assertion clocks for timed statements**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp` so
+     `currentAssertionClock` canonicalizes:
+     - `@(cb)` clocking-block references to the underlying signal event
+     - single-entry event-list wrappers.
+   - Updated `lib/Conversion/ImportVerilog/Statements.cpp` concurrent assertion
+     hoisting to canonicalize assertion clocks before converting the clock
+     expression and edge into `verif.clocked_*` ops.
+
+2. **Bug resolved**
+   - Repro that previously failed:
+     - `always @(cb) begin assert property ($rose(a)); end`
+   - Previous error:
+     - `unsupported arbitrary symbol reference 'cb'`
+   - Now imports and hoists as a clocked assertion on the underlying event
+     signal (`posedge clk`).
+
+3. **Regression coverage**
+   - Extended
+     `test/Conversion/ImportVerilog/clocking-event-wait.sv` with a concurrent
+     assertion-in-`@(cb)` case.
+   - Added
+     `test/Tools/circt-bmc/sva-clocking-block-procedural-assert-unsat-e2e.sv`
+     to lock end-to-end BMC behavior.
+
+### Validation
+
+- Targeted:
+  - `/tmp/sva_stmt_cb.sv` parse-only import now succeeds.
+- Lit:
+  - `test/Conversion/ImportVerilog/clocking-event-wait.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+  - BMC e2e tests remain unsupported in this local lit config (`bmc-jit`
+    feature gate), validated via direct tool runs.
+- Direct BMC:
+  - `sva-clocking-block-procedural-assert-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
 ## Iteration 475 - February 8, 2026
 
 ### Summary

@@ -191,6 +191,29 @@ static bool isAssertionEventControl(const slang::ast::Expression &expr) {
   return false;
 }
 
+static const slang::ast::SignalEventControl *
+getCanonicalSignalEventControlForAssertions(
+    const slang::ast::TimingControl &ctrl) {
+  if (auto *signalCtrl = ctrl.as_if<slang::ast::SignalEventControl>()) {
+    auto symRef = signalCtrl->expr.getSymbolReference();
+    if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+      return getCanonicalSignalEventControlForAssertions(
+          clockingBlock.getEvent());
+    }
+    return signalCtrl;
+  }
+  if (auto *eventList = ctrl.as_if<slang::ast::EventListControl>()) {
+    if (eventList->events.size() != 1)
+      return nullptr;
+    auto *event = *eventList->events.begin();
+    if (!event)
+      return nullptr;
+    return getCanonicalSignalEventControlForAssertions(*event);
+  }
+  return nullptr;
+}
+
 static Value cloneValueIntoBlock(Value value, OpBuilder &builder,
                                  IRMapping &mapping) {
   if (!value)
@@ -658,7 +681,7 @@ Context::convertTimingControl(const slang::ast::TimingControl &ctrl,
     auto clockDone =
         llvm::make_scope_exit([&] { currentAssertionClock = previousAssertionClock; });
     currentAssertionClock = nullptr;
-    if (auto *signalCtrl = ctrl.as_if<slang::ast::SignalEventControl>()) {
+    if (auto *signalCtrl = getCanonicalSignalEventControlForAssertions(ctrl)) {
       if (!signalCtrl->iffCondition &&
           !isAssertionEventControl(signalCtrl->expr))
         currentAssertionClock = signalCtrl;

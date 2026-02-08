@@ -88,6 +88,27 @@ convertEdgeKindVerif(const slang::ast::EdgeKind edge) {
   }
 }
 
+static const slang::ast::SignalEventControl *
+getCanonicalAssertionClockSignalEvent(const slang::ast::TimingControl &ctrl) {
+  if (auto *signalCtrl = ctrl.as_if<slang::ast::SignalEventControl>()) {
+    auto *symRef = signalCtrl->expr.getSymbolReference();
+    if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+      return getCanonicalAssertionClockSignalEvent(clockingBlock.getEvent());
+    }
+    return signalCtrl;
+  }
+  if (auto *eventList = ctrl.as_if<slang::ast::EventListControl>()) {
+    if (eventList->events.size() != 1)
+      return nullptr;
+    auto *event = *eventList->events.begin();
+    if (!event)
+      return nullptr;
+    return getCanonicalAssertionClockSignalEvent(*event);
+  }
+  return nullptr;
+}
+
 static bool isHoistableAssertionOp(Operation *op) {
   if (!op || op->getNumRegions() != 0)
     return false;
@@ -2192,6 +2213,10 @@ struct StmtVisitor {
       auto property = context.convertAssertionExpression(stmt.propertySpec, loc);
       if (!property)
         return failure();
+      auto *assertionClock = getCanonicalAssertionClockSignalEvent(
+          *context.currentAssertionClock);
+      if (!assertionClock)
+        assertionClock = context.currentAssertionClock;
       Value enable;
       if (context.currentAssertionGuard) {
         IRMapping mapping;
@@ -2206,12 +2231,11 @@ struct StmtVisitor {
           mlir::emitWarning(loc)
               << "unable to hoist assertion guard; emitting unguarded assert";
       }
-      auto clockVal =
-          context.convertRvalueExpression(context.currentAssertionClock->expr);
+      auto clockVal = context.convertRvalueExpression(assertionClock->expr);
       clockVal = context.convertToI1(clockVal);
       if (!clockVal)
         return failure();
-      auto edge = convertEdgeKindVerif(context.currentAssertionClock->edge);
+      auto edge = convertEdgeKindVerif(assertionClock->edge);
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
         verif::ClockedAssertOp::create(builder, loc, property, edge, clockVal,

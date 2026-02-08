@@ -39,3 +39,21 @@ module test_clocking_event_negedge;
     $display("Data: %0d", cb.data);
   end
 endmodule
+
+// Concurrent assertions inside always @(cb) should canonicalize the clocking
+// block event to its underlying signal event when hoisted.
+module test_clocking_event_assert;
+  logic clk, a;
+
+  clocking cb @(posedge clk);
+    input a;
+  endclocking
+
+  always @(cb) begin
+    assert property ($rose(a));
+  end
+endmodule
+
+// CHECK-LABEL: moore.module @test_clocking_event_assert
+// CHECK: verif.clocked_assert
+// CHECK-SAME: posedge
