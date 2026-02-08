@@ -44,6 +44,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HI
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY:-error}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION:-1}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH:-auto}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
@@ -202,6 +203,14 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" =~ ^[0-9]+$
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION (expected non-negative integer)" >&2
   exit 1
 fi
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH" in
+  auto|cksum|crc32) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH (expected auto|cksum|crc32)" >&2
+    exit 1
+    ;;
+esac
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS" =~ ^[0-9]+$ ]]; then
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS (expected non-negative integer)" >&2
   exit 1
@@ -1964,6 +1973,7 @@ emit_mode_summary_outputs() {
   local drop_events_lock_backend="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND"
   local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
   local drop_events_lock_stale_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS"
+  local drop_events_id_hash_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH"
   local drop_events_lock_warned=0
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] && [[ -z "$drop_events_lock_file" ]]; then
     drop_events_lock_file="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE}.lock"
@@ -2431,12 +2441,57 @@ PY
 
   stable_event_id() {
     local key="$1"
-    if ! command -v cksum >/dev/null 2>&1; then
-      echo "error: stable drop-event IDs require cksum in PATH" >&2
-      exit 1
-    fi
     local digest
-    digest="$(printf '%s' "$key" | cksum | awk '{print $1}')"
+    case "$drop_events_id_hash_mode" in
+      cksum)
+        if ! command -v cksum >/dev/null 2>&1; then
+          echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH=cksum requires cksum in PATH" >&2
+          exit 1
+        fi
+        if ! digest="$(printf '%s' "$key" | cksum | awk '{print $1}')"; then
+          echo "error: failed to derive drop-event id via cksum" >&2
+          exit 1
+        fi
+        ;;
+      crc32)
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH=crc32 requires python3 in PATH" >&2
+          exit 1
+        fi
+        digest="$(python3 - "$key" <<'PY'
+import sys
+import zlib
+
+key = sys.argv[1]
+print(zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF)
+PY
+)"
+        ;;
+      auto)
+        if command -v cksum >/dev/null 2>&1; then
+          if ! digest="$(printf '%s' "$key" | cksum | awk '{print $1}')"; then
+            echo "error: failed to derive drop-event id via cksum" >&2
+            exit 1
+          fi
+        elif command -v python3 >/dev/null 2>&1; then
+          digest="$(python3 - "$key" <<'PY'
+import sys
+import zlib
+
+key = sys.argv[1]
+print(zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF)
+PY
+)"
+        else
+          echo "error: stable drop-event IDs require cksum or python3 in PATH" >&2
+          exit 1
+        fi
+        ;;
+      *)
+        echo "error: unsupported drop-event id hash mode: $drop_events_id_hash_mode" >&2
+        exit 1
+        ;;
+    esac
     printf 'drop-%s\n' "$digest"
     return 0
   }
@@ -2857,15 +2912,17 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" <<'PY'
 import json
 import shutil
 import subprocess
 import sys
+import zlib
 from collections import OrderedDict
 
 file = sys.argv[1]
 default_schema = sys.argv[2]
+id_hash_mode = sys.argv[3]
 
 REQUIRED_STRING_KEYS = (
     "generated_at_utc",
@@ -2943,17 +3000,36 @@ def normalize_schema(schema, lineno: int) -> str:
     )
 
 
-def derive_event_id(reason: str, history_format: str, run_id: str, row_generated_at: str) -> str:
+def cksum_digest(key: str):
     if shutil.which("cksum") is None:
-        fail("error: stable drop-event IDs require cksum in PATH")
-    key = f"{reason}|{history_format}|{run_id}|{row_generated_at}"
+        return None
     proc = subprocess.run(["cksum"], input=key, capture_output=True, text=True)
     if proc.returncode != 0:
-        fail("error: failed to derive drop-event id via cksum")
+        return None
     parts = proc.stdout.strip().split()
     if not parts:
-        fail("error: failed to derive drop-event id via cksum")
-    return f"drop-{parts[0]}"
+        return None
+    return parts[0]
+
+
+def derive_event_id(reason: str, history_format: str, run_id: str, row_generated_at: str) -> str:
+    key = f"{reason}|{history_format}|{run_id}|{row_generated_at}"
+    if id_hash_mode not in {"auto", "cksum", "crc32"}:
+        fail(
+            f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH mode: {id_hash_mode}"
+        )
+
+    if id_hash_mode in {"auto", "cksum"}:
+        digest = cksum_digest(key)
+        if digest is not None:
+            return f"drop-{digest}"
+        if id_hash_mode == "cksum":
+            fail(
+                "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH=cksum requires functional cksum in PATH"
+            )
+
+    digest = zlib.crc32(key.encode("utf-8")) & 0xFFFFFFFF
+    return f"drop-{digest}"
 
 
 with open(file, "r", encoding="utf-8") as f:
