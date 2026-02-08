@@ -46,6 +46,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND:-auto}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS:-30}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
@@ -197,6 +199,10 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS" =~ ^[0-9]+$ ]
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS (expected non-negative integer)" >&2
   exit 1
 fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS (expected non-negative integer)" >&2
+  exit 1
+fi
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY,,}"
 case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY" in
   error|warn) ;;
@@ -210,6 +216,14 @@ case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR" in
   auto|python) ;;
   *)
     echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python)" >&2
+    exit 1
+    ;;
+esac
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND" in
+  auto|flock|mkdir|none) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND (expected auto|flock|mkdir|none)" >&2
     exit 1
     ;;
 esac
@@ -1911,6 +1925,8 @@ emit_mode_summary_outputs() {
   local history_drop_future_tsv=0
   local history_drop_future_jsonl=0
   local drop_events_lock_file="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE"
+  local drop_events_lock_backend="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND"
+  local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
   local drop_events_lock_warned=0
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] && [[ -z "$drop_events_lock_file" ]]; then
     drop_events_lock_file="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE}.lock"
@@ -2091,26 +2107,60 @@ PY
   with_drop_events_lock() {
     local lock_file="$1"
     shift
-    if [[ -z "$lock_file" ]]; then
+    if [[ -z "$lock_file" || "$drop_events_lock_backend" == "none" ]]; then
       "$@"
       return $?
     fi
+    local selected_backend="$drop_events_lock_backend"
     : >> "$lock_file"
-    if command -v flock >/dev/null 2>&1; then
-      local lock_fd status
-      exec {lock_fd}>>"$lock_file"
-      flock -x "$lock_fd"
-      "$@"
-      status=$?
-      flock -u "$lock_fd" || true
-      exec {lock_fd}>&-
-      return $status
+    if [[ "$selected_backend" == "auto" ]]; then
+      if command -v flock >/dev/null 2>&1; then
+        selected_backend="flock"
+      else
+        selected_backend="mkdir"
+        if ((drop_events_lock_warned == 0)); then
+          echo "warning: flock not found; using mkdir lock backend for $lock_file" >&2
+          drop_events_lock_warned=1
+        fi
+      fi
     fi
-    if ((drop_events_lock_warned == 0)); then
-      echo "warning: flock not found; proceeding without drop-event file locking for $lock_file" >&2
-      drop_events_lock_warned=1
-    fi
-    "$@"
+    case "$selected_backend" in
+      flock)
+        if ! command -v flock >/dev/null 2>&1; then
+          echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=flock requires flock in PATH" >&2
+          return 1
+        fi
+        local lock_fd status
+        exec {lock_fd}>>"$lock_file"
+        flock -x "$lock_fd"
+        "$@"
+        status=$?
+        flock -u "$lock_fd" || true
+        exec {lock_fd}>&-
+        return $status
+        ;;
+      mkdir)
+        local lock_dir start_epoch now_epoch status
+        lock_dir="${lock_file}.d"
+        start_epoch="$(date -u +%s)"
+        while ! mkdir "$lock_dir" 2>/dev/null; do
+          now_epoch="$(date -u +%s)"
+          if ((now_epoch - start_epoch >= drop_events_lock_timeout_secs)); then
+            echo "error: timed out acquiring drop-event lock directory $lock_dir after ${drop_events_lock_timeout_secs}s" >&2
+            return 1
+          fi
+          sleep 0.1
+        done
+        "$@"
+        status=$?
+        rmdir "$lock_dir" 2>/dev/null || true
+        return $status
+        ;;
+      *)
+        echo "error: unsupported drop-event lock backend: $selected_backend" >&2
+        return 1
+        ;;
+    esac
   }
 
   append_drop_event_line() {
