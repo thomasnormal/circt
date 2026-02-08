@@ -47,6 +47,34 @@ static Value createUnknownOrZeroConstant(Context &context, Location loc,
       FVInt(APInt(width, 0), APInt::getAllOnes(width)));
 }
 
+static bool isEquivalentTimingControl(const slang::ast::TimingControl &lhs,
+                                      const slang::ast::TimingControl &rhs) {
+  if (lhs.isEquivalentTo(rhs))
+    return true;
+  auto *lhsSignal = lhs.as_if<slang::ast::SignalEventControl>();
+  auto *rhsSignal = rhs.as_if<slang::ast::SignalEventControl>();
+  if (!lhsSignal || !rhsSignal)
+    return false;
+  if (lhsSignal->edge != rhsSignal->edge)
+    return false;
+  if (!lhsSignal->expr.isEquivalentTo(rhsSignal->expr)) {
+    auto *lhsSym = lhsSignal->expr.getSymbolReference();
+    auto *rhsSym = rhsSignal->expr.getSymbolReference();
+    if (!(lhsSym && rhsSym && lhsSym == rhsSym))
+      return false;
+  }
+  if ((lhsSignal->iffCondition == nullptr) != (rhsSignal->iffCondition == nullptr))
+    return false;
+  if (lhsSignal->iffCondition &&
+      !lhsSignal->iffCondition->isEquivalentTo(*rhsSignal->iffCondition)) {
+    auto *lhsIffSym = lhsSignal->iffCondition->getSymbolReference();
+    auto *rhsIffSym = rhsSignal->iffCondition->getSymbolReference();
+    if (!(lhsIffSym && rhsIffSym && lhsIffSym == rhsIffSym))
+      return false;
+  }
+  return true;
+}
+
 struct SequenceLengthBounds {
   uint64_t min = 0;
   std::optional<uint64_t> max;
@@ -1313,26 +1341,6 @@ Value Context::convertAssertionCallExpression(
     // Also allow direct lowering when the sampled-value explicit clocking
     // argument is structurally equivalent to the enclosing assertion clock,
     // since both sample on the same event stream.
-    auto isEquivalentTimingControl = [](const slang::ast::TimingControl &lhs,
-                                        const slang::ast::TimingControl &rhs) {
-      if (lhs.isEquivalentTo(rhs))
-        return true;
-      auto *lhsSignal = lhs.as_if<slang::ast::SignalEventControl>();
-      auto *rhsSignal = rhs.as_if<slang::ast::SignalEventControl>();
-      if (!lhsSignal || !rhsSignal)
-        return false;
-      if (lhsSignal->edge != rhsSignal->edge)
-        return false;
-      if (!lhsSignal->expr.isEquivalentTo(rhsSignal->expr))
-        return false;
-      if ((lhsSignal->iffCondition == nullptr) !=
-          (rhsSignal->iffCondition == nullptr))
-        return false;
-      if (lhsSignal->iffCondition &&
-          !lhsSignal->iffCondition->isEquivalentTo(*rhsSignal->iffCondition))
-        return false;
-      return true;
-    };
     bool explicitClockMatchesAssertionClock = false;
     if (hasClockingArg && inAssertionExpr && clockingCtrl) {
       if (currentAssertionClock &&
@@ -1421,6 +1429,7 @@ Value Context::convertAssertionCallExpression(
     // Default to 1 if empty or not provided.
     int64_t delay = 1;
     const slang::ast::TimingControl *clockingCtrl = nullptr;
+    bool hasClockingArg = false;
     const slang::ast::Expression *enableExpr = nullptr;
     SmallVector<const slang::ast::Expression *, 4> disableExprs;
     if (args.size() > 1 &&
@@ -1429,6 +1438,7 @@ Value Context::convertAssertionCallExpression(
         if (auto *clockExpr =
                 args[1]->as_if<slang::ast::ClockingEventExpression>())
           clockingCtrl = &clockExpr->timingControl;
+        hasClockingArg = true;
       } else {
         auto cv = evaluateConstant(*args[1]);
         if (cv.isInteger()) {
@@ -1444,6 +1454,7 @@ Value Context::convertAssertionCallExpression(
         if (auto *clockExpr =
                 args[2]->as_if<slang::ast::ClockingEventExpression>())
           clockingCtrl = &clockExpr->timingControl;
+        hasClockingArg = true;
       } else {
         enableExpr = args[2];
       }
@@ -1458,6 +1469,7 @@ Value Context::convertAssertionCallExpression(
         if (auto *clockExpr =
                 args[3]->as_if<slang::ast::ClockingEventExpression>())
           clockingCtrl = &clockExpr->timingControl;
+        hasClockingArg = true;
       } else if (!enableExpr) {
         enableExpr = args[3];
       } else {
@@ -1491,9 +1503,27 @@ Value Context::convertAssertionCallExpression(
       if (!clockingCtrl)
         disableExprs.clear();
     }
-    if (clockingCtrl)
-      return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
-                                   enableExpr, disableExprs, loc);
+    if (clockingCtrl) {
+      if (!inAssertionExpr)
+        return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
+                                     enableExpr, disableExprs, loc);
+      bool explicitClockMatchesAssertionClock = false;
+      if (hasClockingArg) {
+        if (currentAssertionClock &&
+            isEquivalentTimingControl(*clockingCtrl, *currentAssertionClock))
+          explicitClockMatchesAssertionClock = true;
+        else if (currentAssertionTimingControl &&
+                 isEquivalentTimingControl(*clockingCtrl,
+                                           *currentAssertionTimingControl))
+          explicitClockMatchesAssertionClock = true;
+      }
+      bool needsClockedHelper = enableExpr || !disableExprs.empty() ||
+                                (hasClockingArg &&
+                                 !explicitClockMatchesAssertionClock);
+      if (needsClockedHelper)
+        return lowerPastWithClocking(*this, *args[0], *clockingCtrl, delay,
+                                     enableExpr, disableExprs, loc);
+    }
     if (enableExpr) {
       mlir::emitError(loc)
           << "unsupported $past enable expression without explicit clocking";

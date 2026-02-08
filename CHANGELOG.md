@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 474 - February 8, 2026
+
+### Summary
+
+Extended the sampled-value skew fix to `$past` so equivalent-clock assertion
+forms use direct `moore.past` semantics instead of helper-state lowering.
+
+### Fixes
+
+1. **Equivalent-clock `$past` direct lowering**
+   - Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` to select direct
+     `moore.past` lowering for assertion-context `$past` when helper-state
+     controls are unnecessary.
+   - Kept helper-state lowering for cases that require it:
+     - enable expressions
+     - disable-iff/default disable interactions
+     - genuinely different explicit clock domains.
+
+2. **Timing-control equivalence hardening**
+   - Reused and strengthened structural timing-control equivalence matching:
+     - first via `TimingControl::isEquivalentTo`
+     - then via `SignalEventControl` fallback checks:
+       edge kind, expression equivalence/symbol identity, and `iff`
+       equivalence.
+   - This allows explicit same-clock `$past(..., @(posedge clk))` to match
+     enclosing `@(posedge clk)` assertions reliably.
+
+3. **New and updated regressions**
+   - Added `test/Tools/circt-bmc/sva-past-nonoverlap-unsat-e2e.sv` with both:
+     - implicit `$past` non-overlap implication case
+     - explicit same-clock `$past` non-overlap implication case
+   - Extended
+     `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv` with:
+     - `sampled_past_explicit_same_clock_in_assert` (expects direct past)
+     - `sampled_past_explicit_same_clock_with_disable` (expects helper path)
+
+### Validation
+
+- Targeted:
+  - direct BMC on `sva-past-nonoverlap-unsat-e2e.sv` modules:
+    `BMC_RESULT=UNSAT` for both implicit and explicit same-clock variants
+- Lit:
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-value-change.sv`: PASS
+  - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`: PASS
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 473 - February 8, 2026
 
 ### Summary
