@@ -1,0 +1,26 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf '*\t*\t*\tpass\nsimple\t*\t*\tpass\nsimple\tpass\txprop\tfail\nghost\tpass\tknown\tpass\n' > %t/expect.txt
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_FAIL_ON_ISSUES=1 \
+// RUN:   EXPECT_LINT_HINTS_FILE=%t/hints.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN: sed 's/\t/|/g' %t/hints.tsv | FileCheck %s --check-prefix=HINT
+
+// OUT-DAG: EXPECT_LINT(unknown-test): EXPECT_FILE references missing test 'ghost' via key ghost|pass|known
+// OUT-DAG: EXPECT_LINT(shadowed): EXPECT_FILE wildcard key *|*|* is never selected for suite matrix
+// OUT-DAG: EXPECT_LINT(ambiguity): EXPECT_FILE precedence-sensitive overlap: simple|pass|xprop (fail) overrides simple|*|* (pass) for 1 tuple(s), e.g. simple|pass|xprop
+// OUT: EXPECT_LINT_SUMMARY: issues=3
+// OUT: PASS(pass): simple
+// OUT: SKIP(fail-no-macro): simple
+// OUT: yosys SVA summary: 1 tests, failures=1, xfail=0, xpass=0, skipped=0
+
+// HINT: kind|source|key|action|note
+// HINT-DAG: unknown-test|EXPECT_FILE|ghost|pass|known|rename-or-remove-row|test missing from suite
+// HINT-DAG: shadowed|EXPECT_FILE|*|*|*|remove-or-tighten-key|wildcard row is dead under precedence
+// HINT-DAG: ambiguity|EXPECT_FILE|simple|pass|xprop||simple|*|*|split-or-align-overlap|simple|pass|xprop
