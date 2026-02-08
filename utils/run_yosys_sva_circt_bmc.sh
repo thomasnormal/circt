@@ -2590,89 +2590,151 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      local -a migrate_lines=()
-      local line_text
-      local generated_at
-      local reason
-      local history_file
-      local history_format
-      local event_line
-      local row_generated_at
-      local run_id
-      local schema_version
-      local event_id
-      local escaped_generated_at
-      local escaped_reason
-      local escaped_history_file
-      local escaped_history_format
-      local escaped_row_generated_at
-      local escaped_run_id
-      local escaped_schema_version
-      local escaped_event_id
-      mapfile -t migrate_lines < "$migrate_file"
-      : > "$migrate_file"
-      for ((i = 0; i < ${#migrate_lines[@]}; ++i)); do
-        line_text="${migrate_lines[$i]}"
-        [[ -z "$line_text" ]] && continue
-        generated_at="$(printf '%s\n' "$line_text" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        reason="$(printf '%s\n' "$line_text" | sed -nE 's/.*"reason"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        history_file="$(printf '%s\n' "$line_text" | sed -nE 's/.*"history_file"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        history_format="$(printf '%s\n' "$line_text" | sed -nE 's/.*"history_format"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        event_line="$(printf '%s\n' "$line_text" | sed -nE 's/.*"line"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p')"
-        row_generated_at="$(printf '%s\n' "$line_text" | sed -nE 's/.*"row_generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        run_id="$(printf '%s\n' "$line_text" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        schema_version="$(printf '%s\n' "$line_text" | sed -nE 's/.*"schema_version"[[:space:]]*:[[:space:]]*"([0-9]+)".*/\1/p')"
-        event_id="$(printf '%s\n' "$line_text" | sed -nE 's/.*"event_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        if [[ -z "$generated_at" ]]; then
-          echo "error: missing key 'generated_at_utc' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$reason" ]]; then
-          echo "error: missing key 'reason' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$history_file" ]]; then
-          echo "error: missing key 'history_file' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$history_format" ]]; then
-          echo "error: missing key 'history_format' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$event_line" ]]; then
-          echo "error: missing key 'line' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$row_generated_at" ]]; then
-          echo "error: missing key 'row_generated_at_utc' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$run_id" ]]; then
-          echo "error: missing key 'run_id' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$schema_version" ]]; then
-          schema_version="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION"
-        fi
-        if [[ ! "$schema_version" =~ ^[0-9]+$ ]]; then
-          echo "error: invalid key 'schema_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
-          exit 1
-        fi
-        if [[ -z "$event_id" ]]; then
-          event_id="$(stable_event_id "${reason}|${history_format}|${run_id}|${row_generated_at}")"
-        fi
-        escaped_generated_at="$(json_escape "$generated_at")"
-        escaped_reason="$(json_escape "$reason")"
-        escaped_history_file="$(json_escape "$history_file")"
-        escaped_history_format="$(json_escape "$history_format")"
-        escaped_row_generated_at="$(json_escape "$row_generated_at")"
-        escaped_run_id="$(json_escape "$run_id")"
-        escaped_schema_version="$(json_escape "$schema_version")"
-        escaped_event_id="$(json_escape "$event_id")"
-        printf '{"schema_version":"%s","event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}\n' \
-          "$escaped_schema_version" "$escaped_event_id" "$escaped_generated_at" "$escaped_reason" "$escaped_history_file" "$escaped_history_format" "$event_line" "$escaped_row_generated_at" "$escaped_run_id" \
-          >> "$migrate_file"
-      done
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" <<'PY'
+import json
+import shutil
+import subprocess
+import sys
+from collections import OrderedDict
+
+file = sys.argv[1]
+default_schema = sys.argv[2]
+
+REQUIRED_STRING_KEYS = (
+    "generated_at_utc",
+    "reason",
+    "history_file",
+    "history_format",
+    "row_generated_at_utc",
+    "run_id",
+)
+CANONICAL_KEYS = (
+    "schema_version",
+    "event_id",
+    "generated_at_utc",
+    "reason",
+    "history_file",
+    "history_format",
+    "line",
+    "row_generated_at_utc",
+    "run_id",
+)
+
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_json_object(line: str, lineno: int) -> dict:
+    def no_duplicate_object_pairs_hook(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate key '{key}'")
+            result[key] = value
+        return result
+
+    try:
+        obj = json.loads(line, object_pairs_hook=no_duplicate_object_pairs_hook)
+    except ValueError as ex:
+        if "duplicate key" in str(ex):
+            fail(
+                f"error: duplicate key in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}: {ex}"
+            )
+        fail(
+            f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+        )
+    except Exception:
+        fail(
+            f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+        )
+    if not isinstance(obj, dict):
+        fail(
+            f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE line in {file} at line {lineno}: expected JSON object"
+        )
+    return obj
+
+
+def normalize_schema(schema, lineno: int) -> str:
+    if schema is None:
+        schema = default_schema
+    if isinstance(schema, bool):
+        fail(
+            f"error: invalid key 'schema_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+        )
+    if isinstance(schema, int):
+        if schema < 0:
+            fail(
+                f"error: invalid key 'schema_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+        return str(schema)
+    if isinstance(schema, str) and schema.isdigit():
+        return schema
+    fail(
+        f"error: invalid key 'schema_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+    )
+
+
+def derive_event_id(reason: str, history_format: str, run_id: str, row_generated_at: str) -> str:
+    if shutil.which("cksum") is None:
+        fail("error: stable drop-event IDs require cksum in PATH")
+    key = f"{reason}|{history_format}|{run_id}|{row_generated_at}"
+    proc = subprocess.run(["cksum"], input=key, capture_output=True, text=True)
+    if proc.returncode != 0:
+        fail("error: failed to derive drop-event id via cksum")
+    parts = proc.stdout.strip().split()
+    if not parts:
+        fail("error: failed to derive drop-event id via cksum")
+    return f"drop-{parts[0]}"
+
+
+with open(file, "r", encoding="utf-8") as f:
+    lines = f.read().splitlines()
+
+rewritten = []
+for lineno, line in enumerate(lines, start=1):
+    if not line:
+        continue
+    obj = parse_json_object(line, lineno)
+    for key in REQUIRED_STRING_KEYS:
+        value = obj.get(key)
+        if not isinstance(value, str) or not value:
+            fail(
+                f"error: missing key '{key}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+    line_value = obj.get("line")
+    if isinstance(line_value, bool) or not isinstance(line_value, int) or line_value < 0:
+        fail(
+            f"error: missing key 'line' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+        )
+
+    schema_version = normalize_schema(obj.get("schema_version"), lineno)
+    event_id = obj.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        event_id = derive_event_id(
+            obj["reason"], obj["history_format"], obj["run_id"], obj["row_generated_at_utc"]
+        )
+
+    canonical = OrderedDict()
+    canonical["schema_version"] = schema_version
+    canonical["event_id"] = event_id
+    canonical["generated_at_utc"] = obj["generated_at_utc"]
+    canonical["reason"] = obj["reason"]
+    canonical["history_file"] = obj["history_file"]
+    canonical["history_format"] = obj["history_format"]
+    canonical["line"] = line_value
+    canonical["row_generated_at_utc"] = obj["row_generated_at_utc"]
+    canonical["run_id"] = obj["run_id"]
+    for key, value in obj.items():
+        if key not in canonical:
+            canonical[key] = value
+    rewritten.append(json.dumps(canonical, separators=(",", ":")))
+
+with open(file, "w", encoding="utf-8") as f:
+    for line in rewritten:
+        f.write(line + "\n")
+PY
     }
 
     prepare_drop_events_jsonl_file "$file"
