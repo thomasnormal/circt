@@ -1,0 +1,23 @@
+--- a/source/parsing/Parser_members.cpp
++++ b/source/parsing/Parser_members.cpp
+@@ -1622,9 +1622,18 @@ CoverageIffClauseSyntax* Parser::parseCoverageIffClause() {
+         return nullptr;
+
+     auto iff = consume();
+-    auto openParen = expect(TokenKind::OpenParenthesis);
++    if (peek(TokenKind::OpenParenthesis)) {
++        auto openParen = consume();
++        auto& expr = parseExpression();
++        return &factory.coverageIffClause(iff, openParen, expr,
++                                          expect(TokenKind::CloseParenthesis));
++    }
++
++    // Allow iff without parentheses as an extension (some tools accept this).
++    auto openParen = Token::createMissing(alloc, TokenKind::OpenParenthesis, peek().location());
+     auto& expr = parseExpression();
+-    return &factory.coverageIffClause(iff, openParen, expr, expect(TokenKind::CloseParenthesis));
++    auto closeParen = Token::createMissing(alloc, TokenKind::CloseParenthesis, peek().location());
++    return &factory.coverageIffClause(iff, openParen, expr, closeParen);
+ }
+
+ CoverpointSyntax* Parser::parseCoverpoint(AttrList attributes, DataTypeSyntax* type,

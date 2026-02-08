@@ -30,3 +30,7 @@ git apply --ignore-whitespace "$script_dir/slang-nested-block-comment.patch" || 
 git apply --ignore-whitespace "$script_dir/slang-virtual-arg-default.patch" || true
 # Allow randomize-with blocks to access caller's class properties (SPI AVIP compat)
 git apply --ignore-whitespace "$script_dir/slang-randomize-with-scope.patch" || true
+# Allow covergroup iff without parentheses (extension for Xcelium/VCS compat)
+git apply --ignore-whitespace "$script_dir/slang-covergroup-iff-noparen.patch" || true
+# Allow missing semicolon before endsequence in sequence declarations
+git apply --ignore-whitespace "$script_dir/slang-sequence-decl-semicolon.patch" || true

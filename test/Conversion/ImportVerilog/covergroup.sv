@@ -39,4 +39,22 @@ module test_covergroups;
     axd: cross a_cp, d_cp;
   endgroup
 
+  // Test coverpoint iff with parentheses (standard form).
+  // CHECK: moore.covergroup.decl @cg4 sampling_event<"@(posedge valid)"> {
+  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8 iff<"valid"> {
+  // CHECK:   }
+  // CHECK: }
+  covergroup cg4 @(posedge valid);
+    coverpoint addr iff (valid);
+  endgroup
+
+  // Test coverpoint iff without parentheses (extension).
+  // CHECK: moore.covergroup.decl @cg5 sampling_event<"@(posedge valid)"> {
+  // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8 iff<{{.*}}valid"> {
+  // CHECK:   }
+  // CHECK: }
+  covergroup cg5 @(posedge valid);
+    coverpoint addr iff valid;
+  endgroup
+
 endmodule
