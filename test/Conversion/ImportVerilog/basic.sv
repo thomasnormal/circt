@@ -1259,23 +1259,37 @@ module Expressions;
     c = a < b;
 
     // CHECK: [[TMP1:%.+]] = moore.read %a
-    // CHECK: [[TMP2:%.+]] = moore.read %b
     // CHECK: [[A:%.+]] = moore.bool_cast [[TMP1]] : i32 -> i1
-    // CHECK: [[B:%.+]] = moore.bool_cast [[TMP2]] : i32 -> i1
-    // CHECK: moore.and [[A]], [[B]] : i1
+    // CHECK: moore.conditional [[A]] : i1 -> i1 {
+    // CHECK:   moore.read %b
+    // CHECK:   moore.bool_cast
+    // CHECK:   moore.yield
+    // CHECK: } {
+    // CHECK:   moore.constant 0 : i1
+    // CHECK:   moore.yield
+    // CHECK: }
     c = a && b;
     // CHECK: [[TMP1:%.+]] = moore.read %a
-    // CHECK: [[TMP2:%.+]] = moore.read %b
     // CHECK: [[A:%.+]] = moore.bool_cast [[TMP1]] : i32 -> i1
-    // CHECK: [[B:%.+]] = moore.bool_cast [[TMP2]] : i32 -> i1
-    // CHECK: moore.or [[A]], [[B]] : i1
+    // CHECK: moore.conditional [[A]] : i1 -> i1 {
+    // CHECK:   moore.constant 1 : i1
+    // CHECK:   moore.yield
+    // CHECK: } {
+    // CHECK:   moore.read %b
+    // CHECK:   moore.bool_cast
+    // CHECK:   moore.yield
+    // CHECK: }
     c = a || b;
     // CHECK: [[TMP1:%.+]] = moore.read %a
-    // CHECK: [[TMP2:%.+]] = moore.read %b
     // CHECK: [[A:%.+]] = moore.bool_cast [[TMP1]] : i32 -> i1
-    // CHECK: [[B:%.+]] = moore.bool_cast [[TMP2]] : i32 -> i1
-    // CHECK: [[NOT_A:%.+]] = moore.not [[A]] : i1
-    // CHECK: moore.or [[NOT_A]], [[B]] : i1
+    // CHECK: moore.conditional [[A]] : i1 -> i1 {
+    // CHECK:   moore.read %b
+    // CHECK:   moore.bool_cast
+    // CHECK:   moore.yield
+    // CHECK: } {
+    // CHECK:   moore.constant 1 : i1
+    // CHECK:   moore.yield
+    // CHECK: }
     c = a -> b;
     // CHECK: [[TMP1:%.+]] = moore.read %a
     // CHECK: [[TMP2:%.+]] = moore.read %b
@@ -1288,14 +1302,24 @@ module Expressions;
     // CHECK: moore.or [[BOTH]], [[NOT_BOTH]] : i1
     c = a <-> b;
     // CHECK: [[TMP:%.+]] = moore.read %x : <i1>
-    // CHECK: [[Y:%.+]] = moore.read %y : <l1>
     // CHECK: [[X:%.+]] = moore.int_to_logic [[TMP]] : i1
-    // CHECK: moore.and [[X]], [[Y]] : l1
+    // CHECK: moore.conditional [[X]] : l1 -> l1 {
+    // CHECK:   moore.read %y
+    // CHECK:   moore.yield
+    // CHECK: } {
+    // CHECK:   moore.constant 0 : l1
+    // CHECK:   moore.yield
+    // CHECK: }
     y = x && y;
     // CHECK: [[Y:%.+]] = moore.read %y : <l1>
-    // CHECK: [[TMP:%.+]] = moore.read %x : <i1>
-    // CHECK: [[X:%.+]] = moore.int_to_logic [[TMP]] : i1
-    // CHECK: moore.and [[Y]], [[X]] : l1
+    // CHECK: moore.conditional [[Y]] : l1 -> l1 {
+    // CHECK:   moore.read %x
+    // CHECK:   moore.int_to_logic
+    // CHECK:   moore.yield
+    // CHECK: } {
+    // CHECK:   moore.constant 0 : l1
+    // CHECK:   moore.yield
+    // CHECK: }
     y = y && x;
 
     // CHECK: [[TMP1:%.+]] = moore.read %a
