@@ -14281,22 +14281,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue eventPtrVal = getValue(procId, callOp.getOperand(0));
         if (!eventPtrVal.isX()) {
           uint64_t eventAddr = eventPtrVal.getUInt64();
+
+          // Record the time slot when this event was triggered.
+          // Per IEEE 1800-2017 §15.5.3, .triggered is only valid within the
+          // same time slot. This map is the authoritative source.
+          eventTriggerTime[eventAddr] = scheduler.getCurrentTime().realTime;
+          LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
+                                  << "event 0x"
+                                  << llvm::format_hex(eventAddr, 16)
+                                  << " triggered at time "
+                                  << scheduler.getCurrentTime().realTime
+                                  << " fs\n");
+
+          // Also set the memory byte if this is a memory-backed event.
           uint64_t offset = 0;
-          MemoryBlock *block = findMemoryBlockByAddress(eventAddr, procId, &offset);
+          MemoryBlock *block =
+              findMemoryBlockByAddress(eventAddr, procId, &offset);
           if (block && block->size >= offset + 1) {
-            // Set the event flag to true (1)
             block->data[offset] = 1;
             block->initialized = true;
-            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
-                                    << "set event at address 0x"
-                                    << llvm::format_hex(eventAddr, 16) << " to true\n");
-
-            // Check if any processes are waiting on this memory location
+            // Check if any processes are waiting on this memory location.
             checkMemoryEventWaiters();
-          } else {
-            LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
-                                    << "could not find memory block for address 0x"
-                                    << llvm::format_hex(eventAddr, 16) << "\n");
           }
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
@@ -14317,15 +14322,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
         if (!eventPtrVal.isX()) {
           uint64_t eventAddr = eventPtrVal.getUInt64();
-          uint64_t offset = 0;
-          MemoryBlock *block = findMemoryBlockByAddress(eventAddr, procId, &offset);
-          if (block && block->size >= offset + 1 && block->initialized) {
-            triggered = (block->data[offset] != 0);
+          uint64_t currentRealTime = scheduler.getCurrentTime().realTime;
+
+          // Per IEEE 1800-2017 §15.5.3, .triggered returns true only within
+          // the same time slot where the event was triggered.
+          // The eventTriggerTime map is the authoritative source - it records
+          // when __moore_event_trigger was called for this event ID.
+          auto it = eventTriggerTime.find(eventAddr);
+          if (it != eventTriggerTime.end() &&
+              it->second == currentRealTime) {
+            triggered = true;
           }
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
                                   << "event at address 0x"
                                   << llvm::format_hex(eventAddr, 16)
-                                  << " is " << (triggered ? "triggered" : "not triggered") << "\n");
+                                  << " is " << (triggered ? "triggered" : "not triggered")
+                                  << " at time " << currentRealTime << " fs\n");
         } else {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
                                   << "event pointer is X, returning false\n");
