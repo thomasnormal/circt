@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 507)
+## Current Status - February 8, 2026 (Iteration 508)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis with bit-select, part-select, and reduction support (`|expr`, `&expr`, `^expr`); next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata for bit/part-select + reductions and corresponding VerifToSMT consumption; next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,69 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 508
+
+1. **ImportVerilog now emits structured Slang event-expression metadata**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Event-source details now carry structured attributes when derivable from
+     Slang AST semantics:
+     - `<prefix>_name` (existing)
+     - `<prefix>_lsb`, `<prefix>_msb` for constant bit/part-selects
+     - `<prefix>_reduction` for unary reductions (`and`/`or`/`xor`)
+   - This fixes a real metadata-loss bug where expressions like `bus[2]` were
+     previously collapsed to `signal_name = "bus"` with select information lost.
+
+2. **VerifToSMT now consumes structured event-expression attrs before text parsing**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Source/`iff` resolution for `bmc_event_source_details` now prefers
+     structured attrs (`*_name`, `*_lsb/msb`, `*_reduction`) and falls back to
+     `*_expr` text parsing only when needed.
+   - This reduces parser fragility and tightens Slang-to-BMC semantic fidelity.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-structured-metadata.mlir`
+   - Expanded:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New coverage validates both:
+     - frontend emission of structured attrs from Slang event expressions,
+     - backend witness synthesis from structured attrs without relying on text.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witness-structured-metadata.mlir`: PASS
+     - `bmc-event-arm-witness-reduction.mlir`: PASS
+     - `bmc-event-arm-witness-part-select.mlir`: PASS
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Structured attrs are still a partial bridge; we still lack a canonical
+     expression graph/ID handoff end-to-end.
+   - Missing expression classes remain:
+     - casts (including 4-state aware semantics),
+     - concatenation/replication,
+     - indexed part-selects (`+:`/`-:`),
+     - broader builtin/system expression lowering.
+   - Highest-value long-term step:
+     - define canonical Slang expression identity + type metadata in event
+       details and lower directly from that representation in VerifToSMT.
 
 ### Session Summary - Iteration 507
 

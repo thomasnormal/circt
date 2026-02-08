@@ -628,6 +628,82 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
   return {};
 }
 
+static bool resolveStructuredExprFromDetail(
+    DictionaryAttr detail, StringRef prefix,
+    const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
+    size_t numNonStateArgs, std::optional<unsigned> &argIndex,
+    std::unique_ptr<ResolvedNamedBoolExpr> &resolvedExpr) {
+  auto key = [&](StringRef suffix) {
+    std::string key = prefix.str();
+    key += "_";
+    key += suffix.str();
+    return key;
+  };
+  auto nameAttr =
+      dyn_cast_or_null<StringAttr>(detail.get(key("name")));
+  if (!nameAttr || nameAttr.getValue().empty())
+    return false;
+
+  auto it = inputNameToArgIndex.find(nameAttr.getValue());
+  if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
+    return false;
+  unsigned sourceIndex = it->second;
+
+  auto lsbAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("lsb")));
+  auto msbAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("msb")));
+  bool hasSliceAttrs = static_cast<bool>(lsbAttr) || static_cast<bool>(msbAttr);
+  if (hasSliceAttrs && (!lsbAttr || !msbAttr))
+    return false;
+
+  std::optional<ResolvedNamedBoolExpr::ArgSlice> argSlice;
+  if (lsbAttr && msbAttr) {
+    int64_t lsb = lsbAttr.getInt();
+    int64_t msb = msbAttr.getInt();
+    if (lsb < 0 || msb < lsb)
+      return false;
+    argSlice = ResolvedNamedBoolExpr::ArgSlice{static_cast<unsigned>(lsb),
+                                                static_cast<unsigned>(msb)};
+  }
+
+  auto reductionAttr =
+      dyn_cast_or_null<StringAttr>(detail.get(key("reduction")));
+  std::optional<ResolvedNamedBoolExpr::Kind> reductionKind;
+  if (reductionAttr) {
+    StringRef reduction = reductionAttr.getValue();
+    if (reduction == "and")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceAnd;
+    else if (reduction == "or")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceOr;
+    else if (reduction == "xor")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+    else
+      return false;
+  }
+
+  if (!argSlice && !reductionKind) {
+    argIndex = sourceIndex;
+    return true;
+  }
+
+  auto argNode = std::make_unique<ResolvedNamedBoolExpr>();
+  argNode->kind = ResolvedNamedBoolExpr::Kind::Arg;
+  argNode->argIndex = sourceIndex;
+  argNode->argSlice = argSlice;
+
+  if (!reductionKind) {
+    resolvedExpr = std::move(argNode);
+    return true;
+  }
+
+  auto reduceNode = std::make_unique<ResolvedNamedBoolExpr>();
+  reduceNode->kind = *reductionKind;
+  reduceNode->lhs = std::move(argNode);
+  resolvedExpr = std::move(reduceNode);
+  return true;
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -4950,8 +5026,6 @@ struct VerifBoundedModelCheckingOpConversion
           witnessInfo.kind = EventArmWitnessInfo::Kind::Signal;
           bool sourceResolved = false;
           if (kind == "signal") {
-            auto signalNameAttr =
-                dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
             auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
             if (!edgeAttr)
               continue;
@@ -4959,14 +5033,9 @@ struct VerifBoundedModelCheckingOpConversion
             if (!edge)
               continue;
             witnessInfo.edge = *edge;
-            if (signalNameAttr && !signalNameAttr.getValue().empty()) {
-              auto sourceIt = inputNameToArgIndex.find(signalNameAttr.getValue());
-              if (sourceIt != inputNameToArgIndex.end() &&
-                  sourceIt->second < numNonStateArgs) {
-                witnessInfo.sourceArgIndex = sourceIt->second;
-                sourceResolved = true;
-              }
-            }
+            sourceResolved = resolveStructuredExprFromDetail(
+                detail, "signal", inputNameToArgIndex, numNonStateArgs,
+                witnessInfo.sourceArgIndex, witnessInfo.sourceExpr);
             if (!sourceResolved)
               if (auto signalExprAttr =
                       dyn_cast_or_null<StringAttr>(detail.get("signal_expr")))
@@ -4978,17 +5047,10 @@ struct VerifBoundedModelCheckingOpConversion
                     sourceResolved = true;
                   }
           } else if (kind == "sequence") {
-            auto sequenceNameAttr =
-                dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
             witnessInfo.kind = EventArmWitnessInfo::Kind::Sequence;
-            if (sequenceNameAttr && !sequenceNameAttr.getValue().empty()) {
-              auto sourceIt = inputNameToArgIndex.find(sequenceNameAttr.getValue());
-              if (sourceIt != inputNameToArgIndex.end() &&
-                  sourceIt->second < numNonStateArgs) {
-                witnessInfo.sourceArgIndex = sourceIt->second;
-                sourceResolved = true;
-              }
-            }
+            sourceResolved = resolveStructuredExprFromDetail(
+                detail, "sequence", inputNameToArgIndex, numNonStateArgs,
+                witnessInfo.sourceArgIndex, witnessInfo.sourceExpr);
             if (!sourceResolved)
               if (auto sequenceExprAttr =
                       dyn_cast_or_null<StringAttr>(detail.get("sequence_expr")))
@@ -5005,16 +5067,13 @@ struct VerifBoundedModelCheckingOpConversion
           if (!sourceResolved)
             continue;
 
-          bool hasIffConstraint = detail.get("iff_name") || detail.get("iff_expr");
-          if (auto iffNameAttr = dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
-            if (!iffNameAttr.getValue().empty()) {
-              auto iffIt = inputNameToArgIndex.find(iffNameAttr.getValue());
-              if (iffIt != inputNameToArgIndex.end() &&
-                  iffIt->second < numNonStateArgs)
-                witnessInfo.iffArgIndex = iffIt->second;
-            }
-          }
-          if (!witnessInfo.iffArgIndex)
+          bool hasIffConstraint = detail.get("iff_name") || detail.get("iff_expr") ||
+                                  detail.get("iff_lsb") || detail.get("iff_msb") ||
+                                  detail.get("iff_reduction");
+          (void)resolveStructuredExprFromDetail(
+              detail, "iff", inputNameToArgIndex, numNonStateArgs,
+              witnessInfo.iffArgIndex, witnessInfo.iffExpr);
+          if (!witnessInfo.iffArgIndex && !witnessInfo.iffExpr)
             if (auto iffExprAttr =
                     dyn_cast_or_null<StringAttr>(detail.get("iff_expr")))
               if (auto parsedExpr = parseNamedBoolExpr(iffExprAttr.getValue()))
