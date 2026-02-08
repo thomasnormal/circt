@@ -33663,6 +33663,61 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Fingerprint policy remains internal (no external compatibility version
   contract).
 
+## Iteration 678 - February 8, 2026
+
+### Lane-State Inspection/Report Utility
+
+- Added new utility:
+  - `utils/inspect_formal_lane_state.py`
+- Utility capabilities:
+  - validates one or more lane-state TSV files using strict row schema checks
+  - merges duplicate lane rows with the same precedence policy used by
+    `utils/run_formal_all.sh`
+  - prints deterministic summary output for CI logs
+  - emits structured JSON summary via `--json-out`
+- Added policy/gating options for CI closure checks:
+  - `--require-config-hash`
+  - `--require-single-config-hash`
+  - `--require-lane <lane_id>` (repeatable)
+
+### Test and Docs Updates
+
+- Added:
+  - `test/Tools/run-formal-lane-state-inspect.test`
+    - positive merge + summary + JSON emission case
+    - negative conflicting-hash case
+    - negative missing-hash policy case
+    - negative missing required-lane case
+    - negative multi-hash policy case
+- Updated:
+  - `docs/FormalRegression.md`
+    - documented lane-state inspector invocation and semantics
+
+### Validation
+
+- `python3 -m py_compile utils/inspect_formal_lane_state.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-lane-state-inspect.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep + inspector:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-inspect-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-inspect-smoke.tsv --reset-lane-state`:
+    - PASS
+  - `python3 utils/inspect_formal_lane_state.py /tmp/formal-lane-inspect-smoke.tsv --require-config-hash --require-single-config-hash --require-lane sv-tests/BMC --require-lane sv-tests/LEC --require-lane verilator-verification/BMC --require-lane yosys/tests/sva/BMC --require-lane opentitan/LEC --json-out /tmp/formal-lane-inspect-smoke-summary.json`:
+    - PASS
+
+### Remaining Limitations
+
+- Lane-state inspection is row-level; no built-in per-test case coverage diff.
+- Lane-state files still have no signed provenance chain.
+- Harness resume remains lane-level (no intra-lane test replay).
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
