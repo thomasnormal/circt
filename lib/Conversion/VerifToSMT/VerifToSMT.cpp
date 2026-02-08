@@ -6223,6 +6223,36 @@ struct VerifBoundedModelCheckingOpConversion
       auto evalSubExprAsValue = [&](auto &selfValue,
                                     const ResolvedNamedBoolExpr &subexpr)
           -> FailureOr<Value> {
+        auto projectDirectFourStateArgToValue =
+            [&](const ResolvedNamedBoolExpr &sourceExpr, Value sourceValue,
+                bool twoStateTarget) -> FailureOr<Value> {
+          if (sourceExpr.kind != ResolvedNamedBoolExpr::Kind::Arg ||
+              sourceExpr.argSlice || sourceExpr.argIndex >= oldCircuitInputTy.size())
+            return sourceValue;
+          int64_t valueWidth = 0;
+          int64_t unknownWidth = 0;
+          if (!isFourStateStruct(oldCircuitInputTy[sourceExpr.argIndex], valueWidth,
+                                 unknownWidth))
+            return sourceValue;
+          if (valueWidth <= 0 || unknownWidth <= 0 || valueWidth != unknownWidth)
+            return failure();
+          auto sourceBvTy = dyn_cast<smt::BitVectorType>(sourceValue.getType());
+          if (!sourceBvTy || sourceBvTy.getWidth() !=
+                                 static_cast<unsigned>(valueWidth + unknownWidth))
+            return failure();
+          auto valueTy =
+              smt::BitVectorType::get(builder.getContext(), valueWidth);
+          auto unknownTy =
+              smt::BitVectorType::get(builder.getContext(), unknownWidth);
+          Value unknownBits =
+              smt::ExtractOp::create(builder, loc, unknownTy, 0, sourceValue);
+          Value valueBits = smt::ExtractOp::create(builder, loc, valueTy,
+                                                   unknownWidth, sourceValue);
+          if (!twoStateTarget)
+            return valueBits;
+          Value knownMask = smt::BVNotOp::create(builder, loc, unknownBits);
+          return Value(smt::BVAndOp::create(builder, loc, valueBits, knownMask));
+        };
         switch (subexpr.kind) {
         case ResolvedNamedBoolExpr::Kind::Arg:
           return evalArgValue(subexpr.argIndex, subexpr.argSlice);
@@ -6271,7 +6301,11 @@ struct VerifBoundedModelCheckingOpConversion
           auto operandOr = selfValue(selfValue, *subexpr.lhs);
           if (failed(operandOr))
             return failure();
-          return materializeAsSMTBVForCmp(*operandOr, subexpr.castWidth,
+          auto castSourceOr = projectDirectFourStateArgToValue(
+              *subexpr.lhs, *operandOr, /*twoStateTarget=*/!subexpr.castFourState);
+          if (failed(castSourceOr))
+            return failure();
+          return materializeAsSMTBVForCmp(*castSourceOr, subexpr.castWidth,
                                           subexpr.castSigned);
         }
         case ResolvedNamedBoolExpr::Kind::Concat: {
