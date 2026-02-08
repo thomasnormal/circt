@@ -27964,3 +27964,69 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector scope supports regex matching over `run_id` and `reason` only.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
 - xprop-profile expected failures remain baseline-tracked.
+
+## Iteration 581 - February 8, 2026
+
+### Yosys SVA BMC Drop-Events Timestamp Rewrite Selectors
+
+- Added selector env controls:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX`
+- Timestamp bounds are inclusive and validated as
+  `YYYY-MM-DDTHH:MM:SSZ`.
+- Selectors gate `rewrite` behavior for both:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY`
+
+### Migration Semantics
+
+- Added strict parsing + validation for timestamp selector bounds.
+- Added explicit failure for invalid selector window (`MIN > MAX`).
+- Added line-aware row timestamp validation when timestamp selectors are active.
+
+### Test Coverage
+
+- Expanded
+  `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+  with:
+  - timestamp-window targeted rewrite case
+  - invalid selector timestamp format case
+  - invalid selector window (`MIN > MAX`) case
+- Focused lit run:
+  - 4/4 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.12--property-disj$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_not$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - FAIL
+    - Slang diagnostics include:
+      - interface instance to virtual interface assignment restriction with
+        defparam/bind target
+      - missing implicit conversion from `reg[4:0]` to enum type
+
+### Remaining Limitations
+
+- Strict duplicate-key/syntax JSON validation still depends on Python.
+- xprop-profile expected failures remain baseline-tracked.
+- Slang compatibility gaps remain for `jtag_avip` enum conversion and
+  bind/defparam virtual-interface interactions.

@@ -49,6 +49,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY="${YOSYS_SVA_MODE_SUM
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY:-infer}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
@@ -1998,6 +2000,8 @@ emit_mode_summary_outputs() {
   local drop_events_id_metadata_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY"
   local drop_events_rewrite_run_id_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX"
   local drop_events_rewrite_reason_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX"
+  local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
+  local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
   local drop_events_id_hash_algorithm
   local drop_events_id_hash_version
@@ -2998,7 +3002,8 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+from datetime import datetime, timezone
 import json
 import re
 import shutil
@@ -3017,10 +3022,21 @@ event_id_policy = sys.argv[7]
 id_metadata_policy = sys.argv[8]
 rewrite_run_id_regex = sys.argv[9]
 rewrite_reason_regex = sys.argv[10]
+rewrite_row_generated_at_utc_min = sys.argv[11]
+rewrite_row_generated_at_utc_max = sys.argv[12]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
     sys.exit(1)
+
+def parse_utc_epoch(value: str, field_name: str) -> int:
+    try:
+        dt = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        fail(
+            f"error: invalid {field_name}: {value} (expected YYYY-MM-DDTHH:MM:SSZ)"
+        )
+    return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
 try:
     effective_id_hash_version = int(effective_id_hash_version_raw)
@@ -3060,6 +3076,31 @@ if rewrite_reason_regex:
         fail(
             f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX: {rewrite_reason_regex} ({ex})"
         )
+
+rewrite_row_generated_at_min_epoch = None
+if rewrite_row_generated_at_utc_min:
+    rewrite_row_generated_at_min_epoch = parse_utc_epoch(
+        rewrite_row_generated_at_utc_min,
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN",
+    )
+
+rewrite_row_generated_at_max_epoch = None
+if rewrite_row_generated_at_utc_max:
+    rewrite_row_generated_at_max_epoch = parse_utc_epoch(
+        rewrite_row_generated_at_utc_max,
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX",
+    )
+
+if (
+    rewrite_row_generated_at_min_epoch is not None
+    and rewrite_row_generated_at_max_epoch is not None
+    and rewrite_row_generated_at_min_epoch > rewrite_row_generated_at_max_epoch
+):
+    fail(
+        "error: invalid rewrite timestamp window: "
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN exceeds "
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
+    )
 
 REQUIRED_STRING_KEYS = (
     "generated_at_utc",
@@ -3167,10 +3208,27 @@ def derive_event_id(reason: str, history_format: str, run_id: str, row_generated
     return f"drop-{digest}"
 
 
-def selected_for_rewrite(reason: str, run_id: str) -> bool:
+def parse_row_generated_at_epoch(row_generated_at: str, lineno: int) -> int:
+    return parse_utc_epoch(
+        row_generated_at,
+        f"row_generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}",
+    )
+
+
+def selected_for_rewrite(reason: str, run_id: str, row_generated_at_epoch) -> bool:
     if rewrite_run_id_pattern is not None and rewrite_run_id_pattern.search(run_id) is None:
         return False
     if rewrite_reason_pattern is not None and rewrite_reason_pattern.search(reason) is None:
+        return False
+    if (
+        rewrite_row_generated_at_min_epoch is not None
+        and row_generated_at_epoch < rewrite_row_generated_at_min_epoch
+    ):
+        return False
+    if (
+        rewrite_row_generated_at_max_epoch is not None
+        and row_generated_at_epoch > rewrite_row_generated_at_max_epoch
+    ):
         return False
     return True
 
@@ -3196,7 +3254,17 @@ for lineno, line in enumerate(lines, start=1):
         )
 
     schema_version = normalize_schema(obj.get("schema_version"), lineno)
-    rewrite_selected = selected_for_rewrite(obj["reason"], obj["run_id"])
+    row_generated_at_epoch = None
+    if (
+        rewrite_row_generated_at_min_epoch is not None
+        or rewrite_row_generated_at_max_epoch is not None
+    ):
+        row_generated_at_epoch = parse_row_generated_at_epoch(
+            obj["row_generated_at_utc"], lineno
+        )
+    rewrite_selected = selected_for_rewrite(
+        obj["reason"], obj["run_id"], row_generated_at_epoch
+    )
     event_id = obj.get("event_id")
     had_event_id = isinstance(event_id, str) and bool(event_id)
     if event_id_policy == "preserve":
