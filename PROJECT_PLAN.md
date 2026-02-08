@@ -10140,6 +10140,71 @@ ninja -C build circt-verilog
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
   - Continue first-class four-state value/unknown propagation work.
 
+### Iteration 524
+- Yosys SVA BMC regeneration policy controls and skip-case capture:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_OBSERVED_INCLUDE_SKIPPED` (default `0`)
+    - `EXPECT_REGEN_FAIL_POLICY` (default `xfail`)
+    - `EXPECT_REGEN_SKIP_POLICY` (default `omit`)
+  - Added skip-case recording in observed snapshots for:
+    - `SKIP(vhdl)` filtered tests (records both `pass` and `fail` modes)
+    - `SKIP(fail-no-macro)` fail-mode skips
+    - `SKIP(no-property)` mode skips
+  - Added regeneration policy mapping:
+    - observed `pass` -> expected `pass`
+    - observed `fail` -> policy-driven (`pass`/`fail`/`xfail`/`omit`)
+    - observed `skip` -> policy-driven (`pass`/`fail`/`xfail`/`omit`)
+  - Keeps default behavior backward-compatible:
+    - fail maps to `xfail`
+    - skip rows omitted unless explicitly configured.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-regen-policy.test`:
+    - validates skip inclusion in observed snapshot
+    - validates policy-driven regeneration (`fail` and `skip`)
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-observed-snapshot.test` for new regeneration
+    header metadata.
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 8/8 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Regeneration policies are global; per-test/per-mode policy overrides are
+    not yet available.
+  - Skip-case semantics are captured but not yet integrated into expected
+    outcome evaluation as first-class `skip` expectations.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+  - Four-state witness unknown propagation remains approximation-based in
+    cast/slice paths.
+- Long-term features to prioritize:
+  - Add per-key regeneration policy overrides (e.g. keyed by test/mode/profile)
+    for finer baseline curation.
+  - Consider first-class `skip` expectation support in harness outcome checks.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+  - Continue first-class four-state value/unknown propagation work.
+
 ---
 
 ## Architecture Reference
