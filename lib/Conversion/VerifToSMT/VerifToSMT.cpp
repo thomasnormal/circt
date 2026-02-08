@@ -966,6 +966,16 @@ static bool resolveStructuredExprFromDetail(
 
   auto reductionAttr =
       dyn_cast_or_null<StringAttr>(detail.get(key("reduction")));
+  Attribute bitwiseNotAny = detail.get(key("bitwise_not"));
+  bool bitwiseNot = false;
+  if (bitwiseNotAny) {
+    if (auto bitwiseNotAttr = dyn_cast<BoolAttr>(bitwiseNotAny))
+      bitwiseNot = bitwiseNotAttr.getValue();
+    else if (isa<UnitAttr>(bitwiseNotAny))
+      bitwiseNot = true;
+    else
+      return false;
+  }
   std::optional<ResolvedNamedBoolExpr::Kind> reductionKind;
   if (reductionAttr) {
     StringRef reduction = reductionAttr.getValue();
@@ -985,7 +995,7 @@ static bool resolveStructuredExprFromDetail(
       return false;
   }
 
-  if (!argSlice && !reductionKind) {
+  if (!argSlice && !reductionKind && !bitwiseNot) {
     argIndex = sourceIndex;
     return true;
   }
@@ -994,16 +1004,20 @@ static bool resolveStructuredExprFromDetail(
   argNode->kind = ResolvedNamedBoolExpr::Kind::Arg;
   argNode->argIndex = sourceIndex;
   argNode->argSlice = argSlice;
-
-  if (!reductionKind) {
-    resolvedExpr = std::move(argNode);
-    return true;
+  std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(argNode);
+  if (bitwiseNot) {
+    auto notNode = std::make_unique<ResolvedNamedBoolExpr>();
+    notNode->kind = ResolvedNamedBoolExpr::Kind::BitwiseNot;
+    notNode->lhs = std::move(current);
+    current = std::move(notNode);
   }
-
-  auto reduceNode = std::make_unique<ResolvedNamedBoolExpr>();
-  reduceNode->kind = *reductionKind;
-  reduceNode->lhs = std::move(argNode);
-  resolvedExpr = std::move(reduceNode);
+  if (reductionKind) {
+    auto reduceNode = std::make_unique<ResolvedNamedBoolExpr>();
+    reduceNode->kind = *reductionKind;
+    reduceNode->lhs = std::move(current);
+    current = std::move(reduceNode);
+  }
+  resolvedExpr = std::move(current);
   return true;
 }
 
@@ -5370,9 +5384,12 @@ struct VerifBoundedModelCheckingOpConversion
           if (!sourceResolved)
             continue;
 
-          bool hasIffConstraint = detail.get("iff_name") || detail.get("iff_expr") ||
-                                  detail.get("iff_lsb") || detail.get("iff_msb") ||
-                                  detail.get("iff_reduction");
+          bool hasIffConstraint =
+              detail.get("iff_name") || detail.get("iff_expr") ||
+              detail.get("iff_lsb") || detail.get("iff_msb") ||
+              detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
+              detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
+              detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");
           (void)resolveStructuredExprFromDetail(
               detail, "iff", inputNameToArgIndex, numNonStateArgs,
               witnessInfo.iffArgIndex, witnessInfo.iffExpr);

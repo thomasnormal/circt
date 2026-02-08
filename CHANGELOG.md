@@ -23041,3 +23041,54 @@ CIRCT/slang correctly enforces LRM restrictions.
   - `yosys/tests/sva` LEC (`basic00`): PASS
   - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
   - AVIP APB compile smoke: PASS
+
+---
+
+## Iteration 460 - February 8, 2026
+
+### Structured Bitwise-Not Event Metadata for BMC/LEC
+
+- Continued the structured event-arm witness work by wiring unary bitwise-not
+  through both ImportVerilog metadata and VerifToSMT structured consumption.
+- `ImportVerilog` now preserves unary `~` in structured event attributes as:
+  - `signal_bitwise_not`
+  - `iff_bitwise_not`
+- `VerifToSMT` structured resolver now accepts both metadata encodings for
+  `*_bitwise_not`:
+  - `UnitAttr` (e.g. `signal_bitwise_not`)
+  - `BoolAttr` (e.g. `signal_bitwise_not = true`)
+- Witness iff-detection now also accounts for structured dynamic-slice and
+  bitwise-not keys (`iff_dyn_*`, `iff_bitwise_not`) so witness generation does
+  not get skipped when only structured metadata is present.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-bitwise-not-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Uses legal 1-bit edge form `posedge (~bus[0])`.
+    - Checks structured `signal_bitwise_not` and `iff_bitwise_not`.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (10 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- OpenTitan `prim_count` simulation smoke currently reports testbench-level
+  failure (`TEST FAILED: error flag set`) despite successful compile/sim flow.
+- OpenTitan `prim_fifo_sync` simulation still emits `llhd.drv`
+  `interpretOperation` diagnostics during run.
+- Structured event metadata still lacks full binary-expression trees; complex
+  boolean compositions continue to rely on text-expression fallback.

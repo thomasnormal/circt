@@ -342,3 +342,27 @@ module SequenceSignalEventListStructuredDynamicSelectAffine;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for unary bitwise-not event terms.
+module SequenceSignalEventListStructuredBitwiseNot;
+  logic clk, q;
+  logic [3:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredBitwiseNot
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_name = "bus"
+  // CHECK-DAG: signal_lsb = 0 : i32
+  // CHECK-DAG: signal_msb = 0 : i32
+  // CHECK-DAG: signal_bitwise_not
+  // CHECK-DAG: iff_name = "bus"
+  // CHECK-DAG: iff_lsb = 2 : i32
+  // CHECK-DAG: iff_msb = 2 : i32
+  // CHECK-DAG: iff_bitwise_not
+  always @(seq or posedge (~bus[0]) iff (~bus[2])) begin
+    q <= ~q;
+  end
+endmodule

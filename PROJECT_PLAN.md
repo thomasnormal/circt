@@ -9082,6 +9082,48 @@ ninja -C build circt-verilog
   - yosys SVA BMC mini smoke PASS.
   - OpenTitan LEC mini smoke PASS.
 
+### Iteration 460
+- BMC/LEC structured witness fidelity:
+  - Extended structured event metadata extraction for unary bitwise-not in
+    `ImportVerilog` (`signal_bitwise_not` / `iff_bitwise_not`).
+  - Extended `VerifToSMT` structured event expression resolution to consume
+    `*_bitwise_not` in both representations:
+    - `UnitAttr` (legacy/hand-authored MLIR dictionaries).
+    - `BoolAttr` (`*_bitwise_not = true`) from structured frontend emission.
+  - Preserved structured wrapper ordering for composite expressions:
+    `reduce(bitwise_not(arg_slice_or_dyn_slice))`.
+- New/updated regression tests:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-bitwise-not-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with a
+    legal 1-bit edge expression (`posedge (~bus[0])`) and structured
+    bitwise-not checks.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (10 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - OpenTitan `prim_count` smoke still reports testbench-level failure
+    (`TEST FAILED: error flag set`) even when pipeline execution succeeds.
+  - OpenTitan `prim_fifo_sync` simulation still emits `llhd.drv`
+    `interpretOperation` failures despite completing.
+  - Structured event metadata still does not encode full binary expression trees
+    (it relies on text fallback for richer boolean combinations).
+- Long-term features to prioritize:
+  - Add structured metadata for binary event expressions (`&`, `|`, `^`, `==`,
+    `!=`) to reduce text-parser dependence in BMC/LEC witness lowering.
+  - Add mixed structured nesting coverage (`not(reduction(dynamic-slice))`,
+    nested parenthesized forms) in both ImportVerilog and VerifToSMT tests.
+  - Add stricter end-to-end checks that witness generation survives mixed
+    `UnitAttr`/`BoolAttr` metadata producers.
+
 ---
 
 ## Architecture Reference

@@ -283,6 +283,7 @@ struct StructuredEventExprInfo {
   std::optional<int32_t> dynSign;
   std::optional<int32_t> dynOffset;
   std::optional<unsigned> dynWidth;
+  bool bitwiseNot = false;
   std::optional<StringRef> reduction;
 };
 
@@ -384,6 +385,9 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
     case UnaryOperator::BitwiseXnor:
       reduction = "xnor";
       break;
+    case UnaryOperator::BitwiseNot:
+      info.bitwiseNot = !info.bitwiseNot;
+      return extractStructuredEventExprInfo(unary->operand(), info);
     default:
       break;
     }
@@ -531,6 +535,8 @@ static bool maybeAddStructuredEventExprAttrs(
     addAttrIfMissing(keyFor("dyn_width"),
                      builder.getI32IntegerAttr(*info.dynWidth));
   }
+  if (info.bitwiseNot)
+    addAttrIfMissing(keyFor("bitwise_not"), builder.getBoolAttr(true));
   if (info.reduction)
     addAttrIfMissing(keyFor("reduction"), builder.getStringAttr(*info.reduction));
 
