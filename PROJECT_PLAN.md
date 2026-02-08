@@ -18082,6 +18082,45 @@ ninja -C build circt-verilog
     policy yet).
   - External closure is still filtered/smoke-oriented, not full-matrix.
 
+### Iteration 674
+- Formal harness lane sharding controls in `utils/run_formal_all.sh`:
+  - Added:
+    - `--include-lane-regex REGEX`
+    - `--exclude-lane-regex REGEX`
+  - Added deterministic lane-id filtering at run dispatch:
+    - `sv-tests/BMC`, `sv-tests/LEC`
+    - `verilator-verification/BMC`, `verilator-verification/LEC`
+    - `yosys/tests/sva/BMC`, `yosys/tests/sva/LEC`
+    - `opentitan/LEC`
+    - `avip/<name>/compile`
+  - Implemented strict regex validation for lane filters.
+  - This enables distributed closure workflows by splitting the full matrix
+    across workers without modifying suite scripts.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - include-only lane filter run (`sv-tests/(BMC|LEC)`)
+    - include+exclude lane filter run (`sv-tests/` excluding `/LEC`)
+- Documentation:
+  - Updated `docs/FormalRegression.md` with lane-sharding examples and lane-id
+    format.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated filtered sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-sharding-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+      - `sv-tests` BMC/LEC PASS
+      - `verilator-verification` BMC/LEC PASS
+      - `yosys/tests/sva` BMC/LEC PASS
+      - `opentitan` LEC PASS
+      - all filtered AVIP variants PASS
+- Current limitations / debt:
+  - Lane filtering improves orchestration but does not yet provide persistent
+    resume checkpoints for interrupted full-matrix runs.
+  - External closure remains filtered/smoke-oriented unless full-lane schedules
+    are routinely executed.
+
 ---
 
 ## Architecture Reference

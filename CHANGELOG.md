@@ -33443,6 +33443,58 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Trust distribution remains key-file based (no certificate-chain trust policy).
 - External closure remains filtered/smoke-oriented, not full-matrix.
 
+## Iteration 674 - February 8, 2026
+
+### Lane Sharding Controls for `run_formal_all.sh`
+
+- Added lane filter options to `utils/run_formal_all.sh`:
+  - `--include-lane-regex <regex>`
+  - `--exclude-lane-regex <regex>`
+- Added deterministic lane IDs used for filter matching:
+  - `sv-tests/BMC`, `sv-tests/LEC`
+  - `verilator-verification/BMC`, `verilator-verification/LEC`
+  - `yosys/tests/sva/BMC`, `yosys/tests/sva/LEC`
+  - `opentitan/LEC`
+  - `avip/<name>/compile`
+- Added strict regex validation for lane-filter arguments.
+- Lane filtering is now applied at suite dispatch time, allowing sharded
+  full-matrix execution across multiple workers without suite-runner changes.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - include-only lane filter validation (`sv-tests/(BMC|LEC)`)
+    - include+exclude lane filter validation (`^sv-tests/` excluding `/LEC`)
+  - `docs/FormalRegression.md`
+    - added lane-sharding examples and lane-id format
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-sharding-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - `sv-tests` BMC/LEC PASS
+    - `verilator-verification` BMC/LEC PASS
+    - `yosys/tests/sva` BMC/LEC PASS
+    - `opentitan` LEC PASS
+    - all filtered AVIP variants PASS
+
+### Remaining Limitations
+
+- Lane sharding improves orchestration, but no persistent resume/checkpoint
+  mechanism exists yet for interrupted long full-matrix runs.
+- External closure is still filtered/smoke-heavy unless full-lane schedules are
+  run continuously.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

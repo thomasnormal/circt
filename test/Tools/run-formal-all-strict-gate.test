@@ -23,6 +23,10 @@
 // RUN: FileCheck %s --check-prefix=AVIPENV < %t/out-avip/avip-foo_avip.log
 // RUN: FileCheck %s --check-prefix=OPENTITANPATH < %t/out-avip/summary.tsv
 // RUN: FileCheck %s --check-prefix=OPENTITANENV < %t/out-avip/opentitan-lec.log
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-include --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --with-avip --avip-glob %t/avip/* --circt-verilog %t/fake-circt-verilog --circt-verilog-avip %t/fake-circt-verilog-avip --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^sv-tests/(BMC|LEC)$'
+// RUN: FileCheck %s --check-prefix=LANEINCLUDE < %t/out-lane-include/summary.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-exclude --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --with-avip --avip-glob %t/avip/* --circt-verilog %t/fake-circt-verilog --circt-verilog-avip %t/fake-circt-verilog-avip --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^sv-tests/' --exclude-lane-regex '/LEC$'
+// RUN: FileCheck %s --check-prefix=LANEEXCLUDE < %t/out-lane-exclude/summary.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tmissing_case\tbase\tFAIL\t2099-01-01\tstale_entry\n' > %t/expected-failure-cases-unmatched.tsv
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-unmatched --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases-unmatched.tsv --fail-on-unmatched-expected-failure-cases' 2>&1 | FileCheck %s --check-prefix=CASEUNMATCHED
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC\taes_sbox_canright\tbase\tXFAIL\t2099-01-01\tknown_xprop\n' > %t/expected-failure-cases-opentitan.tsv
@@ -166,6 +170,14 @@
 // AVIPENV: CIRCT_VERILOG_AVIP_OK
 // OPENTITANPATH: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
 // OPENTITANENV: CIRCT_VERILOG_OPENTITAN_OK
+// LANEINCLUDE: sv-tests{{[[:space:]]+}}BMC
+// LANEINCLUDE: sv-tests{{[[:space:]]+}}LEC
+// LANEINCLUDE-NOT: verilator-verification
+// LANEINCLUDE-NOT: yosys/tests/sva
+// LANEINCLUDE-NOT: opentitan
+// LANEINCLUDE-NOT: avip/foo_avip
+// LANEEXCLUDE: sv-tests{{[[:space:]]+}}BMC
+// LANEEXCLUDE-NOT: sv-tests{{[[:space:]]+}}LEC
 // CASEUNMATCHED: unmatched expected failure cases:
 // CASEUNMATCHED: sv-tests LEC id_kind=base id=missing_case status=FAIL
 // CASEOT: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_xprop
