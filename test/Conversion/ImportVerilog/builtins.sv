@@ -399,23 +399,20 @@ module SampleValueBuiltins #() (
     input clk_i
 );
   // CHECK: [[CLKWIRE:%.+]] = moore.net name "clk_i" wire : <l1>
-  // CHECK: moore.procedure always
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.not
   // CHECK: moore.and
-  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
-  // CHECK: moore.procedure always
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.not
   // CHECK: moore.and
-  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
-  // CHECK: moore.procedure always
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.eq
-  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));

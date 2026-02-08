@@ -18,9 +18,7 @@ module PastClocking(input logic clk, input logic clk2,
   property past_with_clocking_pos3;
     @(posedge clk) a |-> $past(b, 2, @(posedge clk));
   endproperty
-  // CHECK: moore.variable
-  // CHECK: moore.procedure
-  // CHECK: moore.blocking_assign
+  // CHECK: moore.past %{{.+}} delay 2
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (past_with_clocking_pos3);
 

@@ -35,16 +35,15 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $changed - value changed from previous clock cycle
-  // $changed(x) now uses explicit register tracking with a procedure.
+  // $changed(x) uses moore.past to get the previous value.
   //===--------------------------------------------------------------------===//
   property changed_test;
     @(posedge clk) a |=> $changed(b);
   endproperty
-  // $changed uses procedure-based register tracking
-  // CHECK: moore.procedure always
+  // $changed uses moore.past to get the previous value and compare
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.eq
   // CHECK: moore.not
-  // CHECK: moore.blocking_assign
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (changed_test);
 
@@ -59,26 +58,24 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $past with default delay of 1
-  // $past(x) now uses explicit register tracking with a procedure.
+  // $past(x) uses moore.past op directly.
   //===--------------------------------------------------------------------===//
   property past_default;
     @(posedge clk) a |-> $past(b);
   endproperty
-  // CHECK: moore.procedure always
-  // CHECK: moore.blocking_assign
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (past_default);
 
   //===--------------------------------------------------------------------===//
   // Test $past with explicit delay parameter
-  // $past(x, 2) uses a 2-stage register pipeline.
+  // $past(x, 2) uses moore.past op with delay 2.
   //===--------------------------------------------------------------------===//
   property past_with_delay;
     @(posedge clk) a |-> $past(b, 2);
   endproperty
-  // CHECK: moore.procedure always
-  // CHECK: moore.blocking_assign
+  // CHECK: moore.past %{{.+}} delay 2
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (past_with_delay);
@@ -97,36 +94,34 @@ module Assertions(input logic clk, rst, a, b);
 
   //===--------------------------------------------------------------------===//
   // Test $stable - value unchanged since last clock
-  // $stable(x) now uses explicit register tracking.
+  // $stable(x) uses moore.past to compare current with previous value.
   //===--------------------------------------------------------------------===//
   property stable_test;
     @(posedge clk) a |-> $stable(b);
   endproperty
-  // CHECK: moore.procedure always
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.eq
-  // CHECK: moore.blocking_assign
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (stable_test);
 
   //===--------------------------------------------------------------------===//
   // Test $rose - rising edge detection (0->1 transition)
-  // $rose(x) = x && !past(x) via register tracking
+  // $rose(x) = x && !past(x) via moore.past
   //===--------------------------------------------------------------------===//
   property rose_test;
     @(posedge clk) a |-> $rose(b);
   endproperty
-  // $rose produces: current && !past(current) via register
-  // CHECK: moore.procedure always
+  // $rose produces: current && !past(current) via moore.past
+  // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.not
   // CHECK: moore.and
-  // CHECK: moore.blocking_assign
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (rose_test);
 
   //===--------------------------------------------------------------------===//
   // Test $fell - falling edge detection (1->0 transition)
-  // $fell(x) = !x && past(x) via register tracking
+  // $fell(x) = !x && past(x) via moore.past
   //===--------------------------------------------------------------------===//
   property fell_test;
     @(posedge clk) a |-> $fell(b);
