@@ -55,7 +55,7 @@ that unexpectedly pass (not a tool bug).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 166 | 166 | 0 | All tests pass; includes queue/array ops, config_db, semaphores, vtable dispatch, string methods, coverage |
+| circt-sim | 166 | 166 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage |
 
 ## UVM Simulation Feature Status
 
@@ -118,6 +118,8 @@ to commercial simulators like Cadence Xcelium.
 | I2S | Runs | Runs* | Runs* | `I2sBaseTest` at ~200 ns; *bind assertions need slang fix |
 | I3C | Runs | Runs | Runs | `i3c_base_test` at ~200 ns; pullup/wire/generate all work |
 | SPI | Runs | Runs* | Runs* | `SpiBaseTest` at ~800 ns; *bind assertions need slang fix |
+| AXI4Lite | Runs | N/A | N/A | `Axi4LiteBaseTest` at ~500 ns; has UVM_ERROR UVM/DPI/REGEX (regex DPI not implemented) |
+| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; has UVM_ERROR UVM/DPI/REGEX |
 
 ## Key Fixes History
 
@@ -167,3 +169,4 @@ to commercial simulators like Cadence Xcelium.
 | StreamUnpackOp 4-state fix | Extract 4-state `{value, unknown}` struct before i64 widening in MooreToCore |
 | Queue ops on fixed arrays | Add `UnpackedArrayType` to 5 MooreToCore patterns with `llhd::ProbeOp`/`llhd::DriveOp` for `!llhd.ref<!hw.array>` |
 | Parameterized interface dedup | Use `hasSameType()` for deduplication; different parameterizations get separate MLIR declarations |
+| Bounded delta polling (RUNPHSTIME fix) | Use delta steps for first 1000 polls, then 1ps fallback; eliminates UVM_FATAL [RUNPHSTIME] in all AVIPs |
