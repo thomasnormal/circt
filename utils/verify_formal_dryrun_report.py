@@ -27,10 +27,39 @@ def hash_rows(rows: list[dict]) -> str:
   return digest.hexdigest()
 
 
+def read_hmac_keyring(path: Path) -> dict[str, bytes]:
+  if not path.is_file():
+    fail(f"HMAC keyring file not found: {path}")
+  keyring: dict[str, bytes] = {}
+  for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+      continue
+    fields = line.split("\t")
+    if len(fields) != 2:
+      fail(
+          f"{path}:{line_no}: expected '<hmac_key_id>\\t<key_file_path>' row in keyring"
+      )
+    key_id = fields[0].strip()
+    key_file = fields[1].strip()
+    if not key_id:
+      fail(f"{path}:{line_no}: empty hmac_key_id in keyring row")
+    if key_id in keyring:
+      fail(f"{path}:{line_no}: duplicate hmac_key_id '{key_id}' in keyring")
+    key_path = Path(key_file)
+    if not key_path.is_file():
+      fail(f"{path}:{line_no}: HMAC key file not found: {key_path}")
+    keyring[key_id] = key_path.read_bytes()
+  if not keyring:
+    fail(f"{path}: keyring has no usable rows")
+  return keyring
+
+
 def verify_report(
     path: Path,
     allow_legacy_prefix: bool,
     hmac_key_bytes: Optional[bytes],
+    hmac_keyring: Optional[dict[str, bytes]],
     expected_hmac_key_id: Optional[str],
 ) -> int:
   rows: list[dict] = []
@@ -79,6 +108,19 @@ def verify_report(
           f"{path}:{line_no}: run_meta.hmac_key_id mismatch; expected "
           f"'{expected_hmac_key_id}', got '{run_meta_hmac_key_id}'"
       )
+    run_hmac_key_bytes = hmac_key_bytes
+    if hmac_keyring is not None:
+      if not run_meta_hmac_key_id:
+        fail(
+            f"{path}:{line_no}: run_meta.hmac_key_id must be non-empty when using "
+            "--hmac-keyring-tsv"
+        )
+      run_hmac_key_bytes = hmac_keyring.get(run_meta_hmac_key_id)
+      if run_hmac_key_bytes is None:
+        fail(
+            f"{path}:{line_no}: unknown hmac_key_id '{run_meta_hmac_key_id}' "
+            f"(not found in keyring)"
+        )
 
     segment = [row]
     idx += 1
@@ -124,12 +166,12 @@ def verify_report(
           f"{actual_hash}, got {expected_hash}"
       )
 
-    if hmac_key_bytes is not None:
+    if run_hmac_key_bytes is not None:
       actual_hmac = run_end.get("payload_hmac_sha256")
       if not isinstance(actual_hmac, str) or not actual_hmac:
         fail(f"{path}:{end_line}: run_end.payload_hmac_sha256 must be non-empty string")
       expected_hmac = hmac.new(
-          hmac_key_bytes, actual_hash.encode("utf-8"), hashlib.sha256
+          run_hmac_key_bytes, actual_hash.encode("utf-8"), hashlib.sha256
       ).hexdigest()
       if actual_hmac != expected_hmac:
         fail(
@@ -176,6 +218,10 @@ def main() -> int:
       help="Optional key file for validating run_end.payload_hmac_sha256",
   )
   parser.add_argument(
+      "--hmac-keyring-tsv",
+      help="Optional TSV mapping '<hmac_key_id>\\t<key_file_path>' for keyed HMAC validation",
+  )
+  parser.add_argument(
       "--expected-hmac-key-id",
       help="Optional expected hmac_key_id for run_meta/run_end rows",
   )
@@ -191,11 +237,17 @@ def main() -> int:
     if not key_path.is_file():
       fail(f"HMAC key file not found: {key_path}")
     hmac_key_bytes = key_path.read_bytes()
+  hmac_keyring = None
+  if args.hmac_keyring_tsv:
+    hmac_keyring = read_hmac_keyring(Path(args.hmac_keyring_tsv))
+  if hmac_key_bytes is not None and hmac_keyring is not None:
+    fail("cannot use both --hmac-key-file and --hmac-keyring-tsv")
 
   run_count = verify_report(
       report_path,
       allow_legacy_prefix=args.allow_legacy_prefix,
       hmac_key_bytes=hmac_key_bytes,
+      hmac_keyring=hmac_keyring,
       expected_hmac_key_id=args.expected_hmac_key_id,
   )
   print(f"verified dry-run report: runs={run_count}")

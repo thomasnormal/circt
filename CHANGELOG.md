@@ -32928,6 +32928,57 @@ CIRCT/slang correctly enforces LRM restrictions.
 - AVIP compile failures currently indicate an unrelated `circt-verilog` MLIR
   verifier regression in this workspace.
 
+## Iteration 665 - February 8, 2026
+
+### Dry-Run Verifier HMAC Keyring Mode
+
+- Added `--hmac-keyring-tsv <file>` to
+  `utils/verify_formal_dryrun_report.py`.
+- Keyring file format:
+  - one row per key: `<hmac_key_id>\t<key_file_path>`
+  - blank/comment (`#`) lines are ignored
+- Added strict keyring parsing/validation:
+  - keyring file must exist and contain at least one usable row
+  - each non-comment row must have exactly two tab-separated columns
+  - `hmac_key_id` must be non-empty and unique
+  - referenced key files must exist
+
+### Per-Run Key Resolution
+
+- In keyring mode, verifier now resolves the HMAC key using
+  `run_meta.hmac_key_id`.
+- Added explicit failures for:
+  - empty `run_meta.hmac_key_id` in keyring mode
+  - unknown `hmac_key_id` not present in keyring
+- Added CLI exclusivity check:
+  - `--hmac-key-file` and `--hmac-keyring-tsv` cannot be used together.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive keyring verification path
+    - negative unknown key-id path
+  - `docs/FormalRegression.md`
+    - documented keyring option and TSV format
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+
+### Remaining Limitations
+
+- Keyring format is local TSV + key files only (no signed registry/protocol).
+- Key lifecycle policy (rotation/revocation) remains external.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

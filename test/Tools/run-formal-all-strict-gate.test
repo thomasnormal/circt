@@ -82,6 +82,11 @@
 // RUN: printf 'wrong-key\n' > %t/dryrun-hmac-bad.key
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac-bad.key %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYHMACBAD
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-key-file %t/dryrun-hmac.key --expected-hmac-key-id wrong-key-id %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYIDBAD
+// RUN: printf 'lit-key-1\t%t/dryrun-hmac.key\nother-key\t%t/dryrun-hmac-bad.key\n' > %t/dryrun-hmac-keyring.tsv
+// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv %t/dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRING
+// RUN: cp %t/dryrun-report.jsonl %t/dryrun-report-keyring-bad.jsonl
+// RUN: sed -i 's/"hmac_key_id": "lit-key-1"/"hmac_key_id": "missing-key"/g' %t/dryrun-report-keyring-bad.jsonl
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv %t/dryrun-report-keyring-bad.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGBAD
 // RUN: printf '{"operation":"refresh_expected_failures","target_file":"legacy.tsv"}\n' > %t/dryrun-report-legacy-prefix.jsonl
 // RUN: cat %t/dryrun-report.jsonl >> %t/dryrun-report-legacy-prefix.jsonl
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py %t/dryrun-report-legacy-prefix.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYLEGACYBAD
@@ -179,6 +184,8 @@
 // DRYRUNVERIFYBAD: error: {{.*}}run_end.row_count=99 does not match observed rows=3
 // DRYRUNVERIFYHMACBAD: error: {{.*}}run_end.payload_hmac_sha256 mismatch
 // DRYRUNVERIFYKEYIDBAD: error: {{.*}}run_meta.hmac_key_id mismatch
+// DRYRUNVERIFYKEYRING: verified dry-run report: runs=1
+// DRYRUNVERIFYKEYRINGBAD: error: {{.*}}unknown hmac_key_id 'missing-key'
 // DRYRUNVERIFYLEGACYBAD: error: {{.*}}expected operation=run_meta
 // DRYRUNVERIFYLEGACY: verified dry-run report: runs=1
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
