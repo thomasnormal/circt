@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 478)
+## Current Status - February 8, 2026 (Iteration 479)
 
 ### Test Results
 
@@ -46,6 +46,59 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 479
+
+1. **Mixed sequence/signal event-list lowering on equivalent clocks**
+   - Extended
+     `lib/Conversion/ImportVerilog/TimingControls.cpp` to lower mixed event
+     lists of the form `@(seq or signal_event)` when:
+     - the signal event has an explicit edge,
+     - the edge matches the sequence clock edge, and
+     - the signal clock is equivalent to the sequence clock signal.
+   - Mixed-list wakeup now combines sequence acceptance with signal-event `iff`
+     predicates in the event loop match condition.
+   - Added explicit diagnostics for unsupported mixed forms:
+     - missing signal edge (`@(seq or clk)`),
+     - non-equivalent edge (`posedge` vs `negedge`),
+     - non-equivalent clock signals.
+
+2. **Regression and end-to-end coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with a stable
+       mixed-list case using `@(seq or posedge clk iff b)`.
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`
+       validating mixed-list behavior against a sampled-value reference counter.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog circt-bmc`: PASS
+   - Lit/targeted:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+   - Direct BMC:
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `UNSAT`
+     - `sva-sequence-event-dynamic-equivalence-unsat-e2e.sv`: `UNSAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Different-clock event lists are still unsupported for sequence OR forms and
+     mixed sequence/signal forms.
+   - Mixed sequence/signal lists with non-equivalent edges remain unsupported.
+   - Property event controls in procedural timing controls are still unsupported.
+   - High-value Slang/SVA gaps to prioritize next:
+     - richer sequence operators (`first_match`, `throughout`, intersect variants),
+     - complete match-item side effects and subroutine interactions,
+     - stronger multi-clock sampled-value alignment and disable-iff composition.
 
 ### Session Summary - Iteration 478
 
