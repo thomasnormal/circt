@@ -7,9 +7,11 @@
 // SMTLIB-DAG: signal_bin_op = "eq"
 // SMTLIB-DAG: signal_lhs_cast_width = 2 : i32
 // SMTLIB-DAG: signal_lhs_cast_signed = false
+// SMTLIB-DAG: signal_lhs_cast_four_state = false
 // SMTLIB-DAG: iff_bin_op = "ne"
 // SMTLIB-DAG: iff_lhs_cast_width = 2 : i32
 // SMTLIB-DAG: iff_lhs_cast_signed
+// SMTLIB-DAG: iff_lhs_cast_four_state
 // SMTLIB-DAG: witness_name = "event_arm_witness_0_0"
 // SMTLIB: smt.declare_fun "event_arm_witness_0_0" : !smt.bool
 // SMTLIB-DAG: smt.bv.concat
@@ -21,9 +23,11 @@
 // RUNTIME-DAG: signal_bin_op = "eq"
 // RUNTIME-DAG: signal_lhs_cast_width = 2 : i32
 // RUNTIME-DAG: signal_lhs_cast_signed = false
+// RUNTIME-DAG: signal_lhs_cast_four_state = false
 // RUNTIME-DAG: iff_bin_op = "ne"
 // RUNTIME-DAG: iff_lhs_cast_width = 2 : i32
 // RUNTIME-DAG: iff_lhs_cast_signed
+// RUNTIME-DAG: iff_lhs_cast_four_state
 // RUNTIME-DAG: witness_name = "event_arm_witness_0_0"
 // RUNTIME: smt.declare_fun "event_arm_witness_0_0" : !smt.bool
 // RUNTIME-DAG: smt.bv.concat
@@ -35,7 +39,7 @@ func.func @bmc_event_arm_witness_cast_structured() {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["a", "b", "ab", "mask", "ok"],
     bmc_event_sources = [["signal[0]:both:iff"]],
-    bmc_event_source_details = [[{edge = "both", iff_bin_op = "ne", iff_lhs_arg_name = "b", iff_lhs_cast_signed, iff_lhs_cast_width = 2 : i32, iff_rhs_name = "mask", kind = "signal", label = "signal[0]:both:iff", signal_bin_op = "eq", signal_index = 0 : i32, signal_lhs_arg_name = "a", signal_lhs_cast_signed = false, signal_lhs_cast_width = 2 : i32, signal_rhs_name = "ab"}]]
+    bmc_event_source_details = [[{edge = "both", iff_bin_op = "ne", iff_lhs_arg_name = "b", iff_lhs_cast_four_state, iff_lhs_cast_signed, iff_lhs_cast_width = 2 : i32, iff_rhs_name = "mask", kind = "signal", label = "signal[0]:both:iff", signal_bin_op = "eq", signal_index = 0 : i32, signal_lhs_arg_name = "a", signal_lhs_cast_four_state = false, signal_lhs_cast_signed = false, signal_lhs_cast_width = 2 : i32, signal_rhs_name = "ab"}]]
   }
   init {
     verif.yield

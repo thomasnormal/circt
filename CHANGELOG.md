@@ -23776,3 +23776,66 @@ CIRCT/slang correctly enforces LRM restrictions.
   for full mixed-width / mixed-domain fidelity.
 - Group-depth metadata still captures wrapper nesting, not full parenthesis
   tree structure.
+
+---
+
+## Iteration 473 - February 8, 2026
+
+### Structured Cast Domain Provenance (`cast_four_state`)
+
+- Extended ImportVerilog structured event extraction to emit cast-domain
+  provenance for integral conversion wrappers:
+  - `<prefix>_cast_four_state`
+- This is emitted together with existing cast metadata:
+  - `<prefix>_cast_width`
+  - `<prefix>_cast_signed`
+  - `<prefix>_arg`
+- The new attr records Slang type-domain intent (two-state vs four-state) at
+  cast points.
+
+### VerifToSMT Structured Parsing Updates
+
+- Extended structured resolver to parse `*_cast_four_state` as bool or unit
+  attrs and store it on structured cast nodes.
+- Added `iff_cast_four_state` to structured-iff presence detection.
+- This iteration preserves metadata end-to-end; lowering semantics are kept
+  unchanged and will consume this provenance in a follow-up.
+
+### Regression Tests
+
+- Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+  - `SequenceSignalEventListStructuredCast` now checks cast-domain attrs.
+  - Added two-state `bit [2:0] tbus` in the `iff` cast path and validated
+    nested provenance:
+    - `iff_lhs_arg_cast_four_state = false` (source-domain)
+    - outer balancing cast remains four-state.
+- Updated
+  `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+  to include and verify `*_cast_four_state` metadata parsing.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (21 tests)
+- External matrix:
+  - `sv-tests` BMC: 26/26 PASS
+  - `sv-tests` LEC: 23/23 PASS
+  - `verilator-verification` BMC: 17/17 PASS
+  - `verilator-verification` LEC: 17/17 PASS
+  - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+  - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`):
+    PASS (`XPROP_ONLY` accepted)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (no
+    `interpretOperation failed`)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- `cast_four_state` is parsed but not yet used for domain-distinct cast
+  semantics during witness lowering.
+- Structured compare/cast lowering still needs richer canonical Slang type
+  graph metadata for fully general mixed-domain cases.
+- `yosys` `counter` pass/fail polarity remains sensitive to
+  `--assume-known-inputs`; harness expectation split is still pending.

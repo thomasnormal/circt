@@ -606,6 +606,7 @@ module SequenceSignalEventListStructuredCast;
   logic clk, q;
   logic signed [2:0] sbus;
   logic [2:0] ubus;
+  bit [2:0] tbus;
 
   sequence seq;
     @(posedge clk) q;
@@ -616,17 +617,21 @@ module SequenceSignalEventListStructuredCast;
   // CHECK-DAG: signal_bin_op = "eq"
   // CHECK-DAG: signal_lhs_cast_width = 3 : i32
   // CHECK-DAG: signal_lhs_cast_signed
+  // CHECK-DAG: signal_lhs_cast_four_state
   // CHECK-DAG: signal_lhs_arg_name = "ubus"
   // CHECK-DAG: signal_rhs_cast_width = 3 : i32
   // CHECK-DAG: signal_rhs_cast_signed
+  // CHECK-DAG: signal_rhs_cast_four_state
   // CHECK-DAG: signal_rhs_arg_name = "sbus"
   // CHECK-DAG: iff_bin_op = "ne"
   // CHECK-DAG: iff_lhs_cast_width = 3 : i32
   // CHECK-DAG: iff_lhs_cast_signed = false
-  // CHECK-DAG: iff_lhs_arg_name = "sbus"
+  // CHECK-DAG: iff_lhs_cast_four_state
+  // CHECK-DAG: iff_lhs_arg_arg_name = "tbus"
+  // CHECK-DAG: iff_lhs_arg_cast_four_state = false
   // CHECK-DAG: iff_rhs_name = "ubus"
   always @(seq or posedge (signed'(ubus) == signed'(sbus))
-           iff (unsigned'(sbus) != ubus)) begin
+           iff (unsigned'(tbus) != ubus)) begin
     q <= ~q;
   end
 endmodule

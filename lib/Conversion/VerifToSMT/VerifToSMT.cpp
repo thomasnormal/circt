@@ -219,6 +219,7 @@ struct ResolvedNamedBoolExpr {
   bool constValue = false;
   uint32_t castWidth = 0;
   bool castSigned = false;
+  bool castFourState = false;
   uint32_t replicateCount = 0;
   bool compareSigned = false;
   std::unique_ptr<ResolvedNamedBoolExpr> lhs;
@@ -970,8 +971,13 @@ static bool resolveStructuredExprFromDetail(
   };
   auto castWidthAttr = dyn_cast_or_null<IntegerAttr>(detail.get(key("cast_width")));
   bool hasCastSignedAttr = static_cast<bool>(detail.get(key("cast_signed")));
+  bool hasCastFourStateAttr =
+      static_cast<bool>(detail.get(key("cast_four_state")));
   auto castSignedAttr = parseBoolLikeAttr("cast_signed");
   if (!castSignedAttr)
+    return false;
+  auto castFourStateAttr = parseBoolLikeAttr("cast_four_state");
+  if (!castFourStateAttr)
     return false;
   if (castWidthAttr || hasCastSignedAttr) {
     if (!castWidthAttr || !hasCastSignedAttr)
@@ -992,6 +998,8 @@ static bool resolveStructuredExprFromDetail(
     castNode->kind = ResolvedNamedBoolExpr::Kind::Cast;
     castNode->castWidth = static_cast<uint32_t>(castWidth);
     castNode->castSigned = *castSignedAttr;
+    castNode->castFourState =
+        hasCastFourStateAttr ? *castFourStateAttr : false;
     castNode->lhs = std::move(argNode);
     std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(castNode);
     if (logicalNot) {
@@ -5677,6 +5685,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_group_depth") ||
               detail.get("iff_bin_op") || detail.get("iff_unary_op") ||
               detail.get("iff_cast_width") || detail.get("iff_cast_signed") ||
+              detail.get("iff_cast_four_state") ||
               detail.get("iff_concat_arity") ||
               detail.get("iff_replicate_count") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
