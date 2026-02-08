@@ -3122,6 +3122,7 @@ PY
 from datetime import datetime, timezone
 import csv
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -3928,13 +3929,15 @@ def parse_context_int_arithmetic_presets(value, field_name: str):
     return presets
 
 
-def parse_context_schema_import_modules(value, field_name: str):
+def parse_context_schema_import_modules(value, field_name: str, import_stack=None):
     if value is None:
         return []
     if not isinstance(value, list) or not value:
         fail(
             f"error: invalid {field_name}: expected non-empty array"
         )
+    if import_stack is None:
+        import_stack = []
     modules = []
     for idx, entry in enumerate(value):
         import_field = f"{field_name}[{idx}]"
@@ -3943,6 +3946,13 @@ def parse_context_schema_import_modules(value, field_name: str):
                 f"error: invalid {import_field}: expected non-empty string import path"
             )
         import_path = entry.strip()
+        import_real_path = os.path.realpath(import_path)
+        if import_real_path in import_stack:
+            cycle_paths = list(import_stack)
+            cycle_paths.append(import_real_path)
+            fail(
+                f"error: invalid {import_field}: import cycle detected: {' -> '.join(cycle_paths)}"
+            )
         try:
             with open(import_path, "r", encoding="utf-8") as handle:
                 import_raw = handle.read()
@@ -3962,13 +3972,20 @@ def parse_context_schema_import_modules(value, field_name: str):
             )
         unknown_keys = sorted(
             set(import_payload.keys())
-            - {"regex_defs", "limits", "int_arithmetic_presets"}
+            - {"imports", "regex_defs", "limits", "int_arithmetic_presets"}
         )
         if unknown_keys:
             fail(
                 f"error: invalid {import_field}: import file '{import_path}' has unknown key '{unknown_keys[0]}'"
             )
-        modules.append((import_path, import_payload))
+        modules.extend(
+            parse_context_schema_import_modules(
+                import_payload.get("imports"),
+                f"{import_field}.imports",
+                import_stack + [import_real_path],
+            )
+        )
+        modules.append((import_path, import_payload, import_field))
     return modules
 
 
@@ -6048,8 +6065,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
     imported_regex_defs = {}
     imported_limit_overrides = {}
     imported_int_arithmetic_presets = {}
-    for idx, (_, import_payload) in enumerate(import_modules):
-        import_field = f"{field_name}.imports[{idx}]"
+    for _, import_payload, import_field in import_modules:
         import_regex_defs = parse_regex_definitions(
             import_payload.get("regex_defs"),
             f"{import_field}.regex_defs",

@@ -371,11 +371,14 @@ Top-level schema keys:
 
 Import module JSON contract:
 - Allowed keys inside each imported JSON object:
+  - `imports`
   - `regex_defs`
   - `limits`
   - `int_arithmetic_presets`
 - Unknown keys are rejected.
 - Import payload must be a non-empty JSON object.
+- Imports may recursively import other modules.
+- Import cycles are rejected with field-qualified diagnostics.
 
 Merge and precedence rules:
 - `limits`: later imports override earlier imports; inline schema overrides all
