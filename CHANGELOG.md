@@ -33335,6 +33335,56 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrated sweep currently has one AVIP compile failure:
   `avip/axi4Lite_avip` (`missing hierarchical interface value`).
 
+## Iteration 672 - February 8, 2026
+
+### ImportVerilog Transitive Nested-Interface Fix
+
+- Fixed hierarchical interface resolution in
+  `lib/Conversion/ImportVerilog/Structure.cpp` for transitive nested interface
+  paths forwarded through module ports (for example `t.master.write`).
+- Extended `resolveInterfaceInstance(InstanceSymbol*)` fallback:
+  - when a direct cached parent interface match is unavailable, resolver now
+    attempts resolution through the containing interface body's parent
+    instance.
+- This closes the externally observed AVIP failure mode:
+  - `missing hierarchical interface value for t.master.write`
+  - and the previous `avip/axi4Lite_avip` compile failure.
+
+### Test Coverage
+
+- Added:
+  - `test/Conversion/ImportVerilog/nested-interface-port-transitive.sv`
+    - exercises `TopIf -> MasterIf -> WriteIf` forwarding across module
+      boundaries
+- Revalidated existing nested-interface coverage:
+  - `test/Conversion/ImportVerilog/nested-interface-port-instance.sv`
+
+### Validation
+
+- Build:
+  - `ninja -C build circt-verilog`: PASS
+- ImportVerilog lit:
+  - `build/bin/llvm-lit -sv test/Conversion/ImportVerilog/nested-interface-port-transitive.sv test/Conversion/ImportVerilog/nested-interface-port-instance.sv`:
+    - 2/2 PASS
+- AVIP tool lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-avip-circt-verilog-axi4lite.test`:
+    - 1/1 PASS
+- Direct AVIP repro:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/axi4Lite_avip`:
+    - PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-nested-if-fix-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - `sv-tests` BMC/LEC PASS
+    - `verilator-verification` BMC/LEC PASS
+    - `yosys/tests/sva` BMC/LEC PASS
+    - `opentitan` LEC PASS
+    - all filtered AVIP variants PASS (including `avip/axi4Lite_avip`)
+
+### Remaining Limitations
+
+- External closure remains filtered/smoke-oriented rather than full matrix.
+- OpenTitan `aes_sbox_canright` still requires `LEC_ACCEPT_XPROP_ONLY=1`.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

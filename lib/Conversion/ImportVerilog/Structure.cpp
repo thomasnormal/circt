@@ -3416,6 +3416,12 @@ Value Context::resolveInterfaceInstance(
           }
         }
       }
+      // Third pass: resolve through the containing interface body's
+      // instantiated parent interface, if available.
+      if (!parentRef && containingBody->parentInstance &&
+          containingBody->parentInstance != instSym)
+        parentRef = resolveInterfaceInstance(containingBody->parentInstance,
+                                             loc);
       if (parentRef) {
         // Navigate from parent interface to the sub-interface child.
         auto parentRefTy = dyn_cast<moore::RefType>(parentRef.getType());
