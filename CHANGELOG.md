@@ -25381,3 +25381,71 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Severity tiers remain coarse (`error` vs `warning`) and not parser-provenance
   driven.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 541 - February 8, 2026
+
+### Yosys SVA BMC Normalized Mode-Level Skip Accounting
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with explicit mode-level
+  accounting counters while preserving legacy test-level summary compatibility.
+- Added mode-level outcome buckets:
+  - `pass`, `fail`, `xfail`, `xpass`, `epass`, `efail`, `unskip`
+- Added mode-level skip buckets:
+  - `skipped`, `skip_pass`, `skip_fail`
+  - `skip_expected`, `skip_unexpected`
+  - reason buckets:
+    - `skip_reason_vhdl`
+    - `skip_reason_fail-no-macro`
+    - `skip_reason_no-property`
+    - `skip_reason_other`
+- Added normalized mode summary line:
+  - `yosys SVA mode summary: ...`
+- Kept legacy summary line unchanged:
+  - `yosys SVA summary: ... skipped=<test-level>`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-modes.test`
+- Revalidated targeted lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-modes.test`
+  - `test/Tools/run-yosys-sva-bmc-format*.test`
+  - `test/Tools/run-yosys-sva-bmc-format-strict*.test`
+- Targeted lit result: 12/12 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 24/24 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Legacy and normalized summaries coexist; downstream parsers may still depend
+  on legacy test-level `skipped` only.
+- Comment-anchor semantics are row-local and do not yet support sticky group
+  policies.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.

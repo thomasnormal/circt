@@ -11220,6 +11220,71 @@ ninja -C build circt-verilog
   - Add richer malformed reason families with policy-aware severity.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 541
+- Yosys SVA BMC normalized mode-level skip accounting:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with explicit mode-level
+    accounting counters while preserving legacy test-level `skipped` reporting.
+  - Added mode-level outcome buckets:
+    - `pass`, `fail`, `xfail`, `xpass`, `epass`, `efail`, `unskip`
+  - Added mode-level skip buckets:
+    - `skipped`, `skip_pass`, `skip_fail`
+    - `skip_expected`, `skip_unexpected`
+    - reason buckets:
+      - `skip_reason_vhdl`
+      - `skip_reason_fail-no-macro`
+      - `skip_reason_no-property`
+      - `skip_reason_other`
+  - Added explicit normalized summary line:
+    - `yosys SVA mode summary: ...`
+    - emitted in all runs, independent of strict/fmt/lint settings.
+  - Legacy summary remains unchanged for compatibility:
+    - `yosys SVA summary: ... skipped=<test-level>`
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-modes.test`:
+    - validates mode-level accounting for:
+      - pass-mode success
+      - fail-mode expected skip (`fail-no-macro`)
+      - `skip_expected` bucket behavior.
+  - Re-ran targeted lit tests:
+    - `test/Tools/run-yosys-sva-bmc-summary-modes.test`
+    - `test/Tools/run-yosys-sva-bmc-format*.test`
+    - `test/Tools/run-yosys-sva-bmc-format-strict*.test`
+    - result: 12/12 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 24/24 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Summary now has normalized mode-level skip buckets, but legacy summary and
+    mode summary coexist; downstream consumers may still parse only legacy line.
+  - Comment-anchor semantics are row-local and do not yet support sticky group
+    modes.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add structured machine-readable summary artifact (TSV/JSON) for mode-level
+    counters.
+  - Add configurable comment-anchor mode (`local` vs `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
