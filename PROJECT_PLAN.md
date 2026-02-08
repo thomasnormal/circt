@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 496)
+## Current Status - February 8, 2026 (Iteration 497)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed robust model-name step parsing for arm attribution (`sig_1`-style names); next: exact witness extraction + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed anchor-based disambiguation for suffix-name activity parsing; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,51 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 497
+
+1. **Anchor-based step-suffix disambiguation**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Model name parsing now uses event-detail anchor names
+     (`signal_name` / `sequence_name` / `iff_name`) to prevent splitting
+     anchored symbols as step-suffixed names.
+   - This fixes ambiguous models where both `sig` and `sig_1` exist, ensuring
+     `sig_1` can still be treated as the actual signal base when referenced by
+     event metadata.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-suffix-name.sh`
+       (now includes both `sig` and `sig_1` to force ambiguity)
+   - Existing suffix-name regression continues to assert:
+     - correct per-arm activity
+     - correct per-step fired-arm summary.
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Fired-arm reporting remains model-derived, not explicit solver witness
+     extraction.
+   - Attribution quality for complex unnamed expressions remains limited.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit explicit arm witness signals from lowering and print those directly,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 496
 

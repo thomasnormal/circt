@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 497 - February 8, 2026
+
+### Summary
+
+Strengthened suffix-name activity parsing by anchoring to names referenced in
+event metadata, fixing ambiguous cases where both short and suffixed symbols
+coexist (for example `sig` and `sig_1`).
+
+### Fixes
+
+1. **Anchor-aware wave-table parsing**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Added collection of event-detail anchor names from
+     `bmc_event_source_details` (`signal_name`, `sequence_name`, `iff_name`).
+   - `_N` suffix splitting is now skipped for anchored names, preventing
+     incorrect step parsing of referenced symbols like `sig_1`.
+
+2. **Regression strengthening**
+   - Updated:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-suffix-name.sh`
+   - The fake model now includes both `sig` and `sig_1` to exercise the
+     ambiguous parsing case and verify correct arm attribution remains stable.
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Arm attribution remains model-derived estimation rather than explicit solver
+  witness extraction.
+- Complex/internal expression naming is still best-effort.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 496 - February 8, 2026
 
 ### Summary

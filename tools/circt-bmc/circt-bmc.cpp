@@ -322,8 +322,34 @@ static std::optional<bool> decodeBoolModelValue(StringRef value) {
 using StepMap = std::map<unsigned, bool>;
 using WaveTable = std::map<std::string, StepMap>;
 
+static llvm::StringSet<> collectEventWaveNames(ModuleOp module) {
+  llvm::StringSet<> names;
+  module.walk([&](mlir::smt::SolverOp solver) {
+    auto detailSets =
+        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details");
+    if (!detailSets)
+      return;
+    for (Attribute detailSetAttr : detailSets) {
+      auto detailSet = dyn_cast<ArrayAttr>(detailSetAttr);
+      if (!detailSet)
+        continue;
+      for (Attribute detailAttr : detailSet) {
+        auto detail = dyn_cast<DictionaryAttr>(detailAttr);
+        if (!detail)
+          continue;
+        for (StringRef field : {"signal_name", "sequence_name", "iff_name"}) {
+          if (auto nameAttr = dyn_cast_or_null<StringAttr>(detail.get(field)))
+            names.insert(nameAttr.getValue());
+        }
+      }
+    }
+  });
+  return names;
+}
+
 static WaveTable buildWaveTable(const llvm::StringMap<std::string> &modelValues,
-                                unsigned &maxStep) {
+                                unsigned &maxStep,
+                                const llvm::StringSet<> *anchorNames = nullptr) {
   WaveTable table;
   maxStep = 0;
   llvm::StringSet<> boolValueNames;
@@ -340,18 +366,22 @@ static WaveTable buildWaveTable(const llvm::StringMap<std::string> &modelValues,
     StringRef name = kv.getKey();
     std::string base = name.str();
     unsigned step = 0;
-    size_t underscore = name.rfind('_');
-    if (underscore != StringRef::npos && underscore + 1 < name.size()) {
-      StringRef suffix = name.drop_front(underscore + 1);
-      unsigned suffixStep = 0;
-      if (!suffix.getAsInteger(10, suffixStep)) {
-        StringRef candidateBase = name.take_front(underscore);
-        // Treat `_N` as a step suffix only when an unsuffixed base declaration
-        // also exists. This avoids mis-parsing names like `sig_1`.
-        if (boolValueNames.contains(candidateBase)) {
-          base = candidateBase.str();
-          // We use step 0 for the unsuffixed declaration; `_0` is next step.
-          step = suffixStep + 1;
+    bool shouldAnchorAsBase = anchorNames && anchorNames->contains(name);
+    if (!shouldAnchorAsBase) {
+      size_t underscore = name.rfind('_');
+      if (underscore != StringRef::npos && underscore + 1 < name.size()) {
+        StringRef suffix = name.drop_front(underscore + 1);
+        unsigned suffixStep = 0;
+        if (!suffix.getAsInteger(10, suffixStep)) {
+          StringRef candidateBase = name.take_front(underscore);
+          // Treat `_N` as a step suffix only when an unsuffixed base
+          // declaration also exists. Anchor names from event metadata are never
+          // split, which avoids ambiguity for symbols like `sig_1`.
+          if (boolValueNames.contains(candidateBase)) {
+            base = candidateBase.str();
+            // We use step 0 for the unsuffixed declaration; `_0` is next step.
+            step = suffixStep + 1;
+          }
         }
       }
     }
@@ -367,8 +397,11 @@ static void printMixedEventSources(
   bool printedHeader = false;
   unsigned maxStep = 0;
   WaveTable waves;
-  if (modelValues)
-    waves = buildWaveTable(*modelValues, maxStep);
+  llvm::StringSet<> anchorNames;
+  if (modelValues) {
+    anchorNames = collectEventWaveNames(module);
+    waves = buildWaveTable(*modelValues, maxStep, &anchorNames);
+  }
   bool printedActivityHeader = false;
   bool printedByStepHeader = false;
   module.walk([&](mlir::smt::SolverOp solver) {
