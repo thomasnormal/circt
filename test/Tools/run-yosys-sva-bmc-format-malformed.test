@@ -1,0 +1,57 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'simple\t*\t*\tpass\n' > %t/expect.txt
+// RUN: printf 'ghost pass known\nalpha pass xprop FAIL trailing\nbadline\n' > %t/malformed-template.txt
+// RUN: cp %t/malformed-template.txt %t/malformed-dry.txt
+// RUN: cp %t/malformed-template.txt %t/malformed-apply.txt
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=%t/malformed-dry.txt \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run EXPECT_FORMAT_FILES=XFAIL_FILE \
+// RUN:   EXPECT_FORMAT_MALFORMED_FIX_FILE=%t/dry-fixes.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
+// RUN: FileCheck %s --check-prefix=DRYOUT < %t/dry.out
+// RUN: sed 's/\t/|/g' %t/malformed-dry.txt | FileCheck %s --check-prefix=DRYFILE
+// RUN: sed 's/\t/|/g' %t/dry-fixes.tsv | FileCheck %s --check-prefix=DRYFIX
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=%t/malformed-apply.txt \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=apply EXPECT_FORMAT_FILES=XFAIL_FILE \
+// RUN:   EXPECT_FORMAT_REWRITE_MALFORMED=1 EXPECT_FORMAT_MALFORMED_FIX_FILE=%t/apply-fixes.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN: FileCheck %s --check-prefix=APPLYOUT < %t/apply.out
+// RUN: sed 's/\t/|/g' %t/malformed-apply.txt | FileCheck %s --check-prefix=APPLYFILE
+// RUN: sed 's/\t/|/g' %t/apply-fixes.tsv | FileCheck %s --check-prefix=APPLYFIX
+
+// DRYOUT: EXPECT_FORMAT: mode=dry-run file={{.*malformed-dry.txt}} rows=2 malformed=1 changed=1 malformed_suggested=1 malformed_fixed=0
+// DRYOUT: EXPECT_FORMAT: mode=dry-run files=1 changed=1
+// DRYOUT: PASS(pass): simple
+// DRYOUT: SKIP(fail-no-macro): simple
+// DRYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// DRYFILE: ghost pass known
+// DRYFILE: alpha pass xprop FAIL trailing
+// DRYFILE: badline
+
+// DRYFIX: file|original|suggested|reason|applied
+// DRYFIX-DAG: {{.*malformed-dry.txt}}|alpha pass xprop FAIL trailing|alpha\tpass\txprop\tfail|trim-extra-fields|0
+
+// APPLYOUT: EXPECT_FORMAT: mode=apply file={{.*malformed-apply.txt}} rows=3 malformed=1 changed=1 malformed_suggested=1 malformed_fixed=1
+// APPLYOUT: EXPECT_FORMAT: mode=apply files=1 changed=1
+// APPLYOUT: PASS(pass): simple
+// APPLYOUT: SKIP(fail-no-macro): simple
+// APPLYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// APPLYFILE: alpha|pass|xprop|fail
+// APPLYFILE: badline|*|*|xfail
+// APPLYFILE: ghost|pass|known|xfail
+// APPLYFILE-NOT: alpha pass xprop FAIL trailing
+// APPLYFILE-NOT: badline
+
+// APPLYFIX: file|original|suggested|reason|applied
+// APPLYFIX-DAG: {{.*malformed-apply.txt}}|alpha pass xprop FAIL trailing|alpha\tpass\txprop\tfail|trim-extra-fields|1

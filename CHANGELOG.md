@@ -24988,3 +24988,73 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Comment placement is normalized into a header block, not row-local anchors.
 - Skip accounting remains mixed test-level/mode-level in summaries.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 535 - February 8, 2026
+
+### Yosys SVA BMC Malformed-Row Suggestions and Optional Autofix
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_FORMAT_REWRITE_MALFORMED` (`0`/`1`)
+  - `EXPECT_FORMAT_MALFORMED_FIX_FILE`
+- Added malformed-row suggestion engine for expectation formatting:
+  - proposes canonical rewrites for recoverable malformed rows
+  - suggestion reasons:
+    - `trim-extra-fields`
+    - `fill-expected-default`
+    - `fill-profile-expected-default`
+- Added optional malformed autofix:
+  - when `EXPECT_FORMAT_REWRITE_MALFORMED=1`, recoverable malformed lines are
+    rewritten into canonical rows.
+- Added machine-readable malformed-fix artifact output (TSV):
+  - columns:
+    - `file`
+    - `original`
+    - `suggested`
+    - `reason`
+    - `applied`
+- Added formatter summary metrics:
+  - `malformed_suggested=<n>`
+  - `malformed_fixed=<n>`
+- Added rewrite guardrails:
+  - `omit/auto` malformed rewrites are only permitted for
+    `EXPECT_REGEN_OVERRIDE_FILE`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-format-malformed.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 18/18 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Non-recoverable malformed rows are preserved and still require manual cleanup.
+- Comment placement is still header-normalized rather than row-local.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

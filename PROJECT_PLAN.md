@@ -10849,6 +10849,73 @@ ninja -C build circt-verilog
   - Normalize skip accounting to explicit mode-level metrics in summary.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 535
+- Yosys SVA BMC malformed-row rewrite suggestions and optional autofix:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_FORMAT_REWRITE_MALFORMED` (`0` or `1`)
+    - `EXPECT_FORMAT_MALFORMED_FIX_FILE`
+  - Added malformed-row suggestion engine in expectation formatter:
+    - emits canonical row suggestions for recoverable malformed lines
+    - suggestion reasons include:
+      - `trim-extra-fields`
+      - `fill-expected-default`
+      - `fill-profile-expected-default`
+  - Added optional malformed autofix path:
+    - when `EXPECT_FORMAT_REWRITE_MALFORMED=1`, recoverable malformed lines are
+      rewritten into canonical rows instead of being preserved as raw lines.
+  - Added machine-readable malformed fix artifact output (TSV):
+    - columns:
+      - `file`
+      - `original`
+      - `suggested`
+      - `reason`
+      - `applied` (`0`/`1`)
+  - Extended formatter summaries with malformed-fix metrics:
+    - `malformed_suggested=<n>`
+    - `malformed_fixed=<n>`
+  - Added expectation-domain guardrails for malformed rewrites:
+    - `omit/auto` rewrites are only allowed for
+      `EXPECT_REGEN_OVERRIDE_FILE`; not for normal expectation files.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-format-malformed.test`:
+    - validates dry-run suggestion emission (`applied=0`)
+    - validates apply-mode malformed rewrite (`applied=1`)
+    - validates malformed-fix summary metrics
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 18/18 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Non-recoverable malformed lines are still preserved (not auto-rewritten),
+    which can keep local table debt alive.
+  - Formatter still normalizes comments into header placement and does not
+    preserve row-local comment anchors.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add lint/error reporting for non-recoverable malformed rows with optional
+    fail-on-malformed policy.
+  - Preserve row-local comment anchors through canonical formatting.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
