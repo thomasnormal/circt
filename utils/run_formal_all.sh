@@ -84,6 +84,10 @@ Options:
   --refresh-expected-failure-cases-include-id-regex REGEX
                          Refresh only case rows with id matching REGEX
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
+  --lane-state-tsv FILE  Persistent lane state TSV (for resumable matrix runs)
+  --resume-from-lane-state
+                         Reuse completed lane rows from --lane-state-tsv
+  --reset-lane-state     Reset/truncate --lane-state-tsv before running
   --include-lane-regex REGEX
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
@@ -156,6 +160,9 @@ REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX=""
 REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX=""
 REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX=""
 JSON_SUMMARY_FILE=""
+LANE_STATE_TSV=""
+RESUME_FROM_LANE_STATE=0
+RESET_LANE_STATE=0
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -273,6 +280,12 @@ while [[ $# -gt 0 ]]; do
       REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX="$2"; shift 2 ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
+    --lane-state-tsv)
+      LANE_STATE_TSV="$2"; shift 2 ;;
+    --resume-from-lane-state)
+      RESUME_FROM_LANE_STATE=1; shift ;;
+    --reset-lane-state)
+      RESET_LANE_STATE=1; shift ;;
     --include-lane-regex)
       INCLUDE_LANE_REGEX="$2"; shift 2 ;;
     --exclude-lane-regex)
@@ -321,6 +334,26 @@ if [[ -n "$EXCLUDE_LANE_REGEX" ]]; then
     echo "invalid --exclude-lane-regex: $EXCLUDE_LANE_REGEX" >&2
     exit 1
   fi
+fi
+if [[ "$RESUME_FROM_LANE_STATE" == "1" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--resume-from-lane-state requires --lane-state-tsv" >&2
+  exit 1
+fi
+if [[ "$RESET_LANE_STATE" == "1" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--reset-lane-state requires --lane-state-tsv" >&2
+  exit 1
+fi
+if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
+  echo "--resume-from-lane-state and --reset-lane-state are mutually exclusive" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then
+  echo "lane state file not readable: $LANE_STATE_TSV" >&2
+  exit 1
+fi
+if [[ "$RESUME_FROM_LANE_STATE" == "1" && ! -f "$LANE_STATE_TSV" ]]; then
+  echo "lane state file not found for resume: $LANE_STATE_TSV" >&2
+  exit 1
 fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
       ! -r "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
@@ -524,6 +557,91 @@ with report_path.open("a", encoding="utf-8") as f:
 PY
 fi
 
+declare -A LANE_STATE_ROW_BY_ID=()
+declare -a LANE_STATE_ORDER=()
+
+lane_state_register_row() {
+  local lane_id="$1"
+  local row="$2"
+  if [[ -z "${LANE_STATE_ROW_BY_ID[$lane_id]+_}" ]]; then
+    LANE_STATE_ORDER+=("$lane_id")
+  fi
+  LANE_STATE_ROW_BY_ID["$lane_id"]="$row"
+}
+
+lane_state_write_file() {
+  if [[ -z "$LANE_STATE_TSV" ]]; then
+    return
+  fi
+  local lane_state_dir
+  lane_state_dir="$(dirname "$LANE_STATE_TSV")"
+  mkdir -p "$lane_state_dir"
+  local tmp="${LANE_STATE_TSV}.tmp.$$"
+  {
+    printf "lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\n"
+    for lane_id in "${LANE_STATE_ORDER[@]}"; do
+      printf "%s\n" "${LANE_STATE_ROW_BY_ID[$lane_id]}"
+    done
+  } > "$tmp"
+  mv "$tmp" "$LANE_STATE_TSV"
+}
+
+lane_state_load_file() {
+  if [[ -z "$LANE_STATE_TSV" || ! -f "$LANE_STATE_TSV" ]]; then
+    return
+  fi
+  local line_no=0
+  while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc extra; do
+    line_no=$((line_no + 1))
+    if [[ -z "$lane_id" ]]; then
+      continue
+    fi
+    if [[ "$line_no" == "1" && "$lane_id" == "lane_id" ]]; then
+      continue
+    fi
+    if [[ -n "$extra" ]]; then
+      echo "invalid lane state row ${line_no}: expected 11 tab-separated fields" >&2
+      exit 1
+    fi
+    if [[ -z "$suite" || -z "$mode" || -z "$updated_at_utc" ]]; then
+      echo "invalid lane state row ${line_no}: missing required fields" >&2
+      exit 1
+    fi
+    for value in "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"; do
+      if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "invalid lane state row ${line_no}: non-integer counters" >&2
+        exit 1
+      fi
+    done
+    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc")"
+  done < "$LANE_STATE_TSV"
+}
+
+if [[ -n "$LANE_STATE_TSV" ]]; then
+  if [[ "$RESET_LANE_STATE" == "1" ]]; then
+    lane_state_write_file
+  else
+    lane_state_load_file
+  fi
+fi
+
+lane_resume_from_state() {
+  local lane_id="$1"
+  if [[ "$RESUME_FROM_LANE_STATE" != "1" ]]; then
+    return 1
+  fi
+  local row="${LANE_STATE_ROW_BY_ID[$lane_id]-}"
+  if [[ -z "$row" ]]; then
+    return 1
+  fi
+  local saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc
+  IFS=$'\t' read -r saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc <<< "$row"
+  echo "==> ${lane_id} (resume from lane state @ ${updated_at_utc})" | tee -a "$OUT_DIR/resume.log"
+  record_result "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+  return 0
+}
+
 run_suite() {
   local name="$1"; shift
   local log="$OUT_DIR/${name}.log"
@@ -568,6 +686,14 @@ record_result() {
   local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary" >> "$results_tsv"
+  if [[ -n "$LANE_STATE_TSV" ]]; then
+    local lane_id="${suite}/${mode}"
+    local updated_at_utc
+    updated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc")"
+    lane_state_write_file
+  fi
 }
 
 record_simple_result() {
@@ -583,144 +709,171 @@ record_simple_result() {
 
 # sv-tests BMC
 if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
-  run_suite sv-tests-bmc \
-    env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
-    BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
-    Z3_BIN="$Z3_BIN" \
-    utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
-  line=$(grep -E "sv-tests SVA summary:" "$OUT_DIR/sv-tests-bmc.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(extract_kv "$line" total)
-    pass=$(extract_kv "$line" pass)
-    fail=$(extract_kv "$line" fail)
-    xfail=$(extract_kv "$line" xfail)
-    xpass=$(extract_kv "$line" xpass)
-    error=$(extract_kv "$line" error)
-    skip=$(extract_kv "$line" skip)
-    record_result "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+  if lane_resume_from_state "sv-tests/BMC"; then
+    :
+  else
+    run_suite sv-tests-bmc \
+      env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
+      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
+    line=$(grep -E "sv-tests SVA summary:" "$OUT_DIR/sv-tests-bmc.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      xfail=$(extract_kv "$line" xfail)
+      xpass=$(extract_kv "$line" xpass)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      record_result "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+    fi
   fi
 fi
 
 # sv-tests LEC
 if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
-  run_suite sv-tests-lec \
-    env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
-    LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
-    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
-    Z3_BIN="$Z3_BIN" \
-    utils/run_sv_tests_circt_lec.sh "$SV_TESTS_DIR" || true
-  line=$(grep -E "sv-tests LEC summary:" "$OUT_DIR/sv-tests-lec.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(extract_kv "$line" total)
-    pass=$(extract_kv "$line" pass)
-    fail=$(extract_kv "$line" fail)
-    error=$(extract_kv "$line" error)
-    skip=$(extract_kv "$line" skip)
-    record_result "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+  if lane_resume_from_state "sv-tests/LEC"; then
+    :
+  else
+    run_suite sv-tests-lec \
+      env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
+      LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+      LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_sv_tests_circt_lec.sh "$SV_TESTS_DIR" || true
+    line=$(grep -E "sv-tests LEC summary:" "$OUT_DIR/sv-tests-lec.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      record_result "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+    fi
   fi
 fi
 
 # verilator-verification BMC
 if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
-  run_suite verilator-bmc \
-    env OUT="$OUT_DIR/verilator-bmc-results.txt" \
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
-    BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
-    Z3_BIN="$Z3_BIN" \
-    utils/run_verilator_verification_circt_bmc.sh "$VERILATOR_DIR" || true
-  line=$(grep -E "verilator-verification summary:" "$OUT_DIR/verilator-bmc.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(extract_kv "$line" total)
-    pass=$(extract_kv "$line" pass)
-    fail=$(extract_kv "$line" fail)
-    xfail=$(extract_kv "$line" xfail)
-    xpass=$(extract_kv "$line" xpass)
-    error=$(extract_kv "$line" error)
-    skip=$(extract_kv "$line" skip)
-    record_result "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+  if lane_resume_from_state "verilator-verification/BMC"; then
+    :
+  else
+    run_suite verilator-bmc \
+      env OUT="$OUT_DIR/verilator-bmc-results.txt" \
+      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_verilator_verification_circt_bmc.sh "$VERILATOR_DIR" || true
+    line=$(grep -E "verilator-verification summary:" "$OUT_DIR/verilator-bmc.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      xfail=$(extract_kv "$line" xfail)
+      xpass=$(extract_kv "$line" xpass)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      record_result "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+    fi
   fi
 fi
 
 # verilator-verification LEC
 if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
-  run_suite verilator-lec \
-    env OUT="$OUT_DIR/verilator-lec-results.txt" \
-    LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
-    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
-    Z3_BIN="$Z3_BIN" \
-    utils/run_verilator_verification_circt_lec.sh "$VERILATOR_DIR" || true
-  line=$(grep -E "verilator-verification LEC summary:" "$OUT_DIR/verilator-lec.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(extract_kv "$line" total)
-    pass=$(extract_kv "$line" pass)
-    fail=$(extract_kv "$line" fail)
-    error=$(extract_kv "$line" error)
-    skip=$(extract_kv "$line" skip)
-    record_result "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+  if lane_resume_from_state "verilator-verification/LEC"; then
+    :
+  else
+    run_suite verilator-lec \
+      env OUT="$OUT_DIR/verilator-lec-results.txt" \
+      LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+      LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_verilator_verification_circt_lec.sh "$VERILATOR_DIR" || true
+    line=$(grep -E "verilator-verification LEC summary:" "$OUT_DIR/verilator-lec.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      record_result "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+    fi
   fi
 fi
 
 # yosys SVA BMC
 if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
-  # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
-  # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
-  # to avoid spurious X-driven counterexamples.  Only forward an explicit
-  # override from the user (--bmc-assume-known-inputs flag).
-  yosys_bmc_env=(OUT="$OUT_DIR/yosys-bmc-results.txt"
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
-    Z3_BIN="$Z3_BIN")
-  if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-    yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
-  fi
-  run_suite yosys-bmc \
-    env "${yosys_bmc_env[@]}" \
-    utils/run_yosys_sva_circt_bmc.sh "$YOSYS_DIR" || true
-  line=$(grep -E "yosys SVA summary:" "$OUT_DIR/yosys-bmc.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(echo "$line" | sed -n 's/.*summary: \([0-9]\+\) tests.*/\1/p')
-    failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
-    skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
-    pass=$((total - failures - skipped))
-    record_result "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped"
+  if lane_resume_from_state "yosys/tests/sva/BMC"; then
+    :
+  else
+    # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
+    # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
+    # to avoid spurious X-driven counterexamples.  Only forward an explicit
+    # override from the user (--bmc-assume-known-inputs flag).
+    yosys_bmc_env=(OUT="$OUT_DIR/yosys-bmc-results.txt"
+      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+      Z3_BIN="$Z3_BIN")
+    if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
+    fi
+    run_suite yosys-bmc \
+      env "${yosys_bmc_env[@]}" \
+      utils/run_yosys_sva_circt_bmc.sh "$YOSYS_DIR" || true
+    line=$(grep -E "yosys SVA summary:" "$OUT_DIR/yosys-bmc.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(echo "$line" | sed -n 's/.*summary: \([0-9]\+\) tests.*/\1/p')
+      failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
+      skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
+      pass=$((total - failures - skipped))
+      record_result "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped"
+    fi
   fi
 fi
 
 # yosys SVA LEC
 if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
-  run_suite yosys-lec \
-    env OUT="$OUT_DIR/yosys-lec-results.txt" \
-    LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
-    LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
-    Z3_BIN="$Z3_BIN" \
-    utils/run_yosys_sva_circt_lec.sh "$YOSYS_DIR" || true
-  line=$(grep -E "yosys LEC summary:" "$OUT_DIR/yosys-lec.log" | tail -1 || true)
-  if [[ -n "$line" ]]; then
-    total=$(extract_kv "$line" total)
-    pass=$(extract_kv "$line" pass)
-    fail=$(extract_kv "$line" fail)
-    error=$(extract_kv "$line" error)
-    skip=$(extract_kv "$line" skip)
-    record_result "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+  if lane_resume_from_state "yosys/tests/sva/LEC"; then
+    :
+  else
+    run_suite yosys-lec \
+      env OUT="$OUT_DIR/yosys-lec-results.txt" \
+      LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
+      LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_yosys_sva_circt_lec.sh "$YOSYS_DIR" || true
+    line=$(grep -E "yosys LEC summary:" "$OUT_DIR/yosys-lec.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      record_result "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+    fi
   fi
 fi
 
 # OpenTitan LEC (optional)
 if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
-  opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
-  : > "$opentitan_case_results"
-  opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
-    OUT="$opentitan_case_results"
-    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
-  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
-    opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
-  fi
-  run_suite opentitan-lec \
-    env "${opentitan_env[@]}" \
-    utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
-  if [[ ! -s "$opentitan_case_results" ]]; then
-    OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
-    OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
+  if lane_resume_from_state "opentitan/LEC"; then
+    :
+  else
+    opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
+    : > "$opentitan_case_results"
+    opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
+      OUT="$opentitan_case_results"
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
+    if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+      opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
+    fi
+    run_suite opentitan-lec \
+      env "${opentitan_env[@]}" \
+      utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
+    if [[ ! -s "$opentitan_case_results" ]]; then
+      OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
+      OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
 import os
 import re
 from pathlib import Path
@@ -751,16 +904,17 @@ with out_path.open("w") as f:
   for row in rows:
     f.write("\t".join(row) + "\n")
 PY
-  fi
-  line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
-  total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
-  failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
-  if [[ -n "$total" ]]; then
-    if [[ -z "$failures" ]]; then
-      failures=0
     fi
-    pass=$((total - failures))
-    record_result "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0
+    line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
+    total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
+    failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
+    if [[ -n "$total" ]]; then
+      if [[ -z "$failures" ]]; then
+        failures=0
+      fi
+      pass=$((total - failures))
+      record_result "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0
+    fi
   fi
 fi
 
@@ -773,6 +927,9 @@ if [[ "$WITH_AVIP" == "1" ]]; then
       avip_name="$(basename "$avip")"
       avip_lane_id="avip/${avip_name}/compile"
       if ! lane_enabled "$avip_lane_id"; then
+        continue
+      fi
+      if lane_resume_from_state "$avip_lane_id"; then
         continue
       fi
       run_suite "avip-${avip_name}" \

@@ -61,6 +61,19 @@ utils/run_formal_all.sh --include-lane-regex '^sv-tests/(BMC|LEC)$'
 utils/run_formal_all.sh --include-lane-regex '^avip/.*/compile$' --exclude-lane-regex '^avip/spi_avip/compile$'
 ```
 
+Enable persistent lane checkpoints and resume interrupted matrix runs:
+
+```bash
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --resume-from-lane-state
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state
+```
+
+Lane-state semantics:
+- `--lane-state-tsv` persists per-lane counters (`total/pass/fail/xfail/xpass/error/skip`).
+- `--resume-from-lane-state` reuses matching lane rows and skips re-running those lanes.
+- `--reset-lane-state` truncates the lane-state file before the run.
+
 Lane-id format:
 - `sv-tests/BMC`
 - `sv-tests/LEC`
