@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 481)
+## Current Status - February 8, 2026 (Iteration 482)
 
 ### Test Results
 
@@ -76,6 +76,60 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 482
+
+1. **Different-clock sequence event-list lowering**
+   - Extended `lib/Conversion/ImportVerilog/TimingControls.cpp` to lower
+     sequence-only event lists across non-equivalent clocks (e.g.
+     `@(seq1 or seq2)` where each sequence has a different clock).
+   - Added a dedicated multi-clock wait path that:
+     - wakes on any change of the participating clocks,
+     - derives per-clock edge ticks in-loop, and
+     - filters clock-gating stutter transitions from wakeup matching.
+   - Kept conservative diagnostics for unsupported forms:
+     - mixed sequence/signal lists across different clocks.
+
+2. **Regression coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+       `SequenceEventListDifferentClocks`.
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-list-multiclock-sat-e2e.sv`
+       to validate end-to-end trigger handling for different-clock
+       sequence-event lists.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build-test circt-verilog circt-bmc circt-opt circt-lec`: PASS
+   - Targeted regressions:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-event-iff-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Strong UNSAT equivalence proofs for different-clock procedural
+     sequence-event lists remain limited by multi-clock BMC modeling corner
+     cases on internally-derived/non-keyable clocks.
+   - Mixed sequence/signal event-lists across different clocks are still
+     unsupported.
+   - Procedural property event controls (`@property`) remain unsupported.
+   - High-value next work:
+     - move to per-sequence independent multiclock NFA stepping,
+     - add non-vacuous multiclock SAT/UNSAT litmus tests with explicit
+       clock assumptions,
+     - expand Slang-backed SVA coverage for richer procedural event forms.
 
 ### Session Summary - Iteration 481
 

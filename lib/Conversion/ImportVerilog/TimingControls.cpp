@@ -379,6 +379,258 @@ static LogicalResult lowerClockedSequenceEventControl(
   return success();
 }
 
+static Value stripClockCasts(Value clock);
+static bool equivalentClockSignals(Value lhs, Value rhs);
+
+static Value computeClockTick(OpBuilder &builder, Location loc, Value prev,
+                              Value curr, ltl::ClockEdge edge) {
+  auto i1Type = builder.getI1Type();
+  auto one = hw::ConstantOp::create(builder, loc, i1Type, 1);
+  switch (edge) {
+  case ltl::ClockEdge::Pos: {
+    auto notPrev = comb::XorOp::create(builder, loc, prev, one);
+    return comb::AndOp::create(builder, loc, ValueRange{notPrev, curr}, true);
+  }
+  case ltl::ClockEdge::Neg: {
+    auto notCurr = comb::XorOp::create(builder, loc, curr, one);
+    return comb::AndOp::create(builder, loc, ValueRange{prev, notCurr}, true);
+  }
+  case ltl::ClockEdge::Both:
+    return comb::XorOp::create(builder, loc, prev, curr);
+  }
+  return Value{};
+}
+
+static bool isClockStutterCondition(Value condition, ArrayRef<Value> ticks) {
+  auto xorOp = condition.getDefiningOp<comb::XorOp>();
+  if (!xorOp)
+    return false;
+  auto inputs = xorOp.getInputs();
+  if (inputs.size() != 2)
+    return false;
+  auto isOne = [](Value value) {
+    if (auto cst = value.getDefiningOp<hw::ConstantOp>())
+      return cst.getValue().isOne();
+    return false;
+  };
+  Value tick;
+  if (isOne(inputs[0]))
+    tick = inputs[1];
+  else if (isOne(inputs[1]))
+    tick = inputs[0];
+  else
+    return false;
+  return llvm::is_contained(ticks, tick);
+}
+
+static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
+                                                         Location loc,
+                                                         Value seqValue,
+                                                         ArrayRef<Value> clocks) {
+  OpBuilder &builder = context.builder;
+  Block *startBlock = builder.getInsertionBlock();
+  if (!startBlock)
+    return mlir::emitError(loc) << "sequence event control requires a block";
+  if (clocks.empty())
+    return mlir::emitError(loc) << "multi-clock sequence event control requires "
+                                   "at least one clock";
+
+  Region *parentRegion = startBlock->getParent();
+  auto *loopBlock = new Block();
+  auto *resumeBlock = new Block();
+  parentRegion->getBlocks().insert(
+      std::next(startBlock->getIterator()), loopBlock);
+  parentRegion->getBlocks().insert(
+      std::next(loopBlock->getIterator()), resumeBlock);
+
+  builder.setInsertionPointToEnd(loopBlock);
+  auto waitOp = moore::WaitEventOp::create(builder, loc);
+  Block &waitBlock = waitOp.getBody().emplaceBlock();
+  {
+    OpBuilder waitBuilder(builder.getContext());
+    waitBuilder.setInsertionPointToStart(&waitBlock);
+    IRMapping mapping;
+    auto mooreClockTy = moore::IntType::get(builder.getContext(), 1,
+                                            moore::Domain::TwoValued);
+    for (Value clockValue : clocks) {
+      Value clockInWait = cloneValueIntoBlock(clockValue, waitBuilder, mapping);
+      if (!isa<moore::IntType>(clockInWait.getType()))
+        clockInWait = UnrealizedConversionCastOp::create(
+                          waitBuilder, loc, mooreClockTy, clockInWait)
+                          ->getResult(0);
+      // Wake on any change and derive edge-specific ticks in the loop body.
+      moore::DetectEventOp::create(waitBuilder, loc, moore::Edge::AnyChange,
+                                   clockInWait, Value{});
+    }
+  }
+
+  auto i1Type = builder.getI1Type();
+  auto trueVal = hw::ConstantOp::create(builder, loc, i1Type, 1);
+  auto falseVal = hw::ConstantOp::create(builder, loc, i1Type, 0);
+
+  size_t numClocks = clocks.size();
+  SmallVector<BlockArgument, 4> prevClockArgs;
+  prevClockArgs.reserve(numClocks);
+  for (size_t i = 0; i < numClocks; ++i)
+    prevClockArgs.push_back(loopBlock->addArgument(i1Type, loc));
+
+  IRMapping clockMapping;
+  SmallVector<Value, 4> currClockVals;
+  currClockVals.reserve(numClocks);
+  for (Value clockValue : clocks) {
+    Value curr = cloneValueIntoBlock(clockValue, builder, clockMapping);
+    curr = context.convertToI1(curr);
+    if (!curr)
+      return failure();
+    currClockVals.push_back(curr);
+  }
+
+  SmallVector<Value, 4> posTicks;
+  SmallVector<Value, 4> negTicks;
+  SmallVector<Value, 4> bothTicks;
+  posTicks.reserve(numClocks);
+  negTicks.reserve(numClocks);
+  bothTicks.reserve(numClocks);
+  for (size_t i = 0; i < numClocks; ++i) {
+    Value prev = prevClockArgs[i];
+    Value curr = currClockVals[i];
+    posTicks.push_back(computeClockTick(builder, loc, prev, curr,
+                                        ltl::ClockEdge::Pos));
+    negTicks.push_back(computeClockTick(builder, loc, prev, curr,
+                                        ltl::ClockEdge::Neg));
+    bothTicks.push_back(computeClockTick(builder, loc, prev, curr,
+                                         ltl::ClockEdge::Both));
+  }
+
+  auto clockEdgePredicate = [&](Value clock, ltl::ClockEdge edge) -> Value {
+    for (size_t i = 0; i < numClocks; ++i) {
+      if (!equivalentClockSignals(clocks[i], clock))
+        continue;
+      switch (edge) {
+      case ltl::ClockEdge::Pos:
+        return posTicks[i];
+      case ltl::ClockEdge::Neg:
+        return negTicks[i];
+      case ltl::ClockEdge::Both:
+        return bothTicks[i];
+      }
+    }
+    return Value{};
+  };
+
+  ltl::NFABuilder nfa(trueVal, clockEdgePredicate);
+  auto fragment = nfa.build(seqValue, loc, builder);
+  nfa.eliminateEpsilon();
+
+  size_t numStates = nfa.states.size();
+  if (numStates == 0)
+    return mlir::emitError(loc) << "empty sequence event control";
+
+  SmallVector<Value, 8> stateArgs;
+  stateArgs.reserve(numStates);
+  for (size_t i = 0; i < numStates; ++i)
+    stateArgs.push_back(loopBlock->addArgument(i1Type, loc));
+
+  // Clone sequence transition conditions into the loop body so they are
+  // re-evaluated on every wakeup, not frozen at loop entry.
+  IRMapping condMapping;
+  for (Value tick : posTicks)
+    condMapping.map(tick, tick);
+  for (Value tick : negTicks)
+    condMapping.map(tick, tick);
+  for (Value tick : bothTicks)
+    condMapping.map(tick, tick);
+  SmallVector<Value, 8> loopConditions;
+  loopConditions.reserve(nfa.conditions.size());
+  for (Value cond : nfa.conditions)
+    loopConditions.push_back(cloneValueIntoBlock(cond, builder, condMapping));
+
+  SmallVector<SmallVector<SmallVector<Value, 4>, 4>, 8> incoming;
+  incoming.resize(numStates);
+  for (size_t from = 0; from < numStates; ++from) {
+    for (auto &tr : nfa.states[from].transitions) {
+      if (tr.isEpsilon)
+        continue;
+      incoming[tr.to].push_back(SmallVector<Value, 4>{
+          stateArgs[from], loopConditions[tr.condIndex]});
+    }
+  }
+
+  SmallVector<Value, 8> nextVals;
+  nextVals.resize(numStates, falseVal);
+  for (size_t i = 0; i < numStates; ++i) {
+    SmallVector<Value, 8> orInputs;
+    if (static_cast<int>(i) == fragment.start)
+      orInputs.push_back(trueVal);
+    for (auto &edgeVals : incoming[i]) {
+      auto andVal = comb::AndOp::create(builder, loc, edgeVals, true);
+      orInputs.push_back(andVal);
+    }
+    if (orInputs.empty())
+      nextVals[i] = falseVal;
+    else
+      nextVals[i] = comb::OrOp::create(builder, loc, orInputs, true);
+  }
+
+  Value match = falseVal;
+  SmallVector<Value, 12> allTicks;
+  allTicks.reserve(posTicks.size() + negTicks.size() + bothTicks.size());
+  allTicks.append(posTicks.begin(), posTicks.end());
+  allTicks.append(negTicks.begin(), negTicks.end());
+  allTicks.append(bothTicks.begin(), bothTicks.end());
+
+  SmallVector<Value, 8> acceptingMatches;
+  for (size_t from = 0; from < numStates; ++from) {
+    for (auto &tr : nfa.states[from].transitions) {
+      if (tr.isEpsilon || !nfa.states[tr.to].accepting)
+        continue;
+      Value condition = loopConditions[tr.condIndex];
+      // Ignore pure stutter (`not tick`) transitions added by clock gating.
+      // They keep states alive across unrelated clocks, but they should never
+      // trigger new procedural wakeups by themselves.
+      if (isClockStutterCondition(condition, allTicks))
+        continue;
+      acceptingMatches.push_back(comb::AndOp::create(
+          builder, loc, ValueRange{stateArgs[from], condition}, true));
+    }
+  }
+  if (!acceptingMatches.empty())
+    match = comb::OrOp::create(builder, loc, acceptingMatches, true);
+
+  SmallVector<Value, 12> loopArgs;
+  loopArgs.reserve(numStates + numClocks);
+  loopArgs.append(currClockVals.begin(), currClockVals.end());
+  loopArgs.append(nextVals.begin(), nextVals.end());
+  cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
+                           loopBlock, loopArgs);
+
+  builder.setInsertionPointToEnd(startBlock);
+  SmallVector<Value, 8> initStates;
+  initStates.reserve(numStates);
+  auto initTrue = hw::ConstantOp::create(builder, loc, i1Type, 1);
+  auto initFalse = hw::ConstantOp::create(builder, loc, i1Type, 0);
+  for (size_t i = 0; i < numStates; ++i)
+    initStates.push_back(static_cast<int>(i) == fragment.start ? initTrue
+                                                               : initFalse);
+  IRMapping initClockMapping;
+  SmallVector<Value, 4> initClocks;
+  initClocks.reserve(numClocks);
+  for (Value clockValue : clocks) {
+    Value initClock = cloneValueIntoBlock(clockValue, builder, initClockMapping);
+    initClock = context.convertToI1(initClock);
+    if (!initClock)
+      return failure();
+    initClocks.push_back(initClock);
+  }
+  SmallVector<Value, 12> initArgs;
+  initArgs.reserve(numStates + numClocks);
+  initArgs.append(initClocks.begin(), initClocks.end());
+  initArgs.append(initStates.begin(), initStates.end());
+  cf::BranchOp::create(builder, loc, loopBlock, initArgs);
+  builder.setInsertionPointToEnd(resumeBlock);
+  return success();
+}
+
 static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
                                                const slang::ast::Expression &expr,
                                                const slang::ast::Expression *iffExpr) {
@@ -503,7 +755,10 @@ lowerSequenceEventListControl(Context &context, Location loc,
 
   std::optional<ltl::ClockEdge> commonEdge;
   Value commonClock;
+  bool sameClockAndEdge = true;
   SmallVector<Value, 4> sequenceInputs;
+  SmallVector<Value, 4> clockedInputs;
+  SmallVector<Value, 4> sequenceClocks;
   SmallVector<Value, 4> clockedValues;
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
 
@@ -554,9 +809,7 @@ lowerSequenceEventListControl(Context &context, Location loc,
       commonClock = clockOp.getClock();
     } else if (*commonEdge != clockOp.getEdge() ||
                !equivalentClockSignals(commonClock, clockOp.getClock())) {
-      return mlir::emitError(loc)
-             << "event lists with sequence/property controls on different "
-                "clocks are not yet supported";
+      sameClockAndEdge = false;
     }
 
     Value sequenceInput = clockOp.getInput();
@@ -570,10 +823,19 @@ lowerSequenceEventListControl(Context &context, Location loc,
         return failure();
       sequenceInput = ltl::AndOp::create(
           builder, loc, SmallVector<Value, 2>{sequenceInput, condition});
+      clockedValue = ltl::ClockOp::create(builder, loc, sequenceInput,
+                                          clockOp.getEdge(), clockOp.getClock());
     }
     sequenceInputs.push_back(sequenceInput);
+    clockedInputs.push_back(clockedValue);
+    sequenceClocks.push_back(clockOp.getClock());
     clockedValues.push_back(clockedValue);
   }
+
+  if (!sameClockAndEdge && !signalEvents.empty())
+    return mlir::emitError(loc)
+           << "event lists mixing sequence/property and signal events across "
+              "different clocks are not yet supported";
 
   for (auto *signalCtrl : signalEvents) {
     if (signalCtrl->edge == slang::ast::EdgeKind::None)
@@ -596,12 +858,29 @@ lowerSequenceEventListControl(Context &context, Location loc,
     equivalentSignals.push_back(signalCtrl);
   }
 
-  Value combinedSequence = sequenceInputs.front();
-  if (sequenceInputs.size() > 1)
-    combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
-  auto result = lowerClockedSequenceEventControl(
-      context, loc, combinedSequence, commonClock, *commonEdge,
-      equivalentSignals);
+  LogicalResult result = failure();
+  if (sameClockAndEdge) {
+    Value combinedSequence = sequenceInputs.front();
+    if (sequenceInputs.size() > 1)
+      combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
+    result = lowerClockedSequenceEventControl(context, loc, combinedSequence,
+                                              commonClock, *commonEdge,
+                                              equivalentSignals);
+  } else {
+    Value combinedSequence = clockedInputs.front();
+    if (clockedInputs.size() > 1)
+      combinedSequence = ltl::OrOp::create(builder, loc, clockedInputs);
+    SmallVector<Value, 4> uniqueClocks;
+    for (Value clock : sequenceClocks) {
+      bool exists = llvm::any_of(uniqueClocks, [&](Value known) {
+        return equivalentClockSignals(known, clock);
+      });
+      if (!exists)
+        uniqueClocks.push_back(clock);
+    }
+    result = lowerMultiClockSequenceEventControl(context, loc, combinedSequence,
+                                                 uniqueClocks);
+  }
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);
   return result;
