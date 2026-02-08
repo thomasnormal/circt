@@ -32202,3 +32202,53 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Refreshed case rows are status-specific; there is no auto-canonicalization to
   status=`ANY`.
 - No built-in prune-only workflow for unmatched/expired rows.
+
+## Iteration 650 - February 8, 2026
+
+### Expected-Case Refresh Canonicalization (`status=ANY`)
+
+- Added:
+  - `--refresh-expected-failure-cases-collapse-status-any`
+  - to `utils/run_formal_all.sh`
+- Behavior:
+  - refresh now can collapse per-status rows into one canonical row per case:
+    - key: `(suite, mode, id_kind, id)`
+    - output status: `ANY`
+- Metadata precedence in collapse mode:
+  - preserve from existing matching `ANY` row first
+  - fallback to existing exact-status row metadata
+  - fallback to default expiry from
+    `--refresh-expected-failure-cases-default-expires-on`
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added `REFRESHANY` scenario covering:
+      - collapse to `status=ANY`
+      - metadata preservation (`expires_on`, `reason`)
+  - `docs/FormalRegression.md`
+    - documented collapse-mode CLI and semantics
+  - `test/Tools/run-formal-all-baselines.test`
+    - aligned baseline-header check with current TSV schema
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused tests:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke sweep with collapse refresh:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-refresh-any-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --refresh-expected-failure-cases-file /tmp/formal-expected-cases-refresh-any-smoke.tsv --refresh-expected-failure-cases-collapse-status-any --refresh-expected-failure-cases-default-expires-on 2099-12-31`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+    - refreshed file rows: 1
+
+### Remaining Limitations
+
+- Collapse mode is global; there is no per-suite/per-mode collapse policy yet.
+- Refresh remains full-file rewrite; no selective prune/update workflow.
