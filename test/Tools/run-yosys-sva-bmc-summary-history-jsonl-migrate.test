@@ -6,6 +6,7 @@
 // RUN: printf 'simple\t*\t*\tpass\n' > %t/expect.txt
 
 // RUN: printf '{"test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":1,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":1,"skip_pass":0,"skip_fail":1,"skip_expected":0,"skip_unexpected":1},"skip_reasons":{"vhdl":0,"fail_no_macro":1,"no_property":0,"other":0}}\n' > %t/history.jsonl
+// RUN: printf '{"meta":{"schema_version":"nested"},"test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":1,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":1,"skip_pass":0,"skip_fail":1,"skip_expected":0,"skip_unexpected":1},"skip_reasons":{"vhdl":0,"fail_no_macro":1,"no_property":0,"other":0}}\n' >> %t/history.jsonl
 
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
@@ -18,4 +19,5 @@
 // RUN: cat %t/history.jsonl | FileCheck %s --check-prefix=JSONL
 
 // JSONL: "schema_version":"0","run_id":"legacy-1","generated_at_utc":"1970-01-01T00:00:00Z"
+// JSONL: "schema_version":"0","run_id":"legacy-2","generated_at_utc":"1970-01-01T00:00:00Z","meta":{"schema_version":"nested"}
 // JSONL: "schema_version":"1","run_id":"run-new","generated_at_utc":"{{[0-9T:\-]+Z}}"

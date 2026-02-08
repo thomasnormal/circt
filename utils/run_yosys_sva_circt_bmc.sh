@@ -2172,6 +2172,92 @@ print(run_id)
 PY
   }
 
+  migrate_history_jsonl_line() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    local payload migrated
+
+    if command -v python3 >/dev/null 2>&1; then
+      python3 - "$line" "$file" "$lineno" <<'PY'
+import json
+import sys
+
+line = sys.argv[1]
+file = sys.argv[2]
+lineno = sys.argv[3]
+
+invalid_json_msg = (
+    f"error: invalid JSON object in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE "
+    f"{file} at line {lineno}"
+)
+
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def no_duplicate_object_pairs_hook(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key '{key}'")
+        result[key] = value
+    return result
+
+
+try:
+    obj = json.loads(line, object_pairs_hook=no_duplicate_object_pairs_hook)
+except ValueError as ex:
+    if "duplicate key" in str(ex):
+        fail(
+            f"error: duplicate key in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}: {ex}"
+        )
+    fail(invalid_json_msg)
+except Exception:
+    fail(invalid_json_msg)
+
+if not isinstance(obj, dict):
+    fail(
+        f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line in {file} at line {lineno}: expected JSON object"
+    )
+
+if "schema_version" in obj:
+    print(line)
+    sys.exit(0)
+
+migrated = {
+    "schema_version": "0",
+    "run_id": f"legacy-{lineno}",
+    "generated_at_utc": "1970-01-01T00:00:00Z",
+}
+for key, value in obj.items():
+    if key not in migrated:
+        migrated[key] = value
+
+print(json.dumps(migrated, separators=(",", ":")))
+PY
+      return
+    fi
+
+    if [[ "$line" == *\"schema_version\"* ]]; then
+      printf '%s\n' "$line"
+      return
+    fi
+    if [[ "$line" != *"{"* || "$line" != *"}"* ]]; then
+      echo "error: unsupported YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line format in $file at line $lineno" >&2
+      exit 1
+    fi
+    payload="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*\{//; s/\}[[:space:]]*$//')"
+    if [[ -n "$payload" ]]; then
+      printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z",%s}' "$lineno" "$payload"
+    else
+      printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z"}' "$lineno"
+    fi
+    printf '%s\n' "$migrated"
+  }
+
   utc_to_epoch() {
     local timestamp="$1"
     local epoch
@@ -2552,7 +2638,7 @@ PY
     local file="$1"
     local -a lines=()
     local i
-    local line payload migrated
+    local line migrated
     [[ -f "$file" ]] || return 0
     [[ -s "$file" ]] || return 0
     mapfile -t lines < "$file"
@@ -2561,21 +2647,7 @@ PY
     for ((i = 0; i < ${#lines[@]}; ++i)); do
       line="${lines[$i]}"
       [[ -z "$line" ]] && continue
-      if [[ "$line" == *\"schema_version\"* ]]; then
-        validate_history_jsonl_line "$line" "$file" "$((i + 1))"
-        printf '%s\n' "$line" >> "$file"
-        continue
-      fi
-      if [[ "$line" != *"{"* || "$line" != *"}"* ]]; then
-        echo "error: unsupported YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line format in $file at line $((i + 1))" >&2
-        exit 1
-      fi
-      payload="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*\{//; s/\}[[:space:]]*$//')"
-      if [[ -n "$payload" ]]; then
-        printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z",%s}' "$((i + 1))" "$payload"
-      else
-        printf -v migrated '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z"}' "$((i + 1))"
-      fi
+      migrated="$(migrate_history_jsonl_line "$line" "$file" "$((i + 1))")"
       validate_history_jsonl_line "$migrated" "$file" "$((i + 1))"
       printf '%s\n' "$migrated" >> "$file"
     done
