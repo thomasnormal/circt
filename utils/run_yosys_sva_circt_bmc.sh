@@ -3211,7 +3211,7 @@ def parse_selector_clause_array(payload, field_name: str):
         fail(
             f"error: invalid {field_name}: expected non-empty JSON array"
         )
-    allowed_keys = {
+    base_keys = {
         "run_id_regex",
         "reason_regex",
         "schema_version_regex",
@@ -3221,72 +3221,126 @@ def parse_selector_clause_array(payload, field_name: str):
         "row_generated_at_utc_min",
         "row_generated_at_utc_max",
     }
-    clauses = []
-    for clause_index, clause in enumerate(payload, start=1):
-        field_prefix = f"{field_name}[{clause_index}]"
-        if not isinstance(clause, dict) or not clause:
+    combinator_keys = {"all_of", "any_of", "not"}
+
+    def parse_selector_expression(expr, expr_field_name: str):
+        if not isinstance(expr, dict) or not expr:
             fail(
-                f"error: invalid {field_prefix}: expected non-empty object"
+                f"error: invalid {expr_field_name}: expected non-empty object"
             )
-        unknown_keys = sorted(set(clause.keys()) - allowed_keys)
+        unknown_keys = sorted(set(expr.keys()) - base_keys - combinator_keys)
         if unknown_keys:
             fail(
-                f"error: invalid {field_prefix}: unknown key '{unknown_keys[0]}'"
+                f"error: invalid {expr_field_name}: unknown key '{unknown_keys[0]}'"
             )
 
         min_epoch = None
-        if "row_generated_at_utc_min" in clause:
-            if not isinstance(clause["row_generated_at_utc_min"], str):
+        if "row_generated_at_utc_min" in expr:
+            if not isinstance(expr["row_generated_at_utc_min"], str):
                 fail(
-                    f"error: invalid {field_prefix}.row_generated_at_utc_min: expected string"
+                    f"error: invalid {expr_field_name}.row_generated_at_utc_min: expected string"
                 )
             min_epoch = parse_utc_epoch(
-                clause["row_generated_at_utc_min"],
-                f"{field_prefix}.row_generated_at_utc_min",
+                expr["row_generated_at_utc_min"],
+                f"{expr_field_name}.row_generated_at_utc_min",
             )
         max_epoch = None
-        if "row_generated_at_utc_max" in clause:
-            if not isinstance(clause["row_generated_at_utc_max"], str):
+        if "row_generated_at_utc_max" in expr:
+            if not isinstance(expr["row_generated_at_utc_max"], str):
                 fail(
-                    f"error: invalid {field_prefix}.row_generated_at_utc_max: expected string"
+                    f"error: invalid {expr_field_name}.row_generated_at_utc_max: expected string"
                 )
             max_epoch = parse_utc_epoch(
-                clause["row_generated_at_utc_max"],
-                f"{field_prefix}.row_generated_at_utc_max",
+                expr["row_generated_at_utc_max"],
+                f"{expr_field_name}.row_generated_at_utc_max",
             )
         if min_epoch is not None and max_epoch is not None and min_epoch > max_epoch:
             fail(
-                f"error: invalid {field_prefix}: row_generated_at_utc_min exceeds row_generated_at_utc_max"
+                f"error: invalid {expr_field_name}: row_generated_at_utc_min exceeds row_generated_at_utc_max"
             )
 
-        clauses.append(
-            {
-                "run_id_pattern": compile_clause_regex(
-                    clause.get("run_id_regex"), f"{field_prefix}.run_id_regex"
-                ),
-                "reason_pattern": compile_clause_regex(
-                    clause.get("reason_regex"), f"{field_prefix}.reason_regex"
-                ),
-                "schema_version_pattern": compile_clause_regex(
-                    clause.get("schema_version_regex"),
-                    f"{field_prefix}.schema_version_regex",
-                ),
-                "history_file_pattern": compile_clause_regex(
-                    clause.get("history_file_regex"),
-                    f"{field_prefix}.history_file_regex",
-                ),
-                "schema_version_set": parse_selector_list_value(
-                    clause.get("schema_version_list"),
-                    f"{field_prefix}.schema_version_list",
-                ),
-                "history_file_set": parse_selector_list_value(
-                    clause.get("history_file_list"),
-                    f"{field_prefix}.history_file_list",
-                ),
-                "row_generated_at_min_epoch": min_epoch,
-                "row_generated_at_max_epoch": max_epoch,
-            }
-        )
+        all_of_expressions = None
+        if "all_of" in expr:
+            if not isinstance(expr["all_of"], list) or not expr["all_of"]:
+                fail(
+                    f"error: invalid {expr_field_name}.all_of: expected non-empty JSON array"
+                )
+            all_of_expressions = []
+            for all_of_index, all_of_expr in enumerate(expr["all_of"], start=1):
+                all_of_expressions.append(
+                    parse_selector_expression(
+                        all_of_expr, f"{expr_field_name}.all_of[{all_of_index}]"
+                    )
+                )
+
+        any_of_expressions = None
+        if "any_of" in expr:
+            if not isinstance(expr["any_of"], list) or not expr["any_of"]:
+                fail(
+                    f"error: invalid {expr_field_name}.any_of: expected non-empty JSON array"
+                )
+            any_of_expressions = []
+            for any_of_index, any_of_expr in enumerate(expr["any_of"], start=1):
+                any_of_expressions.append(
+                    parse_selector_expression(
+                        any_of_expr, f"{expr_field_name}.any_of[{any_of_index}]"
+                    )
+                )
+
+        not_expression = None
+        if "not" in expr:
+            if not isinstance(expr["not"], dict) or not expr["not"]:
+                fail(
+                    f"error: invalid {expr_field_name}.not: expected non-empty object"
+                )
+            not_expression = parse_selector_expression(
+                expr["not"], f"{expr_field_name}.not"
+            )
+
+        has_base_predicate = bool(base_keys.intersection(expr.keys()))
+        if (
+            not has_base_predicate
+            and all_of_expressions is None
+            and any_of_expressions is None
+            and not_expression is None
+        ):
+            fail(
+                f"error: invalid {expr_field_name}: expected selector predicates or combinators"
+            )
+
+        return {
+            "run_id_pattern": compile_clause_regex(
+                expr.get("run_id_regex"), f"{expr_field_name}.run_id_regex"
+            ),
+            "reason_pattern": compile_clause_regex(
+                expr.get("reason_regex"), f"{expr_field_name}.reason_regex"
+            ),
+            "schema_version_pattern": compile_clause_regex(
+                expr.get("schema_version_regex"),
+                f"{expr_field_name}.schema_version_regex",
+            ),
+            "history_file_pattern": compile_clause_regex(
+                expr.get("history_file_regex"),
+                f"{expr_field_name}.history_file_regex",
+            ),
+            "schema_version_set": parse_selector_list_value(
+                expr.get("schema_version_list"),
+                f"{expr_field_name}.schema_version_list",
+            ),
+            "history_file_set": parse_selector_list_value(
+                expr.get("history_file_list"),
+                f"{expr_field_name}.history_file_list",
+            ),
+            "row_generated_at_min_epoch": min_epoch,
+            "row_generated_at_max_epoch": max_epoch,
+            "all_of_expressions": all_of_expressions,
+            "any_of_expressions": any_of_expressions,
+            "not_expression": not_expression,
+        }
+
+    clauses = []
+    for clause_index, clause in enumerate(payload, start=1):
+        clauses.append(parse_selector_expression(clause, f"{field_name}[{clause_index}]"))
     return clauses
 
 
@@ -3642,30 +3696,40 @@ def selected_for_rewrite(
     history_file: str,
     row_generated_at_epoch,
 ) -> bool:
+    def selector_expression_matches(expr) -> bool:
+        checks = []
+        if expr["run_id_pattern"] is not None:
+            checks.append(expr["run_id_pattern"].search(run_id) is not None)
+        if expr["reason_pattern"] is not None:
+            checks.append(expr["reason_pattern"].search(reason) is not None)
+        if expr["schema_version_pattern"] is not None:
+            checks.append(expr["schema_version_pattern"].search(schema_version) is not None)
+        if expr["history_file_pattern"] is not None:
+            checks.append(expr["history_file_pattern"].search(history_file) is not None)
+        if expr["schema_version_set"] is not None:
+            checks.append(schema_version in expr["schema_version_set"])
+        if expr["history_file_set"] is not None:
+            checks.append(history_file in expr["history_file_set"])
+        if expr["row_generated_at_min_epoch"] is not None:
+            checks.append(
+                row_generated_at_epoch is not None
+                and row_generated_at_epoch >= expr["row_generated_at_min_epoch"]
+            )
+        if expr["row_generated_at_max_epoch"] is not None:
+            checks.append(
+                row_generated_at_epoch is not None
+                and row_generated_at_epoch <= expr["row_generated_at_max_epoch"]
+            )
+        if expr["all_of_expressions"] is not None:
+            checks.append(all(selector_expression_matches(child) for child in expr["all_of_expressions"]))
+        if expr["any_of_expressions"] is not None:
+            checks.append(any(selector_expression_matches(child) for child in expr["any_of_expressions"]))
+        if expr["not_expression"] is not None:
+            checks.append(not selector_expression_matches(expr["not_expression"]))
+        return bool(checks) and all(checks)
+
     if rewrite_selector_clauses is not None:
-        clause_results = []
-        for clause in rewrite_selector_clauses:
-            checks = []
-            if clause["run_id_pattern"] is not None:
-                checks.append(clause["run_id_pattern"].search(run_id) is not None)
-            if clause["reason_pattern"] is not None:
-                checks.append(clause["reason_pattern"].search(reason) is not None)
-            if clause["schema_version_pattern"] is not None:
-                checks.append(
-                    clause["schema_version_pattern"].search(schema_version) is not None
-                )
-            if clause["history_file_pattern"] is not None:
-                checks.append(clause["history_file_pattern"].search(history_file) is not None)
-            if clause["schema_version_set"] is not None:
-                checks.append(schema_version in clause["schema_version_set"])
-            if clause["history_file_set"] is not None:
-                checks.append(history_file in clause["history_file_set"])
-            if clause["row_generated_at_min_epoch"] is not None:
-                checks.append(row_generated_at_epoch >= clause["row_generated_at_min_epoch"])
-            if clause["row_generated_at_max_epoch"] is not None:
-                checks.append(row_generated_at_epoch <= clause["row_generated_at_max_epoch"])
-            clause_results.append(bool(checks) and all(checks))
-        return any(clause_results)
+        return any(selector_expression_matches(clause) for clause in rewrite_selector_clauses)
 
     checks = []
     if rewrite_run_id_pattern is not None:
@@ -3694,16 +3758,33 @@ def selected_for_rewrite(
 with open(file, "r", encoding="utf-8") as f:
     lines = f.read().splitlines()
 
+def selector_expression_uses_row_generated_at(expr) -> bool:
+    if (
+        expr["row_generated_at_min_epoch"] is not None
+        or expr["row_generated_at_max_epoch"] is not None
+    ):
+        return True
+    if expr["all_of_expressions"] is not None:
+        for child in expr["all_of_expressions"]:
+            if selector_expression_uses_row_generated_at(child):
+                return True
+    if expr["any_of_expressions"] is not None:
+        for child in expr["any_of_expressions"]:
+            if selector_expression_uses_row_generated_at(child):
+                return True
+    if expr["not_expression"] is not None:
+        if selector_expression_uses_row_generated_at(expr["not_expression"]):
+            return True
+    return False
+
+
 needs_row_generated_at_epoch = (
     rewrite_row_generated_at_min_epoch is not None
     or rewrite_row_generated_at_max_epoch is not None
 )
 if rewrite_selector_clauses is not None:
     for clause in rewrite_selector_clauses:
-        if (
-            clause["row_generated_at_min_epoch"] is not None
-            or clause["row_generated_at_max_epoch"] is not None
-        ):
+        if selector_expression_uses_row_generated_at(clause):
             needs_row_generated_at_epoch = True
             break
 
