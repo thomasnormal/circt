@@ -1,5 +1,76 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 504 - February 8, 2026
+
+### Summary
+
+Added expression-backed mixed-event witness support by propagating Slang event
+expression text into event-source metadata and teaching VerifToSMT to synthesize
+witnesses from resolvable boolean expression trees, not only direct named inputs.
+
+### Fixes
+
+1. **ImportVerilog event metadata now records expression fallbacks**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Event detail dictionaries now include:
+     - `signal_expr` when `signal_name` is unavailable
+     - `iff_expr` when `iff_name` is unavailable
+     - `sequence_expr` when `sequence_name` is unavailable
+   - Expression text is sourced from Slang syntax nodes.
+
+2. **Expression parser/resolver in VerifToSMT witness lowering**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+   - Added a local parser/resolver for named i1 boolean expressions supporting:
+     - unary `!` / `~`
+     - binary `&`/`&&`, `|`/`||`, `^`, `==`, `!=`
+     - parentheses and simple boolean constants
+   - `bmc_event_source_details` arm witness synthesis now resolves source/iff
+     via:
+     - name fields first (`signal_name`, `sequence_name`, `iff_name`)
+     - expression fields second (`signal_expr`, `sequence_expr`, `iff_expr`)
+
+3. **Tool-level witness regression for expression-backed arms**
+   - Added:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`
+   - Updated:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+   - Validates witness-driven event-arm activity rendering when an arm is
+     expression-derived instead of name-derived.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Current expression witness support is intentionally limited to simple boolean
+  forms over named BMC inputs.
+- Rich SV expression forms (casts, part-selects, reductions, many builtin ops)
+  still need canonical metadata and lowering support.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 503 - February 8, 2026
 
 ### Summary

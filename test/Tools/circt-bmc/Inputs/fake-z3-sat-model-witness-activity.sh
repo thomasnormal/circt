@@ -32,6 +32,9 @@ if [[ "$want_model" == "1" ]] && grep -q "(get-model)" "$file"; then
   (define-fun event_arm_witness_0_1 () Bool false)
   (define-fun event_arm_witness_0_1_0 () Bool true)
   (define-fun event_arm_witness_0_1_1 () Bool false)
+  (define-fun event_arm_witness_0_2 () Bool false)
+  (define-fun event_arm_witness_0_2_0 () Bool true)
+  (define-fun event_arm_witness_0_2_1 () Bool false)
 )
 MODEL
 fi

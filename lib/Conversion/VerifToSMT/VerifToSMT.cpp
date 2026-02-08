@@ -36,6 +36,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include <cctype>
+#include <memory>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -146,6 +148,370 @@ static Value buildXOptimisticDiff(Value lhs, Value rhs, Type originalTy,
       smt::BVConstantOp::create(builder, loc, 0, valueWidth);
   return smt::DistinctOp::create(builder, loc, maskedDiff, zero);
 }
+
+namespace {
+
+struct ParsedNamedBoolExpr {
+  enum class Kind { Name, Const, Not, And, Or, Xor, Eq, Ne };
+  Kind kind = Kind::Name;
+  std::string name;
+  bool constValue = false;
+  std::unique_ptr<ParsedNamedBoolExpr> lhs;
+  std::unique_ptr<ParsedNamedBoolExpr> rhs;
+};
+
+struct ResolvedNamedBoolExpr {
+  enum class Kind { Arg, Const, Not, And, Or, Xor, Eq, Ne };
+  Kind kind = Kind::Arg;
+  unsigned argIndex = 0;
+  bool constValue = false;
+  std::unique_ptr<ResolvedNamedBoolExpr> lhs;
+  std::unique_ptr<ResolvedNamedBoolExpr> rhs;
+};
+
+enum class NamedBoolTokenKind {
+  Eof,
+  Identifier,
+  LParen,
+  RParen,
+  Not,
+  And,
+  Or,
+  Xor,
+  Eq,
+  Ne
+};
+
+struct NamedBoolToken {
+  NamedBoolTokenKind kind = NamedBoolTokenKind::Eof;
+  StringRef text;
+};
+
+class NamedBoolExprParser {
+public:
+  explicit NamedBoolExprParser(StringRef input) : input(input) {
+    consumeToken();
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parse() {
+    auto expr = parseOr();
+    if (!expr || token.kind != NamedBoolTokenKind::Eof)
+      return {};
+    return expr;
+  }
+
+private:
+  StringRef input;
+  size_t pos = 0;
+  NamedBoolToken token;
+
+  static bool isIdentifierStart(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_' || c == '$';
+  }
+
+  static bool isIdentifierChar(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' ||
+           c == '.';
+  }
+
+  static std::optional<bool> parseBoolLiteral(StringRef text) {
+    if (text.equals_insensitive("true"))
+      return true;
+    if (text.equals_insensitive("false"))
+      return false;
+    if (text == "1" || text == "1'b1" || text == "1'h1")
+      return true;
+    if (text == "0" || text == "1'b0" || text == "1'h0")
+      return false;
+    return std::nullopt;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr>
+  makeUnary(ParsedNamedBoolExpr::Kind kind,
+            std::unique_ptr<ParsedNamedBoolExpr> operand) {
+    auto node = std::make_unique<ParsedNamedBoolExpr>();
+    node->kind = kind;
+    node->lhs = std::move(operand);
+    return node;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr>
+  makeBinary(ParsedNamedBoolExpr::Kind kind,
+             std::unique_ptr<ParsedNamedBoolExpr> lhs,
+             std::unique_ptr<ParsedNamedBoolExpr> rhs) {
+    auto node = std::make_unique<ParsedNamedBoolExpr>();
+    node->kind = kind;
+    node->lhs = std::move(lhs);
+    node->rhs = std::move(rhs);
+    return node;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parsePrimary() {
+    if (token.kind == NamedBoolTokenKind::LParen) {
+      consumeToken();
+      auto expr = parseOr();
+      if (!expr || token.kind != NamedBoolTokenKind::RParen)
+        return {};
+      consumeToken();
+      return expr;
+    }
+    if (token.kind != NamedBoolTokenKind::Identifier)
+      return {};
+    StringRef text = token.text;
+    consumeToken();
+    auto literal = parseBoolLiteral(text);
+    if (literal) {
+      auto node = std::make_unique<ParsedNamedBoolExpr>();
+      node->kind = ParsedNamedBoolExpr::Kind::Const;
+      node->constValue = *literal;
+      return node;
+    }
+    auto node = std::make_unique<ParsedNamedBoolExpr>();
+    node->kind = ParsedNamedBoolExpr::Kind::Name;
+    node->name = text.str();
+    return node;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parseUnary() {
+    if (token.kind == NamedBoolTokenKind::Not) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::Not, std::move(operand));
+    }
+    return parsePrimary();
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parseEq() {
+    auto lhs = parseUnary();
+    if (!lhs)
+      return {};
+    while (token.kind == NamedBoolTokenKind::Eq ||
+           token.kind == NamedBoolTokenKind::Ne) {
+      auto op = token.kind;
+      consumeToken();
+      auto rhs = parseUnary();
+      if (!rhs)
+        return {};
+      lhs = makeBinary(op == NamedBoolTokenKind::Eq
+                           ? ParsedNamedBoolExpr::Kind::Eq
+                           : ParsedNamedBoolExpr::Kind::Ne,
+                       std::move(lhs), std::move(rhs));
+    }
+    return lhs;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parseAnd() {
+    auto lhs = parseEq();
+    if (!lhs)
+      return {};
+    while (token.kind == NamedBoolTokenKind::And) {
+      consumeToken();
+      auto rhs = parseEq();
+      if (!rhs)
+        return {};
+      lhs = makeBinary(ParsedNamedBoolExpr::Kind::And, std::move(lhs),
+                       std::move(rhs));
+    }
+    return lhs;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parseXor() {
+    auto lhs = parseAnd();
+    if (!lhs)
+      return {};
+    while (token.kind == NamedBoolTokenKind::Xor) {
+      consumeToken();
+      auto rhs = parseAnd();
+      if (!rhs)
+        return {};
+      lhs = makeBinary(ParsedNamedBoolExpr::Kind::Xor, std::move(lhs),
+                       std::move(rhs));
+    }
+    return lhs;
+  }
+
+  std::unique_ptr<ParsedNamedBoolExpr> parseOr() {
+    auto lhs = parseXor();
+    if (!lhs)
+      return {};
+    while (token.kind == NamedBoolTokenKind::Or) {
+      consumeToken();
+      auto rhs = parseXor();
+      if (!rhs)
+        return {};
+      lhs = makeBinary(ParsedNamedBoolExpr::Kind::Or, std::move(lhs),
+                       std::move(rhs));
+    }
+    return lhs;
+  }
+
+  void skipWhitespace() {
+    while (pos < input.size() &&
+           std::isspace(static_cast<unsigned char>(input[pos])))
+      ++pos;
+  }
+
+  void consumeToken() {
+    skipWhitespace();
+    if (pos >= input.size()) {
+      token = {NamedBoolTokenKind::Eof, StringRef{}};
+      return;
+    }
+    size_t start = pos;
+    auto peek = [&](char c) -> bool {
+      return pos < input.size() && input[pos] == c;
+    };
+    if (peek('(')) {
+      ++pos;
+      token = {NamedBoolTokenKind::LParen, input.slice(start, pos)};
+      return;
+    }
+    if (peek(')')) {
+      ++pos;
+      token = {NamedBoolTokenKind::RParen, input.slice(start, pos)};
+      return;
+    }
+    if (peek('!')) {
+      ++pos;
+      if (peek('=')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Ne, input.slice(start, pos)};
+      } else {
+        token = {NamedBoolTokenKind::Not, input.slice(start, pos)};
+      }
+      return;
+    }
+    if (peek('~')) {
+      ++pos;
+      token = {NamedBoolTokenKind::Not, input.slice(start, pos)};
+      return;
+    }
+    if (peek('&')) {
+      ++pos;
+      if (peek('&'))
+        ++pos;
+      token = {NamedBoolTokenKind::And, input.slice(start, pos)};
+      return;
+    }
+    if (peek('|')) {
+      ++pos;
+      if (peek('|'))
+        ++pos;
+      token = {NamedBoolTokenKind::Or, input.slice(start, pos)};
+      return;
+    }
+    if (peek('^')) {
+      ++pos;
+      token = {NamedBoolTokenKind::Xor, input.slice(start, pos)};
+      return;
+    }
+    if (peek('=')) {
+      ++pos;
+      if (peek('=')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Eq, input.slice(start, pos)};
+        return;
+      }
+      token = {NamedBoolTokenKind::Eof, StringRef{}};
+      return;
+    }
+    if (isIdentifierStart(input[pos]) || std::isdigit(input[pos])) {
+      ++pos;
+      while (pos < input.size() && isIdentifierChar(input[pos]))
+        ++pos;
+      if (pos < input.size() && input[pos] == '\'') {
+        ++pos;
+        if (pos < input.size() &&
+            (input[pos] == 'b' || input[pos] == 'B' || input[pos] == 'h' ||
+             input[pos] == 'H' || input[pos] == 'd' || input[pos] == 'D')) {
+          ++pos;
+          while (pos < input.size() &&
+                 (std::isalnum(static_cast<unsigned char>(input[pos])) ||
+                  input[pos] == '_'))
+            ++pos;
+        }
+      }
+      token = {NamedBoolTokenKind::Identifier, input.slice(start, pos)};
+      return;
+    }
+    token = {NamedBoolTokenKind::Eof, StringRef{}};
+  }
+};
+
+static std::unique_ptr<ParsedNamedBoolExpr>
+parseNamedBoolExpr(StringRef text) {
+  NamedBoolExprParser parser(text.trim());
+  return parser.parse();
+}
+
+static std::unique_ptr<ResolvedNamedBoolExpr>
+resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
+                     const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
+                     size_t numNonStateArgs) {
+  auto resolved = std::make_unique<ResolvedNamedBoolExpr>();
+  switch (expr.kind) {
+  case ParsedNamedBoolExpr::Kind::Const:
+    resolved->kind = ResolvedNamedBoolExpr::Kind::Const;
+    resolved->constValue = expr.constValue;
+    return resolved;
+  case ParsedNamedBoolExpr::Kind::Name: {
+    auto it = inputNameToArgIndex.find(expr.name);
+    if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
+      return {};
+    resolved->kind = ResolvedNamedBoolExpr::Kind::Arg;
+    resolved->argIndex = it->second;
+    return resolved;
+  }
+  case ParsedNamedBoolExpr::Kind::Not: {
+    auto operand = resolveNamedBoolExpr(*expr.lhs, inputNameToArgIndex,
+                                        numNonStateArgs);
+    if (!operand)
+      return {};
+    resolved->kind = ResolvedNamedBoolExpr::Kind::Not;
+    resolved->lhs = std::move(operand);
+    return resolved;
+  }
+  case ParsedNamedBoolExpr::Kind::And:
+  case ParsedNamedBoolExpr::Kind::Or:
+  case ParsedNamedBoolExpr::Kind::Xor:
+  case ParsedNamedBoolExpr::Kind::Eq:
+  case ParsedNamedBoolExpr::Kind::Ne: {
+    auto lhs = resolveNamedBoolExpr(*expr.lhs, inputNameToArgIndex,
+                                    numNonStateArgs);
+    auto rhs = resolveNamedBoolExpr(*expr.rhs, inputNameToArgIndex,
+                                    numNonStateArgs);
+    if (!lhs || !rhs)
+      return {};
+    switch (expr.kind) {
+    case ParsedNamedBoolExpr::Kind::And:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::And;
+      break;
+    case ParsedNamedBoolExpr::Kind::Or:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::Or;
+      break;
+    case ParsedNamedBoolExpr::Kind::Xor:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::Xor;
+      break;
+    case ParsedNamedBoolExpr::Kind::Eq:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::Eq;
+      break;
+    case ParsedNamedBoolExpr::Kind::Ne:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::Ne;
+      break;
+    default:
+      break;
+    }
+    resolved->lhs = std::move(lhs);
+    resolved->rhs = std::move(rhs);
+    return resolved;
+  }
+  }
+  return {};
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Conversion patterns
@@ -4421,13 +4787,18 @@ struct VerifBoundedModelCheckingOpConversion
                          nonFinalCheckProps);
     SmallVector<std::optional<unsigned>> finalCheckClockPos;
     resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps);
+    size_t numNonStateArgs =
+        oldCircuitInputTy.size() - numRegs - totalDelaySlots -
+        totalNFAStateSlots;
 
     struct EventArmWitnessInfo {
       enum class Kind { Signal, Sequence };
       Kind kind = Kind::Signal;
       StringAttr witnessName;
-      unsigned sourceArgIndex = 0;
+      std::optional<unsigned> sourceArgIndex;
+      std::unique_ptr<ResolvedNamedBoolExpr> sourceExpr;
       std::optional<unsigned> iffArgIndex;
+      std::unique_ptr<ResolvedNamedBoolExpr> iffExpr;
       ltl::ClockEdge edge = ltl::ClockEdge::Both;
     };
     SmallVector<EventArmWitnessInfo> armWitnesses;
@@ -4444,9 +4815,6 @@ struct VerifBoundedModelCheckingOpConversion
         return std::nullopt;
       };
 
-      size_t numNonStateArgs =
-          oldCircuitInputTy.size() - numRegs - totalDelaySlots -
-          totalNFAStateSlots;
       DenseMap<uint64_t, StringAttr> witnessByArm;
       for (auto [setIdx, detailSetAttr] : llvm::enumerate(eventSourceDetails)) {
         auto detailSet = dyn_cast<ArrayAttr>(detailSetAttr);
@@ -4463,44 +4831,83 @@ struct VerifBoundedModelCheckingOpConversion
 
           EventArmWitnessInfo witnessInfo;
           witnessInfo.kind = EventArmWitnessInfo::Kind::Signal;
-          StringRef sourceName;
+          bool sourceResolved = false;
           if (kind == "signal") {
             auto signalNameAttr =
                 dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
             auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
-            if (!signalNameAttr || !edgeAttr)
+            if (!edgeAttr)
               continue;
             auto edge = parseEdge(edgeAttr.getValue());
             if (!edge)
               continue;
             witnessInfo.edge = *edge;
-            sourceName = signalNameAttr.getValue();
+            if (signalNameAttr && !signalNameAttr.getValue().empty()) {
+              auto sourceIt = inputNameToArgIndex.find(signalNameAttr.getValue());
+              if (sourceIt != inputNameToArgIndex.end() &&
+                  sourceIt->second < numNonStateArgs) {
+                witnessInfo.sourceArgIndex = sourceIt->second;
+                sourceResolved = true;
+              }
+            }
+            if (!sourceResolved)
+              if (auto signalExprAttr =
+                      dyn_cast_or_null<StringAttr>(detail.get("signal_expr")))
+                if (auto parsedExpr =
+                        parseNamedBoolExpr(signalExprAttr.getValue()))
+                  if (auto resolvedExpr = resolveNamedBoolExpr(
+                          *parsedExpr, inputNameToArgIndex, numNonStateArgs)) {
+                    witnessInfo.sourceExpr = std::move(resolvedExpr);
+                    sourceResolved = true;
+                  }
           } else if (kind == "sequence") {
             auto sequenceNameAttr =
                 dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
-            if (!sequenceNameAttr)
-              continue;
             witnessInfo.kind = EventArmWitnessInfo::Kind::Sequence;
-            sourceName = sequenceNameAttr.getValue();
+            if (sequenceNameAttr && !sequenceNameAttr.getValue().empty()) {
+              auto sourceIt = inputNameToArgIndex.find(sequenceNameAttr.getValue());
+              if (sourceIt != inputNameToArgIndex.end() &&
+                  sourceIt->second < numNonStateArgs) {
+                witnessInfo.sourceArgIndex = sourceIt->second;
+                sourceResolved = true;
+              }
+            }
+            if (!sourceResolved)
+              if (auto sequenceExprAttr =
+                      dyn_cast_or_null<StringAttr>(detail.get("sequence_expr")))
+                if (auto parsedExpr =
+                        parseNamedBoolExpr(sequenceExprAttr.getValue()))
+                  if (auto resolvedExpr = resolveNamedBoolExpr(
+                          *parsedExpr, inputNameToArgIndex, numNonStateArgs)) {
+                    witnessInfo.sourceExpr = std::move(resolvedExpr);
+                    sourceResolved = true;
+                  }
           } else {
             continue;
           }
-          auto sourceIt = inputNameToArgIndex.find(sourceName);
-          if (sourceIt == inputNameToArgIndex.end() ||
-              sourceIt->second >= numNonStateArgs)
+          if (!sourceResolved)
             continue;
-          witnessInfo.sourceArgIndex = sourceIt->second;
 
-          std::optional<unsigned> iffArgIndex;
-          if (auto iffNameAttr =
-                  dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
-            auto iffIt = inputNameToArgIndex.find(iffNameAttr.getValue());
-            if (iffIt == inputNameToArgIndex.end() ||
-                iffIt->second >= numNonStateArgs)
-              continue;
-            iffArgIndex = iffIt->second;
+          bool hasIffConstraint = detail.get("iff_name") || detail.get("iff_expr");
+          if (auto iffNameAttr = dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
+            if (!iffNameAttr.getValue().empty()) {
+              auto iffIt = inputNameToArgIndex.find(iffNameAttr.getValue());
+              if (iffIt != inputNameToArgIndex.end() &&
+                  iffIt->second < numNonStateArgs)
+                witnessInfo.iffArgIndex = iffIt->second;
+            }
           }
-          witnessInfo.iffArgIndex = iffArgIndex;
+          if (!witnessInfo.iffArgIndex)
+            if (auto iffExprAttr =
+                    dyn_cast_or_null<StringAttr>(detail.get("iff_expr")))
+              if (auto parsedExpr = parseNamedBoolExpr(iffExprAttr.getValue()))
+                if (auto resolvedExpr = resolveNamedBoolExpr(
+                        *parsedExpr, inputNameToArgIndex, numNonStateArgs))
+                  witnessInfo.iffExpr = std::move(resolvedExpr);
+
+          if (hasIffConstraint && !witnessInfo.iffArgIndex &&
+              !witnessInfo.iffExpr)
+            continue;
 
           StringAttr witnessName =
               dyn_cast_or_null<StringAttr>(detail.get("witness_name"));
@@ -4511,7 +4918,7 @@ struct VerifBoundedModelCheckingOpConversion
                     .str());
           }
           witnessInfo.witnessName = witnessName;
-          armWitnesses.push_back(witnessInfo);
+          armWitnesses.push_back(std::move(witnessInfo));
           uint64_t key = (static_cast<uint64_t>(setIdx) << 32) | armIdx;
           witnessByArm[key] = witnessName;
         }
@@ -4753,20 +5160,83 @@ struct VerifBoundedModelCheckingOpConversion
 
     auto boolTy = smt::BoolType::get(rewriter.getContext());
     auto witnessFalse = smt::BoolConstantOp::create(rewriter, loc, false);
+    auto evalResolvedExpr = [&](auto &self, OpBuilder &builder, ValueRange values,
+                                const ResolvedNamedBoolExpr &expr)
+        -> FailureOr<Value> {
+      switch (expr.kind) {
+      case ResolvedNamedBoolExpr::Kind::Arg:
+        if (expr.argIndex >= values.size())
+          return failure();
+        return toSMTBool(builder, values[expr.argIndex]);
+      case ResolvedNamedBoolExpr::Kind::Const:
+        return Value(smt::BoolConstantOp::create(builder, loc, expr.constValue));
+      case ResolvedNamedBoolExpr::Kind::Not: {
+        auto operandOr = self(self, builder, values, *expr.lhs);
+        if (failed(operandOr))
+          return failure();
+        return Value(smt::NotOp::create(builder, loc, *operandOr));
+      }
+      case ResolvedNamedBoolExpr::Kind::And:
+      case ResolvedNamedBoolExpr::Kind::Or:
+      case ResolvedNamedBoolExpr::Kind::Xor:
+      case ResolvedNamedBoolExpr::Kind::Eq:
+      case ResolvedNamedBoolExpr::Kind::Ne: {
+        auto lhsOr = self(self, builder, values, *expr.lhs);
+        auto rhsOr = self(self, builder, values, *expr.rhs);
+        if (failed(lhsOr) || failed(rhsOr))
+          return failure();
+        switch (expr.kind) {
+        case ResolvedNamedBoolExpr::Kind::And:
+          return Value(smt::AndOp::create(builder, loc, *lhsOr, *rhsOr));
+        case ResolvedNamedBoolExpr::Kind::Or:
+          return Value(smt::OrOp::create(builder, loc, *lhsOr, *rhsOr));
+        case ResolvedNamedBoolExpr::Kind::Xor:
+          return Value(smt::DistinctOp::create(builder, loc, *lhsOr, *rhsOr));
+        case ResolvedNamedBoolExpr::Kind::Eq:
+          return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
+        case ResolvedNamedBoolExpr::Kind::Ne:
+          return Value(smt::DistinctOp::create(builder, loc, *lhsOr, *rhsOr));
+        default:
+          break;
+        }
+      }
+      }
+      return failure();
+    };
+
+    auto getBoolValue = [&](OpBuilder &builder, ValueRange values,
+                            std::optional<unsigned> argIndex,
+                            const std::unique_ptr<ResolvedNamedBoolExpr> &expr)
+        -> FailureOr<Value> {
+      if (argIndex) {
+        if (*argIndex >= values.size())
+          return failure();
+        return toSMTBool(builder, values[*argIndex]);
+      }
+      if (expr)
+        return evalResolvedExpr(evalResolvedExpr, builder, values, *expr);
+      return failure();
+    };
+
     for (const auto &witness : armWitnesses) {
-      if (witness.sourceArgIndex >= inputDecls.size())
+      if (!witness.sourceArgIndex && !witness.sourceExpr)
         continue;
       Value initWitness = witnessFalse;
       if (witness.kind == EventArmWitnessInfo::Kind::Sequence) {
-        auto initBoolOr = toSMTBool(rewriter, inputDecls[witness.sourceArgIndex]);
+        auto initBoolOr = getBoolValue(
+            rewriter, ValueRange(inputDecls).take_front(numNonStateArgs),
+            witness.sourceArgIndex, witness.sourceExpr);
         if (failed(initBoolOr))
           return failure();
         initWitness = *initBoolOr;
-        if (witness.iffArgIndex && *witness.iffArgIndex < inputDecls.size()) {
-          auto iffBoolOr = toSMTBool(rewriter, inputDecls[*witness.iffArgIndex]);
+        if (witness.iffArgIndex || witness.iffExpr) {
+          auto iffBoolOr = getBoolValue(
+              rewriter, ValueRange(inputDecls).take_front(numNonStateArgs),
+              witness.iffArgIndex, witness.iffExpr);
           if (failed(iffBoolOr))
             return failure();
-          initWitness = smt::AndOp::create(rewriter, loc, *iffBoolOr, initWitness);
+          initWitness =
+              smt::AndOp::create(rewriter, loc, *iffBoolOr, initWitness);
         }
       }
       auto initWitnessDecl =
@@ -4780,14 +5250,18 @@ struct VerifBoundedModelCheckingOpConversion
                                  const auto &currValues,
                                  const EventArmWitnessInfo &witness)
         -> FailureOr<Value> {
-      auto currBoolOr = toSMTBool(builder, currValues[witness.sourceArgIndex]);
+      auto currBoolOr =
+          getBoolValue(builder, ValueRange(currValues), witness.sourceArgIndex,
+                       witness.sourceExpr);
       if (failed(currBoolOr))
         return failure();
       Value currBool = *currBoolOr;
 
       Value fired = currBool;
       if (witness.kind == EventArmWitnessInfo::Kind::Signal) {
-        auto prevBoolOr = toSMTBool(builder, prevValues[witness.sourceArgIndex]);
+        auto prevBoolOr =
+            getBoolValue(builder, ValueRange(prevValues), witness.sourceArgIndex,
+                         witness.sourceExpr);
         if (failed(prevBoolOr))
           return failure();
         Value prevBool = *prevBoolOr;
@@ -4808,9 +5282,10 @@ struct VerifBoundedModelCheckingOpConversion
         }
       }
 
-      if (witness.iffArgIndex &&
-          *witness.iffArgIndex < static_cast<unsigned>(currValues.size())) {
-        auto iffBoolOr = toSMTBool(builder, currValues[*witness.iffArgIndex]);
+      if (witness.iffArgIndex || witness.iffExpr) {
+        auto iffBoolOr =
+            getBoolValue(builder, ValueRange(currValues), witness.iffArgIndex,
+                         witness.iffExpr);
         if (failed(iffBoolOr))
           return failure();
         fired = smt::AndOp::create(builder, loc, *iffBoolOr, fired);

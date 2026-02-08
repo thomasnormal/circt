@@ -223,3 +223,23 @@ module SequenceSignalEventListNoEdge;
     c <= ~c;
   end
 endmodule
+
+// Test mixed sequence/signal event list with expression-based signal/iff terms.
+module SequenceSignalEventListExpr;
+  logic clk, a, b, c, en, d;
+
+  sequence seq;
+    @(posedge clk) a;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListExpr
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: iff_expr = " (en | d)"
+  // CHECK-DAG: signal_expr = " (b & c)"
+  // CHECK: moore.event_sources =
+  // CHECK-SAME: "sequence"
+  // CHECK-SAME: "signal[0]:posedge:iff"
+  always @(seq or posedge (b & c) iff (en | d)) begin
+    a <= ~a;
+  end
+endmodule
