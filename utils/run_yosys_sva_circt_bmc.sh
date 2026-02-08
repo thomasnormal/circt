@@ -3311,15 +3311,44 @@ rewrite_history_file_set = parse_selector_list(
 )
 
 
-def compile_clause_regex(value, field_name: str):
+def compile_clause_regex(value, field_name: str, flags: int = 0):
     if value is None:
         return None
     if not isinstance(value, str) or not value:
         fail(f"error: invalid {field_name}: expected non-empty string")
     try:
-        return re.compile(value)
+        return re.compile(value, flags)
     except re.error as ex:
         fail(f"error: invalid {field_name}: {value} ({ex})")
+
+
+def parse_regex_flags(value, field_name: str):
+    if value is None:
+        return ("", 0)
+    if not isinstance(value, str):
+        fail(
+            f"error: invalid {field_name}: expected flags string containing only i, m, s"
+        )
+    flag_bits = 0
+    seen = set()
+    for ch in value:
+        if ch in seen:
+            fail(
+                f"error: invalid {field_name}: duplicate regex flag '{ch}'"
+            )
+        if ch == "i":
+            flag_bits |= re.IGNORECASE
+        elif ch == "m":
+            flag_bits |= re.MULTILINE
+        elif ch == "s":
+            flag_bits |= re.DOTALL
+        else:
+            fail(
+                f"error: invalid {field_name}: expected flags string containing only i, m, s"
+            )
+        seen.add(ch)
+    canonical = "".join(ch for ch in "ims" if ch in seen)
+    return (canonical, flag_bits)
 
 
 def parse_selector_clause_array(payload, field_name: str, macro_specs=None, macro_field_name=None):
@@ -3957,19 +3986,27 @@ def parse_bool_expression(expr, field_name: str):
     if op == "regex":
         if (
             not isinstance(payload, list)
-            or len(payload) != 2
+            or len(payload) not in {2, 3}
             or not isinstance(payload[0], str)
             or not isinstance(payload[1], str)
             or not payload[1]
         ):
             fail(
-                f"error: invalid {field_name}.regex: expected [key, non-empty pattern]"
+                f"error: invalid {field_name}.regex: expected [key, non-empty pattern] or [key, non-empty pattern, flags]"
             )
         key = payload[0]
         pattern = payload[1]
         validate_context_key_name(key, f"{field_name}.regex[0]")
-        compile_clause_regex(pattern, f"{field_name}.regex[1]")
-        return ("regex", key, pattern)
+        flags_text = None
+        if len(payload) == 3:
+            flags_text = payload[2]
+        canonical_flags, regex_flags = parse_regex_flags(
+            flags_text, f"{field_name}.regex[2]"
+        )
+        compiled_pattern = compile_clause_regex(
+            pattern, f"{field_name}.regex[1]", regex_flags
+        )
+        return ("regex", key, pattern, canonical_flags, compiled_pattern)
     if op in {"all", "any"}:
         if not isinstance(payload, list) or not payload:
             fail(
@@ -4044,7 +4081,7 @@ def evaluate_bool_expression(expr, context):
         return lhs_value != rhs_value
     if kind == "regex":
         key = expr[1]
-        pattern = expr[2]
+        pattern = expr[4]
         if key not in context:
             return False
         context_value = context[key]
@@ -4052,7 +4089,7 @@ def evaluate_bool_expression(expr, context):
             haystack = context_value
         else:
             haystack = format_context_scalar(context_value)
-        return re.search(pattern, haystack) is not None
+        return pattern.search(haystack) is not None
     if kind == "all":
         return all(evaluate_bool_expression(child, context) for child in expr[1])
     if kind == "any":
@@ -4090,6 +4127,11 @@ def format_bool_expression(expr):
         op_symbol = "==" if kind == "eq_key" else "!="
         return f"{expr[1]}{op_symbol}{expr[2]}"
     if kind == "regex":
+        if expr[3]:
+            return (
+                f"regex({expr[1]}, {json.dumps(expr[2])}, "
+                f"{json.dumps(expr[3])})"
+            )
         return f"regex({expr[1]}, {json.dumps(expr[2])})"
     if kind in {"all", "any"}:
         return (
