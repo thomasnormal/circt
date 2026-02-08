@@ -101,5 +101,49 @@ uvm_test_run_test	compile-only	UVM testbench: too large for 120s sim timeout
 16.10--property-local-var-fail	skip	Should-fail: property local var error detection
 16.10--sequence-local-var-fail	skip	Should-fail: sequence local var error detection
 
+# Ch18: Class-only tests (no module, just class definitions - nothing to simulate)
+18.4.1--rand-modifier	compile-only	Class-only: rand modifier declaration
+18.4.2--randc-modifier	compile-only	Class-only: randc modifier declaration
+18.5--constraint-blocks_0	compile-only	Class-only: constraint block declaration
+18.5.1--explicit-external-constraint_0	compile-only	Class-only: external constraint
+18.5.1--implicit-external-constraint_0	compile-only	Class-only: implicit external constraint
+18.5.1--implicit-external-constraint_1	compile-only	Class-only: implicit external constraint
+18.5.2--constraint-inheritance_0	compile-only	Class-only: constraint inheritance
+18.5.2--pure-constraint_0	compile-only	Class-only: pure constraint
+18.5.2--pure-constraint_3	compile-only	Class-only: pure constraint
+18.5.3--set-membership_0	compile-only	Class-only: set membership constraint
+18.5.4--distribution_0	compile-only	Class-only: distribution constraint
+18.5.5--uniqueness-constraints_0	compile-only	Class-only: uniqueness constraint
+18.5.6--implication_0	compile-only	Class-only: implication constraint
+18.5.7--if-else-constraints_0	compile-only	Class-only: if-else constraint
+18.5.7--if-else-constraints_1	compile-only	Class-only: if-else constraint
+18.5.7--if-else-constraints_2	compile-only	Class-only: if-else constraint
+18.5.7--if-else-constraints_3	compile-only	Class-only: if-else constraint
+18.5.8.1--foreach-iterative-constraints_0	compile-only	Class-only: foreach iterative constraint
+18.5.8.2--array-reduction-iterative-constraints_0	compile-only	Class-only: array reduction constraint
+18.5.9--global-constraints_0	compile-only	Class-only: global constraint
+18.5.10--variable-ordering_0	compile-only	Class-only: variable ordering
+18.5.11--static-constraint-blocks_0	compile-only	Class-only: static constraint block
+18.5.12--functions-in-constraint_0	compile-only	Class-only: function in constraint
+18.5.13--constraint-guards_0	compile-only	Class-only: constraint guard
+18.5.14--soft-constraints_0	compile-only	Class-only: soft constraint
+18.5.14.1--soft-constraint-priorities_0	compile-only	Class-only: soft priority
+18.5.14.1--soft-constraint-priorities_2	compile-only	Class-only: soft priority
+18.5.14.2--discarding-soft-constraints_0	compile-only	Class-only: discarding soft constraint
+18.5.14.2--discarding-soft-constraints_2	compile-only	Class-only: discarding soft constraint
+18.6.2--post-randomize_method_0	compile-only	Class-only: post_randomize method
+18.6.2--pre-randomize-method_0	compile-only	Class-only: pre_randomize method
+18.6.3--behavior-of-randomization-methods_0	compile-only	Class-only: randomization behavior
+18.7.1--local-scope-resolution_0	compile-only	Class-only: local scope resolution
+18.7--in-line-constraints--randomize_1	compile-only	Class-only: inline constraint
+18.7--in-line-constraints--randomize_3	compile-only	Class-only: inline constraint
+18.7--in-line-constraints--randomize_5	compile-only	Class-only: inline constraint
+18.12.1--adding-constraints-to-scope-variables_0	compile-only	Class-only: scope variable constraint
+18.12--randomization-of-scope-variables_0	compile-only	Class-only: scope randomization
+18.13.1--urandom_0	compile-only	Class-only: $urandom in class
+18.13.1--urandom_2	compile-only	Class-only: $urandom in class
+18.13.2--urandom_range_0	compile-only	Class-only: $urandom_range in class
+18.15--manually-seeding-randomize_0	compile-only	Class-only: manual seed
+
 # UVM utility test: no top module
 uvm_files	skip	No top module (utility file)
