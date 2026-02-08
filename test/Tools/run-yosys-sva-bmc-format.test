@@ -1,0 +1,59 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf '#   Header comment   \nsimple pass xprop FAIL\nsimple\t*\t*\tpass\n' > %t/expect-template.txt
+// RUN: cp %t/expect-template.txt %t/expect-dry.txt
+// RUN: cp %t/expect-template.txt %t/expect-apply.txt
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-dry.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run \
+// RUN:   EXPECT_FORMAT_FILES=%t/expect-dry.txt EXPECT_FORMAT_DIFF_FILE=%t/dry-format.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
+// RUN: FileCheck %s --check-prefix=DRYOUT < %t/dry.out
+// RUN: sed 's/\t/|/g' %t/expect-dry.txt | FileCheck %s --check-prefix=DRYFILE
+// RUN: sed 's/\t/|/g' %t/dry-format.diff | FileCheck %s --check-prefix=DRYDIFF
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=apply \
+// RUN:   EXPECT_FORMAT_FILES=%t/expect-apply.txt EXPECT_FORMAT_DIFF_FILE=%t/apply-format.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN: FileCheck %s --check-prefix=APPLYOUT < %t/apply.out
+// RUN: sed 's/\t/|/g' %t/expect-apply.txt | FileCheck %s --check-prefix=APPLYFILE
+// RUN: sed 's/\t/|/g' %t/apply-format.diff | FileCheck %s --check-prefix=APPLYDIFF
+
+// DRYOUT: EXPECT_FORMAT: mode=dry-run file={{.*expect-dry.txt}} rows=2 malformed=0 changed=1
+// DRYOUT: EXPECT_FORMAT: mode=dry-run files=1 changed=1
+// DRYOUT: PASS(pass): simple
+// DRYOUT: SKIP(fail-no-macro): simple
+// DRYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// DRYFILE: #   Header comment
+// DRYFILE-DAG: simple pass xprop FAIL
+// DRYFILE-DAG: simple|*|*|pass
+
+// DRYDIFF: --- {{.*}}
+// DRYDIFF: +++ {{.*}}
+// DRYDIFF-DAG: -simple pass xprop FAIL
+// DRYDIFF-DAG: +simple|pass|xprop|fail
+
+// APPLYOUT: EXPECT_FORMAT: mode=apply file={{.*expect-apply.txt}} rows=2 malformed=0 changed=1
+// APPLYOUT: EXPECT_FORMAT: mode=apply files=1 changed=1
+// APPLYOUT: PASS(pass): simple
+// APPLYOUT: SKIP(fail-no-macro): simple
+// APPLYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// APPLYFILE: #   Header comment
+// APPLYFILE: simple|*|*|pass
+// APPLYFILE: simple|pass|xprop|fail
+// APPLYFILE-NOT: simple pass xprop FAIL
+
+// APPLYDIFF: --- {{.*}}
+// APPLYDIFF: +++ {{.*}}
+// APPLYDIFF-DAG: -simple pass xprop FAIL
+// APPLYDIFF-DAG: +simple|pass|xprop|fail

@@ -61,6 +61,9 @@ EXPECT_LINT_APPLY_MODE="${EXPECT_LINT_APPLY_MODE:-off}"
 EXPECT_LINT_APPLY_DIFF_FILE="${EXPECT_LINT_APPLY_DIFF_FILE:-}"
 EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS:-drop-row,set-row}"
 EXPECT_LINT_APPLY_ADDROW_FILTER_FILE="${EXPECT_LINT_APPLY_ADDROW_FILTER_FILE:-}"
+EXPECT_FORMAT_MODE="${EXPECT_FORMAT_MODE:-off}"
+EXPECT_FORMAT_FILES="${EXPECT_FORMAT_FILES:-}"
+EXPECT_FORMAT_DIFF_FILE="${EXPECT_FORMAT_DIFF_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -100,6 +103,13 @@ case "$EXPECT_LINT_APPLY_MODE" in
   off|dry-run|apply) ;;
   *)
     echo "invalid EXPECT_LINT_APPLY_MODE: $EXPECT_LINT_APPLY_MODE (expected off|dry-run|apply)" >&2
+    exit 1
+    ;;
+esac
+case "$EXPECT_FORMAT_MODE" in
+  off|dry-run|apply) ;;
+  *)
+    echo "invalid EXPECT_FORMAT_MODE: $EXPECT_FORMAT_MODE (expected off|dry-run|apply)" >&2
     exit 1
     ;;
 esac
@@ -502,6 +512,215 @@ apply_expect_lint_fixes() {
   return 0
 }
 
+trim_whitespace() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+append_expect_format_diff() {
+  local diff_file="$1"
+  local source_file="$2"
+  local changed="$3"
+  if [[ -z "$EXPECT_FORMAT_DIFF_FILE" ]]; then
+    return 0
+  fi
+  if [[ "$changed" == "1" ]]; then
+    {
+      printf '=== %s ===\n' "$source_file"
+      cat "$diff_file"
+      printf '\n'
+    } >> "$EXPECT_FORMAT_DIFF_FILE"
+  fi
+  return 0
+}
+
+resolve_expect_format_files() {
+  local -n out_files="$1"
+  local -n out_defaults="$2"
+  local target resolved default_expected
+  out_files=()
+  out_defaults=()
+
+  resolve_target() {
+    local name="$1"
+    case "$name" in
+      EXPECT_FILE) echo "$EXPECT_FILE" ;;
+      XFAIL_FILE) echo "$XFAIL_FILE" ;;
+      EXPECT_REGEN_OVERRIDE_FILE) echo "$EXPECT_REGEN_OVERRIDE_FILE" ;;
+      *) echo "$name" ;;
+    esac
+  }
+
+  target_default() {
+    local name="$1"
+    local path="$2"
+    if [[ "$name" == "XFAIL_FILE" || "$path" == "$XFAIL_FILE" ]]; then
+      echo "xfail"
+    else
+      echo ""
+    fi
+  }
+
+  if [[ -n "$EXPECT_FORMAT_FILES" ]]; then
+    while IFS= read -r target; do
+      [[ -z "$target" ]] && continue
+      resolved="$(resolve_target "$target")"
+      [[ -z "$resolved" || "$resolved" == "/dev/null" ]] && continue
+      default_expected="$(target_default "$target" "$resolved")"
+      out_files+=("$resolved")
+      out_defaults+=("$default_expected")
+    done < <(printf '%s\n' "$EXPECT_FORMAT_FILES" | tr ',' '\n')
+    return 0
+  fi
+
+  if [[ -n "$EXPECT_FILE" && "$EXPECT_FILE" != "/dev/null" ]]; then
+    out_files+=("$EXPECT_FILE")
+    out_defaults+=("")
+  fi
+  if [[ -n "$EXPECT_REGEN_OVERRIDE_FILE" && "$EXPECT_REGEN_OVERRIDE_FILE" != "/dev/null" ]]; then
+    out_files+=("$EXPECT_REGEN_OVERRIDE_FILE")
+    out_defaults+=("")
+  fi
+  if [[ -n "$XFAIL_FILE" && "$XFAIL_FILE" != "/dev/null" ]]; then
+    out_files+=("$XFAIL_FILE")
+    out_defaults+=("xfail")
+  fi
+  return 0
+}
+
+format_expectation_file() {
+  local file="$1"
+  local default_expected="$2"
+  local mode="$3"
+  local idx="$4"
+  local old_file="$tmpdir/expect-format-old-$idx.tsv"
+  local new_file="$tmpdir/expect-format-new-$idx.tsv"
+  local diff_file="$tmpdir/expect-format-diff-$idx.txt"
+  local line trimmed
+  local test mode_field profile expected extra
+  local changed=0
+  local rows=0
+  local malformed=0
+  local -a comment_lines=()
+  local -a row_lines=()
+  local -a malformed_lines=()
+
+  if [[ ! -f "$file" ]]; then
+    echo "SKIP|-1|-1"
+    return 0
+  fi
+
+  cp "$file" "$old_file"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    trimmed="$(trim_whitespace "$line")"
+    if [[ -z "$trimmed" ]]; then
+      continue
+    fi
+    if [[ "$trimmed" == \#* ]]; then
+      comment_lines+=("$trimmed")
+      continue
+    fi
+    test=""
+    mode_field=""
+    profile=""
+    expected=""
+    extra=""
+    if [[ "$trimmed" == *$'\t'* ]]; then
+      IFS=$'\t' read -r test mode_field profile expected extra <<<"$trimmed"
+    else
+      read -r test mode_field profile expected extra <<<"$trimmed"
+    fi
+    test="$(trim_whitespace "${test:-}")"
+    mode_field="$(trim_whitespace "${mode_field:-}")"
+    profile="$(trim_whitespace "${profile:-}")"
+    expected="$(trim_whitespace "${expected:-}")"
+    if [[ -n "${extra:-}" || -z "$test" ]]; then
+      malformed_lines+=("$trimmed")
+      malformed=$((malformed + 1))
+      continue
+    fi
+    [[ -z "$mode_field" ]] && mode_field="*"
+    [[ -z "$profile" ]] && profile="*"
+    [[ -z "$expected" ]] && expected="$default_expected"
+    if [[ -z "$expected" ]]; then
+      malformed_lines+=("$trimmed")
+      malformed=$((malformed + 1))
+      continue
+    fi
+    mode_field="${mode_field,,}"
+    profile="${profile,,}"
+    expected="${expected,,}"
+    row_lines+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$expected")
+    rows=$((rows + 1))
+  done < "$file"
+
+  : > "$new_file"
+  if ((${#comment_lines[@]} > 0)); then
+    printf '%s\n' "${comment_lines[@]}" >> "$new_file"
+  fi
+  if ((${#comment_lines[@]} > 0 && ${#row_lines[@]} > 0)); then
+    echo >> "$new_file"
+  fi
+  if ((${#row_lines[@]} > 0)); then
+    while IFS= read -r line; do
+      echo "$line" >> "$new_file"
+    done < <(printf '%s\n' "${row_lines[@]}" | LC_ALL=C sort)
+  fi
+  if ((${#malformed_lines[@]} > 0)); then
+    if [[ -s "$new_file" ]]; then
+      echo >> "$new_file"
+    fi
+    printf '%s\n' "${malformed_lines[@]}" >> "$new_file"
+  fi
+
+  if ! cmp -s "$old_file" "$new_file"; then
+    changed=1
+    diff -u "$old_file" "$new_file" > "$diff_file" || true
+    if [[ "$mode" == "apply" ]]; then
+      cp "$new_file" "$file"
+    fi
+  fi
+  append_expect_format_diff "$diff_file" "$file" "$changed"
+  echo "$changed|$rows|$malformed"
+  return 0
+}
+
+run_expectation_formatter() {
+  local mode="$1"
+  local -a files=()
+  local -a defaults=()
+  local i file default_expected result changed rows malformed
+  local changed_files=0
+  local file_count=0
+
+  resolve_expect_format_files files defaults
+  if [[ -n "$EXPECT_FORMAT_DIFF_FILE" ]]; then
+    : > "$EXPECT_FORMAT_DIFF_FILE"
+  fi
+
+  for i in "${!files[@]}"; do
+    file="${files[$i]}"
+    default_expected="${defaults[$i]}"
+    [[ -z "$file" || "$file" == "/dev/null" ]] && continue
+    file_count=$((file_count + 1))
+    result="$(format_expectation_file "$file" "$default_expected" "$mode" "$((i + 1))")"
+    IFS='|' read -r changed rows malformed <<<"$result"
+    if [[ "$changed" == "SKIP" ]]; then
+      echo "EXPECT_FORMAT: mode=$mode file=$file rows=0 malformed=0 changed=0 missing=1"
+      continue
+    fi
+    if [[ "$changed" == "1" ]]; then
+      changed_files=$((changed_files + 1))
+    fi
+    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed"
+  done
+  echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files"
+  return 0
+}
+
 load_expected_cases() {
   local map_name="$1"
   local file="$2"
@@ -550,6 +769,9 @@ load_expected_cases() {
 }
 
 # Load legacy xfail rows first, then let EXPECT_FILE override where needed.
+if [[ "$EXPECT_FORMAT_MODE" != "off" ]]; then
+  run_expectation_formatter "$EXPECT_FORMAT_MODE"
+fi
 if [[ -n "$XFAIL_FILE" ]]; then
   load_expected_cases expected_cases "$XFAIL_FILE" "xfail"
 fi
