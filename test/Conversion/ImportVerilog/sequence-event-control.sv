@@ -112,3 +112,26 @@ module SequenceEventListControlWithIff;
     c <= ~c;
   end
 endmodule
+
+// Test sequence event-list controls on different clocks: @(seq1 or seq2)
+module SequenceEventListDifferentClocks;
+  logic clk1, clk2, a, b, c;
+
+  sequence seq1;
+    @(posedge clk1) a;
+  endsequence
+
+  sequence seq2;
+    @(posedge clk2) b;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceEventListDifferentClocks
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK-DAG: moore.detect_event any
+  // CHECK-DAG: moore.detect_event any
+  // CHECK: cf.cond_br
+  always @(seq1 or seq2) begin
+    c <= ~c;
+  end
+endmodule

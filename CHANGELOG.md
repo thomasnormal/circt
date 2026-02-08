@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 482 - February 8, 2026
+
+### Summary
+
+Extended procedural sequence event-list lowering to handle different-clock
+sequence-only lists, added dedicated import/BMC regressions, and revalidated
+the external BMC/LEC smoke matrix.
+
+### Fixes
+
+1. **Different-clock sequence event-list lowering**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp`:
+     - `lowerSequenceEventListControl` now supports sequence-only event lists
+       with non-equivalent clocks.
+     - Added multi-clock event-loop support with per-clock edge tick
+       derivation.
+     - Filtered clock-gating stutter transitions from wakeup matching in the
+       multi-clock path to avoid unrelated-clock wakeups.
+   - Kept explicit diagnostics for unsupported mixed forms across different
+     clocks (`@(seq or sig)` with non-equivalent clocks).
+
+2. **Regression coverage**
+   - Import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       (`SequenceEventListDifferentClocks`).
+   - BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-list-multiclock-sat-e2e.sv`.
+
+3. **Validation**
+   - Build:
+     - `ninja -C build-test circt-verilog circt-bmc circt-opt circt-lec`: PASS
+   - Targeted regressions:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-event-iff-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+     - AVIP compile smoke (`apb_avip`): PASS
+
+### Remaining Gaps
+
+- Non-vacuous UNSAT equivalence checks for different-clock procedural
+  sequence-event lists still need stronger multi-clock BMC harness constraints
+  for derived/non-keyable clocks.
+- Mixed sequence/signal event-lists across different clocks remain unsupported.
+- Procedural property event controls (`@property`) remain unsupported.
+
 ## Iteration 481 - February 8, 2026
 
 ### Summary
