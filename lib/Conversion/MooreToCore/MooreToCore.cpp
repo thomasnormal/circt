@@ -21859,6 +21859,185 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         constraints.push_back(info);
       }
     }
+
+    // Also extract constraints from individual ConstraintExprOp ops.
+    // Pattern: constraint c { x >= 10; x <= 20; } generates separate
+    //   moore.constraint.expr ops for each comparison.
+    // We collect per-property lower/upper bounds and merge into ranges.
+    struct BoundInfo {
+      std::optional<int64_t> lower, upper;
+      StringRef propName;
+      bool isSigned = false;
+      bool isSoft = false;
+    };
+    DenseMap<StringRef, BoundInfo> varBounds;
+
+    // Helper: extract property name from read(class.property_ref(@prop))
+    auto getPropertyName = [](Value v) -> StringRef {
+      if (auto readOp = v.getDefiningOp<ReadOp>())
+        if (auto propRef =
+                readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
+          return propRef.getProperty();
+      return {};
+    };
+
+    // Helper: extract a constant int64_t value
+    auto getConstVal = [](Value v) -> std::optional<int64_t> {
+      if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+        FVInt fvVal = constOp.getValue();
+        if (fvVal.hasUnknown())
+          return std::nullopt;
+        return fvVal.getRawValue().getSExtValue();
+      }
+      return std::nullopt;
+    };
+
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
+      if (!exprOp)
+        continue;
+
+      Value cond = exprOp.getCondition();
+      Operation *defOp = cond.getDefiningOp();
+      if (!defOp)
+        continue;
+
+      bool isSoft = exprOp.getIsSoft();
+
+      // Try to match: sge/sle/sgt/slt/uge/ule/ugt/ult/eq(read(prop), const)
+      // or the reversed operand order.
+      if (defOp->getNumOperands() != 2)
+        continue;
+      Value lhs = defOp->getOperand(0);
+      Value rhs = defOp->getOperand(1);
+
+      StringRef propName = getPropertyName(lhs);
+      auto constVal = getConstVal(rhs);
+      bool varOnLhs = true;
+      if (propName.empty() || !constVal) {
+        propName = getPropertyName(rhs);
+        constVal = getConstVal(lhs);
+        varOnLhs = false;
+      }
+      if (propName.empty() || !constVal)
+        continue;
+
+      auto &bounds = varBounds[propName];
+      bounds.propName = propName;
+      bounds.isSoft = isSoft;
+
+      int64_t cv = *constVal;
+      // x >= const or const <= x
+      if (isa<SgeOp>(defOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+        } else {
+          if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+        }
+      } else if (isa<SleOp>(defOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+        } else {
+          if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+        }
+      } else if (isa<SgtOp>(defOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          int64_t lo = cv + 1;
+          if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+        } else {
+          int64_t hi = cv - 1;
+          if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+        }
+      } else if (isa<SltOp>(defOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          int64_t hi = cv - 1;
+          if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+        } else {
+          int64_t lo = cv + 1;
+          if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+        }
+      } else if (isa<UgeOp>(defOp)) {
+        if (varOnLhs) {
+          if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+        } else {
+          if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+        }
+      } else if (isa<UleOp>(defOp)) {
+        if (varOnLhs) {
+          if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+        } else {
+          if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+        }
+      } else if (isa<UgtOp>(defOp)) {
+        if (varOnLhs) {
+          int64_t lo = cv + 1;
+          if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+        } else {
+          int64_t hi = cv - 1;
+          if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+        }
+      } else if (isa<UltOp>(defOp)) {
+        if (varOnLhs) {
+          int64_t hi = cv - 1;
+          if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+        } else {
+          int64_t lo = cv + 1;
+          if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+        }
+      } else if (isa<EqOp>(defOp)) {
+        bounds.lower = cv;
+        bounds.upper = cv;
+      }
+    }
+
+    // Convert collected bounds into RangeConstraintInfo entries
+    for (auto &[propName, bounds] : varBounds) {
+      if (!bounds.lower && !bounds.upper)
+        continue;
+
+      auto it = propertyMap.find(propName);
+      if (it == propertyMap.end())
+        continue;
+
+      // Skip if an InsideOp-based constraint already covers this property
+      bool alreadyCovered = false;
+      for (auto &existing : constraints) {
+        if (existing.propertyName == propName &&
+            existing.constraintName == constraintName) {
+          alreadyCovered = true;
+          break;
+        }
+      }
+      if (alreadyCovered)
+        continue;
+
+      unsigned fieldIdx = it->second.first;
+      Type fieldType = it->second.second;
+      unsigned bitWidth = 32;
+      if (auto intType = dyn_cast<IntType>(fieldType))
+        bitWidth = intType.getWidth();
+
+
+      RangeConstraintInfo info;
+      info.propertyName = propName;
+      info.constraintName = constraintName;
+      info.fieldIndex = fieldIdx;
+      info.bitWidth = bitWidth;
+      info.isSoft = bounds.isSoft;
+      info.isMultiRange = false;
+
+      int64_t typeMin = bounds.isSigned ? -(1LL << (bitWidth - 1)) : 0;
+      int64_t typeMax = bounds.isSigned ? ((1LL << (bitWidth - 1)) - 1)
+                                        : ((1ULL << bitWidth) - 1);
+      info.minValue = bounds.lower.value_or(typeMin);
+      info.maxValue = bounds.upper.value_or(typeMax);
+
+      constraints.push_back(info);
+    }
   }
 
   return constraints;

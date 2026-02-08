@@ -16535,6 +16535,35 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_randomize_with_range (singular) ----
+    // Signature: (min: i64, max: i64) -> i64
+    // Returns a uniformly random value in [min, max].
+    if (calleeName == "__moore_randomize_with_range") {
+      int64_t minVal = 0, maxVal = 0;
+      if (callOp.getNumOperands() >= 2) {
+        minVal = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        maxVal = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+      }
+      int64_t result = minVal;
+      if (maxVal > minVal) {
+        uint64_t range = static_cast<uint64_t>(maxVal - minVal) + 1;
+        uint64_t randomVal = static_cast<uint64_t>(std::rand());
+        if (range > UINT32_MAX)
+          randomVal = (static_cast<uint64_t>(std::rand()) << 32) |
+                      static_cast<uint64_t>(std::rand());
+        result = minVal + static_cast<int64_t>(randomVal % range);
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_randomize_with_range(min="
+                 << minVal << ", max=" << maxVal << ") = " << result << "\n");
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
+      return success();
+    }
+
     // ---- __moore_randomize_with_ranges ----
     // Signature: (ranges: ptr, numRanges: i64) -> i64
     // Returns a uniformly random value from the union of [low,high] ranges.
