@@ -13141,6 +13141,63 @@ ninja -C build circt-verilog
   - Add optional compression/rotation for drop-events logs.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 573
+- Yosys SVA BMC shell migration mode + top-level key parser:
+  - Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE` with
+    `auto|python|shell` values.
+  - `emit_mode_summary_outputs()` now resolves migration mode separately from
+    JSON validation mode.
+  - In shell mode, replaced raw substring checks for `schema_version` with an
+    `awk` top-level key scanner (`jsonl_line_has_top_level_key_shell`) that:
+    - tracks brace depth
+    - tracks quoted strings with escape handling
+    - detects only top-level object keys (not nested keys)
+  - This hardens shell-mode migration against false positives from nested
+    `schema_version` while preserving canonical rows where `schema_version` is
+    not the first key.
+- Regression tests:
+  - Added
+    `test/Tools/run-yosys-sva-bmc-summary-history-jsonl-migrate-shell-mode.test`:
+    - forces `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE=shell`
+    - verifies nested `meta.schema_version` legacy row is migrated
+    - verifies canonical row with reordered keys stays canonical
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 55/55 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Shell-mode migration key detection is now top-level aware, but duplicate-key
+    and malformed-JSON diagnostics still rely on Python validation for parity.
+  - Parser-backed validation still depends on `python3`.
+  - `cksum` remains required for generated drop-event IDs.
+  - xprop pass-mode failures remain baseline-tracked.
+  - Remaining gaps are still primarily harness/policy portability and semantic
+    expected-failure retirement, not core Slang frontend feature gaps.
+- Long-term features to prioritize:
+  - Provide a non-Python validation path with duplicate-key and schema checks
+    to fully decouple JSON history flows from `python3`.
+  - Add optional compression/rotation for drop-events logs.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
