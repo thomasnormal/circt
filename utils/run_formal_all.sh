@@ -559,6 +559,38 @@ fi
 
 declare -A LANE_STATE_ROW_BY_ID=()
 declare -a LANE_STATE_ORDER=()
+LANE_STATE_ACTIVE_CONFIG_HASH=""
+
+compute_lane_state_config_hash() {
+  local script_sha=""
+  if [[ -r "$0" ]]; then
+    script_sha="$(sha256sum "$0" | awk '{print $1}' || true)"
+  fi
+  {
+    printf "schema_version=1\n"
+    printf "script_sha256=%s\n" "$script_sha"
+    printf "bmc_run_smtlib=%s\n" "$BMC_RUN_SMTLIB"
+    printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
+    printf "lec_assume_known_inputs=%s\n" "$LEC_ASSUME_KNOWN_INPUTS"
+    printf "lec_accept_xprop_only=%s\n" "$LEC_ACCEPT_XPROP_ONLY"
+    printf "with_opentitan=%s\n" "$WITH_OPENTITAN"
+    printf "with_avip=%s\n" "$WITH_AVIP"
+    printf "z3_bin=%s\n" "$Z3_BIN"
+    printf "circt_verilog=%s\n" "$CIRCT_VERILOG_BIN"
+    printf "circt_verilog_avip=%s\n" "$CIRCT_VERILOG_BIN_AVIP"
+    printf "circt_verilog_opentitan=%s\n" "$CIRCT_VERILOG_BIN_OPENTITAN"
+    printf "sv_tests_dir=%s\n" "$SV_TESTS_DIR"
+    printf "verilator_dir=%s\n" "$VERILATOR_DIR"
+    printf "yosys_dir=%s\n" "$YOSYS_DIR"
+    printf "opentitan_dir=%s\n" "$OPENTITAN_DIR"
+    printf "avip_glob=%s\n" "$AVIP_GLOB"
+    printf "test_filter=%s\n" "${TEST_FILTER:-}"
+    printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
+    printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
+    printf "circt_bmc_args=%s\n" "${CIRCT_BMC_ARGS:-}"
+    printf "circt_lec_args=%s\n" "${CIRCT_LEC_ARGS:-}"
+  } | sha256sum | awk '{print $1}'
+}
 
 lane_state_register_row() {
   local lane_id="$1"
@@ -578,7 +610,7 @@ lane_state_write_file() {
   mkdir -p "$lane_state_dir"
   local tmp="${LANE_STATE_TSV}.tmp.$$"
   {
-    printf "lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\n"
+    printf "lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\n"
     for lane_id in "${LANE_STATE_ORDER[@]}"; do
       printf "%s\n" "${LANE_STATE_ROW_BY_ID[$lane_id]}"
     done
@@ -591,7 +623,7 @@ lane_state_load_file() {
     return
   fi
   local line_no=0
-  while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc extra; do
+  while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc config_hash extra; do
     line_no=$((line_no + 1))
     if [[ -z "$lane_id" ]]; then
       continue
@@ -600,7 +632,7 @@ lane_state_load_file() {
       continue
     fi
     if [[ -n "$extra" ]]; then
-      echo "invalid lane state row ${line_no}: expected 11 tab-separated fields" >&2
+      echo "invalid lane state row ${line_no}: expected 11 or 12 tab-separated fields" >&2
       exit 1
     fi
     if [[ -z "$suite" || -z "$mode" || -z "$updated_at_utc" ]]; then
@@ -613,12 +645,17 @@ lane_state_load_file() {
         exit 1
       fi
     done
-    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc")"
+    if [[ -n "$config_hash" && ! "$config_hash" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "invalid lane state row ${line_no}: invalid config_hash (expected 64 hex chars)" >&2
+      exit 1
+    fi
+    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$config_hash")"
   done < "$LANE_STATE_TSV"
 }
 
 if [[ -n "$LANE_STATE_TSV" ]]; then
+  LANE_STATE_ACTIVE_CONFIG_HASH="$(compute_lane_state_config_hash)"
   if [[ "$RESET_LANE_STATE" == "1" ]]; then
     lane_state_write_file
   else
@@ -635,8 +672,16 @@ lane_resume_from_state() {
   if [[ -z "$row" ]]; then
     return 1
   fi
-  local saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc
-  IFS=$'\t' read -r saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc <<< "$row"
+  local saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc config_hash
+  IFS=$'\t' read -r saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc config_hash <<< "$row"
+  if [[ -z "$config_hash" ]]; then
+    echo "lane state config hash missing for lane ${lane_id}; rerun with --reset-lane-state" >&2
+    exit 1
+  fi
+  if [[ "$config_hash" != "$LANE_STATE_ACTIVE_CONFIG_HASH" ]]; then
+    echo "lane state config hash mismatch for lane ${lane_id}; expected ${LANE_STATE_ACTIVE_CONFIG_HASH}, found ${config_hash}; rerun with --reset-lane-state" >&2
+    exit 1
+  fi
   echo "==> ${lane_id} (resume from lane state @ ${updated_at_utc})" | tee -a "$OUT_DIR/resume.log"
   record_result "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
   return 0
@@ -690,8 +735,8 @@ record_result() {
     local lane_id="${suite}/${mode}"
     local updated_at_utc
     updated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc")"
+    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_ACTIVE_CONFIG_HASH")"
     lane_state_write_file
   fi
 }
