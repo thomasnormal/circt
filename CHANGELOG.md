@@ -33765,6 +33765,66 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Lane-state files still have no signed provenance chain.
 - Harness resume remains lane-level (no intra-lane test replay).
 
+## Iteration 679 - February 8, 2026
+
+### Lane-State Compatibility Policy Versioning
+
+- Added explicit lane-state compatibility policy versioning in
+  `utils/run_formal_all.sh`:
+  - emits `compat_policy_version` in lane-state TSV rows
+  - includes policy version in lane-state config fingerprint hash material
+  - enforces compatibility-policy checks during resume
+- Added compatibility-aware merge behavior for federated lane-state inputs:
+  - rejects conflicting non-empty policy versions
+  - treats legacy rows as lower-precedence than explicit policy-version rows
+- Added backward-compatible parsing for legacy 12-column lane-state rows while
+  hardening row-shape validation and diagnostics.
+
+### Lane-State Inspector Enhancements
+
+- Extended `utils/inspect_formal_lane_state.py` with compatibility policy
+  support:
+  - parses/prints `compat_policy_version`
+  - validates compatibility policy conflicts during merge
+  - includes observed compatibility policy versions in JSON output
+  - adds CI policy flags:
+    - `--require-compat-policy-version`
+    - `--expect-compat-policy-version <v>`
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-lane-state-inspect.test`
+    - positive and negative coverage for compatibility policy presence/mismatch
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative resume check for compatibility policy mismatch
+  - `docs/FormalRegression.md`
+    - documented compatibility policy semantics and inspector CLI usage
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/inspect_formal_lane_state.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-lane-state-inspect.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-tsv /tmp/formal-lane-policy-smoke3.tsv --reset-lane-state`:
+    - PASS
+  - `python3 utils/inspect_formal_lane_state.py /tmp/formal-lane-policy-smoke3.tsv --require-config-hash --require-compat-policy-version --expect-compat-policy-version 1 --require-single-config-hash ...`:
+    - PASS
+
+### Remaining Limitations
+
+- Policy versioning is global per harness schema and does not yet provide
+  per-field compatibility negotiation.
+- Resume remains lane-level (no per-test replay).
+- Lane-state artifacts still lack signed provenance.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

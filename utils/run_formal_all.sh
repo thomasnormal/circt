@@ -576,6 +576,7 @@ declare -A LANE_STATE_ROW_BY_ID=()
 declare -A LANE_STATE_SOURCE_BY_ID=()
 declare -a LANE_STATE_ORDER=()
 LANE_STATE_ACTIVE_CONFIG_HASH=""
+LANE_STATE_COMPAT_POLICY_VERSION="1"
 
 compute_lane_state_config_hash() {
   local script_sha=""
@@ -584,6 +585,7 @@ compute_lane_state_config_hash() {
   fi
   {
     printf "schema_version=1\n"
+    printf "lane_state_compat_policy_version=%s\n" "$LANE_STATE_COMPAT_POLICY_VERSION"
     printf "script_sha256=%s\n" "$script_sha"
     printf "bmc_run_smtlib=%s\n" "$BMC_RUN_SMTLIB"
     printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
@@ -628,10 +630,31 @@ lane_state_merge_row() {
     lane_state_register_row "$lane_id" "$row" "$source_ref"
     return
   fi
-  local old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_config_hash
-  IFS=$'\t' read -r old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_config_hash <<< "$existing_row"
-  local new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_config_hash
-  IFS=$'\t' read -r new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_config_hash <<< "$row"
+  local old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_compat_policy_version old_config_hash
+  IFS=$'\t' read -r old_lane old_suite old_mode old_total old_pass old_fail old_xfail old_xpass old_error old_skip old_updated_at_utc old_compat_policy_version old_config_hash <<< "$existing_row"
+  local new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_compat_policy_version new_config_hash
+  IFS=$'\t' read -r new_lane new_suite new_mode new_total new_pass new_fail new_xfail new_xpass new_error new_skip new_updated_at_utc new_compat_policy_version new_config_hash <<< "$row"
+
+  if [[ "$old_compat_policy_version" == "legacy" && -n "$new_compat_policy_version" && "$new_compat_policy_version" != "legacy" ]]; then
+    lane_state_register_row "$lane_id" "$row" "$source_ref"
+    return
+  fi
+  if [[ "$new_compat_policy_version" == "legacy" && -n "$old_compat_policy_version" && "$old_compat_policy_version" != "legacy" ]]; then
+    return
+  fi
+
+  if [[ -n "$old_compat_policy_version" && -n "$new_compat_policy_version" && "$old_compat_policy_version" != "$new_compat_policy_version" ]]; then
+    echo "conflicting lane state compatibility policy version for lane ${lane_id}: ${LANE_STATE_SOURCE_BY_ID[$lane_id]} has ${old_compat_policy_version}, ${source_ref} has ${new_compat_policy_version}" >&2
+    exit 1
+  fi
+
+  if [[ -z "$old_compat_policy_version" && -n "$new_compat_policy_version" ]]; then
+    lane_state_register_row "$lane_id" "$row" "$source_ref"
+    return
+  fi
+  if [[ -n "$old_compat_policy_version" && -z "$new_compat_policy_version" ]]; then
+    return
+  fi
 
   if [[ -n "$old_config_hash" && -n "$new_config_hash" && "$old_config_hash" != "$new_config_hash" ]]; then
     echo "conflicting lane state config hash for lane ${lane_id}: ${LANE_STATE_SOURCE_BY_ID[$lane_id]} has ${old_config_hash}, ${source_ref} has ${new_config_hash}" >&2
@@ -669,7 +692,7 @@ lane_state_write_file() {
   mkdir -p "$lane_state_dir"
   local tmp="${LANE_STATE_TSV}.tmp.$$"
   {
-    printf "lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\n"
+    printf "lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\n"
     for lane_id in "${LANE_STATE_ORDER[@]}"; do
       printf "%s\n" "${LANE_STATE_ROW_BY_ID[$lane_id]}"
     done
@@ -684,7 +707,7 @@ lane_state_load_file() {
     return
   fi
   local line_no=0
-  while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc config_hash extra; do
+  while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc compat_policy_version config_hash extra; do
     line_no=$((line_no + 1))
     if [[ -z "$lane_id" ]]; then
       continue
@@ -692,8 +715,14 @@ lane_state_load_file() {
     if [[ "$line_no" == "1" && "$lane_id" == "lane_id" ]]; then
       continue
     fi
+    if [[ -z "$config_hash" && "$compat_policy_version" =~ ^[0-9a-f]{64}$ ]]; then
+      # Backward compatibility for pre-policy rows with 12 fields where
+      # config_hash occupied the final column.
+      config_hash="$compat_policy_version"
+      compat_policy_version="legacy"
+    fi
     if [[ -n "$extra" ]]; then
-      echo "invalid lane state row ${source_label}:${line_no}: expected 11 or 12 tab-separated fields" >&2
+      echo "invalid lane state row ${source_label}:${line_no}: expected 11, 12, or 13 tab-separated fields" >&2
       exit 1
     fi
     if [[ -z "$suite" || -z "$mode" || -z "$updated_at_utc" ]]; then
@@ -714,8 +743,12 @@ lane_state_load_file() {
       echo "invalid lane state row ${source_label}:${line_no}: invalid config_hash (expected 64 hex chars)" >&2
       exit 1
     fi
-    lane_state_merge_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$config_hash")" "${source_label}:${line_no}"
+    if [[ -n "$compat_policy_version" && "$compat_policy_version" != "legacy" && ! "$compat_policy_version" =~ ^[0-9]+$ ]]; then
+      echo "invalid lane state row ${source_label}:${line_no}: invalid compat_policy_version (expected integer or legacy)" >&2
+      exit 1
+    fi
+    lane_state_merge_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$compat_policy_version" "$config_hash")" "${source_label}:${line_no}"
   done < "$lane_state_file"
 }
 
@@ -743,8 +776,16 @@ lane_resume_from_state() {
   if [[ -z "$row" ]]; then
     return 1
   fi
-  local saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc config_hash
-  IFS=$'\t' read -r saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc config_hash <<< "$row"
+  local saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc compat_policy_version config_hash
+  IFS=$'\t' read -r saved_lane suite mode total pass fail xfail xpass error skip updated_at_utc compat_policy_version config_hash <<< "$row"
+  if [[ -z "$compat_policy_version" || "$compat_policy_version" == "legacy" ]]; then
+    echo "lane state compatibility policy version missing for lane ${lane_id}; rerun with --reset-lane-state" >&2
+    exit 1
+  fi
+  if [[ "$compat_policy_version" != "$LANE_STATE_COMPAT_POLICY_VERSION" ]]; then
+    echo "lane state compatibility policy version mismatch for lane ${lane_id}; expected ${LANE_STATE_COMPAT_POLICY_VERSION}, found ${compat_policy_version}; rerun with --reset-lane-state" >&2
+    exit 1
+  fi
   if [[ -z "$config_hash" ]]; then
     echo "lane state config hash missing for lane ${lane_id}; rerun with --reset-lane-state" >&2
     exit 1
@@ -806,8 +847,8 @@ record_result() {
     local lane_id="${suite}/${mode}"
     local updated_at_utc
     updated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
-      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_ACTIVE_CONFIG_HASH")" "current-run"
+    lane_state_register_row "$lane_id" "$(printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" \
+      "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_COMPAT_POLICY_VERSION" "$LANE_STATE_ACTIVE_CONFIG_HASH")" "current-run"
     lane_state_write_file
   fi
 }

@@ -1,30 +1,36 @@
 // RUN: rm -rf %t
 // RUN: mkdir -p %t
-// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\t1111111111111111111111111111111111111111111111111111111111111111\n' > %t/lane-a.tsv
-// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t8\t1\t1\t0\t0\t0\t2026-02-08T01:00:00Z\t1111111111111111111111111111111111111111111111111111111111111111\nsv-tests/LEC\tsv-tests\tLEC\t10\t10\t0\t0\t0\t0\t0\t2026-02-08T01:00:00Z\t1111111111111111111111111111111111111111111111111111111111111111\n' > %t/lane-b.tsv
-// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:30:00Z\t2222222222222222222222222222222222222222222222222222222222222222\n' > %t/lane-conflict.tsv
+// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\t1\t1111111111111111111111111111111111111111111111111111111111111111\n' > %t/lane-a.tsv
+// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t8\t1\t1\t0\t0\t0\t2026-02-08T01:00:00Z\t1\t1111111111111111111111111111111111111111111111111111111111111111\nsv-tests/LEC\tsv-tests\tLEC\t10\t10\t0\t0\t0\t0\t0\t2026-02-08T01:00:00Z\t1\t1111111111111111111111111111111111111111111111111111111111111111\n' > %t/lane-b.tsv
+// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:30:00Z\t1\t2222222222222222222222222222222222222222222222222222222222222222\n' > %t/lane-conflict.tsv
 // RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\n' > %t/lane-legacy.tsv
-// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\t1111111111111111111111111111111111111111111111111111111111111111\nyosys/tests/sva/BMC\tyosys/tests/sva\tBMC\t4\t4\t0\t0\t0\t0\t0\t2026-02-08T00:00:00Z\t3333333333333333333333333333333333333333333333333333333333333333\n' > %t/lane-multi-hash.tsv
-// RUN: python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-a.tsv %t/lane-b.tsv --require-config-hash --require-single-config-hash --require-lane sv-tests/BMC --require-lane sv-tests/LEC --print-lanes --json-out %t/lane-summary.json > %t/lane-summary.txt
+// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\t1\t1111111111111111111111111111111111111111111111111111111111111111\nyosys/tests/sva/BMC\tyosys/tests/sva\tBMC\t4\t4\t0\t0\t0\t0\t0\t2026-02-08T00:00:00Z\t1\t3333333333333333333333333333333333333333333333333333333333333333\n' > %t/lane-multi-hash.tsv
+// RUN: printf 'lane_id\tsuite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tupdated_at_utc\tcompat_policy_version\tconfig_hash\nsv-tests/BMC\tsv-tests\tBMC\t10\t9\t0\t1\t0\t0\t0\t2026-02-08T00:00:00Z\t2\t1111111111111111111111111111111111111111111111111111111111111111\n' > %t/lane-policy-mismatch.tsv
+// RUN: python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-a.tsv %t/lane-b.tsv --require-config-hash --require-compat-policy-version --expect-compat-policy-version 1 --require-single-config-hash --require-lane sv-tests/BMC --require-lane sv-tests/LEC --print-lanes --json-out %t/lane-summary.json > %t/lane-summary.txt
 // RUN: FileCheck %s --check-prefix=INSPECT < %t/lane-summary.txt
 // RUN: FileCheck %s --check-prefix=JSON < %t/lane-summary.json
 // RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-a.tsv %t/lane-conflict.tsv 2>&1 | FileCheck %s --check-prefix=BADHASH
 // RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-legacy.tsv --require-config-hash 2>&1 | FileCheck %s --check-prefix=MISSINGHASH
+// RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-legacy.tsv --require-compat-policy-version 2>&1 | FileCheck %s --check-prefix=MISSINGPOLICY
 // RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-a.tsv --require-lane sv-tests/LEC 2>&1 | FileCheck %s --check-prefix=MISSINGLANE
 // RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-multi-hash.tsv --require-single-config-hash 2>&1 | FileCheck %s --check-prefix=MULTIHASH
+// RUN: not python3 %S/../../utils/inspect_formal_lane_state.py %t/lane-policy-mismatch.tsv --expect-compat-policy-version 1 2>&1 | FileCheck %s --check-prefix=BADPOLICY
 
 // INSPECT: SUMMARY input_files=2 input_rows=3 merged_lanes=2 duplicate_lane_rows=1
+// INSPECT: SUMMARY compat_policy_versions_non_empty=1 compat_policy_version_list=1
 // INSPECT: SUMMARY config_hashes_non_empty=1 config_hash_list=1111111111111111111111111111111111111111111111111111111111111111
 // INSPECT: SUMMARY counters total=20 pass=18 fail=1 xfail=1 xpass=0 error=0 skip=0
 // INSPECT: SUITE_MODE suite=sv-tests mode=BMC lanes=1 total=10 pass=8 fail=1 xfail=1 xpass=0 error=0 skip=0
 // INSPECT: SUITE_MODE suite=sv-tests mode=LEC lanes=1 total=10 pass=10 fail=0 xfail=0 xpass=0 error=0 skip=0
-// INSPECT: LANE lane_id=sv-tests/BMC suite=sv-tests mode=BMC total=10 pass=8 fail=1 xfail=1 xpass=0 error=0 skip=0 updated_at_utc=2026-02-08T01:00:00Z config_hash=1111111111111111111111111111111111111111111111111111111111111111
-// INSPECT: LANE lane_id=sv-tests/LEC suite=sv-tests mode=LEC total=10 pass=10 fail=0 xfail=0 xpass=0 error=0 skip=0 updated_at_utc=2026-02-08T01:00:00Z config_hash=1111111111111111111111111111111111111111111111111111111111111111
+// INSPECT: LANE lane_id=sv-tests/BMC suite=sv-tests mode=BMC total=10 pass=8 fail=1 xfail=1 xpass=0 error=0 skip=0 updated_at_utc=2026-02-08T01:00:00Z compat_policy_version=1 config_hash=1111111111111111111111111111111111111111111111111111111111111111
+// INSPECT: LANE lane_id=sv-tests/LEC suite=sv-tests mode=LEC total=10 pass=10 fail=0 xfail=0 xpass=0 error=0 skip=0 updated_at_utc=2026-02-08T01:00:00Z compat_policy_version=1 config_hash=1111111111111111111111111111111111111111111111111111111111111111
 
 // JSON-DAG: "schema_version": 1
 // JSON-DAG: "input_rows": 3
 // JSON-DAG: "merged_lanes": 2
 // JSON-DAG: "duplicate_lane_rows": 1
+// JSON-DAG: "observed_compat_policy_versions": [
+// JSON-DAG: "compat_policy_version": "1"
 // JSON-DAG: "observed_config_hashes": [
 // JSON-DAG: "1111111111111111111111111111111111111111111111111111111111111111"
 // JSON-DAG: "lane_id": "sv-tests/BMC"
@@ -32,5 +38,7 @@
 
 // BADHASH: error: conflicting config_hash for lane sv-tests/BMC
 // MISSINGHASH: error: missing config_hash for lane(s): sv-tests/BMC
+// MISSINGPOLICY: error: missing compat_policy_version for lane(s): sv-tests/BMC
 // MISSINGLANE: error: required lane(s) missing: sv-tests/LEC
 // MULTIHASH: error: multiple non-empty config_hash values observed
+// BADPOLICY: error: unexpected compat_policy_version for lane(s): sv-tests/BMC

@@ -25,6 +25,7 @@ class LaneRow:
   errored: int
   skipped: int
   updated_at_utc: str
+  compat_policy_version: str
   config_hash: str
   source: str
   line_no: int
@@ -64,9 +65,12 @@ def parse_config_hash(value: str, field: str) -> str:
 
 def parse_lane_row(parts: list[str], source: str, line_no: int) -> LaneRow:
   if len(parts) == 11:
-    parts = parts + [""]
-  elif len(parts) != 12:
-    fail(f"{source}:{line_no}: expected 11 or 12 tab-separated fields")
+    parts = parts + ["", ""]
+  elif len(parts) == 12:
+    # Legacy format with no explicit compat_policy_version.
+    parts = parts[:-1] + ["", parts[-1]]
+  elif len(parts) != 13:
+    fail(f"{source}:{line_no}: expected 11, 12, or 13 tab-separated fields")
 
   (
       lane_id,
@@ -80,6 +84,7 @@ def parse_lane_row(parts: list[str], source: str, line_no: int) -> LaneRow:
       errored,
       skipped,
       updated_at_utc,
+      compat_policy_version,
       config_hash,
   ) = parts
 
@@ -91,6 +96,12 @@ def parse_lane_row(parts: list[str], source: str, line_no: int) -> LaneRow:
     fail(f"{source}:{line_no}: updated_at_utc is required")
   if not TIMESTAMP_RE.fullmatch(updated_at_utc):
     fail(f"{source}:{line_no}: updated_at_utc must be UTC RFC3339 timestamp")
+  if (
+      compat_policy_version
+      and compat_policy_version != "legacy"
+      and not re.fullmatch(r"[0-9]+", compat_policy_version)
+  ):
+    fail(f"{source}:{line_no}: compat_policy_version must be integer")
 
   return LaneRow(
       lane_id=lane_id,
@@ -104,6 +115,7 @@ def parse_lane_row(parts: list[str], source: str, line_no: int) -> LaneRow:
       errored=parse_non_negative_int(errored, f"{source}:{line_no}: error"),
       skipped=parse_non_negative_int(skipped, f"{source}:{line_no}: skip"),
       updated_at_utc=updated_at_utc,
+      compat_policy_version=compat_policy_version,
       config_hash=parse_config_hash(config_hash, f"{source}:{line_no}: config_hash"),
       source=source,
       line_no=line_no,
@@ -123,6 +135,7 @@ def row_payload_tuple(row: LaneRow) -> tuple[str, ...]:
       str(row.errored),
       str(row.skipped),
       row.updated_at_utc,
+      row.compat_policy_version,
       row.config_hash,
   )
 
@@ -153,6 +166,24 @@ def merge_lane_rows(rows: list[LaneRow]) -> tuple[dict[str, LaneRow], int]:
       continue
 
     duplicate_lane_rows += 1
+
+    if (
+        current.compat_policy_version
+        and row.compat_policy_version
+        and current.compat_policy_version != row.compat_policy_version
+    ):
+      fail(
+          "conflicting compat_policy_version for lane "
+          f"{row.lane_id}: {current.source}:{current.line_no} has "
+          f"{current.compat_policy_version}, {row.source}:{row.line_no} has "
+          f"{row.compat_policy_version}"
+      )
+
+    if not current.compat_policy_version and row.compat_policy_version:
+      merged[row.lane_id] = row
+      continue
+    if current.compat_policy_version and not row.compat_policy_version:
+      continue
 
     if current.config_hash and row.config_hash and current.config_hash != row.config_hash:
       fail(
@@ -214,6 +245,7 @@ def build_json_payload(
     input_rows: int,
     duplicate_lane_rows: int,
     merged_rows: list[LaneRow],
+    observed_compat_policy_versions: list[str],
     observed_config_hashes: list[str],
     suite_mode_aggregates: list[SuiteModeAggregate],
 ) -> dict:
@@ -223,6 +255,7 @@ def build_json_payload(
       "input_rows": input_rows,
       "merged_lanes": len(merged_rows),
       "duplicate_lane_rows": duplicate_lane_rows,
+      "observed_compat_policy_versions": observed_compat_policy_versions,
       "observed_config_hashes": observed_config_hashes,
       "counters": {
           "total": sum(r.total for r in merged_rows),
@@ -261,6 +294,7 @@ def build_json_payload(
               "error": row.errored,
               "skip": row.skipped,
               "updated_at_utc": row.updated_at_utc,
+              "compat_policy_version": row.compat_policy_version,
               "config_hash": row.config_hash,
               "source": row.source,
               "line_no": row.line_no,
@@ -287,6 +321,15 @@ def main() -> int:
       help="Fail if any merged lane row has empty config_hash",
   )
   parser.add_argument(
+      "--require-compat-policy-version",
+      action="store_true",
+      help="Fail if any merged lane row has empty compat_policy_version",
+  )
+  parser.add_argument(
+      "--expect-compat-policy-version",
+      help="Fail if any non-empty compat_policy_version differs from this value",
+  )
+  parser.add_argument(
       "--require-single-config-hash",
       action="store_true",
       help="Fail if non-empty observed config_hash set has more than one value",
@@ -306,6 +349,9 @@ def main() -> int:
 
   merged, duplicate_lane_rows = merge_lane_rows(all_rows)
   merged_rows = [merged[lane_id] for lane_id in sorted(merged)]
+  observed_compat_policy_versions = sorted(
+      {row.compat_policy_version for row in all_rows if row.compat_policy_version}
+  )
   observed_hashes = sorted({row.config_hash for row in all_rows if row.config_hash})
 
   if args.require_single_config_hash and len(observed_hashes) > 1:
@@ -318,6 +364,27 @@ def main() -> int:
     missing = [row.lane_id for row in merged_rows if not row.config_hash]
     if missing:
       fail("missing config_hash for lane(s): " + ", ".join(missing))
+
+  if args.require_compat_policy_version:
+    missing = [
+        row.lane_id
+        for row in merged_rows
+        if not row.compat_policy_version or row.compat_policy_version == "legacy"
+    ]
+    if missing:
+      fail("missing compat_policy_version for lane(s): " + ", ".join(missing))
+
+  if args.expect_compat_policy_version is not None:
+    expected = args.expect_compat_policy_version.strip()
+    if not expected:
+      fail("--expect-compat-policy-version must be non-empty")
+    mismatched = [
+        row.lane_id
+        for row in merged_rows
+        if row.compat_policy_version and row.compat_policy_version != expected
+    ]
+    if mismatched:
+      fail("unexpected compat_policy_version for lane(s): " + ", ".join(mismatched))
 
   if args.require_lane:
     missing = [lane_id for lane_id in args.require_lane if lane_id not in merged]
@@ -340,6 +407,14 @@ def main() -> int:
       f"input_rows={len(all_rows)} "
       f"merged_lanes={len(merged_rows)} "
       f"duplicate_lane_rows={duplicate_lane_rows}"
+  )
+  print(
+      "SUMMARY "
+      f"compat_policy_versions_non_empty={len(observed_compat_policy_versions)} "
+      "compat_policy_version_list="
+      + (",".join(observed_compat_policy_versions)
+         if observed_compat_policy_versions
+         else "-")
   )
   print(
       "SUMMARY "
@@ -388,6 +463,7 @@ def main() -> int:
           f"error={row.errored} "
           f"skip={row.skipped} "
           f"updated_at_utc={row.updated_at_utc} "
+          f"compat_policy_version={row.compat_policy_version or '-'} "
           f"config_hash={row.config_hash or '-'}"
       )
 
@@ -397,12 +473,16 @@ def main() -> int:
         len(all_rows),
         duplicate_lane_rows,
         merged_rows,
+        observed_compat_policy_versions,
         observed_hashes,
         suite_mode_aggregates,
     )
     json_path = Path(args.json_out)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
   return 0
 
