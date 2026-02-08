@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 512 - February 8, 2026
+
+### Summary
+
+Extended VerifToSMT expression-text fallback so dynamic affine bit/indexed
+slices are preserved when structured `*_dyn_*` metadata is unavailable.
+
+### Fixes
+
+1. **Affine dynamic slice parsing in fallback resolver**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `resolveNamedBoolExpr` fallback now supports:
+     - bit-select: `bus[idx - 1]`, `bus[idx + 1]`
+     - indexed part-select: `bus[idx + 1 +: w]`, `bus[idx - 1 -: w]`
+   - Added one-symbol affine normalization (`scale`, `offset`) and maps dynamic
+     index names to BMC input args for witness evaluation.
+
+2. **Parser hardening for bracketed index forms**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added whitespace compaction before parsing to reliably handle spaced forms
+     such as `bus[idx - 1]` and `bus[jdx + 1 +: 2]`.
+   - Extended identifier token characters with `+` and `-` so index text inside
+     brackets is not prematurely truncated.
+
+3. **Regression coverage updates**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-text.mlir`
+   - New test validates fallback expression handling for:
+     - `signal_expr = "bus[idx - 1]"`
+     - `signal_expr = "bus[jdx + 1 +: 2]"`
+     - `iff_expr = "bus[idx - 1 -: 1]"`
+   - Covers both SMT-LIB and runtime lowering paths.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt circt-verilog`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (8/8)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Fallback affine parsing is still intentionally limited to one-symbol linear
+  forms.
+- Canonical Slang expression graph/ID propagation is still missing, so text
+  reparsing remains in the stack.
+- Structured/fallback semantics for casts, concat, and replication are still
+  missing.
+
 ## Iteration 511 - February 8, 2026
 
 ### Summary
