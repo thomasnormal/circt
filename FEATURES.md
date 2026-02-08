@@ -55,7 +55,8 @@ that unexpectedly pass (not a tool bug).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 167 | 167 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops |
+| circt-sim | 173 | 173 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval |
+| ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past |
 
 ## UVM Simulation Feature Status
 
@@ -95,6 +96,7 @@ to commercial simulators like Cadence Xcelium.
 | `randomize()` (with dist) | WORKS | `__moore_randomize_with_dist()` implements weighted distribution constraints |
 | `randomize()` (with ranges) | WORKS | `__moore_randomize_with_ranges()` generates uniform random within range pairs |
 | Interface ports | WORKS | Generic interface ports resolved from connection site (IEEE 1800-2017 §25.5) |
+| Short-circuit evaluation | WORKS | `&&`, `\|\|`, `->` only evaluate RHS when needed (IEEE 1800-2017 §11.4.7); uses `moore.conditional` in procedural contexts |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | WORKS | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
 | Coverage collection | WORKS | Covergroup/coverpoint sampling + reporting via MooreRuntime; implicit sample() evaluates coverpoint expressions; 4-state value extraction |
@@ -172,3 +174,5 @@ to commercial simulators like Cadence Xcelium.
 | Bounded delta polling (RUNPHSTIME fix) | Use delta steps for first 1000 polls, then 1ps fallback; eliminates UVM_FATAL [RUNPHSTIME] in all AVIPs |
 | UVM regex DPI (`std::regex`) | Replace manual pattern matcher with `std::regex` for full POSIX extended regex; eliminates UVM_ERROR DPI/REGEX in AXI4Lite/JTAG |
 | Fixed-array sort/stream ops | Add `UnpackedArrayType` to 7 more MooreToCore patterns (SortWith, RSortWith, ArraySize, StreamConcat/Unpack, StreamConcatMixed/UnpackMixed) with probe/drive |
+| Short-circuit evaluation | `&&`/`\|\|`/`->` use `moore.conditional` for lazy RHS evaluation in procedural contexts (IEEE 1800-2017 §11.4.7) |
+| Virtual iface bind override | Wire `allowVirtualIfaceWithOverride` to slang `CompilationFlags`; enables virtual iface assignment with defparam/bind targets |
