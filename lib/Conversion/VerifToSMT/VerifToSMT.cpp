@@ -192,6 +192,7 @@ struct ResolvedNamedBoolExpr {
     Group,
     Not,
     BitwiseNot,
+    Cast,
     Concat,
     Replicate,
     ReduceAnd,
@@ -216,6 +217,8 @@ struct ResolvedNamedBoolExpr {
   unsigned argIndex = 0;
   std::optional<ArgSlice> argSlice;
   bool constValue = false;
+  uint32_t castWidth = 0;
+  bool castSigned = false;
   uint32_t replicateCount = 0;
   bool compareSigned = false;
   std::unique_ptr<ResolvedNamedBoolExpr> lhs;
@@ -965,6 +968,41 @@ static bool resolveStructuredExprFromDetail(
     }
     return node;
   };
+  auto castWidthAttr = dyn_cast_or_null<IntegerAttr>(detail.get(key("cast_width")));
+  bool hasCastSignedAttr = static_cast<bool>(detail.get(key("cast_signed")));
+  auto castSignedAttr = parseBoolLikeAttr("cast_signed");
+  if (!castSignedAttr)
+    return false;
+  if (castWidthAttr || hasCastSignedAttr) {
+    if (!castWidthAttr || !hasCastSignedAttr)
+      return false;
+    int64_t castWidth = castWidthAttr.getInt();
+    if (castWidth <= 0 || castWidth > (1 << 20))
+      return false;
+    std::string argPrefix = (prefix + "_arg").str();
+    std::optional<unsigned> argArgIndex;
+    std::unique_ptr<ResolvedNamedBoolExpr> argExpr;
+    if (!resolveStructuredExprFromDetail(detail, argPrefix, inputNameToArgIndex,
+                                         numNonStateArgs, argArgIndex, argExpr))
+      return false;
+    auto argNode = moveArgOrExprToNode(argArgIndex, argExpr);
+    if (!argNode)
+      return false;
+    auto castNode = std::make_unique<ResolvedNamedBoolExpr>();
+    castNode->kind = ResolvedNamedBoolExpr::Kind::Cast;
+    castNode->castWidth = static_cast<uint32_t>(castWidth);
+    castNode->castSigned = *castSignedAttr;
+    castNode->lhs = std::move(argNode);
+    std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(castNode);
+    if (logicalNot) {
+      auto notNode = std::make_unique<ResolvedNamedBoolExpr>();
+      notNode->kind = ResolvedNamedBoolExpr::Kind::Not;
+      notNode->lhs = std::move(current);
+      current = std::move(notNode);
+    }
+    resolvedExpr = maybeWrapGroup(std::move(current));
+    return true;
+  }
   auto concatArityAttr =
       dyn_cast_or_null<IntegerAttr>(detail.get(key("concat_arity")));
   if (concatArityAttr) {
@@ -5638,6 +5676,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_group") ||
               detail.get("iff_group_depth") ||
               detail.get("iff_bin_op") || detail.get("iff_unary_op") ||
+              detail.get("iff_cast_width") || detail.get("iff_cast_signed") ||
               detail.get("iff_concat_arity") ||
               detail.get("iff_replicate_count") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
@@ -6217,6 +6256,15 @@ struct VerifBoundedModelCheckingOpConversion
             return Value(smt::NotOp::create(builder, loc, operand));
           return failure();
         }
+        case ResolvedNamedBoolExpr::Kind::Cast: {
+          if (!subexpr.lhs || subexpr.castWidth == 0)
+            return failure();
+          auto operandOr = selfValue(selfValue, *subexpr.lhs);
+          if (failed(operandOr))
+            return failure();
+          return materializeAsSMTBVForCmp(*operandOr, subexpr.castWidth,
+                                          subexpr.castSigned);
+        }
         case ResolvedNamedBoolExpr::Kind::Concat: {
           auto lhsOr = selfValue(selfValue, *subexpr.lhs);
           auto rhsOr = selfValue(selfValue, *subexpr.rhs);
@@ -6336,6 +6384,7 @@ struct VerifBoundedModelCheckingOpConversion
           return failure();
         return evalBitwiseNotAsBool(*operandOr);
       }
+      case ResolvedNamedBoolExpr::Kind::Cast:
       case ResolvedNamedBoolExpr::Kind::Concat:
       case ResolvedNamedBoolExpr::Kind::Replicate: {
         auto valueOr = evalSubExprAsValue(evalSubExprAsValue, expr);

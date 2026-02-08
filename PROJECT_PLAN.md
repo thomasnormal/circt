@@ -9637,6 +9637,57 @@ ninja -C build circt-verilog
   - Extend structured grouping encoding beyond wrapper depth to full tree
     fidelity.
 
+### Iteration 472
+- Structured cast metadata from Slang conversion expressions:
+  - ImportVerilog structured extraction now recognizes integral
+    `ConversionExpression` wrappers and emits:
+    - `<prefix>_cast_width`
+    - `<prefix>_cast_signed`
+    - operand subtree under `<prefix>_arg`
+  - Non-integral conversion wrappers still fall back to recursive operand
+    extraction, preserving prior behavior.
+- VerifToSMT structured cast lowering support:
+  - Added structured node kind: `Cast`.
+  - Structured resolver now parses `*_cast_width` / `*_cast_signed` and
+    materializes cast wrapper nodes around structured operands.
+  - Event-arm witness lowering now evaluates cast nodes as explicit bitvector
+    width/sign transforms (truncate/extend with sign or zero extension).
+  - Cast-valued nodes participate in both:
+    - value-aware compare lowering (`eq/ne`, relational compares),
+    - bool-context witness evaluation (via non-zero conversion).
+  - IFF structured-presence detection now includes cast attrs.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+    `SequenceSignalEventListStructuredCast`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (20 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS (no `interpretOperation failed`)
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Cast metadata currently models only integral width/sign casts; domain
+    intent and non-integral cast families are not yet encoded structurally.
+  - Structured compare semantics still lack canonical Slang type graph metadata
+    for fully general mixed-width/mixed-domain operands.
+  - Group-depth metadata still captures wrapper nesting, not full parenthesis
+    tree structure.
+- Long-term features to prioritize:
+  - Extend structured cast metadata with domain/type provenance (two-state vs
+    four-state and richer cast families).
+  - Carry canonical Slang expression/type graph metadata into event attrs to
+    retire fallback text parsing.
+  - Encode full grouping-tree fidelity beyond outer-wrapper depth.
+
 ---
 
 ## Architecture Reference
