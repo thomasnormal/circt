@@ -1906,6 +1906,36 @@ emit_mode_summary_outputs() {
     exit 1
   }
 
+  prepare_history_jsonl_file() {
+    local file="$1"
+    local -a lines=()
+    local i
+    local line payload
+    [[ -f "$file" ]] || return 0
+    [[ -s "$file" ]] || return 0
+    mapfile -t lines < "$file"
+    ((${#lines[@]} > 0)) || return 0
+    : > "$file"
+    for ((i = 0; i < ${#lines[@]}; ++i)); do
+      line="${lines[$i]}"
+      [[ -z "$line" ]] && continue
+      if [[ "$line" == *\"schema_version\"* ]]; then
+        printf '%s\n' "$line" >> "$file"
+        continue
+      fi
+      if [[ "$line" != *"{"* || "$line" != *"}"* ]]; then
+        echo "error: unsupported YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE line format in $file at line $((i + 1))" >&2
+        exit 1
+      fi
+      payload="$(printf '%s' "$line" | sed -E 's/^[[:space:]]*\{//; s/\}[[:space:]]*$//')"
+      if [[ -n "$payload" ]]; then
+        printf '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z",%s}\n' "$((i + 1))" "$payload" >> "$file"
+      else
+        printf '{"schema_version":"0","run_id":"legacy-%d","generated_at_utc":"1970-01-01T00:00:00Z"}\n' "$((i + 1))" >> "$file"
+      fi
+    done
+  }
+
   trim_history_jsonl() {
     local file="$1"
     local max_entries="$2"
@@ -1979,6 +2009,7 @@ emit_mode_summary_outputs() {
   fi
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" ]]; then
+    prepare_history_jsonl_file "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
     {
       printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d}}\n' \
         "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
