@@ -32572,3 +32572,44 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - JSONL remains append-only; no run UUID/grouping field yet.
 - Operation rows remain summary-only and do not include row-level textual diffs.
+
+## Iteration 657 - February 8, 2026
+
+### Dry-Run JSONL Grouping (`run_id`)
+
+- Added per-run `run_id` emission in `utils/run_formal_all.sh` for
+  dry-run JSONL reports.
+- `run_id` now appears in:
+  - `run_meta` row
+  - all operation rows (`prune_*` / `refresh_*`)
+- This enables stable grouping of operation rows by invocation in append-only
+  JSONL files.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - `DRYRUNREPORT` now checks `run_meta` carries `run_id`
+  - `docs/FormalRegression.md`
+    - clarified that all JSONL rows share the same per-run `run_id`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Formal lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused tests:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke verification:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+    - report includes `run_meta` + operation rows with shared `run_id`
+    - lanes: `sv-tests`/`verilator-verification`/`yosys`/`opentitan` PASS;
+      AVIP `axi4Lite_avip` known FAIL
+
+### Remaining Limitations
+
+- JSONL is still append-only and has no explicit end-of-run marker.
+- Operation rows remain summary-only and do not provide row-level diffs.
