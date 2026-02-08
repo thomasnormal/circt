@@ -218,6 +218,10 @@ static Value cloneValueIntoBlock(Value value, OpBuilder &builder,
                                  IRMapping &mapping) {
   if (!value)
     return value;
+  // Reference-like values (variables, nets, etc.) must remain shared objects;
+  // cloning them into nested wait regions creates disconnected state.
+  if (isa<moore::RefType>(value.getType()))
+    return value;
   if (auto mapped = mapping.lookupOrNull(value))
     return mapped;
   if (auto *def = value.getDefiningOp()) {
@@ -241,8 +245,9 @@ static moore::Edge convertClockEdge(const ltl::ClockEdge edge) {
   return moore::Edge::AnyChange;
 }
 
-static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
-                                               const slang::ast::Expression &expr) {
+static LogicalResult lowerClockedSequenceEventControl(
+    Context &context, Location loc, Value seqValue, Value clockValue,
+    ltl::ClockEdge edge) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -259,58 +264,19 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
   builder.setInsertionPointToEnd(loopBlock);
   auto waitOp = moore::WaitEventOp::create(builder, loc);
   Block &waitBlock = waitOp.getBody().emplaceBlock();
-
-  const slang::ast::Expression *assertionExpr = &expr;
-  if (auto symRef = expr.getSymbolReference()) {
-    if (symRef->kind == slang::ast::SymbolKind::Sequence ||
-        symRef->kind == slang::ast::SymbolKind::Property ||
-        symRef->kind == slang::ast::SymbolKind::LetDecl) {
-      assertionExpr = &slang::ast::AssertionInstanceExpression::makeDefault(
-          *symRef);
-    }
-  }
-
-  Value rootValue = context.convertRvalueExpression(*assertionExpr);
-  if (!rootValue)
-    return failure();
-  if (isa<ltl::PropertyType>(rootValue.getType()))
-    return mlir::emitError(loc)
-           << "property event controls are not yet supported";
-
-  Value clockedValue = rootValue;
-  if (!clockedValue.getDefiningOp<ltl::ClockOp>()) {
-    if (context.currentScope) {
-      if (auto *clocking = context.compilation.getDefaultClocking(
-              *context.currentScope)) {
-        if (auto *clockBlock =
-                clocking->as_if<slang::ast::ClockingBlockSymbol>())
-          clockedValue =
-              context.convertLTLTimingControl(clockBlock->getEvent(),
-                                              clockedValue);
-      }
-    }
-  }
-
-  auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
-  if (!clockOp)
-    return mlir::emitError(loc)
-           << "sequence event control requires a clocking event";
-
-  Value seqValue = clockOp.getInput();
   {
     OpBuilder waitBuilder(builder.getContext());
     waitBuilder.setInsertionPointToStart(&waitBlock);
     IRMapping mapping;
-    Value clockInWait =
-        cloneValueIntoBlock(clockOp.getClock(), waitBuilder, mapping);
+    Value clockInWait = cloneValueIntoBlock(clockValue, waitBuilder, mapping);
     auto mooreClockTy = moore::IntType::get(builder.getContext(), 1,
                                             moore::Domain::TwoValued);
     if (!isa<moore::IntType>(clockInWait.getType()))
       clockInWait = UnrealizedConversionCastOp::create(
           waitBuilder, loc, mooreClockTy, clockInWait)
                         ->getResult(0);
-    auto edge = convertClockEdge(clockOp.getEdge());
-    moore::DetectEventOp::create(waitBuilder, loc, edge, clockInWait, Value{});
+    moore::DetectEventOp::create(waitBuilder, loc, convertClockEdge(edge),
+                                 clockInWait, Value{});
   }
 
   auto i1Type = builder.getI1Type();
@@ -366,7 +332,6 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
   if (!accepting.empty())
     match = comb::OrOp::create(builder, loc, accepting, true);
 
-  eraseLTLDeadOps(clockedValue);
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, nextVals);
 
@@ -381,6 +346,174 @@ static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
   cf::BranchOp::create(builder, loc, loopBlock, initStates);
   builder.setInsertionPointToEnd(resumeBlock);
   return success();
+}
+
+static LogicalResult lowerSequenceEventControl(Context &context, Location loc,
+                                               const slang::ast::Expression &expr) {
+  const slang::ast::Expression *assertionExpr = &expr;
+  if (auto symRef = expr.getSymbolReference()) {
+    if (symRef->kind == slang::ast::SymbolKind::Sequence ||
+        symRef->kind == slang::ast::SymbolKind::Property ||
+        symRef->kind == slang::ast::SymbolKind::LetDecl) {
+      assertionExpr = &slang::ast::AssertionInstanceExpression::makeDefault(
+          *symRef);
+    }
+  }
+
+  Value rootValue = context.convertRvalueExpression(*assertionExpr);
+  if (!rootValue)
+    return failure();
+  if (isa<ltl::PropertyType>(rootValue.getType()))
+    return mlir::emitError(loc)
+           << "property event controls are not yet supported";
+
+  Value clockedValue = rootValue;
+  if (!clockedValue.getDefiningOp<ltl::ClockOp>()) {
+    if (context.currentScope) {
+      if (auto *clocking = context.compilation.getDefaultClocking(
+              *context.currentScope)) {
+        if (auto *clockBlock =
+                clocking->as_if<slang::ast::ClockingBlockSymbol>())
+          clockedValue =
+              context.convertLTLTimingControl(clockBlock->getEvent(),
+                                              clockedValue);
+      }
+    }
+  }
+
+  auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
+  if (!clockOp)
+    return mlir::emitError(loc)
+           << "sequence event control requires a clocking event";
+
+  Value seqValue = clockOp.getInput();
+  Value clockValue = clockOp.getClock();
+  auto edge = clockOp.getEdge();
+  eraseLTLDeadOps(clockedValue);
+  return lowerClockedSequenceEventControl(context, loc, seqValue, clockValue,
+                                          edge);
+}
+
+static Value stripClockCasts(Value clock) {
+  while (clock) {
+    if (auto toBool = clock.getDefiningOp<moore::ToBuiltinBoolOp>()) {
+      clock = toBool.getInput();
+      continue;
+    }
+    if (auto boolCast = clock.getDefiningOp<moore::BoolCastOp>()) {
+      clock = boolCast.getInput();
+      continue;
+    }
+    if (auto conv = clock.getDefiningOp<moore::ConversionOp>()) {
+      clock = conv.getInput();
+      continue;
+    }
+    if (auto cast = clock.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (cast->getNumOperands() == 1) {
+        clock = cast->getOperand(0);
+        continue;
+      }
+    }
+    break;
+  }
+  return clock;
+}
+
+static bool equivalentClockSignals(Value lhs, Value rhs) {
+  lhs = stripClockCasts(lhs);
+  rhs = stripClockCasts(rhs);
+  if (lhs == rhs)
+    return true;
+  auto lhsRead = lhs.getDefiningOp<moore::ReadOp>();
+  auto rhsRead = rhs.getDefiningOp<moore::ReadOp>();
+  if (lhsRead && rhsRead && lhsRead.getInput() == rhsRead.getInput())
+    return true;
+  return false;
+}
+
+static LogicalResult
+lowerSequenceEventListControl(Context &context, Location loc,
+                              const slang::ast::EventListControl &ctrl) {
+  OpBuilder &builder = context.builder;
+  if (ctrl.events.empty())
+    return mlir::emitError(loc) << "empty event list control";
+
+  std::optional<ltl::ClockEdge> commonEdge;
+  Value commonClock;
+  SmallVector<Value, 4> sequenceInputs;
+  SmallVector<Value, 4> clockedValues;
+
+  for (const auto *event : ctrl.events) {
+    auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
+                             : nullptr;
+    if (!signalCtrl || !isAssertionEventControl(signalCtrl->expr))
+      return mlir::emitError(loc)
+             << "event lists mixing sequence/property and signal events are "
+                "not yet supported";
+    if (signalCtrl->edge != slang::ast::EdgeKind::None ||
+        signalCtrl->iffCondition)
+      return mlir::emitError(loc)
+             << "sequence event controls in event lists do not support edge "
+                "qualifiers";
+
+    const slang::ast::Expression *assertionExpr = &signalCtrl->expr;
+    if (auto symRef = signalCtrl->expr.getSymbolReference()) {
+      if (symRef->kind == slang::ast::SymbolKind::Sequence ||
+          symRef->kind == slang::ast::SymbolKind::Property ||
+          symRef->kind == slang::ast::SymbolKind::LetDecl) {
+        assertionExpr = &slang::ast::AssertionInstanceExpression::makeDefault(
+            *symRef);
+      }
+    }
+
+    Value rootValue = context.convertRvalueExpression(*assertionExpr);
+    if (!rootValue)
+      return failure();
+    if (isa<ltl::PropertyType>(rootValue.getType()))
+      return mlir::emitError(loc)
+             << "property event controls are not yet supported";
+
+    Value clockedValue = rootValue;
+    if (!clockedValue.getDefiningOp<ltl::ClockOp>()) {
+      if (context.currentScope) {
+        if (auto *clocking = context.compilation.getDefaultClocking(
+                *context.currentScope)) {
+          if (auto *clockBlock =
+                  clocking->as_if<slang::ast::ClockingBlockSymbol>())
+            clockedValue =
+                context.convertLTLTimingControl(clockBlock->getEvent(),
+                                                clockedValue);
+        }
+      }
+    }
+
+    auto clockOp = clockedValue.getDefiningOp<ltl::ClockOp>();
+    if (!clockOp)
+      return mlir::emitError(loc)
+             << "sequence event control requires a clocking event";
+
+    if (!commonEdge) {
+      commonEdge = clockOp.getEdge();
+      commonClock = clockOp.getClock();
+    } else if (*commonEdge != clockOp.getEdge() ||
+               !equivalentClockSignals(commonClock, clockOp.getClock())) {
+      return mlir::emitError(loc)
+             << "event lists with sequence/property controls on different "
+                "clocks are not yet supported";
+    }
+
+    sequenceInputs.push_back(clockOp.getInput());
+    clockedValues.push_back(clockedValue);
+  }
+
+  Value combinedSequence = sequenceInputs.front();
+  if (sequenceInputs.size() > 1)
+    combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
+  for (Value clockedValue : clockedValues)
+    eraseLTLDeadOps(clockedValue);
+
+  return lowerClockedSequenceEventControl(context, loc, combinedSequence,
+                                          commonClock, *commonEdge);
 }
 
 // Handle any of the delay control constructs.
@@ -615,6 +748,23 @@ static LogicalResult handleRoot(Context &context,
     return ctrl.visit(visitor);
   }
   case TimingControlKind::EventList: {
+    auto &eventListCtrl = ctrl.as<slang::ast::EventListControl>();
+    bool hasAssertionEvents = false;
+    bool allAssertionEvents = true;
+    for (const auto *event : eventListCtrl.events) {
+      auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
+                               : nullptr;
+      bool isAssertion = signalCtrl && isAssertionEventControl(signalCtrl->expr);
+      hasAssertionEvents |= isAssertion;
+      allAssertionEvents &= isAssertion;
+    }
+    if (hasAssertionEvents) {
+      if (!allAssertionEvents)
+        return mlir::emitError(loc)
+               << "event lists mixing sequence/property and signal events are "
+                  "not yet supported";
+      return lowerSequenceEventListControl(context, loc, eventListCtrl);
+    }
     auto waitOp = moore::WaitEventOp::create(builder, loc);
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(&waitOp.getBody().emplaceBlock());

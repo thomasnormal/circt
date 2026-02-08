@@ -23,3 +23,27 @@ module SequenceEventControl;
     a = 0;
   end
 endmodule
+
+// Test event-list sequence controls: @(seq1 or seq2)
+module SequenceEventListControl;
+  logic clk, a, b;
+
+  sequence seq1;
+    @(posedge clk) a;
+  endsequence
+
+  sequence seq2;
+    @(posedge clk) b;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceEventListControl
+  // CHECK: moore.procedure always
+  // CHECK: %[[OR:.+]] = comb.or
+  // CHECK: moore.wait_event
+  // CHECK: moore.detect_event posedge
+  // CHECK: comb.and bin %{{.+}}, %[[OR]]
+  // CHECK: cf.cond_br
+  always @(seq1 or seq2) begin
+    a <= ~a;
+  end
+endmodule

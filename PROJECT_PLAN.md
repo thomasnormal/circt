@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 476)
+## Current Status - February 8, 2026 (Iteration 477)
 
 ### Test Results
 
@@ -46,6 +46,62 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 477
+
+1. **Sequence event-list support for common-clock OR forms**
+   - Extended timing-control lowering in
+     `lib/Conversion/ImportVerilog/TimingControls.cpp` to support event lists
+     composed purely of sequence/property event controls on an equivalent clock
+     (e.g., `@(seq1 or seq2)` where both are clocked by the same event).
+   - Added dedicated OR lowering path that:
+     - builds a combined sequence condition,
+     - reuses the existing NFA-based sequence event loop semantics, and
+     - uses a shared event wait on the common sequence clock.
+   - Added explicit diagnostics for unsupported forms:
+     - mixed sequence/signal event lists (`@(seq or sig)`)
+     - sequence event-list entries on different clocks.
+
+2. **Correctness hardening for sequence event wait lowering**
+   - Fixed clock/value cloning in sequence event waits so reference-typed values
+     (`!moore.ref` storage like variables/nets) are not cloned into nested
+     wait regions.
+   - This prevents disconnected duplicate storage objects and keeps event
+     detection tied to the real module clock/state.
+
+3. **Regression coverage**
+   - Extended import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       with `SequenceEventListControl` (`@(seq1 or seq2)`).
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-list-or-unsat-e2e.sv`.
+
+4. **Validation**
+   - Lit:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+     - `test/Conversion/ImportVerilog/clocking-event-wait.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+   - Direct BMC:
+     - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+     - `sva-clocking-block-procedural-assert-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
+5. **Current limitations and best long-term next features**
+   - Mixed event lists that combine sequence/property and signal events remain
+     unsupported (`@(seq or sig)`), and require a richer multi-trigger event
+     scheduler model.
+   - Different-clock sequence event-list OR forms are still unsupported and
+     need a multi-clock sequence-event execution model.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in broader flows;
+     initialization/X correlation remains the top LEC correctness item.
+   - Upstream divergence remains large; we still need a planned sync window.
 
 ### Session Summary - Iteration 476
 
