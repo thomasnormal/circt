@@ -2146,6 +2146,46 @@ PY
     printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
   }
 
+  extract_drop_event_generated_at_utc() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    python3 - "$line" "$file" "$lineno" <<'PY'
+import json
+import sys
+
+line = sys.argv[1]
+file = sys.argv[2]
+lineno = sys.argv[3]
+
+try:
+    obj = json.loads(line)
+except Exception:
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if not isinstance(obj, dict):
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+value = obj.get("generated_at_utc")
+if not isinstance(value, str) or not value:
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+print(value)
+PY
+  }
+
   stable_event_id() {
     local key="$1"
     if ! command -v cksum >/dev/null 2>&1; then
@@ -2750,11 +2790,7 @@ PY
       for ((i = 0; i < ${#lines[@]}; ++i)); do
         line="${lines[$i]}"
         [[ -z "$line" ]] && continue
-        generated_at="$(printf '%s\n' "$line" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        if [[ -z "$generated_at" ]]; then
-          echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $file at line $((i + 1))" >&2
-          exit 1
-        fi
+        generated_at="$(extract_drop_event_generated_at_utc "$line" "$file" "$((i + 1))")"
         if ! row_epoch="$(utc_to_epoch "$generated_at")"; then
           echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $file at line $((i + 1))" >&2
           exit 1
