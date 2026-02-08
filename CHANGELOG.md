@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 486 - February 8, 2026
+
+### Summary
+
+Added a new derived-clock multiclock UNSAT equivalence regression for mixed
+sequence/signal procedural event-lists, and reran targeted BMC + external smoke
+validation.
+
+### Fixes
+
+1. **Derived-clock mixed event-list UNSAT regression**
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`
+   - The test checks equivalence between:
+     - mixed event-list lowering: `always @(s or posedge dclk iff b)`, and
+     - explicit sampled-value reference: `always @(posedge dclk) via_ref += (a || b)`.
+   - This strengthens coverage for mixed event-list behavior on derived clocks
+     under `--allow-multi-clock`.
+
+2. **Validation**
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - Import sanity:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: compile PASS
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Direct procedural property event controls remain blocked by frontend legality
+  (`always @(p)` is rejected as invalid event-expression type).
+- `sequence_instance.matched` is still not legal in procedural expression
+  contexts (frontend restriction).
+- Multiclock UNSAT harnesses still need stronger non-vacuous edge forcing for
+  unconstrained input clocks.
+
 ## Iteration 485 - February 8, 2026
 
 ### Summary
