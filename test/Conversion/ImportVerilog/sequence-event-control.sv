@@ -600,3 +600,33 @@ module SequenceSignalEventListStructuredConcatReplicate;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for cast wrappers in event terms.
+module SequenceSignalEventListStructuredCast;
+  logic clk, q;
+  logic signed [2:0] sbus;
+  logic [2:0] ubus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredCast
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "eq"
+  // CHECK-DAG: signal_lhs_cast_width = 3 : i32
+  // CHECK-DAG: signal_lhs_cast_signed
+  // CHECK-DAG: signal_lhs_arg_name = "ubus"
+  // CHECK-DAG: signal_rhs_cast_width = 3 : i32
+  // CHECK-DAG: signal_rhs_cast_signed
+  // CHECK-DAG: signal_rhs_arg_name = "sbus"
+  // CHECK-DAG: iff_bin_op = "ne"
+  // CHECK-DAG: iff_lhs_cast_width = 3 : i32
+  // CHECK-DAG: iff_lhs_cast_signed = false
+  // CHECK-DAG: iff_lhs_arg_name = "sbus"
+  // CHECK-DAG: iff_rhs_name = "ubus"
+  always @(seq or posedge (signed'(ubus) == signed'(sbus))
+           iff (unsigned'(sbus) != ubus)) begin
+    q <= ~q;
+  end
+endmodule

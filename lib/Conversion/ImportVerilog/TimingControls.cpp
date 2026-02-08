@@ -569,9 +569,6 @@ static bool maybeAddStructuredEventExprAttrs(
     StringRef prefix, const slang::ast::Expression *expr) {
   if (!expr)
     return false;
-  if (auto *conv = expr->as_if<slang::ast::ConversionExpression>())
-    return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
-                                            &conv->operand());
   auto addAttrIfMissing = [&](StringRef key, Attribute value) {
     if (llvm::any_of(detailAttrs, [&](NamedAttribute namedAttr) {
           return namedAttr.getName().strref() == key;
@@ -620,99 +617,125 @@ static bool maybeAddStructuredEventExprAttrs(
     }
     return count;
   };
-  StructuredEventExprInfo info;
-  if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
-    emittedAny = true;
-    addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
-    if (info.lsb && info.msb) {
-      addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
-      addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
-    }
-    if (info.dynIndexName && info.dynSign && info.dynOffset && info.dynWidth) {
-      addAttrIfMissing(keyFor("dyn_index_name"),
-                       builder.getStringAttr(*info.dynIndexName));
-      addAttrIfMissing(keyFor("dyn_sign"),
-                       builder.getI32IntegerAttr(*info.dynSign));
-      addAttrIfMissing(keyFor("dyn_offset"),
-                       builder.getI32IntegerAttr(*info.dynOffset));
-      addAttrIfMissing(keyFor("dyn_width"),
-                       builder.getI32IntegerAttr(*info.dynWidth));
-    }
-    if (info.logicalNot)
-      addAttrIfMissing(keyFor("logical_not"), builder.getBoolAttr(true));
-    if (info.bitwiseNot)
-      addAttrIfMissing(keyFor("bitwise_not"), builder.getBoolAttr(true));
-    if (info.reduction)
-      addAttrIfMissing(keyFor("reduction"),
-                       builder.getStringAttr(*info.reduction));
-  }
 
-  if (auto *unary = expr->as_if<slang::ast::UnaryExpression>()) {
-    if (auto unaryOp = getStructuredUnaryEventOp(*unary)) {
-      addAttrIfMissing(keyFor("unary_op"), builder.getStringAttr(*unaryOp));
-      std::string argPrefix = (prefix + "_arg").str();
-      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
-                                            &unary->operand()))
-        return false;
-      emittedAny = true;
-    }
-  }
-
-  if (auto *concat = expr->as_if<slang::ast::ConcatenationExpression>()) {
-    SmallVector<const slang::ast::Expression *, 8> operands;
-    for (auto *operand : concat->operands()) {
-      if (!operand || operand->type->isVoid())
-        continue;
-      operands.push_back(operand);
-    }
-    if (operands.empty())
-      return false;
-    if (operands.size() == 1)
+  bool handledByWrapper = false;
+  if (auto *conv = expr->as_if<slang::ast::ConversionExpression>()) {
+    if (!conv->type || !conv->type->isIntegral())
       return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
-                                              operands.front());
-    addAttrIfMissing(keyFor("concat_arity"),
-                     builder.getI32IntegerAttr(
-                         static_cast<int64_t>(operands.size())));
-    for (auto [i, operand] : llvm::enumerate(operands)) {
-      std::string elemPrefix = (Twine(prefix) + "_cat" + Twine(i)).str();
-      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, elemPrefix,
-                                            operand))
-        return false;
-    }
-    emittedAny = true;
-  }
-
-  if (auto *replicate = expr->as_if<slang::ast::ReplicationExpression>()) {
-    auto count = getConstInt32(replicate->count());
-    if (!count || *count <= 0)
-      return false;
-    addAttrIfMissing(keyFor("replicate_count"),
-                     builder.getI32IntegerAttr(*count));
+                                              &conv->operand());
+    uint64_t width = conv->type->getBitWidth();
+    if (width == 0 || width > (1u << 20))
+      return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
+                                              &conv->operand());
+    addAttrIfMissing(keyFor("cast_width"),
+                     builder.getI32IntegerAttr(static_cast<int64_t>(width)));
+    addAttrIfMissing(keyFor("cast_signed"),
+                     builder.getBoolAttr(conv->type->isSigned()));
     std::string argPrefix = (prefix + "_arg").str();
     if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
-                                          &replicate->concat()))
+                                          &conv->operand()))
       return false;
+    handledByWrapper = true;
     emittedAny = true;
   }
 
-  if (auto *binary = expr->as_if<slang::ast::BinaryExpression>()) {
-    auto binaryOp = getStructuredBinaryEventOp(*binary);
-    if (binaryOp) {
-      addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
-      if (*binaryOp == "lt" || *binaryOp == "le" || *binaryOp == "gt" ||
-          *binaryOp == "ge") {
-        bool cmpSigned = binary->left().type && binary->left().type->isSigned();
-        addAttrIfMissing(keyFor("cmp_signed"), builder.getBoolAttr(cmpSigned));
+  if (!handledByWrapper) {
+    StructuredEventExprInfo info;
+    if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
+      emittedAny = true;
+      addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
+      if (info.lsb && info.msb) {
+        addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
+        addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
       }
-      std::string lhsPrefix = (prefix + "_lhs").str();
-      std::string rhsPrefix = (prefix + "_rhs").str();
-      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
-                                            &binary->left()))
+      if (info.dynIndexName && info.dynSign && info.dynOffset &&
+          info.dynWidth) {
+        addAttrIfMissing(keyFor("dyn_index_name"),
+                         builder.getStringAttr(*info.dynIndexName));
+        addAttrIfMissing(keyFor("dyn_sign"),
+                         builder.getI32IntegerAttr(*info.dynSign));
+        addAttrIfMissing(keyFor("dyn_offset"),
+                         builder.getI32IntegerAttr(*info.dynOffset));
+        addAttrIfMissing(keyFor("dyn_width"),
+                         builder.getI32IntegerAttr(*info.dynWidth));
+      }
+      if (info.logicalNot)
+        addAttrIfMissing(keyFor("logical_not"), builder.getBoolAttr(true));
+      if (info.bitwiseNot)
+        addAttrIfMissing(keyFor("bitwise_not"), builder.getBoolAttr(true));
+      if (info.reduction)
+        addAttrIfMissing(keyFor("reduction"),
+                         builder.getStringAttr(*info.reduction));
+    }
+
+    if (auto *unary = expr->as_if<slang::ast::UnaryExpression>()) {
+      if (auto unaryOp = getStructuredUnaryEventOp(*unary)) {
+        addAttrIfMissing(keyFor("unary_op"), builder.getStringAttr(*unaryOp));
+        std::string argPrefix = (prefix + "_arg").str();
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
+                                              &unary->operand()))
+          return false;
+        emittedAny = true;
+      }
+    }
+
+    if (auto *concat = expr->as_if<slang::ast::ConcatenationExpression>()) {
+      SmallVector<const slang::ast::Expression *, 8> operands;
+      for (auto *operand : concat->operands()) {
+        if (!operand || operand->type->isVoid())
+          continue;
+        operands.push_back(operand);
+      }
+      if (operands.empty())
         return false;
-      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, rhsPrefix,
-                                            &binary->right()))
+      if (operands.size() == 1)
+        return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
+                                                operands.front());
+      addAttrIfMissing(keyFor("concat_arity"),
+                       builder.getI32IntegerAttr(
+                           static_cast<int64_t>(operands.size())));
+      for (auto [i, operand] : llvm::enumerate(operands)) {
+        std::string elemPrefix = (Twine(prefix) + "_cat" + Twine(i)).str();
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, elemPrefix,
+                                              operand))
+          return false;
+      }
+      emittedAny = true;
+    }
+
+    if (auto *replicate = expr->as_if<slang::ast::ReplicationExpression>()) {
+      auto count = getConstInt32(replicate->count());
+      if (!count || *count <= 0)
+        return false;
+      addAttrIfMissing(keyFor("replicate_count"),
+                       builder.getI32IntegerAttr(*count));
+      std::string argPrefix = (prefix + "_arg").str();
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
+                                            &replicate->concat()))
         return false;
       emittedAny = true;
+    }
+
+    if (auto *binary = expr->as_if<slang::ast::BinaryExpression>()) {
+      auto binaryOp = getStructuredBinaryEventOp(*binary);
+      if (binaryOp) {
+        addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
+        if (*binaryOp == "lt" || *binaryOp == "le" || *binaryOp == "gt" ||
+            *binaryOp == "ge") {
+          bool cmpSigned =
+              binary->left().type && binary->left().type->isSigned();
+          addAttrIfMissing(keyFor("cmp_signed"), builder.getBoolAttr(cmpSigned));
+        }
+        std::string lhsPrefix = (prefix + "_lhs").str();
+        std::string rhsPrefix = (prefix + "_rhs").str();
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
+                                              &binary->left()))
+          return false;
+        if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, rhsPrefix,
+                                              &binary->right()))
+          return false;
+        emittedAny = true;
+      }
     }
   }
 
