@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 514 - February 8, 2026
+
+### Summary
+
+Fixed a correctness gap in fallback witness expression lowering by modeling
+unary `~` as bitwise-not (instead of logical-not) for vector expressions.
+
+### Fixes
+
+1. **Unary `~` semantic split from `!` in fallback parser**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added explicit token/kind handling for bitwise-not.
+   - `!expr` continues to lower as logical not.
+   - `~expr` now lowers with bitvector-aware semantics in fallback expression
+     evaluation.
+
+2. **Bitwise-not fallback lowering for event-arm witness expressions**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - For bitvector operands, `~expr` booleanization now checks
+     `expr != all_ones`, which matches `(~expr) != 0`.
+   - Handles sliced/dynamic-sliced arguments (`~bus[2]`, `~bus[idx]`) through
+     the existing arg-evaluation path.
+
+3. **Regression coverage updates**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-bitwise-not-text.mlir`
+   - Verifies fallback text expressions:
+     - `signal_expr = "~bus"`
+     - `iff_expr = "~bus[2]"`
+   - Covers SMT-LIB and runtime lowering.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-bitwise-not-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-bitwise-not-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (9/9)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Fallback parsing is still a bridge; canonical Slang expression graph/ID
+  propagation remains the long-term target.
+- Multi-symbol/non-linear index arithmetic is still unsupported in fallback
+  dynamic slice parsing.
+- Cast/concat/replication semantics are still missing in structured/fallback
+  witness lowering.
+
 ## Iteration 513 - February 8, 2026
 
 ### Summary

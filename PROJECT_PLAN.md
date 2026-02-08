@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 513)
+## Current Status - February 8, 2026 (Iteration 514)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + affine indexed selects and hardened affine text-parser fallback including parenthesized forms (`bus[(idx-1)]`, `bus[(idx+1)+:w]`, `bus[(idx-1)-:w]`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + affine indexed selects + hardened text fallback (parenthesized affine forms, and unary `~` bitwise semantics over vectors); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,61 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 514
+
+1. **Fixed unary `~` semantics in expression-text fallback**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Fallback parser now distinguishes:
+     - logical `!`
+     - bitwise `~`
+   - For vector operands, fallback witness lowering now models `~expr` with
+     bitvector semantics (`expr != all_ones`) instead of mis-lowering it as
+     logical boolean negation.
+
+2. **Fallback parsing + evaluation support**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added parser token/result kind for bitwise-not and lowering path in witness
+     expression evaluation.
+   - Supports both direct vector source expressions and sliced expressions
+     (for example `~bus`, `~bus[2]`) in `signal_expr` / `iff_expr` fallback.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-bitwise-not-text.mlir`
+   - New test validates text-fallback event witness lowering for:
+     - `signal_expr = "~bus"`
+     - `iff_expr = "~bus[2]"`
+   - Covers both SMTLIB and runtime conversion modes.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-bitwise-not-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-bitwise-not-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (9/9)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Fallback text parsing is still inherently brittle; semantics should move to
+     canonical Slang expression graph/ID metadata.
+   - Multi-symbol and non-linear index arithmetic remain unsupported in fallback
+     dynamic slice resolution.
+   - High-value missing semantics remain:
+     - typed casts (especially 4-state-aware),
+     - concatenation/replication,
+     - richer builtin/system expression coverage.
 
 ### Session Summary - Iteration 513
 
