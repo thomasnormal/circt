@@ -926,6 +926,10 @@ static bool resolveStructuredExprFromDetail(
       return {};
     return materializeArgNode(*index, std::nullopt);
   };
+  auto logicalNotAttr = parseBoolLikeAttr("logical_not");
+  if (!logicalNotAttr)
+    return false;
+  bool logicalNot = *logicalNotAttr;
 
   auto binOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("bin_op")));
   if (binOpAttr) {
@@ -965,7 +969,14 @@ static bool resolveStructuredExprFromDetail(
     node->kind = *binKind;
     node->lhs = std::move(lhsNode);
     node->rhs = std::move(rhsNode);
-    resolvedExpr = std::move(node);
+    std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(node);
+    if (logicalNot) {
+      auto notNode = std::make_unique<ResolvedNamedBoolExpr>();
+      notNode->kind = ResolvedNamedBoolExpr::Kind::Not;
+      notNode->lhs = std::move(current);
+      current = std::move(notNode);
+    }
+    resolvedExpr = std::move(current);
     return true;
   }
 
@@ -1062,7 +1073,7 @@ static bool resolveStructuredExprFromDetail(
       return false;
   }
 
-  if (!argSlice && !reductionKind && !bitwiseNot) {
+  if (!argSlice && !reductionKind && !bitwiseNot && !logicalNot) {
     argIndex = sourceIndex;
     return true;
   }
@@ -1080,6 +1091,12 @@ static bool resolveStructuredExprFromDetail(
     reduceNode->kind = *reductionKind;
     reduceNode->lhs = std::move(current);
     current = std::move(reduceNode);
+  }
+  if (logicalNot) {
+    auto notNode = std::make_unique<ResolvedNamedBoolExpr>();
+    notNode->kind = ResolvedNamedBoolExpr::Kind::Not;
+    notNode->lhs = std::move(current);
+    current = std::move(notNode);
   }
   resolvedExpr = std::move(current);
   return true;
@@ -5452,6 +5469,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_name") || detail.get("iff_expr") ||
               detail.get("iff_lsb") || detail.get("iff_msb") ||
               detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
+              detail.get("iff_logical_not") ||
               detail.get("iff_bin_op") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
               detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");

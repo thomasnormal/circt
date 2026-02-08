@@ -23145,3 +23145,52 @@ CIRCT/slang correctly enforces LRM restrictions.
   operators / precedence families; some terms still require text fallback.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 462 - February 8, 2026
+
+### Structured Unary Logical-Not Event Metadata
+
+- Extended ImportVerilog structured event metadata extraction to encode unary
+  logical-not (`!`) as:
+  - `signal_logical_not`
+  - `iff_logical_not`
+  - `sequence_logical_not` (via shared prefix handling)
+- Extended VerifToSMT structured event expression resolution to consume
+  `*_logical_not` (`UnitAttr` or `BoolAttr`) and build an explicit
+  `ResolvedNamedBoolExpr::Not` wrapper.
+- This applies both to structured leaves and recursive structured binary nodes.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-logical-not-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added `SequenceSignalEventListStructuredLogicalNot` coverage.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (12 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured metadata still cannot preserve full unary ordering for mixed `!`
+  and `~` chains at the same structural level.
+- Structured metadata still does not encode explicit grouping / parentheses
+  nodes for all precedence-sensitive expressions.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.
