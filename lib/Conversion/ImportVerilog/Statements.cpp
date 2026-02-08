@@ -927,8 +927,38 @@ struct StmtVisitor {
         context.globalVariablesByName[symName] = globalVarOp;
 
         // If the variable has an initializer expression, remember it for later.
-        if (var.getInitializer())
+        if (var.getInitializer()) {
           context.globalVariableWorklist.push_back(&var);
+        } else {
+          // No explicit initializer -- check for struct field defaults
+          // (IEEE 1800-2017 §7.2.1). Build the init region and synthesize
+          // the struct default inside it so the ops live in the right block.
+          auto hasStructFieldDefaults = [&]() {
+            const auto &canonical =
+                var.getDeclaredType()->getType().getCanonicalType();
+            const slang::ast::Scope *scope = nullptr;
+            if (auto *p = canonical.as_if<slang::ast::PackedStructType>())
+              scope = p;
+            else if (auto *u =
+                         canonical.as_if<slang::ast::UnpackedStructType>())
+              scope = u;
+            if (!scope)
+              return false;
+            for (auto &f : scope->membersOfType<slang::ast::FieldSymbol>())
+              if (f.getInitializer())
+                return true;
+            return false;
+          };
+          if (hasStructFieldDefaults()) {
+            auto &block = globalVarOp.getInitRegion().emplaceBlock();
+            OpBuilder::InsertionGuard initGuard(builder);
+            builder.setInsertionPointToEnd(&block);
+            auto structDefault = context.synthesizeStructFieldDefaults(
+                var.getDeclaredType()->getType(), unpackedType, loc);
+            if (structDefault)
+              moore::YieldOp::create(builder, loc, structDefault);
+          }
+        }
       }
       // InsertionGuard restores original insertion point here.
 
@@ -947,6 +977,11 @@ struct StmtVisitor {
       initial = context.convertRvalueExpression(*init, type);
       if (!initial)
         return failure();
+    } else {
+      // No explicit initializer -- check for struct field defaults
+      // (IEEE 1800-2017 §7.2.1).
+      initial = context.synthesizeStructFieldDefaults(
+          var.getDeclaredType()->getType(), unpackedType, loc);
     }
 
     auto varOp = moore::VariableOp::create(

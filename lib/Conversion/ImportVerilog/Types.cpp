@@ -344,3 +344,100 @@ Type Context::convertType(const slang::ast::DeclaredType &type) {
   return convertType(type.getType(), loc);
 }
 // NOLINTEND(misc-no-recursion)
+
+// Synthesize a struct initial value from field defaults per IEEE 1800-2017
+// §7.2.1. When a struct type has fields with default values (e.g.,
+// `typedef struct { int a = 42; int b; } my_struct;`), this function creates
+// a moore.struct_create op with the field defaults for fields that have them,
+// and zero for fields that don't. Returns null if the type is not a struct
+// or has no field defaults.
+// NOLINTBEGIN(misc-no-recursion)
+Value Context::synthesizeStructFieldDefaults(
+    const slang::ast::Type &slangType, Type mooreType, Location loc) {
+  const auto &canonical = slangType.getCanonicalType();
+
+  // Determine the slang struct scope and Moore struct member list.
+  const slang::ast::Scope *structScope = nullptr;
+  ArrayRef<moore::StructLikeMember> members;
+  bool isPacked = false;
+
+  if (auto *packed = canonical.as_if<slang::ast::PackedStructType>()) {
+    structScope = packed;
+    if (auto st = dyn_cast<moore::StructType>(mooreType)) {
+      members = st.getMembers();
+      isPacked = true;
+    } else {
+      return {};
+    }
+  } else if (auto *unpacked =
+                 canonical.as_if<slang::ast::UnpackedStructType>()) {
+    structScope = unpacked;
+    if (auto st = dyn_cast<moore::UnpackedStructType>(mooreType)) {
+      members = st.getMembers();
+      isPacked = false;
+    } else {
+      return {};
+    }
+  } else {
+    return {}; // Not a struct type.
+  }
+
+  // Check if any field has a default initializer.
+  bool hasAnyDefault = false;
+  for (auto &field :
+       structScope->membersOfType<slang::ast::FieldSymbol>()) {
+    if (field.getInitializer()) {
+      hasAnyDefault = true;
+      break;
+    }
+  }
+  if (!hasAnyDefault)
+    return {}; // No field defaults; let normal zero-init happen.
+
+  // Build field values: use the field's default initializer if present,
+  // otherwise create a zero value of the appropriate type.
+  SmallVector<Value> fieldValues;
+  unsigned idx = 0;
+  for (auto &field :
+       structScope->membersOfType<slang::ast::FieldSymbol>()) {
+    if (idx >= members.size())
+      break;
+    auto fieldMooreType = members[idx].type;
+    Value fieldVal;
+
+    if (const auto *init = field.getInitializer()) {
+      // Convert the field's default initializer expression.
+      fieldVal = convertRvalueExpression(*init, fieldMooreType);
+      if (!fieldVal)
+        return {};
+    } else {
+      // No default for this field - create a zero value.
+      if (auto intType = dyn_cast<moore::IntType>(fieldMooreType)) {
+        fieldVal = moore::ConstantOp::create(builder, loc, intType, 0);
+      } else {
+        // For non-integer fields without defaults, try to recursively
+        // synthesize defaults or create a zero via conversion from 0.
+        fieldVal = synthesizeStructFieldDefaults(
+            field.getDeclaredType()->getType(), fieldMooreType, loc);
+        if (!fieldVal) {
+          // Last resort: create a 1-bit zero and convert to the field type.
+          auto i1 = moore::IntType::getInt(getContext(), 1);
+          auto zero = moore::ConstantOp::create(builder, loc, i1, 0);
+          fieldVal = moore::ConversionOp::create(builder, loc, fieldMooreType,
+                                                 zero);
+        }
+      }
+    }
+    fieldValues.push_back(fieldVal);
+    ++idx;
+  }
+
+  // Build the struct_create op.
+  if (isPacked) {
+    return moore::StructCreateOp::create(
+        builder, loc, cast<moore::StructType>(mooreType), fieldValues);
+  }
+  return moore::StructCreateOp::create(
+      builder, loc, cast<moore::UnpackedStructType>(mooreType), fieldValues);
+}
+// NOLINTEND(misc-no-recursion)
