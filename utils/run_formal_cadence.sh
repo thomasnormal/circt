@@ -13,6 +13,8 @@ Options:
                          (default: formal-cadence-results-YYYYMMDD)
   --interval-secs N      Sleep interval between runs in seconds (default: 21600)
   --iterations N         Number of iterations to run (0=infinite, default: 0)
+  --retain-runs N        Keep only newest N run-* directories (0=keep all,
+                         default: 0)
   --run-formal-all PATH  Path to run_formal_all.sh
                          (default: utils/run_formal_all.sh)
   --strict-gate          Enable strict gate checks (default)
@@ -29,6 +31,7 @@ DATE_STR="$(date +%Y%m%d)"
 OUT_ROOT="${PWD}/formal-cadence-results-${DATE_STR}"
 INTERVAL_SECS=21600
 ITERATIONS=0
+RETAIN_RUNS=0
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
 
@@ -42,6 +45,8 @@ while [[ $# -gt 0 ]]; do
       INTERVAL_SECS="$2"; shift 2 ;;
     --iterations)
       ITERATIONS="$2"; shift 2 ;;
+    --retain-runs)
+      RETAIN_RUNS="$2"; shift 2 ;;
     --run-formal-all)
       RUN_FORMAL_ALL="$2"; shift 2 ;;
     --strict-gate)
@@ -74,6 +79,10 @@ if ! [[ "$ITERATIONS" =~ ^[0-9]+$ ]]; then
   echo "invalid --iterations: expected non-negative integer" >&2
   exit 1
 fi
+if ! [[ "$RETAIN_RUNS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --retain-runs: expected non-negative integer" >&2
+  exit 1
+fi
 if [[ ! -x "$RUN_FORMAL_ALL" ]]; then
   echo "run_formal_all script not executable: $RUN_FORMAL_ALL" >&2
   exit 1
@@ -86,8 +95,38 @@ STATE_FILE="$OUT_ROOT/cadence.state"
 echo "start_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"
 echo "interval_secs=$INTERVAL_SECS" >> "$STATE_FILE"
 echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
+echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
+
+prune_old_runs() {
+  local root="$1"
+  local retain="$2"
+  if [[ "$retain" -le 0 ]]; then
+    return 0
+  fi
+
+  local -a run_dirs=()
+  local run_name
+  while IFS= read -r run_name; do
+    run_dirs+=("$run_name")
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'run-[0-9][0-9][0-9][0-9]-*' -printf '%f\n' | LC_ALL=C sort)
+
+  local count="${#run_dirs[@]}"
+  if [[ "$count" -le "$retain" ]]; then
+    return 0
+  fi
+
+  local prune_count=$((count - retain))
+  local i
+  for ((i = 0; i < prune_count; i++)); do
+    local prune_dir="$root/${run_dirs[$i]}"
+    if [[ -d "$prune_dir" ]]; then
+      rm -rf "$prune_dir"
+      echo "pruned_run_dir=$prune_dir" | tee -a "$CADENCE_LOG"
+    fi
+  done
+}
 
 iteration=0
 while true; do
@@ -121,6 +160,8 @@ while true; do
       | tee -a "$CADENCE_LOG"
     exit "$ec"
   fi
+
+  prune_old_runs "$OUT_ROOT" "$RETAIN_RUNS"
 
   if [[ "$ITERATIONS" -ne 0 && "$iteration" -ge "$ITERATIONS" ]]; then
     echo "completed_iterations=$iteration" | tee -a "$CADENCE_LOG"

@@ -58,6 +58,12 @@ utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 -- --with-opent
 The cadence runner fails fast on the first failing iteration and keeps
 per-iteration artifacts under `formal-cadence-results-YYYYMMDD/`.
 
+Limit retained run directories to cap disk usage:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --retain-runs 12 -- --with-opentitan --opentitan ~/opentitan
+```
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:
