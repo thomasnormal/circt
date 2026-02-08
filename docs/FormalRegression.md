@@ -36,6 +36,19 @@ Fail if the latest baseline differs:
 utils/run_formal_all.sh --fail-on-diff
 ```
 
+Enable strict baseline-aware quality gates:
+
+```bash
+utils/run_formal_all.sh --strict-gate
+```
+
+Fail only on specific gate classes:
+
+```bash
+utils/run_formal_all.sh --fail-on-new-xpass
+utils/run_formal_all.sh --fail-on-passrate-regression
+```
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:
@@ -72,9 +85,15 @@ Each run writes:
 - `<out-dir>/*.log` per suite
 - `<out-dir>/summary.tsv` machine-readable summary
 - `<out-dir>/summary.txt` human-readable summary
+- `<out-dir>/summary.json` machine-readable JSON summary (override path via
+  `--json-summary`)
 - Harnesses treat `BMC_RESULT=SAT|UNSAT|UNKNOWN` and
   `LEC_RESULT=EQ|NEQ|UNKNOWN` tokens as the source of truth for pass/fail
   classification when not in smoke mode.
+
+JSON summary schema:
+
+- `utils/formal-summary-schema.json`
 
 Baselines:
 

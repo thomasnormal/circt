@@ -17,6 +17,11 @@ Options:
   --plan-file FILE       Project plan file to update (default: PROJECT_PLAN.md)
   --update-baselines     Update baseline file and PROJECT_PLAN.md table
   --fail-on-diff         Fail if results differ from baseline file
+  --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
+  --fail-on-new-xpass    Fail when xpass count increases vs baseline
+  --fail-on-passrate-regression
+                         Fail when pass-rate decreases vs baseline
+  --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
@@ -41,6 +46,10 @@ PLAN_FILE="PROJECT_PLAN.md"
 Z3_BIN="${Z3_BIN:-}"
 UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
+STRICT_GATE=0
+FAIL_ON_NEW_XPASS=0
+FAIL_ON_PASSRATE_REGRESSION=0
+JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
 BMC_RUN_SMTLIB=0
@@ -84,6 +93,14 @@ while [[ $# -gt 0 ]]; do
       UPDATE_BASELINES=1; shift ;;
     --fail-on-diff)
       FAIL_ON_DIFF=1; shift ;;
+    --strict-gate)
+      STRICT_GATE=1; shift ;;
+    --fail-on-new-xpass)
+      FAIL_ON_NEW_XPASS=1; shift ;;
+    --fail-on-passrate-regression)
+      FAIL_ON_PASSRATE_REGRESSION=1; shift ;;
+    --json-summary)
+      JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -96,6 +113,13 @@ done
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$PWD/formal-results-${DATE_STR//-/}"
+fi
+if [[ "$STRICT_GATE" == "1" ]]; then
+  FAIL_ON_NEW_XPASS=1
+  FAIL_ON_PASSRATE_REGRESSION=1
+fi
+if [[ -z "$JSON_SUMMARY_FILE" ]]; then
+  JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -277,7 +301,7 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
     utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
   line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
   total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
-  failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p')
+  failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
   if [[ -n "$total" ]]; then
     if [[ -z "$failures" ]]; then
       failures=0
@@ -323,6 +347,63 @@ summary_txt="$OUT_DIR/summary.txt"
   done
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"
+
+OUT_DIR="$OUT_DIR" JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" DATE_STR="$DATE_STR" python3 - <<'PY'
+import csv
+import json
+import os
+import subprocess
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+summary_path = out_dir / "summary.tsv"
+json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
+
+try:
+    git_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).strip()
+except Exception:
+    git_sha = ""
+
+rows = []
+with summary_path.open() as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    for row in reader:
+        total = int(row["total"])
+        passed = int(row["pass"])
+        xfail = int(row["xfail"])
+        skipped = int(row["skip"])
+        eligible = max(total - skipped, 0)
+        pass_rate = 0.0
+        if eligible > 0:
+            pass_rate = ((passed + xfail) * 100.0) / eligible
+        rows.append(
+            {
+                "suite": row["suite"],
+                "mode": row["mode"],
+                "total": total,
+                "pass": passed,
+                "fail": int(row["fail"]),
+                "xfail": xfail,
+                "xpass": int(row["xpass"]),
+                "error": int(row["error"]),
+                "skip": skipped,
+                "pass_rate": round(pass_rate, 3),
+                "summary": row["summary"],
+            }
+        )
+
+payload = {
+    "date": os.environ.get("DATE_STR", ""),
+    "git_sha": git_sha,
+    "rows": rows,
+}
+json_summary_path.parent.mkdir(parents=True, exist_ok=True)
+json_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
 
 if [[ "$UPDATE_BASELINES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" DATE_STR="$DATE_STR" BASELINE_FILE="$BASELINE_FILE" PLAN_FILE="$PLAN_FILE" python3 - <<'PY'
@@ -409,6 +490,113 @@ if plan_path.exists():
             insert_at = table_end + 1
             data[insert_at:insert_at] = new_rows
         plan_path.write_text("\n".join(data) + "\n")
+PY
+fi
+
+if [[ "$FAIL_ON_NEW_XPASS" == "1" || "$FAIL_ON_PASSRATE_REGRESSION" == "1" ]]; then
+  OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
+  FAIL_ON_NEW_XPASS="$FAIL_ON_NEW_XPASS" \
+  FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
+  STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
+import csv
+import os
+import re
+from pathlib import Path
+
+summary_path = Path(os.environ["OUT_DIR"]) / "summary.tsv"
+baseline_path = Path(os.environ["BASELINE_FILE"])
+
+if not baseline_path.exists():
+    raise SystemExit(f"baseline file not found: {baseline_path}")
+
+def parse_result_summary(summary: str):
+    parsed = {}
+    for match in re.finditer(r"([a-z_]+)=([0-9]+)", summary):
+        parsed[match.group(1)] = int(match.group(2))
+    return parsed
+
+def pass_rate(row):
+    total = int(row.get("total", 0))
+    passed = int(row.get("pass", 0))
+    xfail = int(row.get("xfail", 0))
+    skipped = int(row.get("skip", 0))
+    eligible = total - skipped
+    if eligible <= 0:
+        return 0.0
+    return ((passed + xfail) * 100.0) / eligible
+
+summary = {}
+with summary_path.open() as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    for row in reader:
+        key = (row["suite"], row["mode"])
+        summary[key] = row
+
+latest = {}
+with baseline_path.open() as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    for row in reader:
+        suite = row.get("suite", "")
+        mode = row.get("mode", "")
+        if not suite or not mode:
+            continue
+        key = (suite, mode)
+        latest.setdefault(key, []).append(row)
+
+for key, entries in latest.items():
+    entries.sort(key=lambda r: r.get("date", ""))
+    latest[key] = entries[-1]
+
+fail_on_new_xpass = os.environ.get("FAIL_ON_NEW_XPASS", "0") == "1"
+fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0") == "1"
+strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
+
+gate_errors = []
+for key, current_row in summary.items():
+    baseline_row = latest.get(key)
+    suite, mode = key
+    if baseline_row is None:
+        if strict_gate:
+            gate_errors.append(f"{suite} {mode}: missing baseline row")
+        continue
+    baseline_counts = parse_result_summary(baseline_row.get("result", ""))
+    baseline_fail = int(baseline_counts.get("fail", 0))
+    baseline_error = int(baseline_counts.get("error", 0))
+    baseline_xpass = int(baseline_counts.get("xpass", 0))
+    current_fail = int(current_row["fail"])
+    current_error = int(current_row["error"])
+    current_xpass = int(current_row["xpass"])
+    if current_fail > baseline_fail:
+        gate_errors.append(
+            f"{suite} {mode}: fail increased ({baseline_fail} -> {current_fail})"
+        )
+    if current_error > baseline_error:
+        gate_errors.append(
+            f"{suite} {mode}: error increased ({baseline_error} -> {current_error})"
+        )
+    if fail_on_new_xpass and current_xpass > baseline_xpass:
+        gate_errors.append(
+            f"{suite} {mode}: xpass increased ({baseline_xpass} -> {current_xpass})"
+        )
+    if fail_on_passrate_regression:
+        baseline_row_for_rate = {
+            "total": baseline_counts.get("total", 0),
+            "pass": baseline_counts.get("pass", 0),
+            "xfail": baseline_counts.get("xfail", 0),
+            "skip": baseline_counts.get("skip", 0),
+        }
+        baseline_rate = pass_rate(baseline_row_for_rate)
+        current_rate = pass_rate(current_row)
+        if current_rate + 1e-9 < baseline_rate:
+            gate_errors.append(
+                f"{suite} {mode}: pass_rate regressed ({baseline_rate:.3f} -> {current_rate:.3f})"
+            )
+
+if gate_errors:
+    print("strict gate failures:")
+    for item in gate_errors:
+        print(f"  {item}")
+    raise SystemExit(1)
 PY
 fi
 

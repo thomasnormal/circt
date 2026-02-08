@@ -16301,6 +16301,45 @@ ninja -C build circt-verilog
   - Repeated shared imports are still reloaded per reference (no cache/dedup).
   - Arithmetic mode remains schema/clause scoped (no per-expression override).
 
+### Iteration 623
+- Formal regression harness strict quality gates + JSON summaries:
+  - Extended `utils/run_formal_all.sh` with:
+    - `--strict-gate`
+    - `--fail-on-new-xpass`
+    - `--fail-on-passrate-regression`
+    - `--json-summary <file>`
+  - Added baseline-aware gate checks:
+    - fail/error count increases vs latest baseline are rejected
+    - XPASS count increases are rejected when enabled
+    - pass-rate regressions are rejected when enabled
+    - strict mode enables XPASS + pass-rate checks and requires baseline rows
+      for every observed suite/mode.
+  - Added machine-readable run artifact:
+    - default JSON summary output at `<out-dir>/summary.json`.
+- Formal interface documentation and schema:
+  - Added `utils/formal-summary-schema.json` to define JSON summary contract.
+  - Updated `docs/FormalRegression.md` with strict-gate and JSON-summary usage.
+- Regression tests:
+  - Added `test/Tools/run-formal-all-strict-gate.test`:
+    - validates JSON summary output structure
+    - validates strict-gate failure on XPASS increase
+    - validates pass-rate regression gate failure.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - Integrated formal harness smoke:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --lec-accept-xprop-only`
+      -> all targeted BMC/LEC suites PASS, OpenTitan PASS, AVIP PASS except `axi4Lite_avip` compile FAIL (known external VIP limitation)
+- Current limitations / debt:
+  - Baseline format still stores summary text rows; richer structured baseline
+    columns are not yet implemented.
+  - Strict gating currently compares to latest recorded baseline only; no
+    multi-window trend checks yet.
+  - `run_formal_all.sh` gating is local-script level; not yet enforced in CI
+    policy wiring.
+
 ---
 
 ## Architecture Reference
