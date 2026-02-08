@@ -67,10 +67,22 @@ Gate on known expected-failure budgets per suite/mode:
 utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --fail-on-unexpected-failures
 ```
 
+Refresh expected-failure budgets from the current run:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failures-file utils/formal-expected-failures.tsv
+```
+
 Gate on per-test expected failure cases with expiry policy:
 
 ```bash
 utils/run_formal_all.sh --expected-failure-cases-file utils/formal-expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases
+```
+
+Refresh expected failure cases from current observed fail-like rows:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31
 ```
 
 Run formal suites on a fixed cadence (6-hour interval example):
@@ -212,6 +224,8 @@ Expected-failure budget file:
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
+- `--refresh-expected-failures-file <file>` rewrites expected-failures rows from
+  current summary fail/error counts (preserves existing notes by suite/mode).
 
 Expected-failure cases file:
 
@@ -230,6 +244,10 @@ Expected-failure cases file:
   its `expires_on` date.
 - `--fail-on-unmatched-expected-failure-cases` fails when expected-case rows
   have no observed match (stale expectation cleanup gate).
+- `--refresh-expected-failure-cases-file <file>` rewrites expected-case rows
+  from current observed fail-like cases.
+- `--refresh-expected-failure-cases-default-expires-on <YYYY-MM-DD>` sets
+  default expiry for newly added refreshed case rows.
 
 ## Notes
 
