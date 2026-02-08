@@ -11470,6 +11470,71 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 545
+- Yosys SVA BMC summary-history TSV schema migration helpers:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with in-place legacy TSV
+    migration for history artifacts.
+  - Added compatibility behavior when appending to
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE`:
+    - if header matches current schema:
+      - append normally
+    - if header matches legacy unversioned schema:
+      - rewrite to current header
+      - migrate legacy rows with:
+        - `schema_version=0`
+        - `run_id=legacy-<row-index>`
+        - `generated_at_utc=1970-01-01T00:00:00Z`
+      - append current run row afterward.
+    - unknown headers now fail fast with an explicit error.
+  - Kept compatibility:
+    - JSONL and snapshot outputs unchanged
+    - existing retention controls remain active after migration.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-history-migrate.test`:
+    - validates legacy TSV header auto-migrates to versioned schema
+    - validates migrated legacy row + new run row emission.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 5/5 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 28/28 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Migration helper currently targets TSV only; JSONL schema migration is not
+    implemented.
+  - Migration timestamp placeholder for legacy rows is synthetic
+    (`1970-01-01T00:00:00Z`) due missing historic metadata.
+  - Retention remains count-based; no time-window/age-based pruning yet.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add JSONL schema migration/compatibility helpers.
+  - Add age/time-based history retention policies.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
