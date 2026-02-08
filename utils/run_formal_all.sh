@@ -31,6 +31,10 @@ Options:
   --with-opentitan       Run OpenTitan LEC script
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
   --circt-verilog PATH   Path to circt-verilog (default: <repo>/build/bin/circt-verilog)
+  --circt-verilog-avip PATH
+                         Path override for AVIP runs (default: --circt-verilog value)
+  --circt-verilog-opentitan PATH
+                         Path override for OpenTitan runs (default: --circt-verilog value)
   --with-avip            Run AVIP compile smoke using run_avip_circt_verilog.sh
   --avip-glob GLOB       Glob for AVIP dirs (default: ~/mbit/*avip*)
   -h, --help             Show this help
@@ -47,6 +51,8 @@ YOSYS_DIR="${HOME}/yosys/tests/sva"
 OPENTITAN_DIR="${HOME}/opentitan"
 AVIP_GLOB="${HOME}/mbit/*avip*"
 CIRCT_VERILOG_BIN="$REPO_ROOT/build/bin/circt-verilog"
+CIRCT_VERILOG_BIN_AVIP=""
+CIRCT_VERILOG_BIN_OPENTITAN=""
 BASELINE_FILE="utils/formal-baselines.tsv"
 PLAN_FILE="PROJECT_PLAN.md"
 Z3_BIN="${Z3_BIN:-}"
@@ -86,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN=1; shift ;;
     --circt-verilog)
       CIRCT_VERILOG_BIN="$2"; shift 2 ;;
+    --circt-verilog-avip)
+      CIRCT_VERILOG_BIN_AVIP="$2"; shift 2 ;;
+    --circt-verilog-opentitan)
+      CIRCT_VERILOG_BIN_OPENTITAN="$2"; shift 2 ;;
     --with-avip)
       WITH_AVIP=1; shift ;;
     --avip-glob)
@@ -129,9 +139,23 @@ if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; th
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
 fi
-if [[ "$WITH_OPENTITAN" == "1" || "$WITH_AVIP" == "1" ]]; then
-  if [[ ! -x "$CIRCT_VERILOG_BIN" ]]; then
-    echo "circt-verilog not executable: $CIRCT_VERILOG_BIN" >&2
+
+if [[ -z "$CIRCT_VERILOG_BIN_AVIP" ]]; then
+  CIRCT_VERILOG_BIN_AVIP="$CIRCT_VERILOG_BIN"
+fi
+if [[ -z "$CIRCT_VERILOG_BIN_OPENTITAN" ]]; then
+  CIRCT_VERILOG_BIN_OPENTITAN="$CIRCT_VERILOG_BIN"
+fi
+
+if [[ "$WITH_OPENTITAN" == "1" ]]; then
+  if [[ ! -x "$CIRCT_VERILOG_BIN_OPENTITAN" ]]; then
+    echo "circt-verilog for OpenTitan not executable: $CIRCT_VERILOG_BIN_OPENTITAN" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_AVIP" == "1" ]]; then
+  if [[ ! -x "$CIRCT_VERILOG_BIN_AVIP" ]]; then
+    echo "circt-verilog for AVIP not executable: $CIRCT_VERILOG_BIN_AVIP" >&2
     exit 1
   fi
 fi
@@ -314,7 +338,7 @@ fi
 # OpenTitan LEC (optional)
 if [[ "$WITH_OPENTITAN" == "1" ]]; then
   opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
-    CIRCT_VERILOG="$CIRCT_VERILOG_BIN")
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
   if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
     opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
   fi
@@ -340,7 +364,7 @@ if [[ "$WITH_AVIP" == "1" ]]; then
       avip_name="$(basename "$avip")"
       run_suite "avip-${avip_name}" \
         env OUT="$OUT_DIR/${avip_name}-circt-verilog.log" \
-        CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
+        CIRCT_VERILOG="$CIRCT_VERILOG_BIN_AVIP" \
         utils/run_avip_circt_verilog.sh "$avip" || true
       if [[ -f "$OUT_DIR/avip-${avip_name}.exit" ]]; then
         avip_ec=$(cat "$OUT_DIR/avip-${avip_name}.exit")
