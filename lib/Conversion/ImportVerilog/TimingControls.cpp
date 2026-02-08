@@ -498,15 +498,32 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
   return false;
 }
 
+static std::optional<StringRef>
+getStructuredBinaryEventOp(const slang::ast::BinaryExpression &expr) {
+  using slang::ast::BinaryOperator;
+  switch (expr.op) {
+  case BinaryOperator::BinaryAnd:
+  case BinaryOperator::LogicalAnd:
+    return StringRef("and");
+  case BinaryOperator::BinaryOr:
+  case BinaryOperator::LogicalOr:
+    return StringRef("or");
+  case BinaryOperator::BinaryXor:
+    return StringRef("xor");
+  case BinaryOperator::Equality:
+    return StringRef("eq");
+  case BinaryOperator::Inequality:
+    return StringRef("ne");
+  default:
+    return std::nullopt;
+  }
+}
+
 static bool maybeAddStructuredEventExprAttrs(
     OpBuilder &builder, SmallVectorImpl<NamedAttribute> &detailAttrs,
     StringRef prefix, const slang::ast::Expression *expr) {
   if (!expr)
     return false;
-  StructuredEventExprInfo info;
-  if (!extractStructuredEventExprInfo(*expr, info) || info.baseName.empty())
-    return false;
-
   auto addAttrIfMissing = [&](StringRef key, Attribute value) {
     if (llvm::any_of(detailAttrs, [&](NamedAttribute namedAttr) {
           return namedAttr.getName().strref() == key;
@@ -521,25 +538,47 @@ static bool maybeAddStructuredEventExprAttrs(
     return key;
   };
 
-  addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
-  if (info.lsb && info.msb) {
-    addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
-    addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
+  StructuredEventExprInfo info;
+  if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
+    addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
+    if (info.lsb && info.msb) {
+      addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
+      addAttrIfMissing(keyFor("msb"), builder.getI32IntegerAttr(*info.msb));
+    }
+    if (info.dynIndexName && info.dynSign && info.dynOffset && info.dynWidth) {
+      addAttrIfMissing(keyFor("dyn_index_name"),
+                       builder.getStringAttr(*info.dynIndexName));
+      addAttrIfMissing(keyFor("dyn_sign"),
+                       builder.getI32IntegerAttr(*info.dynSign));
+      addAttrIfMissing(keyFor("dyn_offset"),
+                       builder.getI32IntegerAttr(*info.dynOffset));
+      addAttrIfMissing(keyFor("dyn_width"),
+                       builder.getI32IntegerAttr(*info.dynWidth));
+    }
+    if (info.bitwiseNot)
+      addAttrIfMissing(keyFor("bitwise_not"), builder.getBoolAttr(true));
+    if (info.reduction)
+      addAttrIfMissing(keyFor("reduction"),
+                       builder.getStringAttr(*info.reduction));
+    return true;
   }
-  if (info.dynIndexName && info.dynSign && info.dynOffset && info.dynWidth) {
-    addAttrIfMissing(keyFor("dyn_index_name"),
-                     builder.getStringAttr(*info.dynIndexName));
-    addAttrIfMissing(keyFor("dyn_sign"), builder.getI32IntegerAttr(*info.dynSign));
-    addAttrIfMissing(keyFor("dyn_offset"),
-                     builder.getI32IntegerAttr(*info.dynOffset));
-    addAttrIfMissing(keyFor("dyn_width"),
-                     builder.getI32IntegerAttr(*info.dynWidth));
-  }
-  if (info.bitwiseNot)
-    addAttrIfMissing(keyFor("bitwise_not"), builder.getBoolAttr(true));
-  if (info.reduction)
-    addAttrIfMissing(keyFor("reduction"), builder.getStringAttr(*info.reduction));
 
+  auto *binary = expr->as_if<slang::ast::BinaryExpression>();
+  if (!binary)
+    return false;
+  auto binaryOp = getStructuredBinaryEventOp(*binary);
+  if (!binaryOp)
+    return false;
+
+  addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
+  std::string lhsPrefix = (prefix + "_lhs").str();
+  std::string rhsPrefix = (prefix + "_rhs").str();
+  if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
+                                        &binary->left()))
+    return false;
+  if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, rhsPrefix,
+                                        &binary->right()))
+    return false;
   return true;
 }
 

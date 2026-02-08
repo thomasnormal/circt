@@ -234,8 +234,12 @@ module SequenceSignalEventListExpr;
 
   // CHECK-LABEL: moore.module @SequenceSignalEventListExpr
   // CHECK: moore.event_source_details =
-  // CHECK-DAG: iff_expr = " (en | d)"
-  // CHECK-DAG: signal_expr = " (b & c)"
+  // CHECK-DAG: signal_bin_op = "and"
+  // CHECK-DAG: signal_lhs_name = "b"
+  // CHECK-DAG: signal_rhs_name = "c"
+  // CHECK-DAG: iff_bin_op = "or"
+  // CHECK-DAG: iff_lhs_name = "en"
+  // CHECK-DAG: iff_rhs_name = "d"
   // CHECK: moore.event_sources =
   // CHECK-SAME: "sequence"
   // CHECK-SAME: "signal[0]:posedge:iff"
@@ -363,6 +367,33 @@ module SequenceSignalEventListStructuredBitwiseNot;
   // CHECK-DAG: iff_msb = 2 : i32
   // CHECK-DAG: iff_bitwise_not
   always @(seq or posedge (~bus[0]) iff (~bus[2])) begin
+    q <= ~q;
+  end
+endmodule
+
+// Test structured metadata for binary event expressions.
+module SequenceSignalEventListStructuredBinaryExpr;
+  logic clk, q;
+  logic [1:0] bus;
+  logic en;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredBinaryExpr
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "and"
+  // CHECK-DAG: signal_lhs_name = "bus"
+  // CHECK-DAG: signal_lhs_lsb = 0 : i32
+  // CHECK-DAG: signal_lhs_msb = 0 : i32
+  // CHECK-DAG: signal_rhs_name = "en"
+  // CHECK-DAG: iff_bin_op = "ne"
+  // CHECK-DAG: iff_lhs_name = "bus"
+  // CHECK-DAG: iff_lhs_lsb = 1 : i32
+  // CHECK-DAG: iff_lhs_msb = 1 : i32
+  // CHECK-DAG: iff_rhs_name = "en"
+  always @(seq or posedge (bus[0] & en) iff (bus[1] != en)) begin
     q <= ~q;
   end
 endmodule
