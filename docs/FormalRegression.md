@@ -267,6 +267,8 @@ Expected-failure budget file:
   rewriting expectation files.
 - `--expectations-dry-run-report-jsonl <file>` appends JSON Lines dry-run
   operation summaries (`operation`, `target_file`, row-count metadata).
+  Use `--expectations-dry-run-report-max-sample-rows <N>` to control embedded
+  row samples (`output_rows_sample`, `dropped_rows_sample`) per operation.
   The first row per run is `operation=run_meta` with `schema_version=1` and
   `run_id`, operation rows carry the same `run_id`, and the final row is
   `operation=run_end` with `exit_code`, `row_count`, and `payload_sha256`.
