@@ -714,6 +714,16 @@ MooreQueue __moore_array_locator(MooreQueue *array, int64_t elementSize,
                                  void *userData, int32_t mode,
                                  bool returnIndices);
 
+/// Check if an array contains a given value.
+/// Implements SystemVerilog array membership (inside) operator.
+/// @param arr Pointer to the raw array data
+/// @param numElems Number of elements in the array
+/// @param value Pointer to the value to search for
+/// @param elemSize Size of each element in bytes
+/// @return true if the value is found in the array
+bool __moore_array_contains(void *arr, int64_t numElems, void *value,
+                            int64_t elemSize);
+
 /// Find elements equal to a given value (simpler case without callback).
 /// Useful when the comparison can be done by simple memory comparison.
 /// @param array Pointer to the input array/queue
