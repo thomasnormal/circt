@@ -16796,6 +16796,45 @@ ninja -C build circt-verilog
   - Endpoint execution order remains intentionally non-deterministic in
     parallel mode.
 
+### Iteration 640
+- Per-endpoint webhook policy configuration in `utils/run_formal_cadence.sh`:
+  - Added `--on-fail-webhook-config <file>` JSON input for endpoint-specific
+    webhook policy.
+  - Config schema currently supports per-endpoint fields:
+    - `url`
+    - `retries`
+    - `backoff_mode` (`fixed|exponential`)
+    - `backoff_secs`
+    - `backoff_max_secs`
+    - `jitter_secs`
+    - `timeout_secs`
+  - Config-defined endpoints are merged with CLI `--on-fail-webhook` endpoints.
+  - CLI webhook knobs remain defaults for CLI-specified endpoints.
+  - Added config-path state telemetry (`on_fail_webhook_config`).
+- Dispatch integration:
+  - Refactored webhook posting path to pass per-endpoint policy values into
+    retry/backoff logic.
+  - Existing sequential/parallel fanout behavior preserved.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - adds config-driven endpoint scenario with endpoint-specific retries
+    - verifies `cfg-a` receives 3 attempts while `cfg-b` receives 1 attempt.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with config option description and usage.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-webhook-config-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+- Current limitations / debt:
+  - Endpoint policy config is currently JSON-file based only; no env/URL templated
+    secret-injection support yet.
+  - No schema-version contract for webhook config payload evolution yet.
+
 ---
 
 ## Architecture Reference

@@ -31638,3 +31638,50 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Throttling currently uses simple FIFO wait behavior (no adaptive scheduling).
 - Endpoint completion ordering remains non-deterministic in parallel mode.
+
+## Iteration 640 - February 8, 2026
+
+### Webhook Config File with Per-Endpoint Policy
+
+- Added `--on-fail-webhook-config <file>` to `utils/run_formal_cadence.sh`.
+- Config file format adds per-endpoint webhook policy controls:
+  - `url`
+  - `retries`
+  - `backoff_mode` (`fixed|exponential`)
+  - `backoff_secs`
+  - `backoff_max_secs`
+  - `jitter_secs`
+  - `timeout_secs`
+- Config endpoints are merged with CLI `--on-fail-webhook` endpoints.
+- Added state telemetry:
+  - `on_fail_webhook_config` in `cadence.state`
+- Refactored webhook dispatch to apply retry/backoff/timeout per endpoint.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - added config-driven webhook scenario with endpoint-specific retries
+    - verifies `cfg-a` receives 3 attempts while `cfg-b` receives 1 attempt
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--on-fail-webhook-config` option and usage example
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-webhook-config-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Webhook config currently relies on file-based JSON only.
+- No explicit schema-version migration contract yet for webhook config payloads.
