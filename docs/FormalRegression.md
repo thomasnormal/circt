@@ -288,9 +288,16 @@ Expected-failure budget file:
   `active|revoked`; `key_sha256` pins key-file content; cannot be combined with
   `--hmac-key-file`).
   Use `--hmac-keyring-sha256 <hex>` to pin the exact keyring content hash.
-  Use `--hmac-keyring-manifest-json <file>` with
-  `--hmac-keyring-manifest-hmac-key-file <file>` to validate signed keyring
+  Use `--hmac-keyring-manifest-json <file>` to validate signed keyring
   metadata (`keyring_sha256`, `signer_id`, optional `expires_on`).
+  Manifest signature modes:
+  - HMAC mode:
+    - `--hmac-keyring-manifest-hmac-key-file <file>`
+    - manifest field: `signature_hmac_sha256`
+  - Ed25519 mode:
+    - `--hmac-keyring-manifest-ed25519-public-key-file <file>`
+    - manifest field: `signature_ed25519_base64`
+  These two manifest signature flags are mutually exclusive.
   Use `--expected-keyring-signer-id <id>` to pin manifest signer identity.
   Use `--expected-hmac-key-id <id>` to enforce `hmac_key_id` match.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
