@@ -13067,6 +13067,59 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 572
+- Yosys SVA BMC history JSONL legacy migration hardening:
+  - Added `migrate_history_jsonl_line()` to normalize one JSONL row via
+    parser-backed key detection and legacy-field injection.
+  - `prepare_history_jsonl_file()` now uses the helper instead of shell regex
+    payload slicing in the default (`python3` present) path.
+  - Fixes a real misclassification case where a legacy row only had nested
+    `schema_version` (for example `meta.schema_version`) and was previously
+    treated as already-canonical.
+  - Preserves strict duplicate-key and malformed-JSON diagnostics.
+  - Retains a no-`python3` compatibility fallback with prior shell behavior.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-jsonl-migrate.test`:
+    - adds a second legacy row containing nested `meta.schema_version`
+    - verifies migration still emits `schema_version=0`/`run_id=legacy-*`
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 53/53 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - No-`python3` fallback still relies on legacy shell substring/brace handling
+    for history JSONL migration.
+  - Parser-backed validation still depends on `python3`.
+  - `cksum` remains required for generated drop-event IDs.
+  - xprop pass-mode failures remain baseline-tracked.
+  - Remaining gaps are still primarily harness/policy portability and semantic
+    expected-failure retirement, not core Slang frontend feature gaps.
+- Long-term features to prioritize:
+  - Provide a non-Python parser path that can replace shell fallback heuristics
+    for history JSONL migration.
+  - Add optional compression/rotation for drop-events logs.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
