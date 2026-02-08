@@ -13520,6 +13520,66 @@ ninja -C build circt-verilog
     harnesses.
   - Continue semantic retirement of expected-failure baselines.
 
+### Iteration 579
+- Yosys SVA BMC drop-events event-ID migration policy:
+  - Added
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY` with:
+    - `preserve`: require existing `event_id` in legacy rows
+    - `infer` (default): preserve existing IDs and derive only when missing
+    - `rewrite`: deterministically rederive all event IDs from canonical event
+      identity tuple
+  - This makes event-ID handling explicit and controllable for long-term
+    migration/reproducibility workflows.
+- Migration engine updates:
+  - Python migration path now validates event-ID policy mode.
+  - `preserve` mode now rejects legacy rows without `event_id` (explicit
+    strictness for consumers that treat IDs as immutable).
+  - `rewrite` mode now normalizes legacy IDs to deterministic derivation.
+  - Existing metadata policy (`preserve|infer|rewrite`) remains orthogonal.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+      covering:
+      - infer mode (derive missing IDs)
+      - preserve mode failure on missing IDs
+      - rewrite mode ID normalization
+      - invalid policy rejection
+  - Focused lit run:
+    - 7/7 PASS for policy + drop-events migration/retention suite.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External matrix (smoke profile):
+    - `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 failures=0 xpass=1 skipped=2
+    - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 pass=14 fail=0 error=0 skip=2
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+    - `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=23 pass=23 fail=0 error=0 skip=1005
+    - `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`: PASS
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`: PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`:
+      PASS
+- Current limitations / debt:
+  - JSON duplicate-key/syntax strictness still depends on Python.
+  - Event-ID rewrite policy currently rewrites all rows; no scoped selectors
+    (e.g., by age/reason) yet.
+  - Result schema harmonization across harness scripts is still incomplete.
+  - xprop-profile expected failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add scoped rewrite selectors for event-ID/metadata migration (by
+    reason/time/run-id).
+  - Add native shell strict JSON validator to reduce Python dependence.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+  - Continue semantic expected-failure retirement.
+
 ---
 
 ## Architecture Reference
