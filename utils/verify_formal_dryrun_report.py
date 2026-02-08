@@ -42,19 +42,21 @@ def parse_iso_date(value: object, field_name: str) -> Optional[date]:
     fail(f"{field_name} must be YYYY-MM-DD string")
 
 
-def read_hmac_keyring(path: Path) -> dict[str, tuple[bytes, Optional[date], Optional[date]]]:
+def read_hmac_keyring(
+    path: Path,
+) -> dict[str, tuple[bytes, Optional[date], Optional[date], str]]:
   if not path.is_file():
     fail(f"HMAC keyring file not found: {path}")
-  keyring: dict[str, tuple[bytes, Optional[date], Optional[date]]] = {}
+  keyring: dict[str, tuple[bytes, Optional[date], Optional[date], str]] = {}
   for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
     line = raw_line.strip()
     if not line or line.startswith("#"):
       continue
     fields = line.split("\t")
-    if len(fields) < 2 or len(fields) > 4:
+    if len(fields) < 2 or len(fields) > 5:
       fail(
           f"{path}:{line_no}: expected '<hmac_key_id>\\t<key_file_path>"
-          "\\t[not_before]\\t[not_after]' row in keyring"
+          "\\t[not_before]\\t[not_after]\\t[status]' row in keyring"
       )
     key_id = fields[0].strip()
     key_file = fields[1].strip()
@@ -73,7 +75,14 @@ def read_hmac_keyring(path: Path) -> dict[str, tuple[bytes, Optional[date], Opti
       not_after = parse_iso_date(fields[3], f"{path}:{line_no}: keyring.not_after")
     if not_before is not None and not_after is not None and not_before > not_after:
       fail(f"{path}:{line_no}: keyring.not_before must be <= keyring.not_after")
-    keyring[key_id] = (key_path.read_bytes(), not_before, not_after)
+    status = "active"
+    if len(fields) >= 5:
+      status = fields[4].strip().lower()
+      if not status:
+        status = "active"
+      if status not in {"active", "revoked"}:
+        fail(f"{path}:{line_no}: keyring.status must be one of active, revoked")
+    keyring[key_id] = (key_path.read_bytes(), not_before, not_after, status)
   if not keyring:
     fail(f"{path}: keyring has no usable rows")
   return keyring
@@ -83,7 +92,7 @@ def verify_report(
     path: Path,
     allow_legacy_prefix: bool,
     hmac_key_bytes: Optional[bytes],
-    hmac_keyring: Optional[dict[str, tuple[bytes, Optional[date], Optional[date]]]],
+    hmac_keyring: Optional[dict[str, tuple[bytes, Optional[date], Optional[date], str]]],
     expected_hmac_key_id: Optional[str],
 ) -> int:
   rows: list[dict] = []
@@ -145,7 +154,11 @@ def verify_report(
             f"{path}:{line_no}: unknown hmac_key_id '{run_meta_hmac_key_id}' "
             f"(not found in keyring)"
         )
-      run_hmac_key_bytes, not_before, not_after = keyring_entry
+      run_hmac_key_bytes, not_before, not_after, status = keyring_entry
+      if status == "revoked":
+        fail(
+            f"{path}:{line_no}: hmac_key_id '{run_meta_hmac_key_id}' is revoked in keyring"
+        )
       run_date = parse_iso_date(row.get("date"), f"{path}:{line_no}: run_meta.date")
       if run_date is None:
         fail(
@@ -264,7 +277,7 @@ def main() -> int:
       "--hmac-keyring-tsv",
       help=(
           "Optional TSV mapping "
-          "'<hmac_key_id>\\t<key_file_path>\\t[not_before]\\t[not_after]' "
+          "'<hmac_key_id>\\t<key_file_path>\\t[not_before]\\t[not_after]\\t[status]' "
           "for keyed HMAC validation"
       ),
   )

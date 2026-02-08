@@ -87,6 +87,8 @@
 // RUN: cp %t/dryrun-report.jsonl %t/dryrun-report-keyring-bad.jsonl
 // RUN: sed -i 's/"hmac_key_id": "lit-key-1"/"hmac_key_id": "missing-key"/g' %t/dryrun-report-keyring-bad.jsonl
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv %t/dryrun-report-keyring-bad.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGBAD
+// RUN: printf 'lit-key-1\t%t/dryrun-hmac.key\t\t\trevoked\n' > %t/dryrun-hmac-keyring-revoked.tsv
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring-revoked.tsv %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGREVOKED
 // RUN: printf 'lit-key-1\t%t/dryrun-hmac.key\t2000-01-01\t2000-12-31\n' > %t/dryrun-hmac-keyring-window.tsv
 // RUN: cp %t/dryrun-report.jsonl %t/dryrun-report-keyring-window-bad.jsonl
 // RUN: sed -i 's/"date": "[0-9-]\{10\}"/"date": "1999-01-01"/g' %t/dryrun-report-keyring-window-bad.jsonl
@@ -190,6 +192,7 @@
 // DRYRUNVERIFYKEYIDBAD: error: {{.*}}run_meta.hmac_key_id mismatch
 // DRYRUNVERIFYKEYRING: verified dry-run report: runs=1
 // DRYRUNVERIFYKEYRINGBAD: error: {{.*}}unknown hmac_key_id 'missing-key'
+// DRYRUNVERIFYKEYRINGREVOKED: error: {{.*}}hmac_key_id 'lit-key-1' is revoked in keyring
 // DRYRUNVERIFYKEYRINGWINDOWBAD: error: {{.*}}run_meta.date '1999-01-01' is before keyring.not_before '2000-01-01'
 // DRYRUNVERIFYLEGACYBAD: error: {{.*}}expected operation=run_meta
 // DRYRUNVERIFYLEGACY: verified dry-run report: runs=1
