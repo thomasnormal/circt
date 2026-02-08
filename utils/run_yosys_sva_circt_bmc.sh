@@ -64,6 +64,8 @@ EXPECT_LINT_APPLY_ADDROW_FILTER_FILE="${EXPECT_LINT_APPLY_ADDROW_FILTER_FILE:-}"
 EXPECT_FORMAT_MODE="${EXPECT_FORMAT_MODE:-off}"
 EXPECT_FORMAT_FILES="${EXPECT_FORMAT_FILES:-}"
 EXPECT_FORMAT_DIFF_FILE="${EXPECT_FORMAT_DIFF_FILE:-}"
+EXPECT_FORMAT_REWRITE_MALFORMED="${EXPECT_FORMAT_REWRITE_MALFORMED:-0}"
+EXPECT_FORMAT_MALFORMED_FIX_FILE="${EXPECT_FORMAT_MALFORMED_FIX_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -113,6 +115,13 @@ case "$EXPECT_FORMAT_MODE" in
     exit 1
     ;;
 esac
+case "$EXPECT_FORMAT_REWRITE_MALFORMED" in
+  0|1) ;;
+  *)
+    echo "invalid EXPECT_FORMAT_REWRITE_MALFORMED: $EXPECT_FORMAT_REWRITE_MALFORMED (expected 0|1)" >&2
+    exit 1
+    ;;
+esac
 EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS// /}"
 if [[ -n "$EXPECT_LINT_APPLY_ACTIONS" ]]; then
   local_actions_csv=",$EXPECT_LINT_APPLY_ACTIONS,"
@@ -150,6 +159,10 @@ fi
 if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_FIXES_FILE" ]]; then
   : > "$EXPECT_LINT_FIXES_FILE"
   printf 'kind\tsource\taction\tkey\trow\tnote\n' >> "$EXPECT_LINT_FIXES_FILE"
+fi
+if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_MALFORMED_FIX_FILE" ]]; then
+  : > "$EXPECT_FORMAT_MALFORMED_FIX_FILE"
+  printf 'file\toriginal\tsuggested\treason\tapplied\n' >> "$EXPECT_FORMAT_MALFORMED_FIX_FILE"
 fi
 
 emit_expect_lint() {
@@ -519,6 +532,110 @@ trim_whitespace() {
   printf '%s' "$s"
 }
 
+sanitize_tsv_field() {
+  local s="$1"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\n'/\\n}"
+  printf '%s' "$s"
+}
+
+emit_malformed_fix_suggestion() {
+  local file="$1"
+  local original="$2"
+  local suggested="$3"
+  local reason="$4"
+  local applied="$5"
+  if [[ -z "$EXPECT_FORMAT_MALFORMED_FIX_FILE" ]]; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(sanitize_tsv_field "$file")" \
+    "$(sanitize_tsv_field "$original")" \
+    "$(sanitize_tsv_field "$suggested")" \
+    "$(sanitize_tsv_field "$reason")" \
+    "$applied" >> "$EXPECT_FORMAT_MALFORMED_FIX_FILE"
+  return 0
+}
+
+suggest_malformed_expectation_row() {
+  local raw_line="$1"
+  local default_expected="$2"
+  local allow_auto_omit="${3:-0}"
+  local -a toks=()
+  local test mode_field profile expected reason
+  local suggested
+
+  read -r -a toks <<<"$raw_line"
+  if ((${#toks[@]} < 2)); then
+    echo ""
+    return 0
+  fi
+  test="${toks[0]}"
+  mode_field=""
+  profile=""
+  expected=""
+  reason=""
+
+  case ${#toks[@]} in
+    2)
+      if [[ -z "$default_expected" ]]; then
+        echo ""
+        return 0
+      fi
+      mode_field="${toks[1]}"
+      profile="*"
+      expected="$default_expected"
+      reason="fill-profile-expected-default"
+      ;;
+    3)
+      mode_field="${toks[1]}"
+      profile="${toks[2]}"
+      if [[ -z "$default_expected" ]]; then
+        echo ""
+        return 0
+      fi
+      expected="$default_expected"
+      reason="fill-expected-default"
+      ;;
+    *)
+      mode_field="${toks[1]}"
+      profile="${toks[2]}"
+      expected="${toks[3]}"
+      reason="trim-extra-fields"
+      ;;
+  esac
+
+  mode_field="$(trim_whitespace "$mode_field")"
+  profile="$(trim_whitespace "$profile")"
+  expected="$(trim_whitespace "$expected")"
+  [[ -z "$mode_field" ]] && mode_field="*"
+  [[ -z "$profile" ]] && profile="*"
+  [[ -z "$expected" ]] && expected="$default_expected"
+  if [[ -z "$expected" ]]; then
+    echo ""
+    return 0
+  fi
+  mode_field="${mode_field,,}"
+  profile="${profile,,}"
+  expected="${expected,,}"
+  case "$expected" in
+    pass|fail|xfail|skip) ;;
+    omit|auto)
+      if [[ "$allow_auto_omit" != "1" ]]; then
+        echo ""
+        return 0
+      fi
+      ;;
+    *)
+      echo ""
+      return 0
+      ;;
+  esac
+  suggested="$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$expected"
+  printf '%s|%s\n' "$suggested" "$reason"
+  return 0
+}
+
 append_expect_format_diff() {
   local diff_file="$1"
   local source_file="$2"
@@ -603,9 +720,16 @@ format_expectation_file() {
   local changed=0
   local rows=0
   local malformed=0
+  local malformed_suggested=0
+  local malformed_fixed=0
+  local allow_auto_omit=0
+  local suggestion reason suggest_pair applied
   local -a comment_lines=()
   local -a row_lines=()
   local -a malformed_lines=()
+  if [[ -n "$EXPECT_REGEN_OVERRIDE_FILE" ]] && [[ "$file" == "$EXPECT_REGEN_OVERRIDE_FILE" ]]; then
+    allow_auto_omit=1
+  fi
 
   if [[ ! -f "$file" ]]; then
     echo "SKIP|-1|-1"
@@ -638,16 +762,50 @@ format_expectation_file() {
     profile="$(trim_whitespace "${profile:-}")"
     expected="$(trim_whitespace "${expected:-}")"
     if [[ -n "${extra:-}" || -z "$test" ]]; then
-      malformed_lines+=("$trimmed")
       malformed=$((malformed + 1))
+      suggest_pair="$(suggest_malformed_expectation_row "$trimmed" "$default_expected" "$allow_auto_omit")"
+      if [[ -n "$suggest_pair" ]]; then
+        suggestion="${suggest_pair%|*}"
+        reason="${suggest_pair##*|}"
+        malformed_suggested=$((malformed_suggested + 1))
+        applied=0
+        if [[ "$EXPECT_FORMAT_REWRITE_MALFORMED" == "1" ]]; then
+          row_lines+=("$suggestion")
+          rows=$((rows + 1))
+          malformed_fixed=$((malformed_fixed + 1))
+          applied=1
+        else
+          malformed_lines+=("$trimmed")
+        fi
+        emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
+      else
+        malformed_lines+=("$trimmed")
+      fi
       continue
     fi
     [[ -z "$mode_field" ]] && mode_field="*"
     [[ -z "$profile" ]] && profile="*"
     [[ -z "$expected" ]] && expected="$default_expected"
     if [[ -z "$expected" ]]; then
-      malformed_lines+=("$trimmed")
       malformed=$((malformed + 1))
+      suggest_pair="$(suggest_malformed_expectation_row "$trimmed" "$default_expected" "$allow_auto_omit")"
+      if [[ -n "$suggest_pair" ]]; then
+        suggestion="${suggest_pair%|*}"
+        reason="${suggest_pair##*|}"
+        malformed_suggested=$((malformed_suggested + 1))
+        applied=0
+        if [[ "$EXPECT_FORMAT_REWRITE_MALFORMED" == "1" ]]; then
+          row_lines+=("$suggestion")
+          rows=$((rows + 1))
+          malformed_fixed=$((malformed_fixed + 1))
+          applied=1
+        else
+          malformed_lines+=("$trimmed")
+        fi
+        emit_malformed_fix_suggestion "$file" "$trimmed" "$suggestion" "$reason" "$applied"
+      else
+        malformed_lines+=("$trimmed")
+      fi
       continue
     fi
     mode_field="${mode_field,,}"
@@ -684,7 +842,7 @@ format_expectation_file() {
     fi
   fi
   append_expect_format_diff "$diff_file" "$file" "$changed"
-  echo "$changed|$rows|$malformed"
+  echo "$changed|$rows|$malformed|$malformed_suggested|$malformed_fixed"
   return 0
 }
 
@@ -692,7 +850,7 @@ run_expectation_formatter() {
   local mode="$1"
   local -a files=()
   local -a defaults=()
-  local i file default_expected result changed rows malformed
+  local i file default_expected result changed rows malformed malformed_suggested malformed_fixed
   local changed_files=0
   local file_count=0
 
@@ -707,7 +865,7 @@ run_expectation_formatter() {
     [[ -z "$file" || "$file" == "/dev/null" ]] && continue
     file_count=$((file_count + 1))
     result="$(format_expectation_file "$file" "$default_expected" "$mode" "$((i + 1))")"
-    IFS='|' read -r changed rows malformed <<<"$result"
+    IFS='|' read -r changed rows malformed malformed_suggested malformed_fixed <<<"$result"
     if [[ "$changed" == "SKIP" ]]; then
       echo "EXPECT_FORMAT: mode=$mode file=$file rows=0 malformed=0 changed=0 missing=1"
       continue
@@ -715,7 +873,7 @@ run_expectation_formatter() {
     if [[ "$changed" == "1" ]]; then
       changed_files=$((changed_files + 1))
     fi
-    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed"
+    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed malformed_suggested=${malformed_suggested:-0} malformed_fixed=${malformed_fixed:-0}"
   done
   echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files"
   return 0
