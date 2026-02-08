@@ -30,6 +30,8 @@ Options:
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
                          Preview expectation refresh/prune without rewriting files
+  --expectations-dry-run-report-jsonl FILE
+                         Append dry-run operation summaries as JSON Lines
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
@@ -114,6 +116,7 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
+EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 PRUNE_EXPECTED_FAILURES_FILE=""
@@ -199,6 +202,8 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
       EXPECTATIONS_DRY_RUN=1; shift ;;
+    --expectations-dry-run-report-jsonl)
+      EXPECTATIONS_DRY_RUN_REPORT_JSONL="$2"; shift 2 ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
@@ -690,6 +695,7 @@ if [[ -n "$EXPECTED_FAILURES_FILE" || \
   FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
   FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE" \
   PRUNE_EXPECTED_FAILURES_DROP_UNUSED="$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" \
   python3 - <<'PY'
@@ -705,13 +711,22 @@ expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
 fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURES_FILE", "")
 prune_drop_unused = (
     os.environ.get("PRUNE_EXPECTED_FAILURES_DROP_UNUSED", "0") == "1"
 )
 expected_path = Path(expected_file_raw) if expected_file_raw else None
 prune_path = Path(prune_file_raw) if prune_file_raw else None
+dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 expected_summary_path = out_dir / "expected-failures-summary.tsv"
+
+def emit_dry_run_report(payload):
+  if dry_run_report_jsonl_path is None:
+    return
+  dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+  with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 required_cols = {"suite", "mode", "expected_fail", "expected_error"}
 expected = {}
@@ -870,6 +885,14 @@ if prune_path is not None:
   prune_path.parent.mkdir(parents=True, exist_ok=True)
   if expectations_dry_run:
     print(f"dry-run: would prune expected-failures file: {prune_path}")
+    emit_dry_run_report(
+        {
+            "operation": "prune_expected_failures",
+            "target_file": str(prune_path),
+            "kept_rows": len(pruned_rows),
+            "dropped_unused": dropped_unused,
+        }
+    )
   else:
     with prune_path.open("w", newline="") as f:
       writer = csv.DictWriter(
@@ -911,11 +934,13 @@ if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   SUMMARY_FILE="$OUT_DIR/summary.tsv" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX" \
   python3 - <<'PY'
 import csv
+import json
 import os
 import re
 from pathlib import Path
@@ -923,8 +948,17 @@ from pathlib import Path
 summary_path = Path(os.environ["SUMMARY_FILE"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
+dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 suite_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX", "")
 mode_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX", "")
+
+def emit_dry_run_report(payload):
+  if dry_run_report_jsonl_path is None:
+    return
+  dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+  with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 def compile_optional_regex(raw: str, field: str):
   if not raw:
@@ -976,6 +1010,15 @@ rows.sort(key=lambda r: (r["suite"], r["mode"]))
 out_path.parent.mkdir(parents=True, exist_ok=True)
 if expectations_dry_run:
   print(f"dry-run: would refresh expected-failures file: {out_path}")
+  emit_dry_run_report(
+      {
+          "operation": "refresh_expected_failures",
+          "target_file": str(out_path),
+          "output_rows": len(rows),
+          "suite_filter": suite_filter_raw,
+          "mode_filter": mode_filter_raw,
+      }
+  )
 else:
   with out_path.open("w", newline="") as f:
     writer = csv.DictWriter(
@@ -1003,6 +1046,7 @@ if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
   FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
   FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED" \
@@ -1021,8 +1065,10 @@ fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == 
 fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_FILE", "")
 prune_path = Path(prune_file_raw) if prune_file_raw else None
+dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 prune_drop_unmatched = (
     os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED", "0") == "1"
 )
@@ -1033,6 +1079,13 @@ today = dt.date.today()
 
 case_summary_path = out_dir / "expected-failure-cases-summary.tsv"
 unexpected_path = out_dir / "unexpected-failure-cases.tsv"
+
+def emit_dry_run_report(payload):
+  if dry_run_report_jsonl_path is None:
+    return
+  dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+  with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
 result_sources = [
@@ -1361,6 +1414,15 @@ if prune_path is not None:
   prune_path.parent.mkdir(parents=True, exist_ok=True)
   if expectations_dry_run:
     print(f"dry-run: would prune expected-failure-cases file: {prune_path}")
+    emit_dry_run_report(
+        {
+            "operation": "prune_expected_failure_cases",
+            "target_file": str(prune_path),
+            "kept_rows": len(pruned_rows),
+            "dropped_unmatched": dropped_unmatched,
+            "dropped_expired": dropped_expired,
+        }
+    )
   else:
     with prune_path.open("w", newline="") as f:
       writer = csv.DictWriter(
@@ -1410,6 +1472,7 @@ fi
 if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
+  EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
   REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY="$REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY" \
@@ -1420,6 +1483,7 @@ if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   python3 - <<'PY'
 import csv
 import datetime as dt
+import json
 import os
 import re
 from pathlib import Path
@@ -1427,6 +1491,8 @@ from pathlib import Path
 out_dir = Path(os.environ["OUT_DIR"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
+dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
+dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
 collapse_status_any = (
     os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY", "0") == "1"
@@ -1441,6 +1507,13 @@ status_filter_raw = os.environ.get(
     "REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX", ""
 )
 id_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX", "")
+
+def emit_dry_run_report(payload):
+  if dry_run_report_jsonl_path is None:
+    return
+  dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+  with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 def compile_optional_regex(raw: str, field: str):
   if not raw:
@@ -1649,6 +1722,18 @@ refreshed.sort(key=lambda r: (r["suite"], r["mode"], r["id_kind"], r["id"], r["s
 out_path.parent.mkdir(parents=True, exist_ok=True)
 if expectations_dry_run:
   print(f"dry-run: would refresh expected-failure-cases file: {out_path}")
+  emit_dry_run_report(
+      {
+          "operation": "refresh_expected_failure_cases",
+          "target_file": str(out_path),
+          "output_rows": len(refreshed),
+          "collapse_status_any": collapse_status_any,
+          "suite_filter": suite_filter_raw,
+          "mode_filter": mode_filter_raw,
+          "status_filter": status_filter_raw,
+          "id_filter": id_filter_raw,
+      }
+  )
 else:
   with out_path.open("w", newline="") as f:
     writer = csv.DictWriter(

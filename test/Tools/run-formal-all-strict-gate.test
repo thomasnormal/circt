@@ -71,6 +71,9 @@
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tstale_case\tbase\tFAIL\t2099-01-01\tdry_keep_stale\n' > %t/dryrun-prune-expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-prune-case --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --prune-expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --prune-expected-failure-cases-drop-unmatched --expectations-dry-run
 // RUN: FileCheck %s --check-prefix=DRYRUNCASE < %t/dryrun-prune-expected-failure-cases.tsv
+// RUN: rm -f %t/dryrun-report.jsonl
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-report --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/dryrun-refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --expectations-dry-run --expectations-dry-run-report-jsonl %t/dryrun-report.jsonl
+// RUN: FileCheck %s --check-prefix=DRYRUNREPORT < %t/dryrun-report.jsonl
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tknown_case\n' > %t/expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases --json-summary %t/out-expected-cases-ok/summary.json
 // RUN: FileCheck %s --check-prefix=CASEOK < %t/out-expected-cases-ok/expected-failure-cases-summary.tsv
@@ -143,6 +146,8 @@
 // PRUNECASE-NOT: stale_case
 // PRUNECASE-NOT: drop_expired
 // DRYRUNCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}stale_case{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}dry_keep_stale
+// DRYRUNREPORT: "operation": "refresh_expected_failures"
+// DRYRUNREPORT: "operation": "refresh_expected_failure_cases"
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
 // JSONCASE: "expected_failure_cases"
 // JSONCASE: "matched_count": 1

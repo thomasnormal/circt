@@ -17389,6 +17389,47 @@ ninja -C build circt-verilog
   - No machine-readable dry-run delta artifact yet (only console summaries).
   - No per-mutator dry-run granularity; flag is global.
 
+### Iteration 655
+- Machine-readable dry-run delta reporting:
+  - Added `--expectations-dry-run-report-jsonl FILE` to
+    `utils/run_formal_all.sh`.
+  - When used with `--expectations-dry-run`, each expectation mutator appends
+    one JSON line summary to the report file.
+  - Covered mutators:
+    - `prune_expected_failures`
+    - `refresh_expected_failures`
+    - `prune_expected_failure_cases`
+    - `refresh_expected_failure_cases`
+- JSONL payload includes operation metadata:
+  - operation name
+  - target file path
+  - row counts / drop counts
+  - active refresh filters / collapse mode where applicable
+- Regression coverage:
+  - Extended `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` checks report JSONL contains both refresh operation tags.
+  - Existing dry-run non-mutation checks remain:
+    - `DRYRUNBUDGET`
+    - `DRYRUNCASE`
+- Documentation:
+  - Updated `docs/FormalRegression.md` with JSONL report usage and semantics.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep with dry-run + JSONL reporting:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-report-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-report-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-report-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-report-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-report-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-report-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-report-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-report-smoke.jsonl`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+      - verification:
+        - expectation files unchanged (`cmp` PASS)
+        - report file contains 4 operations (one per mutator)
+- Current limitations / debt:
+  - JSONL report is append-only; no run-level envelope or schema-version field.
+  - No direct diff payload (only summary counts + flags).
+
 ---
 
 ## Architecture Reference
