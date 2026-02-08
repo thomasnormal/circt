@@ -55,7 +55,7 @@ that unexpectedly pass (not a tool bug).
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 166 | 166 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage |
+| circt-sim | 167 | 167 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops |
 
 ## UVM Simulation Feature Status
 
@@ -171,3 +171,4 @@ to commercial simulators like Cadence Xcelium.
 | Parameterized interface dedup | Use `hasSameType()` for deduplication; different parameterizations get separate MLIR declarations |
 | Bounded delta polling (RUNPHSTIME fix) | Use delta steps for first 1000 polls, then 1ps fallback; eliminates UVM_FATAL [RUNPHSTIME] in all AVIPs |
 | UVM regex DPI (`std::regex`) | Replace manual pattern matcher with `std::regex` for full POSIX extended regex; eliminates UVM_ERROR DPI/REGEX in AXI4Lite/JTAG |
+| Fixed-array sort/stream ops | Add `UnpackedArrayType` to 7 more MooreToCore patterns (SortWith, RSortWith, ArraySize, StreamConcat/Unpack, StreamConcatMixed/UnpackMixed) with probe/drive |
