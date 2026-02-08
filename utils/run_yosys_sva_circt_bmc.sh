@@ -52,6 +52,9 @@ EXPECT_REGEN_FAIL_POLICY="${EXPECT_REGEN_FAIL_POLICY:-xfail}"
 EXPECT_REGEN_SKIP_POLICY="${EXPECT_REGEN_SKIP_POLICY:-omit}"
 EXPECT_REGEN_OVERRIDE_FILE="${EXPECT_REGEN_OVERRIDE_FILE:-}"
 EXPECT_SKIP_STRICT="${EXPECT_SKIP_STRICT:-0}"
+EXPECT_LINT="${EXPECT_LINT:-0}"
+EXPECT_LINT_FAIL_ON_ISSUES="${EXPECT_LINT_FAIL_ON_ISSUES:-0}"
+EXPECT_LINT_FILE="${EXPECT_LINT_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -77,15 +80,32 @@ xpasses=0
 expect_diff_added=0
 expect_diff_removed=0
 expect_diff_changed=0
+lint_issues=0
 
 declare -A expected_cases
 declare -A observed_cases
 declare -A regen_override_cases
+declare -A suite_tests
+if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_FILE" ]]; then
+  : > "$EXPECT_LINT_FILE"
+fi
+
+emit_expect_lint() {
+  local kind="$1"
+  local message="$2"
+  local line="EXPECT_LINT($kind): $message"
+  echo "$line"
+  if [[ -n "$EXPECT_LINT_FILE" ]]; then
+    echo "$line" >> "$EXPECT_LINT_FILE"
+  fi
+  lint_issues=$((lint_issues + 1))
+}
 load_expected_cases() {
   local map_name="$1"
   local file="$2"
   local default_expected="${3:-}"
   local -n out_map="$map_name"
+  local -A seen_in_file=()
   [[ -f "$file" ]] || return 0
   while IFS=$'\t' read -r test mode profile expected; do
     [[ -z "$test" || "$test" =~ ^# ]] && continue
@@ -104,6 +124,15 @@ load_expected_cases() {
         continue
         ;;
     esac
+    local key="$test|$mode|$profile"
+    if [[ "$EXPECT_LINT" == "1" ]] && [[ -n "${seen_in_file["$key"]+x}" ]]; then
+      if [[ "${seen_in_file["$key"]}" == "$expected" ]]; then
+        emit_expect_lint "redundant" "$file row duplicates $key = $expected"
+      else
+        emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
+      fi
+    fi
+    seen_in_file["$key"]="$expected"
     out_map["$test|$mode|$profile"]="$expected"
   done < "$file"
   return 0
@@ -117,6 +146,7 @@ load_expected_cases expected_cases "$EXPECT_FILE"
 
 load_regen_override_cases() {
   local file="$1"
+  local -A seen_in_file=()
   [[ -f "$file" ]] || return 0
   while IFS=$'\t' read -r test mode profile expected; do
     [[ -z "$test" || "$test" =~ ^# ]] && continue
@@ -131,6 +161,15 @@ load_regen_override_cases() {
         continue
         ;;
     esac
+    local key="$test|$mode|$profile"
+    if [[ "$EXPECT_LINT" == "1" ]] && [[ -n "${seen_in_file["$key"]+x}" ]]; then
+      if [[ "${seen_in_file["$key"]}" == "$expected" ]]; then
+        emit_expect_lint "redundant" "$file row duplicates $key = $expected"
+      else
+        emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
+      fi
+    fi
+    seen_in_file["$key"]="$expected"
     regen_override_cases["$test|$mode|$profile"]="$expected"
   done < "$file"
   return 0
@@ -138,6 +177,42 @@ load_regen_override_cases() {
 
 if [[ -n "$EXPECT_REGEN_OVERRIDE_FILE" ]]; then
   load_regen_override_cases "$EXPECT_REGEN_OVERRIDE_FILE"
+fi
+
+populate_suite_tests() {
+  local sv
+  for sv in "$YOSYS_SVA_DIR"/*.sv; do
+    [[ -f "$sv" ]] || continue
+    suite_tests["$(basename "$sv" .sv)"]=1
+  done
+}
+
+lint_unknown_tests_for_map() {
+  local map_name="$1"
+  local label="$2"
+  local -n map_ref="$map_name"
+  local -a keys=()
+  local key test mode profile
+  for key in "${!map_ref[@]}"; do
+    keys+=("$key")
+  done
+  if ((${#keys[@]} == 0)); then
+    return
+  fi
+  while IFS= read -r key; do
+    IFS='|' read -r test mode profile <<<"$key"
+    [[ "$test" == "*" ]] && continue
+    if [[ -z "${suite_tests["$test"]+x}" ]]; then
+      emit_expect_lint "unknown-test" "$label references missing test '$test' via key $key"
+    fi
+  done < <(printf '%s\n' "${keys[@]}" | sort)
+}
+
+if [[ "$EXPECT_LINT" == "1" ]]; then
+  populate_suite_tests
+  lint_unknown_tests_for_map expected_cases "EXPECT_FILE"
+  lint_unknown_tests_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
+  echo "EXPECT_LINT_SUMMARY: issues=$lint_issues"
 fi
 
 write_expect_diff_line() {
@@ -655,6 +730,10 @@ fi
 
 if [[ -n "$EXPECT_OBSERVED_FILE" || -n "$EXPECT_REGEN_FILE" ]]; then
   emit_observed_outputs
+fi
+
+if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then
+  failures=$((failures + 1))
 fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
