@@ -12894,6 +12894,68 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 569
+- Yosys SVA BMC drop-event extension metadata preservation:
+  - Reworked drop-events JSONL migration to parser-backed canonicalization.
+  - Canonical fields are normalized first:
+    - `schema_version`
+    - `event_id`
+    - `generated_at_utc`
+    - `reason`
+    - `history_file`
+    - `history_format`
+    - `line`
+    - `row_generated_at_utc`
+    - `run_id`
+  - Unknown top-level extension keys are now preserved and appended after
+    canonical fields instead of being dropped.
+  - Migration still enforces required-key checks and schema validation.
+  - Missing `event_id` is still derived deterministically via `cksum`.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`:
+    - seeds legacy rows with extension metadata
+    - verifies extension keys survive canonical migration
+    - retains malformed-row rejection coverage
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 51/51 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Drop-event age-trim parsing still uses regex extraction for
+    `generated_at_utc`; nested extension objects with same-named fields can be
+    ambiguous.
+  - Parser-backed validation still depends on `python3`.
+  - `cksum` remains required for generated drop-event IDs.
+  - xprop pass-mode failures remain baseline-tracked.
+  - Remaining gaps are still primarily harness/policy portability and semantic
+    expected-failure retirement, not core Slang frontend feature gaps.
+- Long-term features to prioritize:
+  - Move all drop-event field extraction in trimming paths to parser-backed
+    extraction (remove regex ambiguity).
+  - Add optional compression/rotation for drop-events logs.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
