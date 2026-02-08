@@ -30,12 +30,15 @@ Options:
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
+  --circt-verilog PATH   Path to circt-verilog (default: <repo>/build/bin/circt-verilog)
   --with-avip            Run AVIP compile smoke using run_avip_circt_verilog.sh
   --avip-glob GLOB       Glob for AVIP dirs (default: ~/mbit/*avip*)
   -h, --help             Show this help
 USAGE
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
 OUT_DIR=""
 SV_TESTS_DIR="${HOME}/sv-tests"
@@ -43,6 +46,7 @@ VERILATOR_DIR="${HOME}/verilator-verification"
 YOSYS_DIR="${HOME}/yosys/tests/sva"
 OPENTITAN_DIR="${HOME}/opentitan"
 AVIP_GLOB="${HOME}/mbit/*avip*"
+CIRCT_VERILOG_BIN="$REPO_ROOT/build/bin/circt-verilog"
 BASELINE_FILE="utils/formal-baselines.tsv"
 PLAN_FILE="PROJECT_PLAN.md"
 Z3_BIN="${Z3_BIN:-}"
@@ -80,6 +84,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_DIR="$2"; WITH_OPENTITAN=1; shift 2 ;;
     --with-opentitan)
       WITH_OPENTITAN=1; shift ;;
+    --circt-verilog)
+      CIRCT_VERILOG_BIN="$2"; shift 2 ;;
     --with-avip)
       WITH_AVIP=1; shift ;;
     --avip-glob)
@@ -122,6 +128,12 @@ fi
 if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; then
   echo "invalid --baseline-window: expected positive integer" >&2
   exit 1
+fi
+if [[ "$WITH_OPENTITAN" == "1" || "$WITH_AVIP" == "1" ]]; then
+  if [[ ! -x "$CIRCT_VERILOG_BIN" ]]; then
+    echo "circt-verilog not executable: $CIRCT_VERILOG_BIN" >&2
+    exit 1
+  fi
 fi
 if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_XPASS=1
@@ -301,7 +313,8 @@ fi
 
 # OpenTitan LEC (optional)
 if [[ "$WITH_OPENTITAN" == "1" ]]; then
-  opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS")
+  opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN")
   if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
     opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
   fi
@@ -327,6 +340,7 @@ if [[ "$WITH_AVIP" == "1" ]]; then
       avip_name="$(basename "$avip")"
       run_suite "avip-${avip_name}" \
         env OUT="$OUT_DIR/${avip_name}-circt-verilog.log" \
+        CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
         utils/run_avip_circt_verilog.sh "$avip" || true
       if [[ -f "$OUT_DIR/avip-${avip_name}.exit" ]]; then
         avip_ec=$(cat "$OUT_DIR/avip-${avip_name}.exit")

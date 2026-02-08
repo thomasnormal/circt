@@ -19,6 +19,12 @@ Options:
                          (-1=disabled, default: -1)
   --on-fail-hook PATH    Executable hook invoked on iteration failure
   --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
+                         (repeatable; can specify multiple endpoints)
+  --webhook-retries N    Retry count per webhook endpoint (default: 0)
+  --webhook-backoff-secs N
+                         Sleep between webhook retries in seconds (default: 5)
+  --webhook-timeout-secs N
+                         Per-webhook HTTP timeout in seconds (default: 15)
   --run-formal-all PATH  Path to run_formal_all.sh
                          (default: utils/run_formal_all.sh)
   --strict-gate          Enable strict gate checks (default)
@@ -38,11 +44,14 @@ ITERATIONS=0
 RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
-ON_FAIL_WEBHOOK=""
+WEBHOOK_RETRIES=0
+WEBHOOK_BACKOFF_SECS=5
+WEBHOOK_TIMEOUT_SECS=15
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
 
 declare -a FORWARD_ARGS=()
+declare -a ON_FAIL_WEBHOOKS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,7 +68,13 @@ while [[ $# -gt 0 ]]; do
     --on-fail-hook)
       ON_FAIL_HOOK="$2"; shift 2 ;;
     --on-fail-webhook)
-      ON_FAIL_WEBHOOK="$2"; shift 2 ;;
+      ON_FAIL_WEBHOOKS+=("$2"); shift 2 ;;
+    --webhook-retries)
+      WEBHOOK_RETRIES="$2"; shift 2 ;;
+    --webhook-backoff-secs)
+      WEBHOOK_BACKOFF_SECS="$2"; shift 2 ;;
+    --webhook-timeout-secs)
+      WEBHOOK_TIMEOUT_SECS="$2"; shift 2 ;;
     --run-formal-all)
       RUN_FORMAL_ALL="$2"; shift 2 ;;
     --strict-gate)
@@ -104,6 +119,18 @@ if [[ "$RETAIN_HOURS" -lt -1 ]]; then
   echo "invalid --retain-hours: expected integer >= -1" >&2
   exit 1
 fi
+if ! [[ "$WEBHOOK_RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "invalid --webhook-retries: expected non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$WEBHOOK_BACKOFF_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --webhook-backoff-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$WEBHOOK_TIMEOUT_SECS" =~ ^[0-9]+$ ]] || [[ "$WEBHOOK_TIMEOUT_SECS" == "0" ]]; then
+  echo "invalid --webhook-timeout-secs: expected positive integer" >&2
+  exit 1
+fi
 if [[ ! -x "$RUN_FORMAL_ALL" ]]; then
   echo "run_formal_all script not executable: $RUN_FORMAL_ALL" >&2
   exit 1
@@ -112,16 +139,27 @@ if [[ -n "$ON_FAIL_HOOK" && ! -x "$ON_FAIL_HOOK" ]]; then
   echo "on-fail hook not executable: $ON_FAIL_HOOK" >&2
   exit 1
 fi
-if [[ -n "$ON_FAIL_WEBHOOK" ]]; then
+if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 ]]; then
   if ! command -v curl >/dev/null 2>&1; then
     echo "--on-fail-webhook requires curl in PATH" >&2
     exit 1
   fi
 fi
+for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
+  if [[ -z "$webhook_url" ]]; then
+    echo "invalid --on-fail-webhook: expected non-empty URL" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$OUT_ROOT"
 CADENCE_LOG="$OUT_ROOT/cadence.log"
 STATE_FILE="$OUT_ROOT/cadence.state"
+
+on_fail_webhooks_csv=""
+if [[ "${#ON_FAIL_WEBHOOKS[@]}" -gt 0 ]]; then
+  on_fail_webhooks_csv="$(IFS=,; echo "${ON_FAIL_WEBHOOKS[*]}")"
+fi
 
 echo "start_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"
 echo "interval_secs=$INTERVAL_SECS" >> "$STATE_FILE"
@@ -129,7 +167,10 @@ echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
 echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
-echo "on_fail_webhook=$ON_FAIL_WEBHOOK" >> "$STATE_FILE"
+echo "on_fail_webhooks=$on_fail_webhooks_csv" >> "$STATE_FILE"
+echo "webhook_retries=$WEBHOOK_RETRIES" >> "$STATE_FILE"
+echo "webhook_backoff_secs=$WEBHOOK_BACKOFF_SECS" >> "$STATE_FILE"
+echo "webhook_timeout_secs=$WEBHOOK_TIMEOUT_SECS" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
 
@@ -208,11 +249,43 @@ invoke_fail_hook() {
   fi
 }
 
-invoke_fail_webhook() {
+post_fail_webhook() {
+  local webhook_url="$1"
+  local payload="$2"
+  local webhook_ts="$3"
+  local attempt=0
+  local max_attempts=$((WEBHOOK_RETRIES + 1))
+  while true; do
+    attempt=$((attempt + 1))
+    echo "[$webhook_ts] posting on-fail webhook attempt $attempt/$max_attempts: $webhook_url" \
+      | tee -a "$CADENCE_LOG"
+    set +e
+    curl -fsS --max-time "$WEBHOOK_TIMEOUT_SECS" -X POST \
+      -H "Content-Type: application/json" --data "$payload" \
+      "$webhook_url" >> "$CADENCE_LOG" 2>&1
+    local curl_ec=$?
+    set -e
+    if [[ "$curl_ec" -eq 0 ]]; then
+      return 0
+    fi
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook failed with exit code $curl_ec after $attempt attempts: $webhook_url" \
+        | tee -a "$CADENCE_LOG"
+      return 1
+    fi
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook attempt failed with exit code $curl_ec (retrying): $webhook_url" \
+      | tee -a "$CADENCE_LOG"
+    if [[ "$WEBHOOK_BACKOFF_SECS" -gt 0 ]]; then
+      sleep "$WEBHOOK_BACKOFF_SECS"
+    fi
+  done
+}
+
+invoke_fail_webhooks() {
   local iteration="$1"
   local exit_code="$2"
   local run_dir="$3"
-  if [[ -z "$ON_FAIL_WEBHOOK" ]]; then
+  if [[ "${#ON_FAIL_WEBHOOKS[@]}" -eq 0 ]]; then
     return 0
   fi
 
@@ -225,6 +298,7 @@ invoke_fail_webhook() {
     OUT_ROOT="$OUT_ROOT" \
     CADENCE_LOG_PATH="$CADENCE_LOG" \
     CADENCE_STATE_PATH="$STATE_FILE" \
+    WEBHOOK_COUNT="${#ON_FAIL_WEBHOOKS[@]}" \
     EVENT_TS="$webhook_ts" python3 - <<'PY'
 import json
 import os
@@ -240,6 +314,7 @@ print(
             "out_root": os.environ["OUT_ROOT"],
             "cadence_log": os.environ["CADENCE_LOG_PATH"],
             "cadence_state": os.environ["CADENCE_STATE_PATH"],
+            "webhook_count": int(os.environ["WEBHOOK_COUNT"]),
         },
         sort_keys=True,
     )
@@ -247,14 +322,15 @@ print(
 PY
   )"
 
-  echo "[$webhook_ts] posting on-fail webhook: $ON_FAIL_WEBHOOK" | tee -a "$CADENCE_LOG"
-  set +e
-  curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" \
-    "$ON_FAIL_WEBHOOK" >> "$CADENCE_LOG" 2>&1
-  local curl_ec=$?
-  set -e
-  if [[ "$curl_ec" -ne 0 ]]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook failed with exit code $curl_ec" \
+  local webhook_url
+  local failures=0
+  for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
+    if ! post_fail_webhook "$webhook_url" "$payload" "$webhook_ts"; then
+      failures=$((failures + 1))
+    fi
+  done
+  if [[ "$failures" -gt 0 ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] webhook delivery failures: $failures/${#ON_FAIL_WEBHOOKS[@]}" \
       | tee -a "$CADENCE_LOG"
   fi
 }
@@ -288,7 +364,7 @@ while true; do
 
   if [[ "$ec" -ne 0 ]]; then
     invoke_fail_hook "$iteration" "$ec" "$run_dir"
-    invoke_fail_webhook "$iteration" "$ec" "$run_dir"
+    invoke_fail_webhooks "$iteration" "$ec" "$run_dir"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] failing fast: iteration $iteration failed" \
       | tee -a "$CADENCE_LOG"
     exit "$ec"
