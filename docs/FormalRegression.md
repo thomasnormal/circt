@@ -85,6 +85,12 @@ Refresh expected failure cases from current observed fail-like rows:
 utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31
 ```
 
+Refresh expected failure cases while collapsing per-status rows to `status=ANY`:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-collapse-status-any
+```
+
 Run formal suites on a fixed cadence (6-hour interval example):
 
 ```bash
@@ -248,6 +254,9 @@ Expected-failure cases file:
   from current observed fail-like cases.
 - `--refresh-expected-failure-cases-default-expires-on <YYYY-MM-DD>` sets
   default expiry for newly added refreshed case rows.
+- `--refresh-expected-failure-cases-collapse-status-any` collapses refreshed
+  rows to one `status=ANY` row per `(suite, mode, id_kind, id)`, preserving
+  metadata from matching existing `ANY` rows first, then exact-status rows.
 
 ## Notes
 

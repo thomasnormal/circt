@@ -46,6 +46,8 @@ Options:
                          Rewrite expected-failure-cases TSV from current run
   --refresh-expected-failure-cases-default-expires-on YYYY-MM-DD
                          Default expires_on for newly added refreshed case rows
+  --refresh-expected-failure-cases-collapse-status-any
+                         Collapse refreshed case statuses to ANY per case key
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -96,6 +98,7 @@ FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
 FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=0
 REFRESH_EXPECTED_FAILURE_CASES_FILE=""
 REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON=""
+REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY=0
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -176,6 +179,8 @@ while [[ $# -gt 0 ]]; do
       REFRESH_EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
     --refresh-expected-failure-cases-default-expires-on)
       REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$2"; shift 2 ;;
+    --refresh-expected-failure-cases-collapse-status-any)
+      REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY=1; shift ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -1182,6 +1187,7 @@ if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
+  REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY="$REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY" \
   python3 - <<'PY'
 import csv
 import datetime as dt
@@ -1191,6 +1197,9 @@ from pathlib import Path
 out_dir = Path(os.environ["OUT_DIR"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
+collapse_status_any = (
+    os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY", "0") == "1"
+)
 
 if default_expires:
   try:
@@ -1301,32 +1310,71 @@ if summary_path.exists():
 
 refreshed = []
 seen = set()
-for obs in observed:
-  if obs["base"] == "__aggregate__":
-    id_kind = "aggregate"
-    case_id = "__aggregate__"
-  elif obs["base"]:
-    id_kind = "base"
-    case_id = obs["base"]
-  else:
-    id_kind = "path"
-    case_id = obs["path"]
-  key = (obs["suite"], obs["mode"], id_kind, case_id, obs["status"])
-  if key in seen:
-    continue
-  seen.add(key)
-  meta = existing_meta.get(key, {})
-  refreshed.append(
-      {
-          "suite": obs["suite"],
-          "mode": obs["mode"],
-          "id": case_id,
-          "id_kind": id_kind,
-          "status": obs["status"],
-          "expires_on": meta.get("expires_on", "") or default_expires,
-          "reason": meta.get("reason", ""),
-      }
-  )
+if collapse_status_any:
+  grouped = {}
+  for obs in observed:
+    if obs["base"] == "__aggregate__":
+      id_kind = "aggregate"
+      case_id = "__aggregate__"
+    elif obs["base"]:
+      id_kind = "base"
+      case_id = obs["base"]
+    else:
+      id_kind = "path"
+      case_id = obs["path"]
+    base_key = (obs["suite"], obs["mode"], id_kind, case_id)
+    grouped.setdefault(base_key, set()).add(obs["status"])
+  for base_key, statuses in grouped.items():
+    suite, mode, id_kind, case_id = base_key
+    key = (suite, mode, id_kind, case_id, "ANY")
+    if key in seen:
+      continue
+    seen.add(key)
+    meta = existing_meta.get(key, {})
+    if not meta:
+      for status in sorted(statuses):
+        exact_key = (suite, mode, id_kind, case_id, status)
+        if exact_key in existing_meta:
+          meta = existing_meta[exact_key]
+          break
+    refreshed.append(
+        {
+            "suite": suite,
+            "mode": mode,
+            "id": case_id,
+            "id_kind": id_kind,
+            "status": "ANY",
+            "expires_on": meta.get("expires_on", "") or default_expires,
+            "reason": meta.get("reason", ""),
+        }
+    )
+else:
+  for obs in observed:
+    if obs["base"] == "__aggregate__":
+      id_kind = "aggregate"
+      case_id = "__aggregate__"
+    elif obs["base"]:
+      id_kind = "base"
+      case_id = obs["base"]
+    else:
+      id_kind = "path"
+      case_id = obs["path"]
+    key = (obs["suite"], obs["mode"], id_kind, case_id, obs["status"])
+    if key in seen:
+      continue
+    seen.add(key)
+    meta = existing_meta.get(key, {})
+    refreshed.append(
+        {
+            "suite": obs["suite"],
+            "mode": obs["mode"],
+            "id": case_id,
+            "id_kind": id_kind,
+            "status": obs["status"],
+            "expires_on": meta.get("expires_on", "") or default_expires,
+            "reason": meta.get("reason", ""),
+        }
+    )
 
 refreshed.sort(key=lambda r: (r["suite"], r["mode"], r["id_kind"], r["id"], r["status"]))
 out_path.parent.mkdir(parents=True, exist_ok=True)
