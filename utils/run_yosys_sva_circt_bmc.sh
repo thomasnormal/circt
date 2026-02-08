@@ -54,6 +54,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX="${YOSYS_S
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE:-all}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2010,6 +2011,7 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_schema_version_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST"
   local drop_events_rewrite_history_file_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST"
   local drop_events_rewrite_selector_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE"
+  local drop_events_rewrite_selector_clauses_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3012,7 +3014,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3038,8 +3040,9 @@ rewrite_history_file_regex = sys.argv[12]
 rewrite_schema_version_list_raw = sys.argv[13]
 rewrite_history_file_list_raw = sys.argv[14]
 rewrite_selector_mode = sys.argv[15]
-rewrite_row_generated_at_utc_min = sys.argv[16]
-rewrite_row_generated_at_utc_max = sys.argv[17]
+rewrite_selector_clauses_json_raw = sys.argv[16]
+rewrite_row_generated_at_utc_min = sys.argv[17]
+rewrite_row_generated_at_utc_max = sys.argv[18]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3085,6 +3088,29 @@ def parse_selector_list(raw: str, field_name: str):
             f"error: invalid {field_name}: empty entry in comma-separated list"
         )
     return set(values)
+
+
+def parse_selector_list_value(value, field_name: str):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return parse_selector_list(value, field_name)
+    if isinstance(value, list):
+        values = []
+        for token in value:
+            if not isinstance(token, str) or not token.strip():
+                fail(
+                    f"error: invalid {field_name}: expected non-empty string entries"
+                )
+            values.append(token.strip())
+        if not values:
+            fail(
+                f"error: invalid {field_name}: expected at least one entry"
+            )
+        return set(values)
+    fail(
+        f"error: invalid {field_name}: expected string or array of strings"
+    )
 
 try:
     effective_id_hash_version = int(effective_id_hash_version_raw)
@@ -3161,6 +3187,117 @@ rewrite_history_file_set = parse_selector_list(
     rewrite_history_file_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST",
 )
+
+
+def compile_clause_regex(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        fail(f"error: invalid {field_name}: expected non-empty string")
+    try:
+        return re.compile(value)
+    except re.error as ex:
+        fail(f"error: invalid {field_name}: {value} ({ex})")
+
+
+def parse_selector_clauses(raw: str):
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON: expected JSON array"
+        )
+    if not isinstance(payload, list) or not payload:
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON: expected non-empty JSON array"
+        )
+    allowed_keys = {
+        "run_id_regex",
+        "reason_regex",
+        "schema_version_regex",
+        "history_file_regex",
+        "schema_version_list",
+        "history_file_list",
+        "row_generated_at_utc_min",
+        "row_generated_at_utc_max",
+    }
+    clauses = []
+    for clause_index, clause in enumerate(payload, start=1):
+        field_prefix = (
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON"
+            f"[{clause_index}]"
+        )
+        if not isinstance(clause, dict) or not clause:
+            fail(
+                f"error: invalid {field_prefix}: expected non-empty object"
+            )
+        unknown_keys = sorted(set(clause.keys()) - allowed_keys)
+        if unknown_keys:
+            fail(
+                f"error: invalid {field_prefix}: unknown key '{unknown_keys[0]}'"
+            )
+
+        min_epoch = None
+        if "row_generated_at_utc_min" in clause:
+            if not isinstance(clause["row_generated_at_utc_min"], str):
+                fail(
+                    f"error: invalid {field_prefix}.row_generated_at_utc_min: expected string"
+                )
+            min_epoch = parse_utc_epoch(
+                clause["row_generated_at_utc_min"],
+                f"{field_prefix}.row_generated_at_utc_min",
+            )
+        max_epoch = None
+        if "row_generated_at_utc_max" in clause:
+            if not isinstance(clause["row_generated_at_utc_max"], str):
+                fail(
+                    f"error: invalid {field_prefix}.row_generated_at_utc_max: expected string"
+                )
+            max_epoch = parse_utc_epoch(
+                clause["row_generated_at_utc_max"],
+                f"{field_prefix}.row_generated_at_utc_max",
+            )
+        if min_epoch is not None and max_epoch is not None and min_epoch > max_epoch:
+            fail(
+                f"error: invalid {field_prefix}: row_generated_at_utc_min exceeds row_generated_at_utc_max"
+            )
+
+        clauses.append(
+            {
+                "run_id_pattern": compile_clause_regex(
+                    clause.get("run_id_regex"), f"{field_prefix}.run_id_regex"
+                ),
+                "reason_pattern": compile_clause_regex(
+                    clause.get("reason_regex"), f"{field_prefix}.reason_regex"
+                ),
+                "schema_version_pattern": compile_clause_regex(
+                    clause.get("schema_version_regex"),
+                    f"{field_prefix}.schema_version_regex",
+                ),
+                "history_file_pattern": compile_clause_regex(
+                    clause.get("history_file_regex"),
+                    f"{field_prefix}.history_file_regex",
+                ),
+                "schema_version_set": parse_selector_list_value(
+                    clause.get("schema_version_list"),
+                    f"{field_prefix}.schema_version_list",
+                ),
+                "history_file_set": parse_selector_list_value(
+                    clause.get("history_file_list"),
+                    f"{field_prefix}.history_file_list",
+                ),
+                "row_generated_at_min_epoch": min_epoch,
+                "row_generated_at_max_epoch": max_epoch,
+            }
+        )
+    return clauses
+
+
+rewrite_selector_clauses = parse_selector_clauses(rewrite_selector_clauses_json_raw)
 
 rewrite_row_generated_at_min_epoch = None
 if rewrite_row_generated_at_utc_min:
@@ -3307,6 +3444,31 @@ def selected_for_rewrite(
     history_file: str,
     row_generated_at_epoch,
 ) -> bool:
+    if rewrite_selector_clauses is not None:
+        clause_results = []
+        for clause in rewrite_selector_clauses:
+            checks = []
+            if clause["run_id_pattern"] is not None:
+                checks.append(clause["run_id_pattern"].search(run_id) is not None)
+            if clause["reason_pattern"] is not None:
+                checks.append(clause["reason_pattern"].search(reason) is not None)
+            if clause["schema_version_pattern"] is not None:
+                checks.append(
+                    clause["schema_version_pattern"].search(schema_version) is not None
+                )
+            if clause["history_file_pattern"] is not None:
+                checks.append(clause["history_file_pattern"].search(history_file) is not None)
+            if clause["schema_version_set"] is not None:
+                checks.append(schema_version in clause["schema_version_set"])
+            if clause["history_file_set"] is not None:
+                checks.append(history_file in clause["history_file_set"])
+            if clause["row_generated_at_min_epoch"] is not None:
+                checks.append(row_generated_at_epoch >= clause["row_generated_at_min_epoch"])
+            if clause["row_generated_at_max_epoch"] is not None:
+                checks.append(row_generated_at_epoch <= clause["row_generated_at_max_epoch"])
+            clause_results.append(bool(checks) and all(checks))
+        return any(clause_results)
+
     checks = []
     if rewrite_run_id_pattern is not None:
         checks.append(rewrite_run_id_pattern.search(run_id) is not None)
@@ -3334,6 +3496,19 @@ def selected_for_rewrite(
 with open(file, "r", encoding="utf-8") as f:
     lines = f.read().splitlines()
 
+needs_row_generated_at_epoch = (
+    rewrite_row_generated_at_min_epoch is not None
+    or rewrite_row_generated_at_max_epoch is not None
+)
+if rewrite_selector_clauses is not None:
+    for clause in rewrite_selector_clauses:
+        if (
+            clause["row_generated_at_min_epoch"] is not None
+            or clause["row_generated_at_max_epoch"] is not None
+        ):
+            needs_row_generated_at_epoch = True
+            break
+
 rewritten = []
 for lineno, line in enumerate(lines, start=1):
     if not line:
@@ -3353,10 +3528,7 @@ for lineno, line in enumerate(lines, start=1):
 
     schema_version = normalize_schema(obj.get("schema_version"), lineno)
     row_generated_at_epoch = None
-    if (
-        rewrite_row_generated_at_min_epoch is not None
-        or rewrite_row_generated_at_max_epoch is not None
-    ):
+    if needs_row_generated_at_epoch:
         row_generated_at_epoch = parse_row_generated_at_epoch(
             obj["row_generated_at_utc"], lineno
         )

@@ -13983,6 +13983,74 @@ ninja -C build circt-verilog
   - Add native shell strict JSON validator to reduce Python dependence.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 587
+- Yosys SVA BMC clause-based selector grammar for rewrite scoping:
+  - Added
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON`
+    with non-empty JSON array semantics.
+  - Clause model is OR-of-AND:
+    - each clause object specifies a conjunction of selector predicates
+    - rewrite selection matches if any clause matches
+  - Supported clause keys:
+    - `run_id_regex`, `reason_regex`, `schema_version_regex`,
+      `history_file_regex`
+    - `schema_version_list`, `history_file_list`
+    - `row_generated_at_utc_min`, `row_generated_at_utc_max`
+  - Clause mode intentionally supersedes legacy global selector composition for
+    deterministic grouped policy control.
+- Migration engine updates:
+  - Added strict clause JSON validation:
+    - must be non-empty array of non-empty objects
+    - rejects unknown keys
+    - validates regex/list/timestamp fields with clause-local diagnostics
+    - validates per-clause min/max timestamp window ordering
+  - Added row timestamp parsing activation when any clause needs time bounds.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+      covering:
+      - clause selection behavior (including superseding global selector inputs)
+      - malformed clause JSON rejection
+      - unknown clause key rejection
+      - invalid clause regex rejection
+      - invalid clause list rejection
+  - Existing selector test updated in prior iteration remains active.
+  - Focused lit run:
+    - 5/5 PASS (`rewrite-clauses`, `rewrite-selectors`, `event-id-policy`,
+      `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.12--property$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_named$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Clause grammar currently has fixed field set and does not support nested
+    boolean composition within a clause.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+  - Result schema harmonization across harness scripts is still incomplete.
+- Long-term features to prioritize:
+  - Add reusable selector profiles (named clause sets) for stable CI policy
+    rollouts.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Add native shell strict JSON validator to reduce Python dependence.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference
