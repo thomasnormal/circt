@@ -357,6 +357,37 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+emit_expectations_dry_run_run_end() {
+  local exit_code="$?"
+  if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
+    OUT_DIR="$OUT_DIR" \
+    DATE_STR="$DATE_STR" \
+    EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+    EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
+    EXPECTATIONS_DRY_RUN_EXIT_CODE="$exit_code" \
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+report_path = Path(os.environ["EXPECTATIONS_DRY_RUN_REPORT_JSONL"])
+report_path.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "operation": "run_end",
+    "schema_version": 1,
+    "date": os.environ.get("DATE_STR", ""),
+    "run_id": os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", ""),
+    "out_dir": os.environ.get("OUT_DIR", ""),
+    "exit_code": int(os.environ.get("EXPECTATIONS_DRY_RUN_EXIT_CODE", "0")),
+}
+with report_path.open("a", encoding="utf-8") as f:
+  f.write(json.dumps(payload, sort_keys=True) + "\n")
+PY
+  fi
+  return "$exit_code"
+}
+trap emit_expectations_dry_run_run_end EXIT
+
 if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" ]]; then
   OUT_DIR="$OUT_DIR" \
   DATE_STR="$DATE_STR" \
