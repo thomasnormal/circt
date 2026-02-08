@@ -17038,6 +17038,46 @@ ninja -C build circt-verilog
   - In smoke mode OpenTitan produces only pass-like rows, so expected case rows
     for XPROP diagnostics remain unmatched in that mode.
 
+### Iteration 646
+- OpenTitan native machine-readable case stream contract:
+  - Extended `utils/run_opentitan_circt_lec.py` with:
+    - `--results-file <path>` option
+    - `OUT` env default for results path
+  - Script now emits per-implementation TSV rows:
+    - `status`, `id`, `path`, `suite`, `mode`
+  - Status mapping:
+    - `OK` -> `PASS`
+    - accepted `XPROP_ONLY` -> `XFAIL`
+    - failed implementation -> `FAIL`
+- `run_formal_all.sh` integration hardening:
+  - OpenTitan lane now passes `OUT=<out-dir>/opentitan-lec-results.txt`.
+  - Retained fallback log parsing only when results file is absent/empty
+    (backward compatibility for older/fake scripts).
+  - Expected-case ingestion now consumes dynamic suite/mode columns from detail
+    streams, and suppresses aggregate fallback when detailed rows are observed.
+- Regression coverage:
+  - Updated OpenTitan tool tests:
+    - `test/Tools/run-opentitan-lec-diagnose-xprop.test`
+    - `test/Tools/run-opentitan-lec-x-optimistic.test`
+    - `test/Tools/run-opentitan-lec-no-assume-known.test`
+    - each now verifies `OUT` results-file contract
+  - Existing `test/Tools/run-formal-all-strict-gate.test` remains green with
+    OpenTitan+AVIP detailed-case gating paths.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-opentitan-out-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-ot-out-smoke.tsv --fail-on-unexpected-failure-cases`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (matched by expected-case row)
+- Current limitations / debt:
+  - OpenTitan smoke mode remains pass-only; `XFAIL` detailed rows appear in
+    non-smoke solver runs (expected).
+  - AVIP detailed stream is still per-directory (not per-source-file/testcase).
+
 ---
 
 ## Architecture Reference
