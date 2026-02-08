@@ -3997,6 +3997,8 @@ def parse_context_schema_import_modules(
     import_stack=None,
     import_registry=None,
     schema_version=None,
+    seen_import_paths=None,
+    import_payload_cache=None,
 ):
     if value is None:
         return []
@@ -4006,6 +4008,10 @@ def parse_context_schema_import_modules(
         )
     if import_stack is None:
         import_stack = []
+    if seen_import_paths is None:
+        seen_import_paths = set()
+    if import_payload_cache is None:
+        import_payload_cache = {}
     modules = []
     for idx, entry in enumerate(value):
         import_field = f"{field_name}[{idx}]"
@@ -4072,31 +4078,37 @@ def parse_context_schema_import_modules(
             fail(
                 f"error: invalid {import_field}: import cycle detected: {' -> '.join(cycle_paths)}"
             )
-        try:
-            with open(import_path, "r", encoding="utf-8") as handle:
-                import_raw = handle.read()
-        except OSError as ex:
-            fail(
-                f"error: invalid {import_field}: unable to read import file '{import_path}' ({ex})"
+        if import_real_path in seen_import_paths:
+            continue
+        seen_import_paths.add(import_real_path)
+        import_payload = import_payload_cache.get(import_real_path)
+        if import_payload is None:
+            try:
+                with open(import_path, "r", encoding="utf-8") as handle:
+                    import_raw = handle.read()
+            except OSError as ex:
+                fail(
+                    f"error: invalid {import_field}: unable to read import file '{import_path}' ({ex})"
+                )
+            try:
+                import_payload = json.loads(import_raw)
+            except Exception:
+                fail(
+                    f"error: invalid {import_field}: import file '{import_path}' must contain JSON object"
+                )
+            if not isinstance(import_payload, dict) or not import_payload:
+                fail(
+                    f"error: invalid {import_field}: import file '{import_path}' must contain non-empty JSON object"
+                )
+            unknown_keys = sorted(
+                set(import_payload.keys())
+                - {"imports", "regex_defs", "limits", "int_arithmetic_presets"}
             )
-        try:
-            import_payload = json.loads(import_raw)
-        except Exception:
-            fail(
-                f"error: invalid {import_field}: import file '{import_path}' must contain JSON object"
-            )
-        if not isinstance(import_payload, dict) or not import_payload:
-            fail(
-                f"error: invalid {import_field}: import file '{import_path}' must contain non-empty JSON object"
-            )
-        unknown_keys = sorted(
-            set(import_payload.keys())
-            - {"imports", "regex_defs", "limits", "int_arithmetic_presets"}
-        )
-        if unknown_keys:
-            fail(
-                f"error: invalid {import_field}: import file '{import_path}' has unknown key '{unknown_keys[0]}'"
-            )
+            if unknown_keys:
+                fail(
+                    f"error: invalid {import_field}: import file '{import_path}' has unknown key '{unknown_keys[0]}'"
+                )
+            import_payload_cache[import_real_path] = import_payload
         modules.extend(
             parse_context_schema_import_modules(
                 import_payload.get("imports"),
@@ -4104,6 +4116,8 @@ def parse_context_schema_import_modules(
                 import_stack + [import_real_path],
                 import_registry,
                 schema_version,
+                seen_import_paths,
+                import_payload_cache,
             )
         )
         modules.append((import_path, import_payload, import_field))

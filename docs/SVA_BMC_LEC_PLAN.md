@@ -396,6 +396,8 @@ Merge and precedence rules:
   schema are rejected.
 - `int_arithmetic_presets`: duplicate preset names across imports or between
   imports and inline schema are rejected.
+- Shared imports are deduplicated by canonicalized file path within one schema
+  parse closure (first import wins; repeated references are ignored).
 - Arithmetic mode precedence during clause evaluation:
   - clause `int_arithmetic` or clause `int_arithmetic_ref`
   - schema `int_arithmetic` or schema `int_arithmetic_ref`
