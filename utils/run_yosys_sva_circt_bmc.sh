@@ -55,6 +55,7 @@ EXPECT_SKIP_STRICT="${EXPECT_SKIP_STRICT:-0}"
 EXPECT_LINT="${EXPECT_LINT:-0}"
 EXPECT_LINT_FAIL_ON_ISSUES="${EXPECT_LINT_FAIL_ON_ISSUES:-0}"
 EXPECT_LINT_FILE="${EXPECT_LINT_FILE:-}"
+EXPECT_LINT_HINTS_FILE="${EXPECT_LINT_HINTS_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -89,6 +90,10 @@ declare -A suite_tests
 if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_FILE" ]]; then
   : > "$EXPECT_LINT_FILE"
 fi
+if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_HINTS_FILE" ]]; then
+  : > "$EXPECT_LINT_HINTS_FILE"
+  printf 'kind\tsource\tkey\taction\tnote\n' >> "$EXPECT_LINT_HINTS_FILE"
+fi
 
 emit_expect_lint() {
   local kind="$1"
@@ -99,6 +104,20 @@ emit_expect_lint() {
     echo "$line" >> "$EXPECT_LINT_FILE"
   fi
   lint_issues=$((lint_issues + 1))
+}
+
+emit_expect_lint_hint() {
+  local kind="$1"
+  local source="$2"
+  local key="$3"
+  local action="$4"
+  local note="${5:-}"
+  if [[ -z "$EXPECT_LINT_HINTS_FILE" ]]; then
+    return 0
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$kind" "$source" "$key" "$action" "$note" >> "$EXPECT_LINT_HINTS_FILE"
+  return 0
 }
 load_expected_cases() {
   local map_name="$1"
@@ -128,8 +147,12 @@ load_expected_cases() {
     if [[ "$EXPECT_LINT" == "1" ]] && [[ -n "${seen_in_file["$key"]+x}" ]]; then
       if [[ "${seen_in_file["$key"]}" == "$expected" ]]; then
         emit_expect_lint "redundant" "$file row duplicates $key = $expected"
+        emit_expect_lint_hint "redundant" "$file" "$key" "remove-duplicate-row" \
+          "same value repeated"
       else
         emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
+        emit_expect_lint_hint "conflict" "$file" "$key" "resolve-key-conflict" \
+          "${seen_in_file["$key"]} vs $expected"
       fi
     fi
     seen_in_file["$key"]="$expected"
@@ -165,8 +188,12 @@ load_regen_override_cases() {
     if [[ "$EXPECT_LINT" == "1" ]] && [[ -n "${seen_in_file["$key"]+x}" ]]; then
       if [[ "${seen_in_file["$key"]}" == "$expected" ]]; then
         emit_expect_lint "redundant" "$file row duplicates $key = $expected"
+        emit_expect_lint_hint "redundant" "$file" "$key" "remove-duplicate-row" \
+          "same value repeated"
       else
         emit_expect_lint "conflict" "$file row redefines $key: ${seen_in_file["$key"]} -> $expected"
+        emit_expect_lint_hint "conflict" "$file" "$key" "resolve-key-conflict" \
+          "${seen_in_file["$key"]} vs $expected"
       fi
     fi
     seen_in_file["$key"]="$expected"
@@ -204,8 +231,11 @@ lint_unknown_tests_for_map() {
     [[ "$test" == "*" ]] && continue
     if [[ -z "${suite_tests["$test"]+x}" ]]; then
       emit_expect_lint "unknown-test" "$label references missing test '$test' via key $key"
+      emit_expect_lint_hint "unknown-test" "$label" "$key" "rename-or-remove-row" \
+        "test missing from suite"
     fi
   done < <(printf '%s\n' "${keys[@]}" | sort)
+  return 0
 }
 
 lookup_match_key_for_tuple() {
@@ -291,8 +321,11 @@ lint_shadowed_patterns_for_map() {
   while IFS= read -r key; do
     if [[ "$key" == *"*"* ]] && [[ "${possible_hits["$key"]}" -eq 0 ]]; then
       emit_expect_lint "shadowed" "$label wildcard key $key is never selected for suite matrix"
+      emit_expect_lint_hint "shadowed" "$label" "$key" "remove-or-tighten-key" \
+        "wildcard row is dead under precedence"
     fi
   done < <(printf '%s\n' "${keys[@]}" | sort)
+  return 0
 }
 
 lint_precedence_ambiguity_for_map() {
@@ -355,7 +388,10 @@ lint_precedence_ambiguity_for_map() {
     fi
     emit_expect_lint "ambiguity" \
       "$label precedence-sensitive overlap: $winner (${map_ref["$winner"]}) overrides $other (${map_ref["$other"]}) for $cnt tuple(s), e.g. ${pair_examples["$pair"]}"
+    emit_expect_lint_hint "ambiguity" "$label" "$winner||$other" "split-or-align-overlap" \
+      "${pair_examples["$pair"]}"
   done < <(printf '%s\n' "${!pair_counts[@]}" | sort)
+  return 0
 }
 
 if [[ "$EXPECT_LINT" == "1" ]]; then
