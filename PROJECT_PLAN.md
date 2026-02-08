@@ -12339,6 +12339,62 @@ ninja -C build circt-verilog
     `sticky-group`).
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 560
+- Yosys SVA BMC drop-event retention controls:
+  - Added bounded retention knobs for structured drop-event telemetry:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS`
+  - Both are non-negative integers and default to `0` (no limit).
+  - Implemented post-run retention trimming on
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE`:
+    - age-based pruning by `generated_at_utc`
+    - entry-count capping to last N rows
+  - Added strict validation errors for invalid drop-event timestamps when
+    age-based retention is enabled.
+- Regression tests:
+  - Added
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`:
+    - validates legacy event aging removal.
+    - validates bounded `max_entries` behavior across multiple runs.
+    - validates invalid
+      `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES` rejection.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 45/45 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Drop-event retention is local-file based and lacks lock-safe semantics for
+    concurrent multi-process writers.
+  - Drop-event schema does not yet include stable event IDs for dedup/merge.
+  - Parser-backed validation still depends on `python3`.
+  - Legacy-migrated rows still carry synthetic timestamp metadata.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add lock-safe append/trim strategy for shared drop-event files.
+  - Add per-reason/per-source aggregate counters in summary JSON output.
+  - Add non-Python JSON parser path for portability.
+  - Add stable event IDs and optional compression/rotation policy.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

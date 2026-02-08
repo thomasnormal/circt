@@ -26601,3 +26601,68 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Comment-anchor policies remain row-local and do not yet support sticky-group
   mode.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 560 - February 8, 2026
+
+### Yosys SVA BMC Drop-Event Retention Controls
+
+- Added bounded retention controls for drop-event telemetry:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS`
+- Both knobs:
+  - accept non-negative integers only
+  - default to `0` (no limit)
+- Added retention trimming for
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE`:
+  - age pruning by `generated_at_utc`
+  - cap-to-last-N behavior for file length
+- Added strict validation for malformed drop-event timestamps during age-based
+  trimming.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`
+- New coverage verifies:
+  - old drop-events are pruned by age.
+  - drop-events are capped to last `N` entries across repeated runs.
+  - invalid
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES` is rejected.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 45/45 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Drop-event retention is local-file based and does not provide lock-safe
+  semantics for concurrent writers.
+- Drop-event schema does not yet include stable event IDs for dedup / merge.
+- Parser-backed validation still depends on `python3`.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
