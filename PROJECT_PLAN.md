@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 508)
+## Current Status - February 8, 2026 (Iteration 509)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata for bit/part-select + reductions and corresponding VerifToSMT consumption; next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions (`nand`/`nor`/`xnor`) and matching VerifToSMT semantics; next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,69 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 509
+
+1. **Fixed inverted reduction semantics in expression-backed witness parsing**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended local expression parser and resolver to support:
+     - `~&expr` / `~|expr` / `~^expr`
+     - `^~expr` (XNOR reduction form)
+   - Added corresponding resolved kinds:
+     - `ReduceNand`, `ReduceNor`, `ReduceXnor`
+   - This closes a semantic gap where forms like `^~bus` could previously be
+     interpreted incorrectly.
+
+2. **Structured Slang metadata now carries inverted reductions**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Structured extraction now emits:
+     - `<prefix>_reduction = "nand" | "nor" | "xnor"`
+   - VerifToSMT structured-attr resolution now consumes those values directly
+     before falling back to text parsing.
+
+3. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-reduction.mlir`
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-structured-metadata.mlir`
+   - New checks cover:
+     - frontend structured attr emission for `^~bus` / `~|bus`
+     - backend witness synthesis for both text and structured inverted
+       reductions.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witness-structured-metadata.mlir`: PASS
+     - `bmc-event-arm-witness-reduction.mlir`: PASS
+     - `bmc-event-arm-witness-part-select.mlir`: PASS
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - We still bridge using attrs+fallback parser; canonical Slang expression
+     graph/ID propagation is not done yet.
+   - High-value missing expression forms:
+     - casts (especially 4-state aware),
+     - concatenation/replication,
+     - indexed part-select (`+:`/`-:`),
+     - richer builtin/system expression semantics.
+   - Best long-term path:
+     - define canonical event expression identity/type metadata from Slang and
+       lower directly from that representation in VerifToSMT.
 
 ### Session Summary - Iteration 508
 

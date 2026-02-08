@@ -160,6 +160,9 @@ struct ParsedNamedBoolExpr {
     ReduceAnd,
     ReduceOr,
     ReduceXor,
+    ReduceNand,
+    ReduceNor,
+    ReduceXnor,
     And,
     Or,
     Xor,
@@ -185,6 +188,9 @@ struct ResolvedNamedBoolExpr {
     ReduceAnd,
     ReduceOr,
     ReduceXor,
+    ReduceNand,
+    ReduceNor,
+    ReduceXnor,
     And,
     Or,
     Xor,
@@ -205,6 +211,9 @@ enum class NamedBoolTokenKind {
   LParen,
   RParen,
   Not,
+  Nand,
+  Nor,
+  Xnor,
   And,
   Or,
   Xor,
@@ -309,6 +318,30 @@ private:
       if (!operand)
         return {};
       return makeUnary(ParsedNamedBoolExpr::Kind::Not, std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::Nand) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceNand,
+                       std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::Nor) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceNor,
+                       std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::Xnor) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceXnor,
+                       std::move(operand));
     }
     if (token.kind == NamedBoolTokenKind::And) {
       consumeToken();
@@ -438,6 +471,21 @@ private:
     }
     if (peek('~')) {
       ++pos;
+      if (peek('&')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Nand, input.slice(start, pos)};
+        return;
+      }
+      if (peek('|')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Nor, input.slice(start, pos)};
+        return;
+      }
+      if (peek('^')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Xnor, input.slice(start, pos)};
+        return;
+      }
       token = {NamedBoolTokenKind::Not, input.slice(start, pos)};
       return;
     }
@@ -457,6 +505,11 @@ private:
     }
     if (peek('^')) {
       ++pos;
+      if (peek('~')) {
+        ++pos;
+        token = {NamedBoolTokenKind::Xnor, input.slice(start, pos)};
+        return;
+      }
       token = {NamedBoolTokenKind::Xor, input.slice(start, pos)};
       return;
     }
@@ -569,7 +622,10 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
   }
   case ParsedNamedBoolExpr::Kind::ReduceAnd:
   case ParsedNamedBoolExpr::Kind::ReduceOr:
-  case ParsedNamedBoolExpr::Kind::ReduceXor: {
+  case ParsedNamedBoolExpr::Kind::ReduceXor:
+  case ParsedNamedBoolExpr::Kind::ReduceNand:
+  case ParsedNamedBoolExpr::Kind::ReduceNor:
+  case ParsedNamedBoolExpr::Kind::ReduceXnor: {
     auto operand = resolveNamedBoolExpr(*expr.lhs, inputNameToArgIndex,
                                         numNonStateArgs);
     if (!operand)
@@ -583,6 +639,15 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
       break;
     case ParsedNamedBoolExpr::Kind::ReduceXor:
       resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+      break;
+    case ParsedNamedBoolExpr::Kind::ReduceNand:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceNand;
+      break;
+    case ParsedNamedBoolExpr::Kind::ReduceNor:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceNor;
+      break;
+    case ParsedNamedBoolExpr::Kind::ReduceXnor:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceXnor;
       break;
     default:
       break;
@@ -678,6 +743,12 @@ static bool resolveStructuredExprFromDetail(
       reductionKind = ResolvedNamedBoolExpr::Kind::ReduceOr;
     else if (reduction == "xor")
       reductionKind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+    else if (reduction == "nand")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceNand;
+    else if (reduction == "nor")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceNor;
+    else if (reduction == "xnor")
+      reductionKind = ResolvedNamedBoolExpr::Kind::ReduceXnor;
     else
       return false;
   }
@@ -5373,24 +5444,43 @@ struct VerifBoundedModelCheckingOpConversion
       };
       auto evalReduce = [&](Value input, ResolvedNamedBoolExpr::Kind kind)
           -> FailureOr<Value> {
+        bool invertResult = kind == ResolvedNamedBoolExpr::Kind::ReduceNand ||
+                            kind == ResolvedNamedBoolExpr::Kind::ReduceNor ||
+                            kind == ResolvedNamedBoolExpr::Kind::ReduceXnor;
+        ResolvedNamedBoolExpr::Kind baseKind = kind;
+        if (kind == ResolvedNamedBoolExpr::Kind::ReduceNand)
+          baseKind = ResolvedNamedBoolExpr::Kind::ReduceAnd;
+        else if (kind == ResolvedNamedBoolExpr::Kind::ReduceNor)
+          baseKind = ResolvedNamedBoolExpr::Kind::ReduceOr;
+        else if (kind == ResolvedNamedBoolExpr::Kind::ReduceXnor)
+          baseKind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+
+        auto maybeInvert = [&](Value value) -> Value {
+          if (!invertResult)
+            return value;
+          return smt::NotOp::create(builder, loc, value);
+        };
+
         if (isa<smt::BoolType>(input.getType()))
-          return input;
+          return maybeInvert(input);
         auto bvTy = dyn_cast<smt::BitVectorType>(input.getType());
         if (!bvTy)
           return failure();
         unsigned width = bvTy.getWidth();
         if (width == 0)
           return failure();
-        if (kind == ResolvedNamedBoolExpr::Kind::ReduceOr) {
+        if (baseKind == ResolvedNamedBoolExpr::Kind::ReduceOr) {
           auto zero = smt::BVConstantOp::create(builder, loc, APInt(width, 0));
-          return Value(smt::DistinctOp::create(builder, loc, input, zero));
+          return maybeInvert(
+              Value(smt::DistinctOp::create(builder, loc, input, zero)));
         }
-        if (kind == ResolvedNamedBoolExpr::Kind::ReduceAnd) {
+        if (baseKind == ResolvedNamedBoolExpr::Kind::ReduceAnd) {
           auto allOnes =
               smt::BVConstantOp::create(builder, loc, APInt::getAllOnes(width));
-          return Value(smt::EqOp::create(builder, loc, input, allOnes));
+          return maybeInvert(
+              Value(smt::EqOp::create(builder, loc, input, allOnes)));
         }
-        if (kind == ResolvedNamedBoolExpr::Kind::ReduceXor) {
+        if (baseKind == ResolvedNamedBoolExpr::Kind::ReduceXor) {
           auto bitTy = smt::BitVectorType::get(builder.getContext(), 1);
           auto one = smt::BVConstantOp::create(builder, loc, APInt(1, 1));
           Value parity = smt::BoolConstantOp::create(builder, loc, false);
@@ -5400,7 +5490,7 @@ struct VerifBoundedModelCheckingOpConversion
             Value bitBool = smt::EqOp::create(builder, loc, bitValue, one);
             parity = smt::DistinctOp::create(builder, loc, parity, bitBool);
           }
-          return parity;
+          return maybeInvert(parity);
         }
         return failure();
       };
@@ -5442,7 +5532,10 @@ struct VerifBoundedModelCheckingOpConversion
       }
       case ResolvedNamedBoolExpr::Kind::ReduceAnd:
       case ResolvedNamedBoolExpr::Kind::ReduceOr:
-      case ResolvedNamedBoolExpr::Kind::ReduceXor: {
+      case ResolvedNamedBoolExpr::Kind::ReduceXor:
+      case ResolvedNamedBoolExpr::Kind::ReduceNand:
+      case ResolvedNamedBoolExpr::Kind::ReduceNor:
+      case ResolvedNamedBoolExpr::Kind::ReduceXnor: {
         if (expr.lhs && expr.lhs->kind == ResolvedNamedBoolExpr::Kind::Arg) {
           auto argValueOr = evalArgValue(expr.lhs->argIndex, expr.lhs->argSlice);
           if (failed(argValueOr))
