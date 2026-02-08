@@ -286,6 +286,7 @@ Expected-failure budget file:
   (`<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]`
   per row; optional date columns use `YYYY-MM-DD`; `status` is
   `active|revoked`; cannot be combined with `--hmac-key-file`).
+  Use `--hmac-keyring-sha256 <hex>` to pin the exact keyring content hash.
   Use `--expected-hmac-key-id <id>` to enforce `hmac_key_id` match.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
