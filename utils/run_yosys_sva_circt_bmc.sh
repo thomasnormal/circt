@@ -3744,6 +3744,156 @@ def validate_context_value(value, key_spec, field_name: str, format_output: bool
     return value
 
 
+def parse_int_expression(expr, field_name: str):
+    if isinstance(expr, bool):
+        fail(
+            f"error: invalid {field_name}: expected integer literal, context key, or expression object"
+        )
+    if isinstance(expr, int):
+        return ("const", expr)
+    if isinstance(expr, str):
+        int_value = parse_context_integer(expr)
+        if int_value is not None:
+            return ("const", int_value)
+        validate_context_key_name(expr, field_name)
+        return ("key", expr)
+    if not isinstance(expr, dict) or not expr:
+        fail(
+            f"error: invalid {field_name}: expected integer literal, context key, or expression object"
+        )
+    if len(expr) != 1:
+        fail(
+            f"error: invalid {field_name}: expected single-key expression object"
+        )
+    op, payload = next(iter(expr.items()))
+    if op == "neg":
+        return ("neg", parse_int_expression(payload, f"{field_name}.neg"))
+    if op in {"add", "sub", "mul", "min", "max"}:
+        if not isinstance(payload, list):
+            fail(
+                f"error: invalid {field_name}.{op}: expected array"
+            )
+        min_arity = 1
+        if op in {"sub", "mul", "min", "max"}:
+            min_arity = 2
+        if len(payload) < min_arity:
+            fail(
+                f"error: invalid {field_name}.{op}: expected at least {min_arity} operand(s)"
+            )
+        operands = []
+        for idx, operand in enumerate(payload):
+            operands.append(
+                parse_int_expression(operand, f"{field_name}.{op}[{idx}]")
+            )
+        return (op, tuple(operands))
+    if op in {"div", "mod"}:
+        if not isinstance(payload, list) or len(payload) != 2:
+            fail(
+                f"error: invalid {field_name}.{op}: expected [lhs, rhs] operands"
+            )
+        lhs_expr = parse_int_expression(payload[0], f"{field_name}.{op}[0]")
+        rhs_expr = parse_int_expression(payload[1], f"{field_name}.{op}[1]")
+        return (op, lhs_expr, rhs_expr)
+    fail(
+        f"error: invalid {field_name}: unknown int expression operator '{op}'"
+    )
+
+
+def evaluate_int_expression(expr, context):
+    kind = expr[0]
+    if kind == "const":
+        return expr[1]
+    if kind == "key":
+        key = expr[1]
+        if key not in context:
+            return None
+        return parse_context_integer(context[key])
+    if kind == "neg":
+        value = evaluate_int_expression(expr[1], context)
+        if value is None:
+            return None
+        return -value
+    if kind in {"add", "sub", "mul", "min", "max"}:
+        operands = []
+        for operand in expr[1]:
+            value = evaluate_int_expression(operand, context)
+            if value is None:
+                return None
+            operands.append(value)
+        if kind == "add":
+            return sum(operands)
+        if kind == "sub":
+            value = operands[0]
+            for operand in operands[1:]:
+                value -= operand
+            return value
+        if kind == "mul":
+            value = 1
+            for operand in operands:
+                value *= operand
+            return value
+        if kind == "min":
+            return min(operands)
+        return max(operands)
+    if kind == "div":
+        lhs_value = evaluate_int_expression(expr[1], context)
+        rhs_value = evaluate_int_expression(expr[2], context)
+        if lhs_value is None or rhs_value is None or rhs_value == 0:
+            return None
+        return lhs_value // rhs_value
+    if kind == "mod":
+        lhs_value = evaluate_int_expression(expr[1], context)
+        rhs_value = evaluate_int_expression(expr[2], context)
+        if lhs_value is None or rhs_value is None or rhs_value == 0:
+            return None
+        return lhs_value % rhs_value
+    return None
+
+
+def format_int_expression(expr):
+    kind = expr[0]
+    if kind == "const":
+        return str(expr[1])
+    if kind == "key":
+        return expr[1]
+    if kind == "neg":
+        return f"(-{format_int_expression(expr[1])})"
+    if kind == "add":
+        return "(" + "+".join(format_int_expression(operand) for operand in expr[1]) + ")"
+    if kind == "sub":
+        return "(" + "-".join(format_int_expression(operand) for operand in expr[1]) + ")"
+    if kind == "mul":
+        return "(" + "*".join(format_int_expression(operand) for operand in expr[1]) + ")"
+    if kind == "min":
+        return "min(" + ",".join(format_int_expression(operand) for operand in expr[1]) + ")"
+    if kind == "max":
+        return "max(" + ",".join(format_int_expression(operand) for operand in expr[1]) + ")"
+    if kind == "div":
+        return f"({format_int_expression(expr[1])}/{format_int_expression(expr[2])})"
+    if kind == "mod":
+        return f"({format_int_expression(expr[1])}%{format_int_expression(expr[2])})"
+    return "<invalid>"
+
+
+def collect_int_expression_keys(expr, out_keys):
+    kind = expr[0]
+    if kind == "key":
+        out_keys.add(expr[1])
+        return
+    if kind in {"const"}:
+        return
+    if kind == "neg":
+        collect_int_expression_keys(expr[1], out_keys)
+        return
+    if kind in {"add", "sub", "mul", "min", "max"}:
+        for operand in expr[1]:
+            collect_int_expression_keys(operand, out_keys)
+        return
+    if kind in {"div", "mod"}:
+        collect_int_expression_keys(expr[1], out_keys)
+        collect_int_expression_keys(expr[2], out_keys)
+
+
 def parse_context_presence_clause(payload, field_name: str):
     if not isinstance(payload, dict) or not payload:
         fail(
@@ -3771,6 +3921,7 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_ge_offset",
             "int_linear",
             "int_affine",
+            "int_expr",
         }
     )
     if unknown_keys:
@@ -4462,6 +4613,39 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_affine_seen.add(term_key)
             int_affine_terms.append(term_key)
+    int_expr_terms = None
+    if "int_expr" in payload:
+        int_expr_raw = payload["int_expr"]
+        if not isinstance(int_expr_raw, list) or not int_expr_raw:
+            fail(
+                f"error: invalid {field_name}.int_expr: expected non-empty array"
+            )
+        int_expr_terms = []
+        int_expr_seen = set()
+        for term_index, term in enumerate(int_expr_raw):
+            term_field = f"{field_name}.int_expr[{term_index}]"
+            if (
+                not isinstance(term, list)
+                or len(term) != 3
+                or not isinstance(term[1], str)
+            ):
+                fail(
+                    f"error: invalid {term_field}: expected [lhs_expr, op, rhs_expr] comparator"
+                )
+            lhs_expr = parse_int_expression(term[0], f"{term_field}.lhs")
+            op = term[1].lower()
+            if op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
+                fail(
+                    f"error: invalid {term_field}.op: expected op in {{lt, le, gt, ge, eq, ne}}"
+                )
+            rhs_expr = parse_int_expression(term[2], f"{term_field}.rhs")
+            term_key = (lhs_expr, op, rhs_expr)
+            if term_key in int_expr_seen:
+                fail(
+                    f"error: invalid {field_name}.int_expr: duplicate comparator"
+                )
+            int_expr_seen.add(term_key)
+            int_expr_terms.append(term_key)
     if (
         keys_all is None
         and keys_any is None
@@ -4482,10 +4666,11 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_ge_offset_triples is None
         and int_linear_terms is None
         and int_affine_terms is None
+        and int_expr_terms is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, or int_affine"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, int_affine, or int_expr"
         )
     return {
         "keys_all": keys_all,
@@ -4507,6 +4692,7 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_ge_offset_triples": int_ge_offset_triples,
         "int_linear_terms": int_linear_terms,
         "int_affine_terms": int_affine_terms,
+        "int_expr_terms": int_expr_terms,
     }
 
 
@@ -4729,6 +4915,25 @@ def is_context_presence_clause_satisfied(context, clause):
                 return False
             if op == "ge" and lhs_value < rhs_total:
                 return False
+    int_expr_terms = clause["int_expr_terms"]
+    if int_expr_terms is not None:
+        for lhs_expr, op, rhs_expr in int_expr_terms:
+            lhs_value = evaluate_int_expression(lhs_expr, context)
+            rhs_value = evaluate_int_expression(rhs_expr, context)
+            if lhs_value is None or rhs_value is None:
+                return False
+            if op == "lt" and lhs_value >= rhs_value:
+                return False
+            if op == "le" and lhs_value > rhs_value:
+                return False
+            if op == "gt" and lhs_value <= rhs_value:
+                return False
+            if op == "ge" and lhs_value < rhs_value:
+                return False
+            if op == "eq" and lhs_value != rhs_value:
+                return False
+            if op == "ne" and lhs_value == rhs_value:
+                return False
     return True
 
 
@@ -4891,6 +5096,22 @@ def format_context_presence_clause(clause):
             rhs_expr = format_int_affine_rhs_expr(rhs_terms, rhs_const)
             affine_parts.append(f"{lhs}{op_symbol[op]}{rhs_expr}")
         parts.append("int_affine=[" + ", ".join(affine_parts) + "]")
+    int_expr_terms = clause["int_expr_terms"]
+    if int_expr_terms is not None:
+        op_symbol = {
+            "lt": "<",
+            "le": "<=",
+            "gt": ">",
+            "ge": ">=",
+            "eq": "==",
+            "ne": "!=",
+        }
+        expr_parts = []
+        for lhs_expr, op, rhs_expr in int_expr_terms:
+            expr_parts.append(
+                f"{format_int_expression(lhs_expr)}{op_symbol[op]}{format_int_expression(rhs_expr)}"
+            )
+        parts.append("int_expr=[" + ", ".join(expr_parts) + "]")
     return ", ".join(parts)
 
 
@@ -4978,6 +5199,14 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
             require_integer_key(lhs, f"{field_name}.int_affine")
             for rhs_key, _ in rhs_terms:
                 require_integer_key(rhs_key, f"{field_name}.int_affine")
+    int_expr_terms = clause["int_expr_terms"]
+    if int_expr_terms is not None:
+        for lhs_expr, _, rhs_expr in int_expr_terms:
+            expr_keys = set()
+            collect_int_expression_keys(lhs_expr, expr_keys)
+            collect_int_expression_keys(rhs_expr, expr_keys)
+            for expr_key in sorted(expr_keys):
+                require_integer_key(expr_key, f"{field_name}.int_expr")
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):

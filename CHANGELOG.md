@@ -30039,3 +30039,80 @@ CIRCT/slang correctly enforces LRM restrictions.
   and explicit expression-level boolean combinators.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 610 - February 8, 2026
+
+### Yosys SVA BMC Recursive Integer Expression Comparators
+
+- Added composite clause operator:
+  - `int_expr`: list of `[lhs_expr, op, rhs_expr]` comparators.
+- Supported comparator operators:
+  - `lt`, `le`, `gt`, `ge`, `eq`, `ne`.
+- Added recursive integer expression parser/evaluator with nodes:
+  - leafs: integer literal, context key
+  - unary: `neg`
+  - n-ary: `add`, `sub`, `mul`, `min`, `max`
+  - binary: `div`, `mod`
+- Added strict diagnostics for `int_expr` metadata:
+  - malformed comparator shape rejection
+  - malformed expression shape rejection
+  - unknown expression operator rejection
+  - invalid comparator operator rejection
+  - arity validation per expression operator
+  - duplicate comparator rejection
+- Added formatted unsatisfied-clause output for expression comparators:
+  - e.g. `int_expr=[(attempt+1)>=(min_attempt+retry_margin+3)]`.
+- Extended schema parse-time comparator typing checks:
+  - all context keys referenced anywhere in `int_expr` ASTs must be declared
+    as integer keys in schema `keys`.
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive merged schema case includes `int_expr`
+    - `int_expr` mismatch rejection
+    - invalid `int_expr` comparator-op rejection
+    - undeclared key inside `int_expr` rejection
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- `int_expr` is currently integer-only and does not yet support boolean-valued
+  expression composition inside a single expression AST.
+- `div` / `mod` semantics follow Python integer behavior and are not yet
+  schema-configurable.
+- Expression normalization, constant-folding, and complexity limits are not yet
+  implemented.
+- OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
+  `aes_sbox_canright`.
