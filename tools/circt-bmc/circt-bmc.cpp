@@ -77,6 +77,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include <atomic>
+#include <map>
 
 #ifdef CIRCT_BMC_ENABLE_JIT
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -295,13 +296,79 @@ static bool hasSMTSolver(mlir::ModuleOp module) {
   return found;
 }
 
-static void printMixedEventSources(ModuleOp module) {
+static std::optional<bool> decodeBoolModelValue(StringRef value) {
+  value = value.trim();
+  if (value.equals_insensitive("true"))
+    return true;
+  if (value.equals_insensitive("false"))
+    return false;
+  if (value == "#b1")
+    return true;
+  if (value == "#b0")
+    return false;
+  if (value == "1")
+    return true;
+  if (value == "0")
+    return false;
+  if (value.contains("'")) {
+    if (value.ends_with("1"))
+      return true;
+    if (value.ends_with("0"))
+      return false;
+  }
+  return std::nullopt;
+}
+
+static std::pair<std::string, unsigned> splitModelStepName(StringRef name) {
+  unsigned step = 0;
+  std::string base = name.str();
+  size_t underscore = name.rfind('_');
+  if (underscore == StringRef::npos || underscore + 1 >= name.size())
+    return {base, step};
+  StringRef suffix = name.drop_front(underscore + 1);
+  unsigned suffixStep = 0;
+  if (!suffix.getAsInteger(10, suffixStep)) {
+    base = name.take_front(underscore).str();
+    // We use step 0 for the unsuffixed declaration; `_0` is the next step.
+    step = suffixStep + 1;
+  }
+  return {base, step};
+}
+
+using StepMap = std::map<unsigned, bool>;
+using WaveTable = std::map<std::string, StepMap>;
+
+static WaveTable buildWaveTable(const llvm::StringMap<std::string> &modelValues,
+                                unsigned &maxStep) {
+  WaveTable table;
+  maxStep = 0;
+  for (const auto &kv : modelValues) {
+    auto decoded = decodeBoolModelValue(kv.getValue());
+    if (!decoded)
+      continue;
+    auto [base, step] = splitModelStepName(kv.getKey());
+    table[base][step] = *decoded;
+    maxStep = std::max(maxStep, step);
+  }
+  return table;
+}
+
+static void printMixedEventSources(
+    ModuleOp module,
+    const llvm::StringMap<std::string> *modelValues = nullptr) {
   bool printedHeader = false;
+  unsigned maxStep = 0;
+  WaveTable waves;
+  if (modelValues)
+    waves = buildWaveTable(*modelValues, maxStep);
+  bool printedActivityHeader = false;
   module.walk([&](mlir::smt::SolverOp solver) {
     auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
     if (!eventSources)
       eventSources =
           solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
+    auto detailSets =
+        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details");
     if (!eventSources || eventSources.empty())
       return;
     if (!printedHeader) {
@@ -314,16 +381,99 @@ static void printMixedEventSources(ModuleOp module) {
         continue;
       llvm::errs() << "  [" << i << "] ";
       bool first = true;
-      for (Attribute sourceAttr : sourceSet) {
+      auto detailSet =
+          detailSets && i < detailSets.size()
+              ? dyn_cast<ArrayAttr>(detailSets[i])
+              : ArrayAttr{};
+      for (unsigned j = 0; j < sourceSet.size(); ++j) {
+        Attribute sourceAttr = sourceSet[j];
         auto source = dyn_cast<StringAttr>(sourceAttr);
         if (!source)
           continue;
+        StringRef label = source.getValue();
+        if (detailSet && j < detailSet.size())
+          if (auto detail = dyn_cast<DictionaryAttr>(detailSet[j]))
+            if (auto detailLabel =
+                    dyn_cast_or_null<StringAttr>(detail.get("label")))
+              label = detailLabel.getValue();
         if (!first)
           llvm::errs() << ", ";
-        llvm::errs() << source.getValue();
+        llvm::errs() << label;
         first = false;
       }
       llvm::errs() << "\n";
+
+      if (!modelValues || maxStep == 0 || !detailSet)
+        continue;
+      for (unsigned j = 0; j < detailSet.size(); ++j) {
+        auto detail = dyn_cast<DictionaryAttr>(detailSet[j]);
+        if (!detail)
+          continue;
+        auto kindAttr = dyn_cast_or_null<StringAttr>(detail.get("kind"));
+        if (!kindAttr || kindAttr.getValue() != "signal")
+          continue;
+        auto signalNameAttr =
+            dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
+        auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
+        if (!signalNameAttr || !edgeAttr)
+          continue;
+        auto signalIt = waves.find(signalNameAttr.getValue().str());
+        if (signalIt == waves.end())
+          continue;
+        const StepMap *iffWave = nullptr;
+        if (auto iffNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
+          auto iffIt = waves.find(iffNameAttr.getValue().str());
+          if (iffIt != waves.end())
+            iffWave = &iffIt->second;
+        }
+        SmallVector<unsigned, 8> activeSteps;
+        for (unsigned step = 1; step <= maxStep; ++step) {
+          auto prevIt = signalIt->second.find(step - 1);
+          auto currIt = signalIt->second.find(step);
+          if (prevIt == signalIt->second.end() ||
+              currIt == signalIt->second.end())
+            continue;
+          bool prev = prevIt->second;
+          bool curr = currIt->second;
+          StringRef edge = edgeAttr.getValue();
+          bool edgeFired = false;
+          if (edge == "posedge")
+            edgeFired = !prev && curr;
+          else if (edge == "negedge")
+            edgeFired = prev && !curr;
+          else if (edge == "both")
+            edgeFired = prev != curr;
+          if (!edgeFired)
+            continue;
+          if (iffWave) {
+            auto iffIt = iffWave->find(step);
+            if (iffIt == iffWave->end() || !iffIt->second)
+              continue;
+          }
+          activeSteps.push_back(step);
+        }
+        if (!printedActivityHeader) {
+          llvm::errs() << "\nestimated signal-arm activity:\n";
+          printedActivityHeader = true;
+        }
+        StringRef label = signalNameAttr.getValue();
+        if (auto detailLabel = dyn_cast_or_null<StringAttr>(detail.get("label")))
+          label = detailLabel.getValue();
+        llvm::errs() << "  [" << i << "][" << j << "] " << label << " ->";
+        if (activeSteps.empty()) {
+          llvm::errs() << " none\n";
+        } else {
+          bool firstStep = true;
+          for (unsigned step : activeSteps) {
+            if (!firstStep)
+              llvm::errs() << ",";
+            llvm::errs() << " step " << step;
+            firstStep = false;
+          }
+          llvm::errs() << "\n";
+        }
+      }
     }
   });
 }
@@ -781,10 +931,12 @@ runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
   StringRef token = *selectedRun->token;
 
   if (printCounterexample && (token == "sat" || token == "unknown")) {
-    printMixedEventSources(module);
-    if (!declaredNames.empty()) {
-      auto modelValues = parseZ3Model(selectedRun->combinedOutput);
-      if (!modelValues.empty()) {
+    auto modelValues = parseZ3Model(selectedRun->combinedOutput);
+    if (!modelValues.empty())
+      printMixedEventSources(module, &modelValues);
+    else
+      printMixedEventSources(module);
+    if (!declaredNames.empty() && !modelValues.empty()) {
         circt_smt_print_model_header();
         for (const auto &name : declaredNames) {
           auto it = modelValues.find(name);
@@ -792,7 +944,6 @@ runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
             continue;
           llvm::errs() << "  " << name << " = " << it->second << "\n";
         }
-      }
     }
   }
 

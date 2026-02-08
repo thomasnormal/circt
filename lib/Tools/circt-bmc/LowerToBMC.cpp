@@ -1313,6 +1313,9 @@ void LowerToBMCPass::runOnOperation() {
     bmcOp->setAttr("bmc_event_sources", mixedEventSources);
     bmcOp->setAttr("bmc_mixed_event_sources", mixedEventSources);
   }
+  if (auto eventSourceDetails =
+          hwModule->getAttrOfType<ArrayAttr>("moore.event_source_details"))
+    bmcOp->setAttr("bmc_event_source_details", eventSourceDetails);
   if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
     bmcOp->setAttr("bmc_reg_clocks", regClocks);
   if (auto regClockSources =

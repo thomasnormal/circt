@@ -43,6 +43,9 @@ module SequenceEventListControl;
   // CHECK: %[[OR:.+]] = comb.or
   // CHECK: comb.and bin %{{.+}}, %[[OR]]
   // CHECK: cf.cond_br
+  // CHECK: moore.event_source_details =
+  // CHECK-SAME: sequence_index = 0
+  // CHECK-SAME: sequence_index = 1
   // CHECK: moore.event_sources =
   // CHECK-SAME: "sequence[0]"
   // CHECK-SAME: "sequence[1]"
@@ -66,6 +69,10 @@ module SequenceSignalEventListControl;
   // CHECK: moore.read %b
   // CHECK: comb.or
   // CHECK: cf.cond_br
+  // CHECK: moore.event_source_details =
+  // CHECK-SAME: edge = "posedge"
+  // CHECK-SAME: iff_name = "b"
+  // CHECK-SAME: signal_name = "clk"
   // CHECK: moore.event_sources =
   // CHECK-SAME: "sequence"
   // CHECK-SAME: "signal[0]:posedge:iff"
@@ -203,6 +210,9 @@ module SequenceSignalEventListNoEdge;
   // CHECK-DAG: moore.detect_event any
   // CHECK-DAG: moore.detect_event any
   // CHECK: cf.cond_br
+  // CHECK: moore.event_source_details =
+  // CHECK-SAME: edge = "both"
+  // CHECK-SAME: signal_name = "b"
   // CHECK: moore.event_sources =
   // CHECK-SAME: "sequence"
   // CHECK-SAME: "signal[0]:both"

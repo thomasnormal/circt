@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 492)
+## Current Status - February 8, 2026 (Iteration 493)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed canonical `event_sources` schema + compatibility aliases; next: per-step trigger attribution + alias deprecation plan + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured `event_source_details` + estimated per-step signal-arm activity; next: exact fired-arm witness attribution + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,87 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 493
+
+1. **Structured event-source details in ImportVerilog**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Sequence/signal event-list lowering now emits structured details on
+     `moore.wait_event`:
+     - `moore.event_source_details`
+   - Module-level aggregation now records both:
+     - `moore.event_sources`
+     - `moore.event_source_details`
+   - Detail dictionaries now include (when available):
+     - `kind`, `label`
+     - `edge`, `signal_index`, `signal_name`, `iff_name`
+     - `sequence_index`, `sequence_name`
+
+2. **Details propagation to BMC/SMT**
+   - Updated:
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Provenance details now flow through:
+     - `moore.event_source_details` (HW module)
+     - `bmc_event_source_details` (`verif.bmc`)
+     - `bmc_event_source_details` (`smt.solver`)
+
+3. **Counterexample activity diagnostics**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - `--print-counterexample` now:
+     - parses model values before printing provenance
+     - emits `estimated signal-arm activity:` for signal arms with detail
+       metadata and decodable waveforms
+   - Current estimate supports:
+     - `posedge` / `negedge` / `both`
+     - optional `iff` gating
+
+4. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+   - New checks cover:
+     - frontend detail emission,
+     - detail propagation through BMC/SMT,
+     - printed activity lines in SAT counterexamples.
+
+5. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+   - Additional BMC lit checks:
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`: PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`: PASS
+     - `bmc-run-smtlib-sat-counterexample.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+6. **Current limitations and best long-term next features**
+   - Activity reporting is currently an estimate from decoded signal waveforms;
+     it is not an exact solver-level witness of which event-list arm fired.
+   - Sequence-arm per-step attribution is still missing.
+   - Detailed naming is best-effort and depends on recoverable symbol refs.
+   - Legacy alias attributes are still mirrored for compatibility.
+   - High-value next work:
+     - instrument exact wake predicates in lowering and print true fired-arm
+       witnesses per step,
+     - stage and execute alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 492
 
