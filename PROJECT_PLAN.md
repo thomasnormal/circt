@@ -17623,6 +17623,32 @@ ninja -C build circt-verilog
   - Sample payload is bounded and may omit row-level details beyond `N` rows.
   - Integrity hashes are unauthenticated (no signature/trust chain).
 
+### Iteration 662
+- Dry-run verifier legacy-prefix compatibility mode:
+  - Extended `utils/verify_formal_dryrun_report.py` with
+    `--allow-legacy-prefix`.
+  - This mode skips leading pre-`run_meta` rows (older non-enveloped report
+    entries) and validates from the first `run_meta` onward.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - negative case: verifier fails on mixed legacy+enveloped report without
+      `--allow-legacy-prefix`
+    - positive case: verifier passes with `--allow-legacy-prefix`
+- Documentation:
+  - Updated `docs/FormalRegression.md` to document
+    `--allow-legacy-prefix` usage.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke + verifier:
+    - `python3 utils/verify_formal_dryrun_report.py /tmp/formal-dryrun-meta-smoke-v3.jsonl` -> PASS
+- Current limitations / debt:
+  - `--allow-legacy-prefix` only handles leading legacy rows, not malformed
+    interleaving between run segments.
+  - Integrity hashes are unauthenticated (no signature/trust chain).
+
 ---
 
 ## Architecture Reference

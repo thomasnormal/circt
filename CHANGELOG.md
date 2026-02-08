@@ -32760,6 +32760,48 @@ CIRCT/slang correctly enforces LRM restrictions.
   limit.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 
+## Iteration 662 - February 8, 2026
+
+### Verifier Compatibility for Legacy Prefix Rows
+
+- Extended `utils/verify_formal_dryrun_report.py` with
+  `--allow-legacy-prefix`.
+- New behavior with the flag:
+  - skips leading rows before the first `run_meta`
+  - validates the remaining enveloped run segments normally
+- Default strict behavior remains unchanged (mixed legacy+enveloped files fail
+  without the flag).
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added mixed-report negative check (no flag)
+    - added mixed-report positive check (`--allow-legacy-prefix`)
+  - `docs/FormalRegression.md`
+    - documented when to use `--allow-legacy-prefix`
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke verifier:
+  - `python3 utils/verify_formal_dryrun_report.py /tmp/formal-dryrun-meta-smoke-v3.jsonl`:
+    - PASS
+
+### Remaining Limitations
+
+- `--allow-legacy-prefix` only handles leading legacy rows, not malformed
+  legacy rows interleaved between run segments.
+- Integrity hashes are unauthenticated (no signature/trust chain).
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility

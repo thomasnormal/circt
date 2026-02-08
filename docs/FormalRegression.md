@@ -274,6 +274,8 @@ Expected-failure budget file:
   `operation=run_end` with `exit_code`, `row_count`, and `payload_sha256`.
 - `python3 utils/verify_formal_dryrun_report.py <file>` verifies JSONL run
   envelopes and checks `run_end.row_count`/`run_end.payload_sha256`.
+  Use `--allow-legacy-prefix` when the file contains older pre-enveloped rows
+  before the first `run_meta`.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
