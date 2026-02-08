@@ -401,9 +401,6 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
           slang::ast::CompilationFlags::AllowSelfDeterminedStreamConcat, true);
       driver.options.compilationFlags.emplace(
           slang::ast::CompilationFlags::AllowMergingAnsiPorts, true);
-      // Also enable AllowVirtualIfaceWithOverride for Xcelium compatibility
-      driver.options.compilationFlags.emplace(
-          slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride, true);
     }
     if (compatStr == "all") {
       // Additional flags for "all" compat mode
@@ -441,10 +438,6 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
       slang::ast::CompilationFlags::AllowTopLevelIfacePorts,
       options.allowTopLevelIfacePorts);
 
-  // Explicit flag for virtual interface with override
-  driver.options.compilationFlags.emplace(
-      slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride,
-      options.allowVirtualIfaceWithOverride);
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::LintMode,
       options.mode == ImportVerilogOptions::Mode::OnlyLint);

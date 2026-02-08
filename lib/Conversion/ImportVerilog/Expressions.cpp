@@ -2189,11 +2189,96 @@ struct RvalueExprVisitor : public ExprVisitor {
     return {};
   }
 
+  /// Short-circuit logical operators (IEEE 1800-2017 §11.4.7).
+  /// RHS is deferred inside a ConditionalOp region so it is only evaluated
+  /// when the LHS does not determine the result.
+  Value buildShortCircuitLogicalOp(const slang::ast::BinaryExpression &expr,
+                                   Value lhs) {
+    using slang::ast::BinaryOperator;
+
+    // Determine the domain for boolean conversion.
+    Domain domain = Domain::TwoValued;
+    if (expr.type->isFourState() || expr.left().type->isFourState() ||
+        expr.right().type->isFourState())
+      domain = Domain::FourValued;
+
+    // Convert LHS to boolean for the condition.
+    auto lhsBool = context.convertToBool(lhs, domain);
+    if (!lhsBool)
+      return {};
+
+    auto resultType = lhsBool.getType();
+    auto intResultType = cast<moore::IntType>(resultType);
+    auto conditionalOp =
+        moore::ConditionalOp::create(builder, loc, resultType, lhsBool);
+    auto &trueBlock = conditionalOp.getTrueRegion().emplaceBlock();
+    auto &falseBlock = conditionalOp.getFalseRegion().emplaceBlock();
+
+    OpBuilder::InsertionGuard g(builder);
+
+    // Helper: evaluate RHS inside current insertion point, convert to bool.
+    auto evalRhsBool = [&]() -> Value {
+      auto rhs = context.convertRvalueExpression(expr.right());
+      if (!rhs)
+        return {};
+      auto rhsBool = context.convertToBool(rhs, domain);
+      if (!rhsBool)
+        return {};
+      // Ensure the type matches the result type.
+      if (rhsBool.getType() != resultType)
+        rhsBool =
+            moore::ConversionOp::create(builder, loc, resultType, rhsBool);
+      return rhsBool;
+    };
+
+    switch (expr.op) {
+    case BinaryOperator::LogicalAnd:
+      // a && b: if a, evaluate b; else yield 0
+      builder.setInsertionPointToStart(&trueBlock);
+      if (auto rhs = evalRhsBool())
+        moore::YieldOp::create(builder, loc, rhs);
+      else
+        return {};
+      builder.setInsertionPointToStart(&falseBlock);
+      moore::YieldOp::create(
+          builder, loc,
+          moore::ConstantOp::create(builder, loc, intResultType, 0));
+      break;
+    case BinaryOperator::LogicalOr:
+      // a || b: if a, yield 1; else evaluate b
+      builder.setInsertionPointToStart(&trueBlock);
+      moore::YieldOp::create(
+          builder, loc,
+          moore::ConstantOp::create(builder, loc, intResultType, 1));
+      builder.setInsertionPointToStart(&falseBlock);
+      if (auto rhs = evalRhsBool())
+        moore::YieldOp::create(builder, loc, rhs);
+      else
+        return {};
+      break;
+    case BinaryOperator::LogicalImplication:
+      // a -> b: if a, evaluate b; else yield 1
+      builder.setInsertionPointToStart(&trueBlock);
+      if (auto rhs = evalRhsBool())
+        moore::YieldOp::create(builder, loc, rhs);
+      else
+        return {};
+      builder.setInsertionPointToStart(&falseBlock);
+      moore::YieldOp::create(
+          builder, loc,
+          moore::ConstantOp::create(builder, loc, intResultType, 1));
+      break;
+    default:
+      llvm_unreachable("not a short-circuit logical operator");
+    }
+
+    return conditionalOp.getResult();
+  }
+
   /// Handles logical operators (§11.4.7), assuming lhs/rhs are rvalues already.
   Value buildLogicalBOp(slang::ast::BinaryOperator op, Value lhs, Value rhs,
                         std::optional<Domain> domain = std::nullopt) {
     using slang::ast::BinaryOperator;
-    // TODO: These should short-circuit; RHS should be in a separate block.
 
     // Check if either operand is an LTL type (property or sequence).
     // In assertion contexts, SVA functions like $changed, $stable return LTL
@@ -2420,6 +2505,35 @@ struct RvalueExprVisitor : public ExprVisitor {
     auto lhs = context.convertRvalueExpression(expr.left());
     if (!lhs)
       return {};
+
+    // Short-circuit evaluation for logical operators (IEEE 1800-2017 §11.4.7).
+    // RHS evaluation is deferred inside a ConditionalOp region.
+    // Only apply in procedural contexts (moore.procedure / func.func).
+    // Skip in concurrent/assertion contexts (module body) and inside
+    // array.locator regions where ConditionalOp causes legalization failures.
+    {
+      using slang::ast::BinaryOperator;
+      if (expr.op == BinaryOperator::LogicalAnd ||
+          expr.op == BinaryOperator::LogicalOr ||
+          expr.op == BinaryOperator::LogicalImplication) {
+        bool canShortCircuit = false;
+        if (auto *block = builder.getInsertionBlock()) {
+          for (auto *op = block->getParentOp(); op; op = op->getParentOp()) {
+            if (isa<moore::ArrayLocatorOp>(op)) {
+              canShortCircuit = false;
+              break;
+            }
+            if (isa<moore::ProcedureOp>(op) || isa<mlir::func::FuncOp>(op)) {
+              canShortCircuit = true;
+              break;
+            }
+          }
+        }
+        if (canShortCircuit)
+          return buildShortCircuitLogicalOp(expr, lhs);
+      }
+    }
+
     auto rhs = context.convertRvalueExpression(expr.right());
     if (!rhs)
       return {};
