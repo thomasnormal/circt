@@ -98,6 +98,7 @@ JSON summary schema:
 Baselines:
 
 - `utils/formal-baselines.tsv` (latest baselines per suite/mode)
+  - columns: `date suite mode total pass fail xfail xpass error skip pass_rate result`
 - `PROJECT_PLAN.md` baseline table (updated when `--update-baselines` is used)
 
 ## Notes

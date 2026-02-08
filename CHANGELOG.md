@@ -31034,3 +31034,35 @@ CIRCT/slang correctly enforces LRM restrictions.
 - This change addresses smoke-mode accounting for these cases; remaining parity
   gaps are primarily semantic/modeling depth (multi-clock, 4-state/X-prop,
   proof strength, and LEC XPROP caveats).
+
+## Iteration 625 - February 8, 2026
+
+### Structured Formal Baselines
+
+- Updated `utils/run_formal_all.sh --update-baselines` to write structured
+  baseline columns in `utils/formal-baselines.tsv`:
+  - `date suite mode total pass fail xfail xpass error skip pass_rate result`
+- Kept compatibility with legacy baseline rows by deriving missing numeric
+  values from `result` summary text.
+- Updated strict-gate comparison to consume structured baseline columns first,
+  then fallback to parsed summary text.
+
+### Test Coverage and Docs
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - now checks baseline header + row include structured pass-rate fields
+- Updated:
+  - `docs/FormalRegression.md`
+    - documents structured baseline column layout
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test`: PASS
+
+### Remaining Limitations
+
+- Strict-gate still compares against latest snapshot only.
+- CI wiring for strict-gate policy enforcement remains pending.
