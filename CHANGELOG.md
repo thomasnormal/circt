@@ -23583,3 +23583,69 @@ CIRCT/slang correctly enforces LRM restrictions.
   mixed-width trees.
 - Simulator ref-provenance hardening still needs broader function-level CFG
   coverage.
+
+---
+
+## Iteration 470 - February 8, 2026
+
+### Structured Relational Compare Metadata (`<`, `<=`, `>`, `>=`)
+
+- Extended ImportVerilog structured event extraction to emit relational
+  comparison operators:
+  - `<` -> `lt`
+  - `<=` -> `le`
+  - `>` -> `gt`
+  - `>=` -> `ge`
+- Added signedness metadata for relational nodes:
+  - emits `<prefix>_cmp_signed` from Slang signedness
+    (`expr.left().type->isSigned()`).
+- This improves long-term semantic fidelity by carrying signed/unsigned intent
+  directly in structured metadata instead of inferring it from text fallback.
+
+### VerifToSMT Signed/Unsigned Relational Lowering
+
+- Added structured witness node kinds:
+  - `Lt`, `Le`, `Gt`, `Ge`
+- Extended structured resolver to parse:
+  - relational `*_bin_op`
+  - `*_cmp_signed`
+- Event-arm witness lowering now evaluates relational nodes with SMT bitvector
+  predicates:
+  - signed: `slt/sle/sgt/sge`
+  - unsigned: `ult/ule/ugt/uge`
+- Compare lowering now materializes a common bitvector width and applies
+  sign-extension or zero-extension based on `*_cmp_signed` before `smt.bv.cmp`.
+- Kept conservative fallback behavior if bitvector materialization fails.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-compare-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added `SequenceSignalEventListStructuredRelCompare`.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (18 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (no `interpretOperation failed`)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured compare lowering still lacks full canonical Slang type metadata
+  for all mixed-width / mixed-domain operand combinations.
+- Group depth captures wrapper nesting but is not yet a full parenthesis-tree
+  encoding for arbitrary grouped forms.
+- Simulator ref-provenance hardening still needs broader function-level CFG
+  coverage.

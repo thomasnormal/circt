@@ -548,3 +548,28 @@ module SequenceSignalEventListStructuredGrouping;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for relational compare operators with signedness.
+module SequenceSignalEventListStructuredRelCompare;
+  logic clk, q;
+  logic signed [2:0] sbus, smask;
+  logic [2:0] bus, mask;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredRelCompare
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "lt"
+  // CHECK-DAG: signal_cmp_signed = true
+  // CHECK-DAG: signal_lhs_name = "sbus"
+  // CHECK-DAG: signal_rhs_name = "smask"
+  // CHECK-DAG: iff_bin_op = "ge"
+  // CHECK-DAG: iff_cmp_signed = false
+  // CHECK-DAG: iff_lhs_name = "bus"
+  // CHECK-DAG: iff_rhs_name = "mask"
+  always @(seq or posedge (sbus < smask) iff (bus >= mask)) begin
+    q <= ~q;
+  end
+endmodule

@@ -526,6 +526,14 @@ getStructuredBinaryEventOp(const slang::ast::BinaryExpression &expr) {
   case BinaryOperator::CaseInequality:
   case BinaryOperator::WildcardInequality:
     return StringRef("ne");
+  case BinaryOperator::LessThan:
+    return StringRef("lt");
+  case BinaryOperator::LessThanEqual:
+    return StringRef("le");
+  case BinaryOperator::GreaterThan:
+    return StringRef("gt");
+  case BinaryOperator::GreaterThanEqual:
+    return StringRef("ge");
   default:
     return std::nullopt;
   }
@@ -651,6 +659,11 @@ static bool maybeAddStructuredEventExprAttrs(
     auto binaryOp = getStructuredBinaryEventOp(*binary);
     if (binaryOp) {
       addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
+      if (*binaryOp == "lt" || *binaryOp == "le" || *binaryOp == "gt" ||
+          *binaryOp == "ge") {
+        bool cmpSigned = binary->left().type && binary->left().type->isSigned();
+        addAttrIfMissing(keyFor("cmp_signed"), builder.getBoolAttr(cmpSigned));
+      }
       std::string lhsPrefix = (prefix + "_lhs").str();
       std::string rhsPrefix = (prefix + "_rhs").str();
       if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
