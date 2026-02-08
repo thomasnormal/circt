@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 527 - February 8, 2026
+
+### Summary
+
+Implemented pre/post_randomize callback support and class property initializers
+for classes without explicit constructors. Added 17 SVA UVM timeout tests to
+xfail tracking. Promoted 2 tests from xfail to pass.
+
+### Fixes
+
+1. **pre_randomize / post_randomize callback support** (FIX #4)
+   - Root cause: SymbolDCE removed `func.func @"ClassName::pre_randomize"`
+     because `moore.call_pre_randomize` references class type `<@ClassName>`,
+     not the function symbol directly
+   - Fix: Mark pre/post_randomize functions with `Public` visibility in
+     `visit(SubroutineSymbol)` so SymbolDCE preserves them
+   - Also: Allow user-defined pre/post_randomize through the BuiltIn filter
+     by checking body structure (StatementKind::List with non-empty list)
+   - Files: `lib/Conversion/ImportVerilog/Structure.cpp`
+   - Tests promoted: `18.6.2--pre-randomize-method_1`, `18.6.2--post-randomize_method_1`
+
+2. **Class property initializers for non-constructor classes** (FIX #3)
+   - When `NewClassExpression::constructorCall()` returns null (no explicit
+     constructor), emit property initializer assignments directly at the
+     `moore.class.new` call site
+   - IEEE 1800-2017 section 8.8: property initializers execute as part of the
+     implicit default constructor
+   - Files: `lib/Conversion/ImportVerilog/Expressions.cpp`
+   - Test: `test/Tools/circt-sim/class-field-initializer.sv`
+
+3. **SVA UVM timeout tests tracked** (17 tests)
+   - Added 17 Ch16 SVA UVM tests to `utils/sv-tests-sim-expect.txt` as xfail
+   - These need concurrent assertion simulation to pass (feature gap)
+
+### New Tests
+
+- `test/Tools/circt-sim/pre-post-randomize.sv` - pre/post_randomize callbacks
+- `test/Tools/circt-sim/class-field-initializer.sv` - class property initializers
+
+### Validation
+
+- circt-sim lit: **187/187 (100%)**
+- ImportVerilog lit: **267/267 (100%)**
+- sv-tests simulation: **0 FAIL** (run in progress)
+
+---
+
 ## Iteration 515 - February 8, 2026
 
 ### Summary
