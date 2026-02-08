@@ -1,0 +1,34 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'simple\t*\t*\tpass\n' > %t/expect.txt
+
+// RUN: printf 'schema_version\trun_id\tgenerated_at_utc\ttest_total\ttest_failures\ttest_xfail\ttest_xpass\ttest_skipped\tmode_total\tmode_pass\tmode_fail\tmode_xfail\tmode_xpass\tmode_epass\tmode_efail\tmode_unskip\tmode_skipped\tmode_skip_pass\tmode_skip_fail\tmode_skip_expected\tmode_skip_unexpected\tskip_reason_vhdl\tskip_reason_fail-no-macro\tskip_reason_no-property\tskip_reason_other\n' > %t/history.tsv
+// RUN: printf '1\trun-old\t1970-01-01T00:00:00Z\t1\t0\t0\t0\t0\t2\t2\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n' >> %t/history.tsv
+// RUN: printf '1\trun-keep\t2099-01-01T00:00:00Z\t1\t0\t0\t0\t0\t2\t2\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n' >> %t/history.tsv
+// RUN: printf '{"schema_version":"1","run_id":"run-old","generated_at_utc":"1970-01-01T00:00:00Z","test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":2,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":0,"skip_pass":0,"skip_fail":0,"skip_expected":0,"skip_unexpected":0},"skip_reasons":{"vhdl":0,"fail_no_macro":0,"no_property":0,"other":0}}\n' > %t/history.jsonl
+// RUN: printf '{"schema_version":"1","run_id":"run-keep","generated_at_utc":"2099-01-01T00:00:00Z","test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":2,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":0,"skip_pass":0,"skip_fail":0,"skip_expected":0,"skip_unexpected":0},"skip_reasons":{"vhdl":0,"fail_no_macro":0,"no_property":0,"other":0}}\n' >> %t/history.jsonl
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-new \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS=1 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
+
+// RUN: sed 's/\t/|/g' %t/history.tsv | FileCheck %s --check-prefix=TSV
+// RUN: cat %t/history.jsonl | FileCheck %s --check-prefix=JSONL
+
+// TSV: schema_version|run_id|generated_at_utc|test_total|test_failures|test_xfail|test_xpass|test_skipped|mode_total|mode_pass|mode_fail|mode_xfail|mode_xpass|mode_epass|mode_efail|mode_unskip|mode_skipped|mode_skip_pass|mode_skip_fail|mode_skip_expected|mode_skip_unexpected|skip_reason_vhdl|skip_reason_fail-no-macro|skip_reason_no-property|skip_reason_other
+// TSV-NOT: run-old
+// TSV: 1|run-keep|2099-01-01T00:00:00Z|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
+// TSV: 1|run-new|{{[0-9T:\-]+Z}}|1|0|0|0|0|2|2|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0
+
+// JSONL-NOT: "run_id":"run-old"
+// JSONL: "run_id":"run-keep"
+// JSONL: "run_id":"run-new"

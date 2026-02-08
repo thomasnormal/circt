@@ -11717,6 +11717,64 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 549
+- Yosys SVA BMC age-based history retention:
+  - Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS` to
+    `utils/run_yosys_sva_circt_bmc.sh`.
+  - Added non-negative integer validation for
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS`.
+  - Extended history retention for both TSV and JSONL:
+    - age pruning is applied first using `generated_at_utc`.
+    - count pruning (`YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES`) remains
+      applied after age pruning.
+  - Added timestamp-to-epoch helper with Linux (`date -d`) and BSD
+    (`date -j -f`) support.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`:
+    - verifies old entries are removed by age policy in both TSV and JSONL.
+    - verifies retained/new entries remain present after pruning.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 8/8 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 31/31 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - History age pruning trusts `generated_at_utc`; future timestamps never age
+    out and should eventually be bounded by policy.
+  - JSONL checks remain regex-based and may miss malformed JSON edge cases.
+  - Legacy-migrated JSONL rows still use synthetic timestamp metadata.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Move JSONL schema/type validation to a real JSON parser path.
+  - Add retention policy guardrails for future timestamps and clock skew.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
