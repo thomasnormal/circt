@@ -23411,3 +23411,57 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Structured metadata still lacks explicit grouping/parenthesis nodes.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 467 - February 8, 2026
+
+### `circt-sim` Ref Block-Argument Provenance for `llhd.drv` / `llhd.prb`
+
+- Fixed a simulator failure mode where `!llhd.ref` block arguments lost their
+  source-provenance across CFG edges, causing downstream `llhd.drv` /
+  `llhd.prb` resolution failures for ref-producing ops like
+  `llhd.sig.array_get`.
+- Added per-process tracking for incoming ref block arguments:
+  - `ProcessExecutionState::refBlockArgSources`
+- Updated branch transfer handling (`cf.br`, `cf.cond_br`) to record the
+  concrete incoming SSA value for each ref block argument.
+- Updated `interpretDrive` and `interpretProbe` to remap ref block arguments
+  through this recorded source chain before normal signal/memory resolution.
+- This addresses the OpenTitan `prim_fifo_sync` diagnostic pattern:
+  repeated `interpretOperation failed` on `llhd.drv` of
+  `!llhd.ref<!hw.struct<value: i8, unknown: i8>>` carried via block arguments.
+
+### Regression Tests
+
+- Added:
+  - `test/Tools/circt-sim/llhd-drv-ref-blockarg-array-get.mlir`
+- Re-ran related simulator coverage:
+  - `test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir`
+  - `test/Tools/circt-sim/llhd-drv-struct-alloca.mlir`
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Tools/circt-sim/llhd-drv-ref-blockarg-array-get.mlir`: PASS
+  - `test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir`: PASS
+  - `test/Tools/circt-sim/llhd-drv-struct-alloca.mlir`: PASS
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS and prior `llhd.drv`
+    diagnostics removed
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured metadata still lacks explicit grouping/parenthesis nodes.
+- Value-aware compare semantics are still partial for richer mixed-type /
+  mixed-width expression trees.
+- Simulator ref-provenance handling is hardened for process CFG transfers, but
+  further coverage for additional function-level branch/ref patterns is still open.

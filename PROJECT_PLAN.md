@@ -9387,6 +9387,48 @@ ninja -C build circt-verilog
   - Investigate and fix `circt-sim` `llhd.drv` diagnostics; lock with dedicated
     simulator regressions.
 
+### Iteration 467
+- `circt-sim` block-argument ref provenance for `llhd.drv` / `llhd.prb`:
+  - Added per-process tracking for ref-typed block arguments:
+    - `ProcessExecutionState::refBlockArgSources`
+  - Branch transfer (`cf.br` / `cf.cond_br`) now records the concrete incoming
+    SSA source for each ref block argument.
+  - `interpretDrive` / `interpretProbe` now remap ref block arguments back to
+    their recorded source before signal/memory resolution.
+  - This preserves reference provenance across CFG edges for cases like:
+    - `llhd.sig.array_get` carried via block arguments
+    - nested block-arg forwarding chains
+- Regression tests:
+  - Added `test/Tools/circt-sim/llhd-drv-ref-blockarg-array-get.mlir`.
+  - Kept existing array/struct memory-backed simulator tests green:
+    - `test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir`
+    - `test/Tools/circt-sim/llhd-drv-struct-alloca.mlir`
+- Validation status:
+  - `llvm-lit`:
+    - `test/Tools/circt-sim/llhd-drv-ref-blockarg-array-get.mlir` PASS
+    - `test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir` PASS
+    - `test/Tools/circt-sim/llhd-drv-struct-alloca.mlir` PASS
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with diagnostics removed
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured metadata still lacks explicit grouping/parenthesis nodes.
+  - Value-aware compare semantics remain partial for richer mixed-type trees.
+  - Simulator ref-provenance remapping is implemented for process CFG transfer;
+    further hardening for all function-level branch/ref patterns is still open.
+- Long-term features to prioritize:
+  - Add structured grouping nodes and precedence-preserving witness lowering.
+  - Continue width/sign-aware compare generalization for non-leaf mixed-type trees.
+  - Extend simulator ref-provenance tracking through additional branch/resume
+    paths and add targeted multi-path regressions.
+
 ---
 
 ## Architecture Reference
