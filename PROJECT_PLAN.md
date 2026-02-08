@@ -16563,6 +16563,33 @@ ninja -C build circt-verilog
   - Built-in webhook/email adapters are still not bundled (hook interface is
     executable-path based).
 
+### Iteration 632
+- Formal cadence webhook notifications in `utils/run_formal_cadence.sh`:
+  - Added `--on-fail-webhook <url>` to POST JSON payload on iteration failure.
+  - Added webhook prerequisite validation (`curl` required when webhook is
+    configured).
+  - Added JSON payload fields:
+    - `event`, `timestamp_utc`, `iteration`, `exit_code`, `run_dir`,
+      `out_root`, `cadence_log`, `cadence_state`.
+  - Added `on_fail_webhook` state metadata and webhook invocation/failure
+    logging to `cadence.log`.
+  - Webhook notification runs alongside `--on-fail-hook` (both can be enabled).
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - injects a fake `curl` in `PATH`
+    - verifies webhook URL and JSON event payload marker are passed.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `--on-fail-webhook` usage.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+- Current limitations / debt:
+  - Webhook policy is single-endpoint POST only; retry/backoff policies and
+    multiple sinks are not yet implemented.
+  - No built-in SMTP/email notifier backend yet (can still be provided via
+    `--on-fail-hook`).
+
 ---
 
 ## Architecture Reference

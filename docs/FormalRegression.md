@@ -85,6 +85,12 @@ utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-hook 
 Fail hook arguments:
 `<iteration> <exit_code> <run_dir> <out_root> <cadence_log> <cadence_state>`.
 
+Post failure events directly to an HTTP webhook:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-webhook https://hooks.example/formal -- --with-opentitan --opentitan ~/opentitan
+```
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:

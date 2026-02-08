@@ -31306,3 +31306,43 @@ CIRCT/slang correctly enforces LRM restrictions.
   run health/state metadata.
 - Notification support is hook-based; built-in webhook/email adapters are not
   provided yet.
+
+## Iteration 632 - February 8, 2026
+
+### Formal Cadence Webhook Notifications
+
+- Added `--on-fail-webhook <url>` to `utils/run_formal_cadence.sh`.
+- On iteration failure, cadence now POSTs JSON event payload (via `curl`) with:
+  - `event`, `timestamp_utc`, `iteration`, `exit_code`, `run_dir`, `out_root`,
+    `cadence_log`, `cadence_state`
+- Added startup validation that `curl` is available when webhook mode is
+  configured.
+- Added webhook telemetry:
+  - `cadence.state` now records `on_fail_webhook`
+  - `cadence.log` records webhook post attempts and webhook failure exit codes.
+- Webhooks and executable failure hooks can now be enabled together.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - injects fake `curl` in PATH
+    - verifies webhook URL and JSON payload marker (`formal_cadence_failure`)
+      are emitted on fail-fast path
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added `--on-fail-webhook` usage
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+
+### Remaining Limitations
+
+- Webhook delivery currently uses single-shot POST without retry/backoff policy.
+- Multiple notification sinks are not yet supported natively.

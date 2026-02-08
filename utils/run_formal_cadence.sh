@@ -18,6 +18,7 @@ Options:
   --retain-hours N       Prune run-* directories older than N hours
                          (-1=disabled, default: -1)
   --on-fail-hook PATH    Executable hook invoked on iteration failure
+  --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
   --run-formal-all PATH  Path to run_formal_all.sh
                          (default: utils/run_formal_all.sh)
   --strict-gate          Enable strict gate checks (default)
@@ -37,6 +38,7 @@ ITERATIONS=0
 RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
+ON_FAIL_WEBHOOK=""
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
 
@@ -56,6 +58,8 @@ while [[ $# -gt 0 ]]; do
       RETAIN_HOURS="$2"; shift 2 ;;
     --on-fail-hook)
       ON_FAIL_HOOK="$2"; shift 2 ;;
+    --on-fail-webhook)
+      ON_FAIL_WEBHOOK="$2"; shift 2 ;;
     --run-formal-all)
       RUN_FORMAL_ALL="$2"; shift 2 ;;
     --strict-gate)
@@ -108,6 +112,12 @@ if [[ -n "$ON_FAIL_HOOK" && ! -x "$ON_FAIL_HOOK" ]]; then
   echo "on-fail hook not executable: $ON_FAIL_HOOK" >&2
   exit 1
 fi
+if [[ -n "$ON_FAIL_WEBHOOK" ]]; then
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "--on-fail-webhook requires curl in PATH" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$OUT_ROOT"
 CADENCE_LOG="$OUT_ROOT/cadence.log"
@@ -119,6 +129,7 @@ echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
 echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
+echo "on_fail_webhook=$ON_FAIL_WEBHOOK" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
 
@@ -197,6 +208,57 @@ invoke_fail_hook() {
   fi
 }
 
+invoke_fail_webhook() {
+  local iteration="$1"
+  local exit_code="$2"
+  local run_dir="$3"
+  if [[ -z "$ON_FAIL_WEBHOOK" ]]; then
+    return 0
+  fi
+
+  local webhook_ts payload
+  webhook_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  payload="$(
+    ITERATION="$iteration" \
+    EXIT_CODE="$exit_code" \
+    RUN_DIR="$run_dir" \
+    OUT_ROOT="$OUT_ROOT" \
+    CADENCE_LOG_PATH="$CADENCE_LOG" \
+    CADENCE_STATE_PATH="$STATE_FILE" \
+    EVENT_TS="$webhook_ts" python3 - <<'PY'
+import json
+import os
+
+print(
+    json.dumps(
+        {
+            "event": "formal_cadence_failure",
+            "timestamp_utc": os.environ["EVENT_TS"],
+            "iteration": int(os.environ["ITERATION"]),
+            "exit_code": int(os.environ["EXIT_CODE"]),
+            "run_dir": os.environ["RUN_DIR"],
+            "out_root": os.environ["OUT_ROOT"],
+            "cadence_log": os.environ["CADENCE_LOG_PATH"],
+            "cadence_state": os.environ["CADENCE_STATE_PATH"],
+        },
+        sort_keys=True,
+    )
+)
+PY
+  )"
+
+  echo "[$webhook_ts] posting on-fail webhook: $ON_FAIL_WEBHOOK" | tee -a "$CADENCE_LOG"
+  set +e
+  curl -fsS -X POST -H "Content-Type: application/json" --data "$payload" \
+    "$ON_FAIL_WEBHOOK" >> "$CADENCE_LOG" 2>&1
+  local curl_ec=$?
+  set -e
+  if [[ "$curl_ec" -ne 0 ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail webhook failed with exit code $curl_ec" \
+      | tee -a "$CADENCE_LOG"
+  fi
+}
+
 iteration=0
 while true; do
   iteration=$((iteration + 1))
@@ -226,6 +288,7 @@ while true; do
 
   if [[ "$ec" -ne 0 ]]; then
     invoke_fail_hook "$iteration" "$ec" "$run_dir"
+    invoke_fail_webhook "$iteration" "$ec" "$run_dir"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] failing fast: iteration $iteration failed" \
       | tee -a "$CADENCE_LOG"
     exit "$ec"
