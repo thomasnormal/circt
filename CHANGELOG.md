@@ -26284,3 +26284,67 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 555 - February 8, 2026
+
+### Yosys SVA BMC Regex Deprecation Policy
+
+- Added new policy knob:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY`
+  - allowed values: `allow|warn|error`
+  - default: `warn`
+- Applied policy when
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex`:
+  - `warn`: emits deprecation warning and continues.
+  - `error`: rejects regex mode and exits.
+  - `allow`: permits regex mode silently.
+- Added input validation for policy values.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-regex-policy.test`
+- New test coverage:
+  - regex mode warning path.
+  - regex mode hard-fail path under policy `error`.
+- Revalidated summary lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+- Summary lit result: 9/9 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 32/32 PASS
+
+### Validation
+
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Regex mode still exists and can be re-enabled via policy.
+- Parser-backed default still depends on `python3` availability.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.

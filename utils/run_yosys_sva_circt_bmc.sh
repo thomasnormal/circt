@@ -42,6 +42,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-86400}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY:-warn}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -189,6 +190,14 @@ case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR" in
   auto|python|regex) ;;
   *)
     echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python|regex)" >&2
+    exit 1
+    ;;
+esac
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY" in
+  allow|warn|error) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY (expected allow|warn|error)" >&2
     exit 1
     ;;
 esac
@@ -1881,6 +1890,17 @@ emit_mode_summary_outputs() {
   if [[ "$json_validator_mode" == "python" ]] && ! command -v python3 >/dev/null 2>&1; then
     echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=python requires python3 in PATH" >&2
     exit 1
+  fi
+  if [[ "$json_validator_mode" == "regex" ]]; then
+    case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY" in
+      warn)
+        echo "warning: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is deprecated; use auto or python (set YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=allow to silence)" >&2
+        ;;
+      error)
+        echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is disabled by YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=error" >&2
+        exit 1
+        ;;
+    esac
   fi
   local tsv_row
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
