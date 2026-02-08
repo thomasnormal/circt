@@ -1189,6 +1189,18 @@ private:
   /// opaque value bytes. Used by config_db_implementation_t interceptors.
   std::map<std::string, std::vector<uint8_t>> configDbEntries;
 
+  /// Per-object rand_mode state. Key is "classPtr:propertyName", value is
+  /// mode (1=enabled, 0=disabled). Default is enabled (1).
+  std::map<std::string, int32_t> randModeState;
+
+  /// Per-object constraint_mode state. Key is "classPtr:constraintName",
+  /// value is mode (1=enabled, 0=disabled). Default is enabled (1).
+  std::map<std::string, int32_t> constraintModeState;
+
+  /// Per-object RNG seeds. Key is classPtr address, value is the seed.
+  /// Used by obj.srandom(seed) to seed per-object randomization.
+  llvm::DenseMap<uint64_t, uint32_t> perObjectRngSeeds;
+
   /// Tracks active function call depth for recursion detection.
   /// Maps funcOp operation pointer to current call depth. Used to enable
   /// save/restore of SSA values only for recursive calls (depth > 1).

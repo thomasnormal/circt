@@ -18,6 +18,9 @@ set_target_properties(MooreRuntime PROPERTIES
   POSITION_INDEPENDENT_CODE ON
 )
 
+# Enable exceptions for regex error handling
+target_compile_options(MooreRuntime PRIVATE -fexceptions)
+
 # Install the runtime library and header for users who compile simulations
 install(TARGETS MooreRuntime
   ARCHIVE DESTINATION lib
