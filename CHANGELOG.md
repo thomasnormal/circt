@@ -27782,3 +27782,68 @@ CIRCT/slang correctly enforces LRM restrictions.
   hash provenance unless rewritten.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+## Iteration 578 - February 8, 2026
+
+### Yosys SVA BMC Drop-Events Metadata Policy
+
+- Added
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY` with
+  `preserve|infer|rewrite`:
+  - `preserve`: keep existing metadata shape for rows that already have an
+    `event_id`
+  - `infer` (default): backfill missing metadata fields from the effective hash
+    configuration
+  - `rewrite`: normalize metadata fields to the effective hash configuration
+- This provides explicit, deterministic migration behavior for legacy drop-event
+  rows while preserving backward compatibility by default.
+
+### Migration Behavior
+
+- Rows missing `event_id` still derive deterministic IDs and now always include
+  explicit metadata provenance.
+- Rows with existing `event_id` now follow policy-controlled metadata behavior.
+- Added explicit validation for invalid policy mode in migration path.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - covers `preserve`, `infer`, `rewrite`
+    - covers invalid-policy rejection
+- Updated aligned drop-event coverage:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-id-hash-crc32.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+- Focused lit result:
+  - 7/7 PASS.
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 failures=0 xpass=1 skipped=2
+- `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+- `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0 skip=1005
+- `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `aes_sbox_canright` OK
+- `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`: PASS
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Strict duplicate-key/syntax JSON validation still depends on Python.
+- Migration policy currently controls metadata fields only; event-ID rewrite
+  policy is still implicit.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
