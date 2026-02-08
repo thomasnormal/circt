@@ -17,6 +17,7 @@ echo "sat"
 if [[ "$want_model" == "1" ]] && grep -q "(get-model)" "$file"; then
   cat <<'MODEL'
 (model
+  (define-fun sig () (_ BitVec 1) #b0)
   (define-fun sig_1 () (_ BitVec 1) #b0)
   (define-fun sig_1_0 () (_ BitVec 1) #b1)
 )
