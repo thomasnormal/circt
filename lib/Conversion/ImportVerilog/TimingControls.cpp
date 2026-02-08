@@ -278,7 +278,8 @@ static void recordMixedEventSourcesOnModule(Context &context,
 static LogicalResult lowerClockedSequenceEventControl(
     Context &context, Location loc, Value seqValue, Value clockValue,
     ltl::ClockEdge edge,
-    std::span<const slang::ast::SignalEventControl *const> signalEvents = {}) {
+    std::span<const slang::ast::SignalEventControl *const> signalEvents = {},
+    ArrayRef<StringAttr> sequenceSources = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -397,9 +398,14 @@ static LogicalResult lowerClockedSequenceEventControl(
 
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, nextVals);
-  if (!signalEvents.empty()) {
-    SmallVector<Attribute, 4> sources;
-    sources.push_back(builder.getStringAttr("sequence"));
+  if (!signalEvents.empty() || !sequenceSources.empty()) {
+    SmallVector<Attribute, 8> sources;
+    if (!sequenceSources.empty()) {
+      for (StringAttr source : sequenceSources)
+        sources.push_back(source);
+    } else if (!signalEvents.empty()) {
+      sources.push_back(builder.getStringAttr("sequence"));
+    }
     for (auto [signalIdx, signalCtrl] : llvm::enumerate(signalEvents)) {
       std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
                           formatClockEdge(edge).str();
@@ -480,7 +486,9 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
                                                          Value seqValue,
                                                          ArrayRef<Value> clocks,
                                                          ArrayRef<MultiClockSignalEventInfo>
-                                                             signalEvents = {}) {
+                                                             signalEvents = {},
+                                                         ArrayRef<StringAttr>
+                                                             sequenceSources = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -685,9 +693,14 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   loopArgs.append(nextVals.begin(), nextVals.end());
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, loopArgs);
-  if (!signalEvents.empty()) {
+  if (!signalEvents.empty() || !sequenceSources.empty()) {
     SmallVector<Attribute, 8> sources;
-    sources.push_back(builder.getStringAttr("sequence"));
+    if (!sequenceSources.empty()) {
+      for (StringAttr source : sequenceSources)
+        sources.push_back(source);
+    } else if (!signalEvents.empty()) {
+      sources.push_back(builder.getStringAttr("sequence"));
+    }
     for (auto [signalIdx, signalEvent] : llvm::enumerate(signalEvents)) {
       std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
                           formatClockEdge(signalEvent.edge).str();
@@ -856,11 +869,17 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<Value, 4> clockedInputs;
   SmallVector<Value, 4> sequenceClocks;
   SmallVector<Value, 4> clockedValues;
+  SmallVector<StringAttr, 4> sequenceSourceAttrs;
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
 
-  for (auto *signalCtrl : sequenceEvents) {
+  for (auto [seqIdx, signalCtrl] : llvm::enumerate(sequenceEvents)) {
+    std::string source = "sequence[" + std::to_string(seqIdx) + "]";
+    if (signalCtrl->iffCondition)
+      source += ":iff";
+    sequenceSourceAttrs.push_back(builder.getStringAttr(source));
+
     if (signalCtrl->edge != slang::ast::EdgeKind::None)
       return mlir::emitError(loc)
              << "sequence event controls in event lists do not support edge "
@@ -946,6 +965,10 @@ lowerSequenceEventListControl(Context &context, Location loc,
   }
   if (sameClockAndEdge)
     equivalentSignals = parsedSignalEvents;
+  ArrayRef<StringAttr> sequenceSources =
+      parsedSignalEvents.empty()
+          ? ArrayRef<StringAttr>(sequenceSourceAttrs)
+          : ArrayRef<StringAttr>();
 
   LogicalResult result = failure();
   if (sameClockAndEdge) {
@@ -954,7 +977,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
       combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
     result = lowerClockedSequenceEventControl(context, loc, combinedSequence,
                                               commonClock, *commonEdge,
-                                              equivalentSignals);
+                                              equivalentSignals,
+                                              sequenceSources);
   } else {
     Value combinedSequence = clockedInputs.front();
     if (clockedInputs.size() > 1)
@@ -975,7 +999,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
         uniqueClocks.push_back(signalEvent.clock);
     }
     result = lowerMultiClockSequenceEventControl(context, loc, combinedSequence,
-                                                 uniqueClocks, multiClockSignals);
+                                                 uniqueClocks, multiClockSignals,
+                                                 sequenceSources);
   }
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);

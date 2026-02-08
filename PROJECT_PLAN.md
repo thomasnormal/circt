@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 490)
+## Current Status - February 8, 2026 (Iteration 491)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed solver/counterexample provenance text; next: per-step trigger attribution + sequence-only OR provenance + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed sequence-only event-list provenance; next: per-step trigger attribution + event-source schema cleanup + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,71 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 491
+
+1. **Sequence-only event-list provenance (including multiclock OR)**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Sequence event-list lowering now emits indexed provenance entries:
+     - `sequence[0]`, `sequence[1]`, ...
+     - `:iff` suffix when applicable.
+   - Coverage now includes sequence-only event-list controls in both:
+     - same-clock lowering
+     - multiclock OR lowering
+   - Metadata continues to flow through module attribute:
+     - `moore.mixed_event_sources`
+     and downstream BMC/SMT plumbing from prior iterations.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       - added sequence-only provenance checks for:
+         - `@(seq1 or seq2)`
+         - `@(seq1 iff en1 or seq2 iff en2)`
+         - different-clock sequence-only event-list lowering.
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-event-list-provenance-emit-mlir.sv`
+       - validates LLHD module-level provenance for sequence-only multiclock
+         event-list controls.
+   - Updated:
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+       - now also checks a sequence-only source-set entry.
+
+3. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `run_verilator_verification_circt_lec.sh` smoke subset: PASS
+     - `run_yosys_sva_circt_lec.sh` smoke subset: PASS
+
+4. **Current limitations and best long-term next features**
+   - Counterexample output still lacks per-step trigger attribution
+     (which event-list arm fired at each cycle).
+   - Event-source naming is now broader than `mixed`; a generalized schema is
+     a good next cleanup target.
+   - Procedural `always @(property)` remains blocked by frontend legality.
+   - High-value next work:
+     - add per-step trigger attribution in model/witness decode,
+     - migrate to a generalized event-source metadata schema while keeping
+       compatibility,
+     - pursue upstream-compatible procedural property-event handling.
 
 ### Session Summary - Iteration 490
 

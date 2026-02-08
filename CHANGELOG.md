@@ -1,5 +1,74 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 491 - February 8, 2026
+
+### Summary
+
+Added provenance coverage for sequence-only procedural event-lists
+(`@(seq1 or seq2)`), including multiclock forms, so these paths now feed the
+same BMC/SMT diagnostics channel as mixed sequence/signal lists.
+
+### Fixes
+
+1. **Sequence-only event-list provenance in ImportVerilog**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Sequence event-list lowering now records indexed sequence source entries:
+     - `sequence[0]`, `sequence[1]`, ...
+     - `:iff` suffix when an event-list arm has an iff guard.
+   - Metadata is attached to `moore.wait_event` and accumulated on module
+     attribute:
+     - `moore.mixed_event_sources`
+   - This now covers sequence-only event-list forms in both:
+     - same-clock lowering
+     - multiclock OR lowering
+
+2. **Regression coverage**
+   - Updated import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+       - added sequence-only provenance checks for:
+         - `@(seq1 or seq2)`
+         - `@(seq1 iff en1 or seq2 iff en2)`
+         - different-clock `@(seq1 or seq2)` multiclock lowering
+   - Added LLHD provenance regression:
+     - `test/Tools/circt-bmc/sva-sequence-event-list-provenance-emit-mlir.sv`
+       - validates module-level provenance for sequence-only multiclock list.
+   - Extended BMC metadata regression:
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+       - now includes a sequence-only source set.
+
+3. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`:
+       PASS
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `utils/run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `utils/run_verilator_verification_circt_lec.sh` (`assert_rose`): PASS
+     - `utils/run_yosys_sva_circt_lec.sh` (`basic00`): PASS
+
+### Remaining Gaps
+
+- We still lack per-step trigger attribution in counterexample traces
+  (which source arm actually fired at cycle `k`).
+- Sequence-only provenance currently reuses `moore.mixed_event_sources` naming;
+  an eventual generalized event-source schema may be cleaner long-term.
+- Direct procedural `always @(property)` remains frontend-blocked by Slang.
+
 ## Iteration 490 - February 8, 2026
 
 ### Summary
