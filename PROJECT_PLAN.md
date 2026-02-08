@@ -18169,6 +18169,51 @@ ninja -C build circt-verilog
   - No first-class merge tool yet for combining lane-state files from multiple
     workers.
 
+### Iteration 676
+- Formal harness lane-state compatibility fingerprinting in
+  `utils/run_formal_all.sh`:
+  - Added deterministic lane-state config hash computation from key run
+    semantics:
+    - script content hash
+    - BMC/LEC semantic flags (`--bmc-run-smtlib`, `--bmc-assume-known-inputs`,
+      `--lec-assume-known-inputs`, `--lec-accept-xprop-only`)
+    - key suite/tool inputs (`--sv-tests`, `--verilator`, `--yosys`,
+      `--opentitan`, `--avip-glob`, `--z3-bin`, CIRCT binaries)
+    - relevant environment scoping (`TEST_FILTER`, smoke toggles, CIRCT args)
+  - Extended lane-state TSV rows with `config_hash` column.
+  - Resume mode now enforces hash compatibility:
+    - missing `config_hash` (legacy rows) is rejected with actionable guidance
+    - hash mismatch is rejected with expected/found hashes and reset guidance
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test` with:
+    - negative hash-mismatch resume case (`--bmc-assume-known-inputs` drift)
+  - Existing lane-state resume/reset/conflict tests remain green.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with hash-compatibility resume semantics.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated filtered sweep + resume replay:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --reset-lane-state`
+      - `sv-tests` BMC/LEC PASS
+      - `verilator-verification` BMC/LEC PASS
+      - `yosys/tests/sva` BMC/LEC PASS
+      - `opentitan` LEC PASS
+      - all filtered AVIP variants PASS
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-resume --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --resume-from-lane-state`
+      - all lanes resumed from checkpoint rows
+    - mismatch probe:
+      - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-mismatch --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --resume-from-lane-state --bmc-assume-known-inputs --include-lane-regex '^sv-tests/BMC$'`
+        - expected FAIL with config-hash mismatch diagnostic
+- Current limitations / debt:
+  - Checkpoint granularity is lane-level only (no intra-lane per-test resume).
+  - No first-class merge utility yet for combining lane-state files across
+    workers/shards.
+  - Fingerprint policy is fixed/internal; there is no user-visible compatibility
+    policy versioning yet.
+
 ---
 
 ## Architecture Reference

@@ -73,6 +73,8 @@ Lane-state semantics:
 - `--lane-state-tsv` persists per-lane counters (`total/pass/fail/xfail/xpass/error/skip`).
 - `--resume-from-lane-state` reuses matching lane rows and skips re-running those lanes.
 - `--reset-lane-state` truncates the lane-state file before the run.
+- Resume enforces a lane-state configuration fingerprint; mismatched options or
+  tool context fail fast with a diagnostic and require `--reset-lane-state`.
 
 Lane-id format:
 - `sv-tests/BMC`

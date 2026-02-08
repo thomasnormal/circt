@@ -33554,6 +33554,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Resume granularity is lane-level only, not per-test within a lane.
 - No merge utility yet for federating multiple worker lane-state files.
 
+## Iteration 676 - February 8, 2026
+
+### Lane-State Config Fingerprinting
+
+- Hardened `utils/run_formal_all.sh` lane-state resume with compatibility
+  fingerprinting.
+- Added deterministic `config_hash` computation over key run semantics:
+  - script content hash
+  - BMC/LEC semantic flags
+  - suite/tool input paths and CIRCT binary selections
+  - filter/smoke/CIRCT-args environment scope
+- Added `config_hash` as a persisted lane-state TSV column.
+- Resume behavior now enforces compatibility:
+  - missing row hash (legacy rows) fails with reset guidance
+  - mismatched row hash fails with expected/found hashes and reset guidance
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative lane-state hash mismatch case
+    - existing lane-state resume/reset/conflict tests still pass
+  - `docs/FormalRegression.md`
+    - documented hash-enforced lane-state resume semantics
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep + resume replay:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --reset-lane-state`:
+    - `sv-tests` BMC/LEC PASS
+    - `verilator-verification` BMC/LEC PASS
+    - `yosys/tests/sva` BMC/LEC PASS
+    - `opentitan` LEC PASS
+    - all filtered AVIP variants PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-resume --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --resume-from-lane-state`:
+    - all lanes resumed from checkpoint rows
+  - mismatch probe:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-hash-mismatch --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --lane-state-tsv /tmp/formal-lane-state-smoke-hash.tsv --resume-from-lane-state --bmc-assume-known-inputs --include-lane-regex '^sv-tests/BMC$'`:
+      - expected FAIL with lane-state config-hash mismatch
+
+### Remaining Limitations
+
+- Resume granularity is still lane-level only (no per-test checkpointing).
+- No merge utility yet for federating lane-state files across workers.
+- Fingerprint policy is internal-only (no explicit user-visible policy version
+  or migration contract yet).
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
