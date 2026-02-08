@@ -11348,6 +11348,70 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 543
+- Yosys SVA BMC summary schema versioning + appendable history artifacts:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE`
+    - `YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION` (default `1`)
+    - `YOSYS_SVA_MODE_SUMMARY_RUN_ID`
+  - Enhanced snapshot artifacts (`TSV` and `JSON`) with metadata:
+    - `schema_version`
+    - `run_id`
+    - `generated_at_utc`
+  - Added appendable history outputs:
+    - TSV history:
+      - writes header once, appends rows per run
+    - JSONL history:
+      - appends one compact JSON object per run
+  - Backward compatibility:
+    - existing text summaries and snapshot artifact env vars remain supported.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-history.test`:
+    - validates multi-run TSV history append behavior
+    - validates JSONL per-run append entries and skip-reason deltas.
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`:
+    - validates snapshot schema/run/timestamp metadata.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 3/3 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 26/26 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - No explicit schema compatibility negotiation/migration logic beyond version
+    stamping.
+  - No rolling retention/pruning policy for history artifacts yet.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add schema compatibility checks + migration helpers for summary artifacts.
+  - Add history retention/rotation controls for long-running CI jobs.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
