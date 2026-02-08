@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 495)
+## Current Status - February 8, 2026 (Iteration 496)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed per-step fired-arm summaries (sequence+signal) in counterexamples; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed robust model-name step parsing for arm attribution (`sig_1`-style names); next: exact witness extraction + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,49 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 496
+
+1. **Model-name parsing correctness fix for activity attribution**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - `buildWaveTable` now treats `_N` as a time-step suffix only when an
+     unsuffixed base symbol also exists in the model.
+   - This fixes mis-attribution for real names ending in numeric suffixes,
+     e.g. `sig_1`.
+
+2. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-suffix-name.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`
+   - New checks verify that suffix-name signals still produce:
+     - correct per-arm activity lines
+     - correct per-step fired-arm summary lines
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Activity/fired-arm reporting is still model-derived estimation, not
+     dedicated solver witness extraction.
+   - Complex internal event expressions still lack stable attribution names.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit dedicated witness signals for event arms and print those directly,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 495
 

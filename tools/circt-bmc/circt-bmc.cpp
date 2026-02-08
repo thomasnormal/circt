@@ -319,22 +319,6 @@ static std::optional<bool> decodeBoolModelValue(StringRef value) {
   return std::nullopt;
 }
 
-static std::pair<std::string, unsigned> splitModelStepName(StringRef name) {
-  unsigned step = 0;
-  std::string base = name.str();
-  size_t underscore = name.rfind('_');
-  if (underscore == StringRef::npos || underscore + 1 >= name.size())
-    return {base, step};
-  StringRef suffix = name.drop_front(underscore + 1);
-  unsigned suffixStep = 0;
-  if (!suffix.getAsInteger(10, suffixStep)) {
-    base = name.take_front(underscore).str();
-    // We use step 0 for the unsuffixed declaration; `_0` is the next step.
-    step = suffixStep + 1;
-  }
-  return {base, step};
-}
-
 using StepMap = std::map<unsigned, bool>;
 using WaveTable = std::map<std::string, StepMap>;
 
@@ -342,11 +326,35 @@ static WaveTable buildWaveTable(const llvm::StringMap<std::string> &modelValues,
                                 unsigned &maxStep) {
   WaveTable table;
   maxStep = 0;
+  llvm::StringSet<> boolValueNames;
   for (const auto &kv : modelValues) {
     auto decoded = decodeBoolModelValue(kv.getValue());
     if (!decoded)
       continue;
-    auto [base, step] = splitModelStepName(kv.getKey());
+    boolValueNames.insert(kv.getKey());
+  }
+  for (const auto &kv : modelValues) {
+    auto decoded = decodeBoolModelValue(kv.getValue());
+    if (!decoded)
+      continue;
+    StringRef name = kv.getKey();
+    std::string base = name.str();
+    unsigned step = 0;
+    size_t underscore = name.rfind('_');
+    if (underscore != StringRef::npos && underscore + 1 < name.size()) {
+      StringRef suffix = name.drop_front(underscore + 1);
+      unsigned suffixStep = 0;
+      if (!suffix.getAsInteger(10, suffixStep)) {
+        StringRef candidateBase = name.take_front(underscore);
+        // Treat `_N` as a step suffix only when an unsuffixed base declaration
+        // also exists. This avoids mis-parsing names like `sig_1`.
+        if (boolValueNames.contains(candidateBase)) {
+          base = candidateBase.str();
+          // We use step 0 for the unsuffixed declaration; `_0` is next step.
+          step = suffixStep + 1;
+        }
+      }
+    }
     table[base][step] = *decoded;
     maxStep = std::max(maxStep, step);
   }

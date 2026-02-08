@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 496 - February 8, 2026
+
+### Summary
+
+Fixed a model-name parsing bug in counterexample activity attribution so names
+ending in numeric suffixes (for example `sig_1`) are no longer misinterpreted
+as time-step suffixed symbols.
+
+### Fixes
+
+1. **Robust `_N` step-suffix parsing**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Wave-table construction now interprets `_N` as a step suffix only when the
+     corresponding unsuffixed base symbol is also present in the model.
+   - This prevents incorrect base-name splitting for genuine symbol names with
+     numeric tails.
+
+2. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-suffix-name.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`
+   - The new regression verifies both:
+     - event-arm activity output
+     - per-step fired-arm summary output
+     for a suffix-name signal (`sig_1`).
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Event-arm attribution is still model-derived estimation, not explicit solver
+  witness extraction.
+- Complex/internal expressions can still lack stable symbolic names.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 495 - February 8, 2026
 
 ### Summary
