@@ -62,6 +62,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE:-off}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2026,6 +2027,7 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_profile_overlay_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST"
   local drop_events_rewrite_selector_profile_route="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE"
   local drop_events_rewrite_selector_profile_routes_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
+  local drop_events_rewrite_selector_profile_route_auto_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3028,7 +3030,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3062,8 +3064,12 @@ rewrite_selector_profile_default_list_raw = sys.argv[20]
 rewrite_selector_profile_overlay_list_raw = sys.argv[21]
 rewrite_selector_profile_route_raw = sys.argv[22]
 rewrite_selector_profile_routes_json_raw = sys.argv[23]
-rewrite_row_generated_at_utc_min = sys.argv[24]
-rewrite_row_generated_at_utc_max = sys.argv[25]
+rewrite_selector_profile_route_auto_mode_raw = sys.argv[24]
+rewrite_selector_context_suite_dir = sys.argv[25]
+rewrite_selector_context_test_filter = sys.argv[26]
+rewrite_selector_context_script_dir = sys.argv[27]
+rewrite_row_generated_at_utc_min = sys.argv[28]
+rewrite_row_generated_at_utc_max = sys.argv[29]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3614,7 +3620,7 @@ def parse_selector_profile_routes(raw: str):
                 f"error: invalid {route_field}: expected non-empty object"
             )
         unknown_keys = sorted(
-            set(route_spec.keys()) - {"default_list", "profile_list", "overlay_list"}
+            set(route_spec.keys()) - {"default_list", "profile_list", "overlay_list", "when"}
         )
         if unknown_keys:
             fail(
@@ -3641,6 +3647,51 @@ def parse_selector_profile_routes(raw: str):
             overlay_names = parse_route_name_list(
                 route_spec["overlay_list"], f"{route_field}.overlay_list"
             )
+        when_conditions = []
+        if "when" in route_spec:
+            when_value = route_spec["when"]
+            if not isinstance(when_value, dict) or not when_value:
+                fail(
+                    f"error: invalid {route_field}.when: expected non-empty object"
+                )
+            unknown_when_keys = sorted(
+                set(when_value.keys())
+                - {"suite_dir_regex", "test_filter_regex", "script_dir_regex"}
+            )
+            if unknown_when_keys:
+                fail(
+                    f"error: invalid {route_field}.when: unknown key '{unknown_when_keys[0]}'"
+                )
+            if "suite_dir_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "suite_dir",
+                        compile_clause_regex(
+                            when_value["suite_dir_regex"],
+                            f"{route_field}.when.suite_dir_regex",
+                        ),
+                    )
+                )
+            if "test_filter_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "test_filter",
+                        compile_clause_regex(
+                            when_value["test_filter_regex"],
+                            f"{route_field}.when.test_filter_regex",
+                        ),
+                    )
+                )
+            if "script_dir_regex" in when_value:
+                when_conditions.append(
+                    (
+                        "script_dir",
+                        compile_clause_regex(
+                            when_value["script_dir_regex"],
+                            f"{route_field}.when.script_dir_regex",
+                        ),
+                    )
+                )
         if not default_names and not profile_names and not overlay_names:
             fail(
                 f"error: invalid {route_field}: expected at least one list key"
@@ -3649,6 +3700,7 @@ def parse_selector_profile_routes(raw: str):
             "default_names": default_names,
             "profile_names": profile_names,
             "overlay_names": overlay_names,
+            "when_conditions": when_conditions,
         }
     return routes
 
@@ -3806,6 +3858,19 @@ rewrite_selector_profile_routes = parse_selector_profile_routes(
     rewrite_selector_profile_routes_json_raw
 )
 rewrite_selector_profile_route = rewrite_selector_profile_route_raw.strip()
+rewrite_selector_profile_route_auto_mode = (
+    rewrite_selector_profile_route_auto_mode_raw.strip().lower()
+)
+if rewrite_selector_profile_route_auto_mode == "auto":
+    rewrite_selector_profile_route_auto_mode = "optional"
+if not rewrite_selector_profile_route_auto_mode:
+    rewrite_selector_profile_route_auto_mode = "off"
+if rewrite_selector_profile_route_auto_mode not in {"off", "optional", "required"}:
+    fail(
+        "error: invalid "
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: "
+        f"expected one of off, optional, required; got '{rewrite_selector_profile_route_auto_mode_raw}'"
+    )
 if rewrite_selector_profile_route:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", rewrite_selector_profile_route):
         fail(
@@ -3831,6 +3896,50 @@ if rewrite_selector_profile_route:
             "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE: "
             f"unknown route '{rewrite_selector_profile_route}'"
         )
+elif rewrite_selector_profile_route_auto_mode != "off":
+    if rewrite_selector_profile_routes is None:
+        if rewrite_selector_profile_route_auto_mode == "required":
+            fail(
+                "error: "
+                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE=required "
+                "requires "
+                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
+            )
+    else:
+        auto_context = {
+            "suite_dir": rewrite_selector_context_suite_dir,
+            "test_filter": rewrite_selector_context_test_filter,
+            "script_dir": rewrite_selector_context_script_dir,
+        }
+        auto_matches = []
+        for route_name, route_spec in rewrite_selector_profile_routes.items():
+            when_conditions = route_spec["when_conditions"]
+            if not when_conditions:
+                continue
+            matched = True
+            for context_field, compiled_regex in when_conditions:
+                if not compiled_regex.search(auto_context.get(context_field, "")):
+                    matched = False
+                    break
+            if matched:
+                auto_matches.append(route_name)
+        if len(auto_matches) > 1:
+            fail(
+                "error: invalid "
+                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: "
+                f"ambiguous auto route matches ({', '.join(auto_matches)})"
+            )
+        if len(auto_matches) == 1:
+            rewrite_selector_profile_route = auto_matches[0]
+            selected_route_spec = rewrite_selector_profile_routes[
+                rewrite_selector_profile_route
+            ]
+        elif rewrite_selector_profile_route_auto_mode == "required":
+            fail(
+                "error: invalid "
+                "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: "
+                "no route matched auto context"
+            )
 rewrite_selector_profiles = parse_selector_profiles(
     rewrite_selector_profiles_json_raw, rewrite_selector_macros
 )

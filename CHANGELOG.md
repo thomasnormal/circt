@@ -28948,3 +28948,98 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector macros are non-parameterized and local to one JSON policy payload.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 595 - February 8, 2026
+
+### Yosys SVA BMC Auto-Route Resolution
+
+- Added auto-route mode env:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE`
+- Supported modes:
+  - `off` (default), `optional`, `required`
+  - `auto` is accepted as an alias for `optional`
+- Explicit route selection via
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE`
+  still takes precedence.
+
+### Route Schema Enhancements
+
+- Extended route specs with optional `when` match object.
+- Supported `when` keys:
+  - `suite_dir_regex`
+  - `test_filter_regex`
+  - `script_dir_regex`
+- Auto-route selection only evaluates routes with non-empty `when`
+  conditions; manual routes without `when` are ignored by auto selection.
+
+### Migration Semantics
+
+- Routed additional context into selector rewrite evaluation:
+  - suite dir (`YOSYS_SVA_DIR`)
+  - test filter (`TEST_FILTER`)
+  - script dir (`SCRIPT_DIR`)
+- Added strict validation and diagnostics for:
+  - invalid auto mode value
+  - `required` mode without routes JSON
+  - `required` mode with no matching route
+  - ambiguous multi-route matches
+  - invalid `when` schema keys
+- Added strict regex compilation diagnostics for route `when` match fields.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive required-mode auto-route match behavior
+    - optional-mode no-match behavior (no failure, no rewrite)
+    - required-mode missing routes JSON rejection
+    - required-mode no-match rejection
+    - ambiguous-match rejection
+    - invalid auto-mode rejection
+    - invalid route `when` key rejection
+- Focused lit run:
+  - 11/11 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-routes.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Auto-route matching currently uses only local execution context; no CI/job
+  metadata matching yet.
+- Selector macros are non-parameterized and local to one JSON policy payload.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
