@@ -1874,7 +1874,8 @@ emit_mode_summary_outputs() {
     if command -v python3 >/dev/null 2>&1; then
       json_validator_mode="python"
     else
-      json_validator_mode="regex"
+      echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=auto requires python3 in PATH; set YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex to opt out" >&2
+      exit 1
     fi
   fi
   if [[ "$json_validator_mode" == "python" ]] && ! command -v python3 >/dev/null 2>&1; then
