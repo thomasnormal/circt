@@ -11,8 +11,17 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=warn \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=WARN
+
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=ERRORDEFAULT
 
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
@@ -26,4 +35,5 @@
 // WARN: warning: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is deprecated
 // WARN: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 
+// ERRORDEFAULT: error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is disabled by YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=error
 // ERROR: error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex is disabled by YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY=error
