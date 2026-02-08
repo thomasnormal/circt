@@ -16128,6 +16128,68 @@ ninja -C build circt-verilog
     override.
   - No schema-version migration policy for arithmetic defaults yet.
 
+### Iteration 620
+- Yosys SVA BMC importable route-context schema modules:
+  - Added optional schema-level `imports` array in
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`.
+  - Each import entry is a JSON file path loaded at schema-parse time.
+  - Imported module keys currently supported:
+    - `regex_defs`
+    - `limits`
+    - `int_arithmetic_presets`
+  - Merge behavior:
+    - later imports override earlier imports for `limits` fields
+    - inline schema `limits` override imported `limits`
+    - duplicate `regex_defs` names across imports or with inline definitions are
+      rejected
+    - duplicate `int_arithmetic_presets` names across imports or with inline
+      presets are rejected
+- Parser hardening and diagnostics:
+  - Added strict diagnostics for unreadable import files and invalid import JSON
+    payloads.
+  - Added import payload key validation with field-qualified errors.
+  - Refactored expression-limit parsing into explicit override parsing so
+    imported and inline limit overlays are deterministic.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive imported module case using imported `regex_defs` +
+      `int_arithmetic_presets`
+    - negative unreadable import file path rejection
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+- Current limitations / debt:
+  - Import modules do not currently support recursive imports or explicit
+    import-cycle diagnostics.
+  - Import modules are file-path based only; no named module registry/versioning
+    contract yet.
+  - Arithmetic mode selection remains schema/clause scoped; still no
+    per-expression override.
+
 ---
 
 ## Architecture Reference

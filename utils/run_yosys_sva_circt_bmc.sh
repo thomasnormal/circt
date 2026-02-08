@@ -3848,8 +3848,15 @@ def consume_expression_budget(budget, field_name: str, depth: int):
 
 def parse_context_expression_limits(value, field_name: str):
     limits = dict(DEFAULT_CONTEXT_EXPR_LIMITS)
+    parsed_limits = parse_context_expression_limits_overrides(value, field_name)
+    if parsed_limits is not None:
+        limits.update(parsed_limits)
+    return limits
+
+
+def parse_context_expression_limits_overrides(value, field_name: str):
     if value is None:
-        return limits
+        return None
     if not isinstance(value, dict) or not value:
         fail(
             f"error: invalid {field_name}: expected non-empty object"
@@ -3859,6 +3866,7 @@ def parse_context_expression_limits(value, field_name: str):
         fail(
             f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
         )
+    parsed_limits = {}
     for limit_key, limit_value in value.items():
         if (
             not isinstance(limit_value, int)
@@ -3868,8 +3876,8 @@ def parse_context_expression_limits(value, field_name: str):
             fail(
                 f"error: invalid {field_name}.{limit_key}: expected positive integer"
             )
-        limits[limit_key] = limit_value
-    return limits
+        parsed_limits[limit_key] = limit_value
+    return parsed_limits
 
 
 def parse_context_int_arithmetic(value, field_name: str):
@@ -3918,6 +3926,50 @@ def parse_context_int_arithmetic_presets(value, field_name: str):
             preset_field,
         )
     return presets
+
+
+def parse_context_schema_import_modules(value, field_name: str):
+    if value is None:
+        return []
+    if not isinstance(value, list) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty array"
+        )
+    modules = []
+    for idx, entry in enumerate(value):
+        import_field = f"{field_name}[{idx}]"
+        if not isinstance(entry, str) or not entry.strip():
+            fail(
+                f"error: invalid {import_field}: expected non-empty string import path"
+            )
+        import_path = entry.strip()
+        try:
+            with open(import_path, "r", encoding="utf-8") as handle:
+                import_raw = handle.read()
+        except OSError as ex:
+            fail(
+                f"error: invalid {import_field}: unable to read import file '{import_path}' ({ex})"
+            )
+        try:
+            import_payload = json.loads(import_raw)
+        except Exception:
+            fail(
+                f"error: invalid {import_field}: import file '{import_path}' must contain JSON object"
+            )
+        if not isinstance(import_payload, dict) or not import_payload:
+            fail(
+                f"error: invalid {import_field}: import file '{import_path}' must contain non-empty JSON object"
+            )
+        unknown_keys = sorted(
+            set(import_payload.keys())
+            - {"regex_defs", "limits", "int_arithmetic_presets"}
+        )
+        if unknown_keys:
+            fail(
+                f"error: invalid {import_field}: import file '{import_path}' has unknown key '{unknown_keys[0]}'"
+            )
+        modules.append((import_path, import_payload))
+    return modules
 
 
 def evaluate_int_division(lhs_value: int, rhs_value: int, div_mode: str):
@@ -5953,6 +6005,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "keys",
             "regex_defs",
             "limits",
+            "imports",
             "int_arithmetic",
             "int_arithmetic_ref",
             "int_arithmetic_presets",
@@ -5988,18 +6041,82 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(
             f"error: invalid {field_name}.keys: expected non-empty object"
         )
-    regex_defs = parse_regex_definitions(
+    import_modules = parse_context_schema_import_modules(
+        payload.get("imports"),
+        f"{field_name}.imports",
+    )
+    imported_regex_defs = {}
+    imported_limit_overrides = {}
+    imported_int_arithmetic_presets = {}
+    for idx, (_, import_payload) in enumerate(import_modules):
+        import_field = f"{field_name}.imports[{idx}]"
+        import_regex_defs = parse_regex_definitions(
+            import_payload.get("regex_defs"),
+            f"{import_field}.regex_defs",
+        )
+        if import_regex_defs is not None:
+            for regex_name, regex_spec in import_regex_defs.items():
+                if regex_name in imported_regex_defs:
+                    fail(
+                        f"error: invalid {import_field}.regex_defs.{regex_name}: duplicate regex definition from imports"
+                    )
+                imported_regex_defs[regex_name] = regex_spec
+        import_limit_overrides = parse_context_expression_limits_overrides(
+            import_payload.get("limits"),
+            f"{import_field}.limits",
+        )
+        if import_limit_overrides is not None:
+            imported_limit_overrides.update(import_limit_overrides)
+        import_int_arithmetic_presets = parse_context_int_arithmetic_presets(
+            import_payload.get("int_arithmetic_presets"),
+            f"{import_field}.int_arithmetic_presets",
+        )
+        if import_int_arithmetic_presets is not None:
+            for preset_name, preset_spec in import_int_arithmetic_presets.items():
+                if preset_name in imported_int_arithmetic_presets:
+                    fail(
+                        f"error: invalid {import_field}.int_arithmetic_presets.{preset_name}: duplicate int arithmetic preset from imports"
+                    )
+                imported_int_arithmetic_presets[preset_name] = preset_spec
+    inline_regex_defs = parse_regex_definitions(
         payload.get("regex_defs"),
         f"{field_name}.regex_defs",
     )
-    expr_limits = parse_context_expression_limits(
+    regex_defs = dict(imported_regex_defs)
+    if inline_regex_defs is not None:
+        for regex_name, regex_spec in inline_regex_defs.items():
+            if regex_name in regex_defs:
+                fail(
+                    f"error: invalid {field_name}.regex_defs.{regex_name}: duplicate regex definition"
+                )
+            regex_defs[regex_name] = regex_spec
+    if not regex_defs:
+        regex_defs = None
+    inline_limit_overrides = parse_context_expression_limits_overrides(
         payload.get("limits"),
         f"{field_name}.limits",
     )
-    int_arithmetic_presets = parse_context_int_arithmetic_presets(
+    merged_limit_overrides = dict(imported_limit_overrides)
+    if inline_limit_overrides is not None:
+        merged_limit_overrides.update(inline_limit_overrides)
+    expr_limits = parse_context_expression_limits(
+        merged_limit_overrides if merged_limit_overrides else None,
+        f"{field_name}.limits",
+    )
+    inline_int_arithmetic_presets = parse_context_int_arithmetic_presets(
         payload.get("int_arithmetic_presets"),
         f"{field_name}.int_arithmetic_presets",
     )
+    int_arithmetic_presets = dict(imported_int_arithmetic_presets)
+    if inline_int_arithmetic_presets is not None:
+        for preset_name, preset_spec in inline_int_arithmetic_presets.items():
+            if preset_name in int_arithmetic_presets:
+                fail(
+                    f"error: invalid {field_name}.int_arithmetic_presets.{preset_name}: duplicate int arithmetic preset"
+                )
+            int_arithmetic_presets[preset_name] = preset_spec
+    if not int_arithmetic_presets:
+        int_arithmetic_presets = None
     int_arithmetic = parse_context_int_arithmetic(
         payload.get("int_arithmetic"),
         f"{field_name}.int_arithmetic",
