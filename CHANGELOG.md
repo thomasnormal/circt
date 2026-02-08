@@ -24525,3 +24525,68 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Lint still lacks explicit precedence-ambiguity diagnostics.
 - Skip accounting remains mixed test-level/mode-level in summary output.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 528 - February 8, 2026
+
+### Yosys SVA BMC Precedence-Ambiguity Linting
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` linting with
+  precedence-sensitive overlap diagnostics.
+- Added matching-chain enumeration for each suite tuple under harness key
+  precedence to identify conflicting overlap chains.
+- Added new lint finding:
+  - `EXPECT_LINT(ambiguity): ... precedence-sensitive overlap ...`
+- Ambiguity diagnostics are emitted when overlapping rows disagree on outcome
+  and both rows are active winners somewhere in the suite matrix.
+- Applied to:
+  - `EXPECT_FILE`
+  - `EXPECT_REGEN_OVERRIDE_FILE`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-lint-ambiguity.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-lint-ambiguity.test`
+  - `test/Tools/run-yosys-sva-bmc-lint-shadow.test`
+  - `test/Tools/run-yosys-sva-bmc-lint.test`
+  - `test/Tools/run-yosys-sva-bmc-skip-expected.test`
+  - `test/Tools/run-yosys-sva-bmc-regen-override.test`
+  - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 13/13 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Lint still lacks explicit fix recommendations for ambiguity findings.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

@@ -232,6 +232,28 @@ lookup_match_key_for_tuple() {
   echo ""
 }
 
+lookup_match_keys_for_tuple() {
+  local map_name="$1"
+  local test="$2"
+  local mode="$3"
+  local profile="$4"
+  local -n map_ref="$map_name"
+  local key
+  for key in \
+    "$test|$mode|$profile" \
+    "$test|$mode|*" \
+    "$test|*|$profile" \
+    "$test|*|*" \
+    "*|$mode|$profile" \
+    "*|$mode|*" \
+    "*|*|$profile" \
+    "*|*|*"; do
+    if [[ -n "${map_ref["$key"]+x}" ]]; then
+      echo "$key"
+    fi
+  done
+}
+
 lint_shadowed_patterns_for_map() {
   local map_name="$1"
   local label="$2"
@@ -273,12 +295,77 @@ lint_shadowed_patterns_for_map() {
   done < <(printf '%s\n' "${keys[@]}" | sort)
 }
 
+lint_precedence_ambiguity_for_map() {
+  local map_name="$1"
+  local label="$2"
+  local -n map_ref="$map_name"
+  local -a tests=()
+  local test mode profile winner winner_val other other_val tuple pair
+  local -a matches=()
+  local -A winner_hits=()
+  local -A pair_counts=()
+  local -A pair_examples=()
+
+  for test in "${!suite_tests[@]}"; do
+    tests+=("$test")
+  done
+  if ((${#tests[@]} == 0)); then
+    return
+  fi
+
+  for test in "${tests[@]}"; do
+    for mode in pass fail; do
+      for profile in known xprop; do
+        mapfile -t matches < <(lookup_match_keys_for_tuple "$map_name" "$test" "$mode" "$profile")
+        if ((${#matches[@]} == 0)); then
+          continue
+        fi
+        winner="${matches[0]}"
+        winner_hits["$winner"]=$((winner_hits["$winner"] + 1))
+        winner_val="${map_ref["$winner"]}"
+        tuple="$test|$mode|$profile"
+        if ((${#matches[@]} < 2)); then
+          continue
+        fi
+        for other in "${matches[@]:1}"; do
+          other_val="${map_ref["$other"]}"
+          if [[ "$winner_val" == "$other_val" ]]; then
+            continue
+          fi
+          pair="$winner||$other"
+          pair_counts["$pair"]=$((pair_counts["$pair"] + 1))
+          if [[ -z "${pair_examples["$pair"]+x}" ]]; then
+            pair_examples["$pair"]="$tuple"
+          fi
+        done
+      done
+    done
+  done
+
+  if ((${#pair_counts[@]} == 0)); then
+    return
+  fi
+  while IFS= read -r pair; do
+    local cnt
+    cnt="${pair_counts["$pair"]}"
+    winner="${pair%%||*}"
+    other="${pair#*||}"
+    if [[ "${winner_hits["$other"]:-0}" -eq 0 ]]; then
+      continue
+    fi
+    emit_expect_lint "ambiguity" \
+      "$label precedence-sensitive overlap: $winner (${map_ref["$winner"]}) overrides $other (${map_ref["$other"]}) for $cnt tuple(s), e.g. ${pair_examples["$pair"]}"
+  done < <(printf '%s\n' "${!pair_counts[@]}" | sort)
+}
+
 if [[ "$EXPECT_LINT" == "1" ]]; then
   populate_suite_tests
   lint_unknown_tests_for_map expected_cases "EXPECT_FILE"
   lint_unknown_tests_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
   lint_shadowed_patterns_for_map expected_cases "EXPECT_FILE"
   lint_shadowed_patterns_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
+  lint_precedence_ambiguity_for_map expected_cases "EXPECT_FILE"
+  lint_precedence_ambiguity_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
   echo "EXPECT_LINT_SUMMARY: issues=$lint_issues"
 fi
 
