@@ -25,7 +25,7 @@ def hash_rows(rows: list[dict]) -> str:
   return digest.hexdigest()
 
 
-def verify_report(path: Path) -> int:
+def verify_report(path: Path, allow_legacy_prefix: bool) -> int:
   rows: list[dict] = []
   for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
     if not line.strip():
@@ -41,6 +41,16 @@ def verify_report(path: Path) -> int:
 
   if not rows:
     fail(f"{path}: report is empty")
+
+  if allow_legacy_prefix:
+    first_run_meta = None
+    for idx, row in enumerate(rows):
+      if row.get("operation") == "run_meta":
+        first_run_meta = idx
+        break
+    if first_run_meta is None:
+      fail(f"{path}: no run_meta rows found")
+    rows = rows[first_run_meta:]
 
   run_count = 0
   idx = 0
@@ -111,13 +121,18 @@ def main() -> int:
       description="Verify integrity for formal dry-run JSONL reports."
   )
   parser.add_argument("report_jsonl", help="Path to report JSONL file")
+  parser.add_argument(
+      "--allow-legacy-prefix",
+      action="store_true",
+      help="Ignore leading pre-run_meta legacy rows before validating segments",
+  )
   args = parser.parse_args()
 
   report_path = Path(args.report_jsonl)
   if not report_path.is_file():
     fail(f"report not found: {report_path}")
 
-  run_count = verify_report(report_path)
+  run_count = verify_report(report_path, allow_legacy_prefix=args.allow_legacy_prefix)
   print(f"verified dry-run report: runs={run_count}")
   return 0
 
