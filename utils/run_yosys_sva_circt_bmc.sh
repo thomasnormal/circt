@@ -2110,6 +2110,28 @@ PY
     printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
   }
 
+  pid_start_jiffies() {
+    local pid="$1"
+    local stat_line
+    if [[ -r "/proc/${pid}/stat" ]]; then
+      stat_line="$(cat "/proc/${pid}/stat" 2>/dev/null || true)"
+      if [[ -n "$stat_line" ]]; then
+        # /proc/<pid>/stat field 22 is starttime in clock ticks since boot.
+        printf '%s\n' "$stat_line" | awk '{print $22}'
+        return 0
+      fi
+    fi
+    return 1
+  }
+
+  generate_lock_owner_nonce() {
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+      cat /proc/sys/kernel/random/uuid 2>/dev/null && return 0
+    fi
+    printf '%s-%s-%s\n' "$(date -u +%s 2>/dev/null || echo 0)" "$$" "$RANDOM"
+    return 0
+  }
+
   lockdir_mtime_epoch() {
     local path="$1"
     local epoch
@@ -2143,11 +2165,23 @@ PY
     ((age_secs >= stale_secs)) || return 1
     owner_file="${lock_dir}/owner"
     owner_pid=""
+    local owner_pid_start
+    local live_pid_start
+    owner_pid_start=""
+    live_pid_start=""
     if [[ -f "$owner_file" ]]; then
       owner_pid="$(sed -nE 's/^pid=([0-9]+)$/\1/p' "$owner_file" | head -n 1)"
+      owner_pid_start="$(sed -nE 's/^pid_start_jiffies=([0-9]+)$/\1/p' "$owner_file" | head -n 1)"
     fi
     if [[ -n "$owner_pid" ]] && kill -0 "$owner_pid" 2>/dev/null; then
-      return 1
+      if [[ -n "$owner_pid_start" ]] && live_pid_start="$(pid_start_jiffies "$owner_pid")"; then
+        if [[ "$live_pid_start" == "$owner_pid_start" ]]; then
+          return 1
+        fi
+      else
+        # Conservatively keep lockdir if we cannot disambiguate PID identity.
+        return 1
+      fi
     fi
     rm -rf "$lock_dir" 2>/dev/null || return 1
     if ((drop_events_lock_warned == 0)); then
@@ -2193,7 +2227,7 @@ PY
         return $status
         ;;
       mkdir)
-        local lock_dir start_epoch now_epoch status
+        local lock_dir start_epoch now_epoch status owner_nonce owner_pid_start
         lock_dir="${lock_file}.d"
         start_epoch="$(date -u +%s)"
         while ! mkdir "$lock_dir" 2>/dev/null; do
@@ -2205,8 +2239,19 @@ PY
           fi
           sleep 0.1
         done
+        owner_nonce="$(generate_lock_owner_nonce)"
+        owner_pid_start=""
+        if owner_pid_start="$(pid_start_jiffies "$$" 2>/dev/null)"; then
+          :
+        else
+          owner_pid_start=""
+        fi
         {
           printf 'pid=%d\n' "$$"
+          if [[ -n "$owner_pid_start" ]]; then
+            printf 'pid_start_jiffies=%s\n' "$owner_pid_start"
+          fi
+          printf 'owner_nonce=%s\n' "$owner_nonce"
           printf 'acquired_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         } > "${lock_dir}/owner" 2>/dev/null || true
         "$@"

@@ -12,7 +12,7 @@
 // RUN: printf '{"schema_version":"1","run_id":"run-keep","generated_at_utc":"2025-01-01T00:00:00Z","test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":2,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":0,"skip_pass":0,"skip_fail":0,"skip_expected":0,"skip_unexpected":0},"skip_reasons":{"vhdl":0,"fail_no_macro":0,"no_property":0,"other":0}}\n' >> %t/history.jsonl
 
 // RUN: mkdir -p %t/drop-events.lock.d
-// RUN: printf 'pid=999999\nacquired_at_utc=1970-01-01T00:00:00Z\n' > %t/drop-events.lock.d/owner
+// RUN: printf 'pid=1\npid_start_jiffies=0\nowner_nonce=stale\nacquired_at_utc=1970-01-01T00:00:00Z\n' > %t/drop-events.lock.d/owner
 // RUN: touch -t 197001010000 %t/drop-events.lock.d
 // RUN: touch -t 197001010000 %t/drop-events.lock.d/owner
 
@@ -32,6 +32,7 @@
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/reclaim.out 2> %t/reclaim.err
 
 // RUN: cat %t/drop-events.jsonl | FileCheck %s --check-prefix=RECLAIM
+// RUN: cat %t/reclaim.err | FileCheck %s --check-prefix=RECLAIMWARN
 // RUN: test ! -d %t/drop-events.lock.d
 
 // RUN: printf 'schema_version\trun_id\tgenerated_at_utc\ttest_total\ttest_failures\ttest_xfail\ttest_xpass\ttest_skipped\tmode_total\tmode_pass\tmode_fail\tmode_xfail\tmode_xpass\tmode_epass\tmode_efail\tmode_unskip\tmode_skipped\tmode_skip_pass\tmode_skip_fail\tmode_skip_expected\tmode_skip_unexpected\tskip_reason_vhdl\tskip_reason_fail-no-macro\tskip_reason_no-property\tskip_reason_other\n' > %t/history.tsv
@@ -69,6 +70,7 @@
 // RECLAIM: "history_format":"tsv"
 // RECLAIM: "reason":"future_skew"
 // RECLAIM: "history_format":"jsonl"
+// RECLAIMWARN: warning: reclaimed stale drop-event lock directory
 
 // TIMEOUT: error: timed out acquiring drop-event lock directory
 
