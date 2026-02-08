@@ -3805,7 +3805,17 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                 f"error: invalid {key_field}: expected object"
             )
         unknown_spec_keys = sorted(
-            set(key_spec.keys()) - {"type", "required", "regex", "enum", "min", "max"}
+            set(key_spec.keys())
+            - {
+                "type",
+                "required",
+                "regex",
+                "enum",
+                "min",
+                "max",
+                "requires",
+                "requires_when_regex",
+            }
         )
         if unknown_spec_keys:
             fail(
@@ -3877,6 +3887,37 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             fail(
                 f"error: invalid {key_field}: min must be <= max"
             )
+        requires_keys = None
+        if "requires" in key_spec:
+            requires_raw = key_spec["requires"]
+            if not isinstance(requires_raw, list) or not requires_raw:
+                fail(
+                    f"error: invalid {key_field}.requires: expected non-empty array"
+                )
+            requires_keys = []
+            requires_seen = set()
+            for required_key in requires_raw:
+                validate_context_key_name(required_key, f"{key_field}.requires")
+                if required_key == context_key:
+                    fail(
+                        f"error: invalid {key_field}.requires: key cannot depend on itself"
+                    )
+                if required_key in requires_seen:
+                    fail(
+                        f"error: invalid {key_field}.requires: duplicate key '{required_key}'"
+                    )
+                requires_seen.add(required_key)
+                requires_keys.append(required_key)
+        requires_when_regex = None
+        if "requires_when_regex" in key_spec:
+            if requires_keys is None:
+                fail(
+                    f"error: invalid {key_field}.requires_when_regex: requires non-empty {key_field}.requires"
+                )
+            requires_when_regex = compile_clause_regex(
+                key_spec["requires_when_regex"],
+                f"{key_field}.requires_when_regex",
+            )
         key_specs[context_key] = {
             "type": value_type,
             "required": required,
@@ -3884,6 +3925,8 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "enum_values": enum_values,
             "min_value": min_value,
             "max_value": max_value,
+            "requires_keys": requires_keys,
+            "requires_when_regex": requires_when_regex,
         }
     return {
         "allow_unknown_keys": allow_unknown_keys,
@@ -3937,6 +3980,24 @@ def validate_selector_profile_route_context_map(
                 fail(
                     f"error: invalid {field_name}: missing required context key '{key}'"
                 )
+        for key, key_spec in key_specs.items():
+            if key not in context:
+                continue
+            requires_keys = key_spec["requires_keys"]
+            if not requires_keys:
+                continue
+            requires_when_regex = key_spec["requires_when_regex"]
+            if requires_when_regex is not None:
+                key_value = format_context_scalar(context[key])
+                if not requires_when_regex.search(key_value):
+                    continue
+            for required_key in requires_keys:
+                if required_key not in context:
+                    fail(
+                        "error: invalid "
+                        f"{field_name}: missing required context key '{required_key}' "
+                        f"required by '{key}'"
+                    )
     return context
 
 
