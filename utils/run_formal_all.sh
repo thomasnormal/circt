@@ -32,6 +32,9 @@ Options:
                          Preview expectation refresh/prune without rewriting files
   --expectations-dry-run-report-jsonl FILE
                          Append dry-run operation summaries as JSON Lines
+  --expectations-dry-run-report-max-sample-rows N
+                         Max sampled rows embedded per dry-run JSONL operation
+                         (default: 5; 0 disables row samples)
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
@@ -118,6 +121,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
+EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS=5
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 PRUNE_EXPECTED_FAILURES_FILE=""
@@ -205,6 +209,8 @@ while [[ $# -gt 0 ]]; do
       EXPECTATIONS_DRY_RUN=1; shift ;;
     --expectations-dry-run-report-jsonl)
       EXPECTATIONS_DRY_RUN_REPORT_JSONL="$2"; shift 2 ;;
+    --expectations-dry-run-report-max-sample-rows)
+      EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$2"; shift 2 ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
@@ -268,6 +274,10 @@ if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; th
 fi
 if ! [[ "$BASELINE_WINDOW_DAYS" =~ ^[0-9]+$ ]]; then
   echo "invalid --baseline-window-days: expected non-negative integer" >&2
+  exit 1
+fi
+if ! [[ "$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --expectations-dry-run-report-max-sample-rows: expected non-negative integer" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
@@ -416,6 +426,7 @@ if [[ "$EXPECTATIONS_DRY_RUN" == "1" && -n "$EXPECTATIONS_DRY_RUN_REPORT_JSONL" 
   OUT_DIR="$OUT_DIR" \
   DATE_STR="$DATE_STR" \
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+  EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   python3 - <<'PY'
 import json
@@ -429,6 +440,9 @@ payload = {
     "schema_version": 1,
     "date": os.environ.get("DATE_STR", ""),
     "run_id": os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", ""),
+    "report_sample_rows_limit": int(
+        os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS", "5")
+    ),
     "out_dir": os.environ.get("OUT_DIR", ""),
 }
 with report_path.open("a", encoding="utf-8") as f:
@@ -776,6 +790,7 @@ if [[ -n "$EXPECTED_FAILURES_FILE" || \
   FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+  EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE" \
   PRUNE_EXPECTED_FAILURES_DROP_UNUSED="$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" \
@@ -793,6 +808,9 @@ fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
 fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
+max_sample_rows = int(
+    os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS", "5")
+)
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURES_FILE", "")
 prune_drop_unused = (
@@ -811,6 +829,11 @@ def emit_dry_run_report(payload):
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+def sample_rows(rows):
+  if max_sample_rows <= 0:
+    return []
+  return rows[:max_sample_rows]
 
 required_cols = {"suite", "mode", "expected_fail", "expected_error"}
 expected = {}
@@ -952,10 +975,21 @@ if prune_path is not None:
   if expected_path is None:
     raise SystemExit("--prune-expected-failures-file requires expected failures to be loaded")
   pruned_rows = []
+  dropped_rows = []
   dropped_unused = 0
   for (suite, mode), exp in expected.items():
     if prune_drop_unused and (suite, mode) not in seen:
       dropped_unused += 1
+      dropped_rows.append(
+          {
+              "suite": suite,
+              "mode": mode,
+              "expected_fail": exp["expected_fail"],
+              "expected_error": exp["expected_error"],
+              "notes": exp.get("notes", ""),
+              "drop_reason": "unused",
+          }
+      )
       continue
     pruned_rows.append(
         {
@@ -975,6 +1009,8 @@ if prune_path is not None:
             "target_file": str(prune_path),
             "kept_rows": len(pruned_rows),
             "dropped_unused": dropped_unused,
+            "kept_rows_sample": sample_rows(pruned_rows),
+            "dropped_rows_sample": sample_rows(dropped_rows),
         }
     )
   else:
@@ -1019,6 +1055,7 @@ if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
   SUMMARY_FILE="$OUT_DIR/summary.tsv" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+  EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX" \
@@ -1034,6 +1071,9 @@ summary_path = Path(os.environ["SUMMARY_FILE"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
+max_sample_rows = int(
+    os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS", "5")
+)
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 suite_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX", "")
@@ -1047,6 +1087,11 @@ def emit_dry_run_report(payload):
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+def sample_rows(rows):
+  if max_sample_rows <= 0:
+    return []
+  return rows[:max_sample_rows]
 
 def compile_optional_regex(raw: str, field: str):
   if not raw:
@@ -1103,6 +1148,7 @@ if expectations_dry_run:
           "operation": "refresh_expected_failures",
           "target_file": str(out_path),
           "output_rows": len(rows),
+          "output_rows_sample": sample_rows(rows),
           "suite_filter": suite_filter_raw,
           "mode_filter": mode_filter_raw,
       }
@@ -1135,6 +1181,7 @@ if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
   FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+  EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   PRUNE_EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" \
@@ -1155,6 +1202,9 @@ fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") 
 fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
+max_sample_rows = int(
+    os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS", "5")
+)
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_FILE", "")
 prune_path = Path(prune_file_raw) if prune_file_raw else None
@@ -1178,6 +1228,11 @@ def emit_dry_run_report(payload):
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+def sample_rows(rows):
+  if max_sample_rows <= 0:
+    return []
+  return rows[:max_sample_rows]
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
 result_sources = [
@@ -1477,19 +1532,35 @@ if prune_path is not None:
         "--prune-expected-failure-cases-file requires expected cases to be loaded"
     )
   pruned_rows = []
+  dropped_rows = []
   dropped_unmatched = 0
   dropped_expired = 0
   for row, summary_row in zip(expected_rows, expected_summary_rows):
     is_unmatched = summary_row["matched_count"] == 0
     is_expired = summary_row["expired"] == "yes"
     drop = False
+    drop_reasons = []
     if prune_drop_unmatched and is_unmatched:
       drop = True
       dropped_unmatched += 1
+      drop_reasons.append("unmatched")
     if prune_drop_expired and is_expired:
       drop = True
       dropped_expired += 1
+      drop_reasons.append("expired")
     if drop:
+      dropped_rows.append(
+          {
+              "suite": row["suite"],
+              "mode": row["mode"],
+              "id": row["id"],
+              "id_kind": row["id_kind"],
+              "status": row["status"],
+              "expires_on": row["expires_on"],
+              "reason": row["reason"],
+              "drop_reasons": ",".join(drop_reasons),
+          }
+      )
       continue
     pruned_rows.append(
         {
@@ -1513,6 +1584,8 @@ if prune_path is not None:
             "kept_rows": len(pruned_rows),
             "dropped_unmatched": dropped_unmatched,
             "dropped_expired": dropped_expired,
+            "kept_rows_sample": sample_rows(pruned_rows),
+            "dropped_rows_sample": sample_rows(dropped_rows),
         }
     )
   else:
@@ -1565,6 +1638,7 @@ if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   EXPECTATIONS_DRY_RUN_RUN_ID="$RUN_ID" \
+  EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS="$EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS" \
   EXPECTATIONS_DRY_RUN_REPORT_JSONL="$EXPECTATIONS_DRY_RUN_REPORT_JSONL" \
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
@@ -1585,6 +1659,9 @@ out_dir = Path(os.environ["OUT_DIR"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
 expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 dry_run_run_id = os.environ.get("EXPECTATIONS_DRY_RUN_RUN_ID", "")
+max_sample_rows = int(
+    os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_MAX_SAMPLE_ROWS", "5")
+)
 dry_run_report_jsonl_raw = os.environ.get("EXPECTATIONS_DRY_RUN_REPORT_JSONL", "")
 dry_run_report_jsonl_path = Path(dry_run_report_jsonl_raw) if dry_run_report_jsonl_raw else None
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
@@ -1610,6 +1687,11 @@ def emit_dry_run_report(payload):
   dry_run_report_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
   with dry_run_report_jsonl_path.open("a", encoding="utf-8") as f:
     f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+def sample_rows(rows):
+  if max_sample_rows <= 0:
+    return []
+  return rows[:max_sample_rows]
 
 def compile_optional_regex(raw: str, field: str):
   if not raw:
@@ -1823,6 +1905,7 @@ if expectations_dry_run:
           "operation": "refresh_expected_failure_cases",
           "target_file": str(out_path),
           "output_rows": len(refreshed),
+          "output_rows_sample": sample_rows(refreshed),
           "collapse_status_any": collapse_status_any,
           "suite_filter": suite_filter_raw,
           "mode_filter": mode_filter_raw,

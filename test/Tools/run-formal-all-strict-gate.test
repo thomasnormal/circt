@@ -151,10 +151,13 @@
 // PRUNECASE-NOT: drop_expired
 // DRYRUNCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}stale_case{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}dry_keep_stale
 // DRYRUNREPORT: "operation": "run_meta"
+// DRYRUNREPORT-SAME: "report_sample_rows_limit": 5
 // DRYRUNREPORT-SAME: "run_id":
 // DRYRUNREPORT-SAME: "schema_version": 1
 // DRYRUNREPORT: "operation": "refresh_expected_failures"
+// DRYRUNREPORT-SAME: "output_rows_sample":
 // DRYRUNREPORT: "operation": "refresh_expected_failure_cases"
+// DRYRUNREPORT-SAME: "output_rows_sample":
 // DRYRUNREPORT: "exit_code": 0
 // DRYRUNREPORT-SAME: "operation": "run_end"
 // DRYRUNREPORT-SAME: "payload_sha256":

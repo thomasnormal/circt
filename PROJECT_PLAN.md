@@ -17592,6 +17592,37 @@ ninja -C build circt-verilog
   - Integrity hashes are unauthenticated (no signature/trust chain).
   - Operation rows remain summary-only (no row-level textual diff data).
 
+### Iteration 661
+- Dry-run JSONL sampled row diffs:
+  - Added `--expectations-dry-run-report-max-sample-rows N` to
+    `utils/run_formal_all.sh` (default `5`, `0` disables samples).
+  - Added sampled payload fields for dry-run mutator operations:
+    - `refresh_expected_failures`: `output_rows_sample`
+    - `refresh_expected_failure_cases`: `output_rows_sample`
+    - `prune_expected_failures`: `kept_rows_sample`, `dropped_rows_sample`
+    - `prune_expected_failure_cases`: `kept_rows_sample`,
+      `dropped_rows_sample`
+  - Added `report_sample_rows_limit` to the `run_meta` row.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` now checks `report_sample_rows_limit`
+    - checks sampled operation payload fields (`output_rows_sample`)
+- Documentation:
+  - Updated `docs/FormalRegression.md` with the new max-sample CLI option and
+    sample payload semantics.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke + report verification:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke-v2 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v2.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v2.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke-v2.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v2.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v2.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke-v2.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke-v2.jsonl`
+      - `python3 utils/verify_formal_dryrun_report.py /tmp/formal-dryrun-meta-smoke-v2.jsonl` -> PASS
+- Current limitations / debt:
+  - Sample payload is bounded and may omit row-level details beyond `N` rows.
+  - Integrity hashes are unauthenticated (no signature/trust chain).
+
 ---
 
 ## Architecture Reference
