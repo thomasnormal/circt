@@ -1306,11 +1306,46 @@ Value Context::convertAssertionCallExpression(
     if (!clockingCtrl)
       disableExprs.clear();
     // The helper-procedure lowering introduces explicit sampled state. For
-    // implicit assertion clocks without disable/enable controls, prefer
-    // direct past-based lowering to avoid extra-cycle skew in temporal
-    // combinations such as non-overlap implication with $rose/$fell.
-    bool needsClockedHelper =
-        hasClockingArg || enableExpr || !disableExprs.empty();
+    // implicit assertion clocks without disable/enable controls, prefer direct
+    // past-based lowering to avoid extra-cycle skew in temporal combinations
+    // such as non-overlap implication with $rose/$fell.
+    //
+    // Also allow direct lowering when the sampled-value explicit clocking
+    // argument is structurally equivalent to the enclosing assertion clock,
+    // since both sample on the same event stream.
+    auto isEquivalentTimingControl = [](const slang::ast::TimingControl &lhs,
+                                        const slang::ast::TimingControl &rhs) {
+      if (lhs.isEquivalentTo(rhs))
+        return true;
+      auto *lhsSignal = lhs.as_if<slang::ast::SignalEventControl>();
+      auto *rhsSignal = rhs.as_if<slang::ast::SignalEventControl>();
+      if (!lhsSignal || !rhsSignal)
+        return false;
+      if (lhsSignal->edge != rhsSignal->edge)
+        return false;
+      if (!lhsSignal->expr.isEquivalentTo(rhsSignal->expr))
+        return false;
+      if ((lhsSignal->iffCondition == nullptr) !=
+          (rhsSignal->iffCondition == nullptr))
+        return false;
+      if (lhsSignal->iffCondition &&
+          !lhsSignal->iffCondition->isEquivalentTo(*rhsSignal->iffCondition))
+        return false;
+      return true;
+    };
+    bool explicitClockMatchesAssertionClock = false;
+    if (hasClockingArg && inAssertionExpr && clockingCtrl) {
+      if (currentAssertionClock &&
+          isEquivalentTimingControl(*clockingCtrl, *currentAssertionClock))
+        explicitClockMatchesAssertionClock = true;
+      else if (currentAssertionTimingControl &&
+               isEquivalentTimingControl(*clockingCtrl,
+                                         *currentAssertionTimingControl))
+        explicitClockMatchesAssertionClock = true;
+    }
+    bool needsClockedHelper = enableExpr || !disableExprs.empty() ||
+                              (hasClockingArg &&
+                               !explicitClockMatchesAssertionClock);
     if (clockingCtrl && inAssertionExpr && needsClockedHelper) {
       return lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,

@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 473 - February 8, 2026
+
+### Summary
+
+Fixed explicit same-clock sampled-value lowering so `$rose/$fell/...` with an
+explicit clock argument equivalent to the enclosing assertion clock does not
+introduce helper-state skew in BMC.
+
+### Fixes
+
+1. **Equivalent-clock explicit sampled-value lowering**
+   - Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` to detect
+     explicit sampled-value clocking controls that are equivalent to the
+     surrounding assertion clock.
+   - Added a robust fallback for signal-event controls (edge + expression + iff
+     condition structural checks) in addition to generic
+     `TimingControl::isEquivalentTo`.
+   - For equivalent-clock and no-enable/no-disable cases, lowering now uses
+     direct `moore.past` expressions instead of helper procedures.
+
+2. **New BMC regression**
+   - Added
+     `test/Tools/circt-bmc/sva-rose-explicit-same-clock-nonoverlap-unsat-e2e.sv`.
+   - Locks `UNSAT` for:
+     - `@(posedge clk) cyc % 2 == 0 |=> $rose(val, @(posedge clk))`.
+
+3. **ImportVerilog coverage extension**
+   - Extended
+     `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv` with
+     `sampled_explicit_same_clock_in_assert`.
+   - Confirms this equivalent-clock explicit form lowers through `moore.past`
+     and not helper procedures.
+
+### Validation
+
+- Targeted:
+  - `/tmp/rose_explicit_sameclk.sv`: `BMC_RESULT=UNSAT`
+- Lit:
+  - `test/Conversion/ImportVerilog/sva-value-change.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+  - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`: PASS
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+
 ## Iteration 472 - February 8, 2026
 
 ### Summary
