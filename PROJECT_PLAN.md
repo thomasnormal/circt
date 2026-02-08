@@ -16510,6 +16510,34 @@ ninja -C build circt-verilog
     notifiers are bundled yet.
   - Retention policy remains count-based only (no size/age policy).
 
+### Iteration 630
+- Formal trend-aware strict gating in `utils/run_formal_all.sh`:
+  - Added `--baseline-window N` (default `1`) for strict-gate comparisons.
+  - Gate metrics now compare against the best values across the latest `N`
+    baseline rows per `(suite, mode)`:
+    - `fail`, `error`, `xpass`: compare against window minimum
+    - `pass_rate`: compare against window maximum
+  - Added strict-mode history sufficiency check:
+    - with `--strict-gate`, fail when baseline history count is below
+      `--baseline-window`.
+  - Extended gate diagnostics to include `window=<N>`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - adapted existing strict-gate diagnostics for `window=1`
+    - added `STRICTWINDOW` case proving `--baseline-window 2` catches
+      pass-rate regression against stronger older baseline rows.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `--baseline-window` usage.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Window selection is count-based by row count; no time-duration windows
+    (e.g., last N days) yet.
+  - Gate policy still lacks configurable tolerance thresholds beyond exact
+    count/rate comparisons.
+
 ---
 
 ## Architecture Reference

@@ -31228,3 +31228,43 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Notification integration is hook-based only; built-in webhook/email adapters
   are not provided yet.
 - Retention policy remains count-based only; no size/age policy exists.
+
+## Iteration 630 - February 8, 2026
+
+### Formal Trend-Aware Strict Gating
+
+- Added `--baseline-window N` to `utils/run_formal_all.sh` (default: `1`).
+- Strict-gate comparison now supports trailing-window evaluation per
+  `(suite, mode)`:
+  - `fail`, `error`, `xpass` regressions are checked against the window minimum
+  - `pass_rate` regressions are checked against the window maximum
+- Added strict-mode baseline sufficiency checks:
+  - `--strict-gate` now fails when available baseline history rows are fewer
+    than `--baseline-window`.
+- Extended strict-gate diagnostics with explicit `window=<N>` context.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - updated existing checks for new `window=1` diagnostic suffix
+    - added `STRICTWINDOW` case proving `--baseline-window 2` catches
+      pass-rate regression against stronger older baseline history
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added trend-aware strict-gate usage with `--baseline-window`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Baseline windowing is row-count based; duration-based windows are not yet
+  supported.
+- Threshold/tolerance policies for noisy suites are not yet configurable.
