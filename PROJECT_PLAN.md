@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 487)
+## Current Status - February 8, 2026 (Iteration 488)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed non-vacuous derived-clock harness forcing; next: multiclock traceability diagnostics + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed mixed-event source provenance metadata; next: SMT-level trace plumb + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,56 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 488
+
+1. **Mixed multiclock traceability diagnostics in event-list lowering**
+   - Updated `lib/Conversion/ImportVerilog/TimingControls.cpp`:
+     - mixed sequence/signal procedural event-list lowering now annotates
+       wakeup metadata via:
+       - `moore.event_sources = ["sequence", "signal[i]:<edge>[:iff]", ...]`
+   - Metadata is attached where wakeup dispatch is decided and is visible in
+     lowered Moore IR for:
+     - equivalent-clock mixed lists,
+     - different-clock mixed lists, and
+     - no-edge mixed signal-event forms.
+   - This is a first step toward richer multiclock BMC/LEC trace diagnostics.
+
+2. **Regression coverage**
+   - Updated import regression:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Added `CHECK` coverage for `moore.event_sources` on:
+     - mixed equivalent-clock `@(seq or posedge clk iff b)`,
+     - mixed different-clock `@(seq or posedge clk2 iff b)`,
+     - mixed no-edge `@(seq or b)`.
+
+3. **Validation**
+   - Import sanity:
+     - `circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv`
+       emits `moore.event_sources` entries as expected.
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke (representative samples):
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Procedural `@property` is still frontend-blocked.
+   - `moore.event_sources` diagnostics are import-level only; they are not yet
+     surfaced in SMT witness/counterexample reporting.
+   - High-value next work:
+     - plumb source metadata through LowerToBMC/VerifToSMT for named witness
+       diagnostics,
+     - add equivalent metadata for sequence-only multiclock OR lowering,
+     - upstream/design strategy for procedural property-like event controls.
 
 ### Session Summary - Iteration 487
 
