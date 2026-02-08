@@ -445,7 +445,7 @@ static void printMixedEventSources(
       }
       llvm::errs() << "\n";
 
-      if (!modelValues || maxStep == 0 || !detailSet)
+      if (!modelValues || !detailSet)
         continue;
       std::map<unsigned, SmallVector<std::string, 4>> activeArmsByStep;
       for (unsigned j = 0; j < detailSet.size(); ++j) {
@@ -493,7 +493,8 @@ static void printMixedEventSources(
                 dyn_cast_or_null<StringAttr>(detail.get("label")))
           label = detailLabel.getValue();
         SmallVector<unsigned, 8> activeSteps;
-        for (unsigned step = 1; step <= maxStep; ++step) {
+        unsigned startStep = kind == "sequence" ? 0 : 1;
+        for (unsigned step = startStep; step <= maxStep; ++step) {
           bool armFired = false;
           if (kind == "signal") {
             auto prevIt = armWave->find(step - 1);

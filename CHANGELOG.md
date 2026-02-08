@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 498 - February 8, 2026
+
+### Summary
+
+Fixed counterexample activity reporting so sequence arms can be reported at
+`step 0` when only unsuffixed model values are present.
+
+### Fixes
+
+1. **Sequence step-0 handling**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Activity iteration now starts at:
+     - `step 0` for sequence arms
+     - `step 1` for signal arms (edge-based)
+   - This restores sequence activity diagnostics for SAT models that do not
+     provide suffixed step values.
+
+2. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-sequence-step0.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`
+   - The new test verifies:
+     - sequence arm activity at `step 0`
+     - per-step fired-arm summary containing `step 0`
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Arm attribution is still model-derived estimation, not explicit solver
+  witness extraction.
+- Complex/internal expression naming remains best-effort.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 497 - February 8, 2026
 
 ### Summary
