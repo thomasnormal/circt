@@ -12282,6 +12282,63 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 559
+- Yosys SVA BMC history future-skew drop telemetry:
+  - Added structured drop-event JSONL output for
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn`.
+  - New opt-in output sink:
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE`.
+  - Future-skew dropped rows now emit per-row events for both history formats:
+    - `history_format="tsv"`
+    - `history_format="jsonl"`
+  - Event payload fields:
+    - `generated_at_utc`, `reason`, `history_file`, `history_format`,
+      `line`, `row_generated_at_utc`, `run_id`
+  - Added aggregate warning summary when warn-policy drops occur:
+    - `dropped future-skew history rows (tsv=..., jsonl=...)`
+- Regression tests:
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`:
+    - validates drop-event JSONL emission for TSV and JSONL dropped rows.
+    - validates aggregate warning summary line.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 43/43 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Drop-event telemetry is file-sink based and does not yet integrate with a
+    counters/metrics backend.
+  - Parser-backed validation still depends on `python3`.
+  - Legacy-migrated rows still carry synthetic timestamp metadata.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add non-Python JSON parser path for portability.
+  - Add bounded drop-event retention/rotation policy controls.
+  - Add per-reason/per-source counters in machine-readable summary outputs.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

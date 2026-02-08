@@ -42,6 +42,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-86400}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY:-error}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
@@ -1896,6 +1897,8 @@ emit_mode_summary_outputs() {
     exit 1
   fi
   local tsv_row
+  local history_drop_future_tsv=0
+  local history_drop_future_jsonl=0
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
     "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
@@ -2064,6 +2067,36 @@ PY
     return 1
   }
 
+  json_escape() {
+    local value="$1"
+    printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  }
+
+  emit_history_drop_event() {
+    local history_file="$1"
+    local history_format="$2"
+    local lineno="$3"
+    local row_generated_at="$4"
+    local run_id="$5"
+    local reason="$6"
+    [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] || return 0
+    local now_utc
+    local escaped_file
+    local escaped_format
+    local escaped_generated
+    local escaped_run_id
+    local escaped_reason
+    now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    escaped_file="$(json_escape "$history_file")"
+    escaped_format="$(json_escape "$history_format")"
+    escaped_generated="$(json_escape "$row_generated_at")"
+    escaped_run_id="$(json_escape "$run_id")"
+    escaped_reason="$(json_escape "$reason")"
+    printf '{"generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}\n' \
+      "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id" \
+      >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE"
+  }
+
   trim_history_tsv() {
     local file="$1"
     local max_entries="$2"
@@ -2104,6 +2137,9 @@ PY
         if ((max_future_skew_secs > 0 && row_epoch > max_future_epoch)); then
           if [[ "$YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY" == "warn" ]]; then
             echo "warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE $file at line $((i + 1)); dropping row due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
+            history_drop_future_tsv=$((history_drop_future_tsv + 1))
+            emit_history_drop_event \
+              "$file" "tsv" "$((i + 1))" "$generated_at" "${cols[1]:-}" "future_skew"
             continue
           fi
           echo "error: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE $file at line $((i + 1))" >&2
@@ -2200,6 +2236,7 @@ PY
     local -a lines=()
     local line
     local generated_at
+    local run_id
     local row_epoch
     local now_epoch
     local cutoff_epoch
@@ -2230,6 +2267,10 @@ PY
         if ((max_future_skew_secs > 0 && row_epoch > max_future_epoch)); then
           if [[ "$YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY" == "warn" ]]; then
             echo "warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1)); dropping row due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
+            history_drop_future_jsonl=$((history_drop_future_jsonl + 1))
+            run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+            emit_history_drop_event \
+              "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "future_skew"
             continue
           fi
           echo "error: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1))" >&2
@@ -2328,6 +2369,10 @@ PY
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
+  fi
+
+  if ((history_drop_future_tsv > 0 || history_drop_future_jsonl > 0)); then
+    echo "warning: dropped future-skew history rows (tsv=${history_drop_future_tsv}, jsonl=${history_drop_future_jsonl}) due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
   fi
 }
 
