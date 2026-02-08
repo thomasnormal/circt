@@ -95,6 +95,23 @@ total=0
 skipped=0
 xfails=0
 xpasses=0
+mode_total=0
+mode_out_pass=0
+mode_out_fail=0
+mode_out_xfail=0
+mode_out_xpass=0
+mode_out_epass=0
+mode_out_efail=0
+mode_out_unskip=0
+mode_skipped=0
+mode_skipped_pass=0
+mode_skipped_fail=0
+mode_skipped_expected=0
+mode_skipped_unexpected=0
+mode_skip_reason_vhdl=0
+mode_skip_reason_fail_no_macro=0
+mode_skip_reason_no_property=0
+mode_skip_reason_other=0
 expect_diff_added=0
 expect_diff_removed=0
 expect_diff_changed=0
@@ -1814,39 +1831,47 @@ report_case_outcome() {
   local mode="$2"
   local passed="$3"
   local profile="$4"
+  mode_total=$((mode_total + 1))
   record_observed_case "$base" "$mode" "$profile" "$passed"
   local expected
   expected="$(lookup_expected_case "$base" "$mode" "$profile")"
   case "$expected" in
     skip)
       echo "UNSKIP($mode): $base [$profile]"
+      mode_out_unskip=$((mode_out_unskip + 1))
       failures=$((failures + 1))
       ;;
     xfail)
       if [[ "$passed" == "1" ]]; then
         echo "XPASS($mode): $base [$profile]"
+        mode_out_xpass=$((mode_out_xpass + 1))
         xpasses=$((xpasses + 1))
         if [[ "$ALLOW_XPASS" != "1" ]]; then
           failures=$((failures + 1))
         fi
       else
         echo "XFAIL($mode): $base [$profile]"
+        mode_out_xfail=$((mode_out_xfail + 1))
         xfails=$((xfails + 1))
       fi
       ;;
     fail)
       if [[ "$passed" == "1" ]]; then
         echo "EPASS($mode): $base [$profile]"
+        mode_out_epass=$((mode_out_epass + 1))
         failures=$((failures + 1))
       else
         echo "EFAIL($mode): $base [$profile]"
+        mode_out_efail=$((mode_out_efail + 1))
       fi
       ;;
     pass)
       if [[ "$passed" == "1" ]]; then
         echo "PASS($mode): $base"
+        mode_out_pass=$((mode_out_pass + 1))
       else
         echo "FAIL($mode): $base"
+        mode_out_fail=$((mode_out_fail + 1))
         failures=$((failures + 1))
       fi
       ;;
@@ -1859,6 +1884,18 @@ report_skipped_case() {
   local profile="$3"
   local reason="$4"
   local emit_line="${5:-1}"
+  mode_total=$((mode_total + 1))
+  mode_skipped=$((mode_skipped + 1))
+  case "$mode" in
+    pass) mode_skipped_pass=$((mode_skipped_pass + 1)) ;;
+    fail) mode_skipped_fail=$((mode_skipped_fail + 1)) ;;
+  esac
+  case "$reason" in
+    vhdl) mode_skip_reason_vhdl=$((mode_skip_reason_vhdl + 1)) ;;
+    fail-no-macro) mode_skip_reason_fail_no_macro=$((mode_skip_reason_fail_no_macro + 1)) ;;
+    no-property) mode_skip_reason_no_property=$((mode_skip_reason_no_property + 1)) ;;
+    *) mode_skip_reason_other=$((mode_skip_reason_other + 1)) ;;
+  esac
   record_skipped_case "$base" "$mode" "$profile"
   local expected
   expected="$(lookup_expected_case "$base" "$mode" "$profile")"
@@ -1866,11 +1903,13 @@ report_skipped_case() {
     echo "SKIP($reason): $base"
   fi
   if [[ "$expected" == "skip" ]]; then
+    mode_skipped_expected=$((mode_skipped_expected + 1))
     if [[ "$emit_line" == "1" ]]; then
       echo "SKIP_EXPECTED($mode): $base [$profile]"
     fi
     return
   fi
+  mode_skipped_unexpected=$((mode_skipped_unexpected + 1))
   if [[ "$EXPECT_SKIP_STRICT" == "1" ]]; then
     echo "UNEXPECTED_SKIP($mode): $base [$profile]"
     failures=$((failures + 1))
@@ -2012,4 +2051,5 @@ if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && 
 fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
+echo "yosys SVA mode summary: total=$mode_total pass=$mode_out_pass fail=$mode_out_fail xfail=$mode_out_xfail xpass=$mode_out_xpass epass=$mode_out_epass efail=$mode_out_efail unskip=$mode_out_unskip skipped=$mode_skipped skip_pass=$mode_skipped_pass skip_fail=$mode_skipped_fail skip_expected=$mode_skipped_expected skip_unexpected=$mode_skipped_unexpected skip_reason_vhdl=$mode_skip_reason_vhdl skip_reason_fail-no-macro=$mode_skip_reason_fail_no_macro skip_reason_no-property=$mode_skip_reason_no_property skip_reason_other=$mode_skip_reason_other"
 exit "$failures"
