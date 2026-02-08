@@ -32141,3 +32141,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Unused-budget gate currently has no warning-only mode.
 - No automatic stale-row rewrite workflow is provided yet.
+
+## Iteration 649 - February 8, 2026
+
+### Formal Expectation Refresh Automation
+
+- Added expected-budget refresh support in `utils/run_formal_all.sh`:
+  - `--refresh-expected-failures-file <file>`
+  - rewrites `suite/mode/expected_fail/expected_error/notes` from current run
+  - preserves existing `notes` by `(suite, mode)`
+- Added expected-case refresh support:
+  - `--refresh-expected-failure-cases-file <file>`
+  - `--refresh-expected-failure-cases-default-expires-on <YYYY-MM-DD>`
+  - rewrites case rows from currently observed fail-like statuses
+    (`FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`)
+  - preserves existing `expires_on`/`reason` by
+    `(suite, mode, id_kind, id, status)`
+
+### Refresh Fallback Semantics
+
+- Case refresh now synthesizes aggregate rows from `summary.tsv` when no
+  detailed fail-like rows were observed for a suite/mode.
+- This fixes summary-only lanes dropping aggregate refreshed cases.
+- Expected-case strict gating semantics are preserved (no behavior regression in
+  `--fail-on-unexpected-failure-cases` paths).
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added refresh-budget and refresh-case scenarios
+    - verifies metadata preservation (`notes`, `reason`, `expires_on`)
+  - `test/Tools/run-formal-all-baselines.test`
+    - updated baseline TSV header expectation to current schema:
+      `date suite mode total pass fail xfail xpass error skip pass_rate result`
+- Updated docs:
+  - `docs/FormalRegression.md`
+    - added refresh option usage and semantics
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- Strict gate and OpenTitan focused tests:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-refresh-cases-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+
+### Remaining Limitations
+
+- Refresh flow is currently all-or-nothing rewrite (no filter/scoping knobs).
+- Refreshed case rows are status-specific; there is no auto-canonicalization to
+  status=`ANY`.
+- No built-in prune-only workflow for unmatched/expired rows.

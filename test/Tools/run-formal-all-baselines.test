@@ -5,5 +5,5 @@
 // RUN: cat %t/baselines.tsv | FileCheck %s --check-prefix=BASE
 // RUN: cat %t/plan.md | FileCheck %s --check-prefix=PLAN
 
-// BASE: date{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}result
+// BASE: date{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}total{{[[:space:]]+}}pass{{[[:space:]]+}}fail{{[[:space:]]+}}xfail{{[[:space:]]+}}xpass{{[[:space:]]+}}error{{[[:space:]]+}}skip{{[[:space:]]+}}pass_rate{{[[:space:]]+}}result
 // PLAN: | Date | Suite | Mode | Result | Notes |

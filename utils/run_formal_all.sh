@@ -32,6 +32,8 @@ Options:
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
                          Fail when expected-failures rows are unused
+  --refresh-expected-failures-file FILE
+                         Rewrite expected-failures TSV from current run
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
   --fail-on-unexpected-failure-cases
@@ -40,6 +42,10 @@ Options:
                          Fail when any expected case is expired by expires_on
   --fail-on-unmatched-expected-failure-cases
                          Fail when expected cases have no observed match
+  --refresh-expected-failure-cases-file FILE
+                         Rewrite expected-failure-cases TSV from current run
+  --refresh-expected-failure-cases-default-expires-on YYYY-MM-DD
+                         Default expires_on for newly added refreshed case rows
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -83,10 +89,13 @@ FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
+REFRESH_EXPECTED_FAILURES_FILE=""
 EXPECTED_FAILURE_CASES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURE_CASES=0
 FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
 FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=0
+REFRESH_EXPECTED_FAILURE_CASES_FILE=""
+REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON=""
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -153,6 +162,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
       FAIL_ON_UNUSED_EXPECTED_FAILURES=1; shift ;;
+    --refresh-expected-failures-file)
+      REFRESH_EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expected-failure-cases-file)
       EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
     --fail-on-unexpected-failure-cases)
@@ -161,6 +172,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=1; shift ;;
     --fail-on-unmatched-expected-failure-cases)
       FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=1; shift ;;
+    --refresh-expected-failure-cases-file)
+      REFRESH_EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
+    --refresh-expected-failure-cases-default-expires-on)
+      REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$2"; shift 2 ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -211,6 +226,12 @@ fi
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" && ! -r "$EXPECTED_FAILURE_CASES_FILE" ]]; then
   echo "expected-failure-cases file not readable: $EXPECTED_FAILURE_CASES_FILE" >&2
   exit 1
+fi
+if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" ]]; then
+  if ! [[ "$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "invalid --refresh-expected-failure-cases-default-expires-on: expected YYYY-MM-DD" >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "$CIRCT_VERILOG_BIN_AVIP" ]]; then
@@ -751,6 +772,62 @@ if fail_on_unused and unused_expectations:
 PY
 fi
 
+if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
+  OUT_DIR="$OUT_DIR" \
+  SUMMARY_FILE="$OUT_DIR/summary.tsv" \
+  REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
+  python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+summary_path = Path(os.environ["SUMMARY_FILE"])
+out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
+
+existing_notes = {}
+if out_path.exists():
+  with out_path.open() as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    for row in reader:
+      suite = (row.get("suite") or "").strip()
+      mode = (row.get("mode") or "").strip()
+      if not suite or not mode:
+        continue
+      existing_notes[(suite, mode)] = row.get("notes", "")
+
+rows = []
+with summary_path.open() as f:
+  reader = csv.DictReader(f, delimiter="\t")
+  for row in reader:
+    suite = row["suite"]
+    mode = row["mode"]
+    rows.append(
+        {
+            "suite": suite,
+            "mode": mode,
+            "expected_fail": int(row.get("fail", "0") or 0),
+            "expected_error": int(row.get("error", "0") or 0),
+            "notes": existing_notes.get((suite, mode), ""),
+        }
+    )
+
+rows.sort(key=lambda r: (r["suite"], r["mode"]))
+out_path.parent.mkdir(parents=True, exist_ok=True)
+with out_path.open("w", newline="") as f:
+  writer = csv.DictWriter(
+      f,
+      fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
+      delimiter="\t",
+  )
+  writer.writeheader()
+  for row in rows:
+    writer.writerow(row)
+
+print(f"refreshed expected-failures file: {out_path}")
+print(f"refreshed expected-failures rows: {len(rows)}")
+PY
+fi
+
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
       "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" || \
       "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" || \
@@ -790,7 +867,7 @@ result_sources = [
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
-known_detailed_pairs = {
+detailed_source_pairs = {
     (suite, mode) for suite, mode, _ in result_sources if suite and mode
 }
 detailed_pairs_observed = set()
@@ -838,7 +915,7 @@ if summary_path.exists():
       mode = row.get("mode", "")
       if not suite or not mode:
         continue
-      if (suite, mode) in known_detailed_pairs or (suite, mode) in detailed_pairs_observed:
+      if (suite, mode) in detailed_source_pairs or (suite, mode) in detailed_pairs_observed:
         continue
       summary = row.get("summary", "")
       try:
@@ -1098,6 +1175,173 @@ if fail_on_unmatched and unmatched_rows:
         f"id={row['id']} status={row['status']}"
     )
   raise SystemExit(1)
+PY
+fi
+
+if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
+  OUT_DIR="$OUT_DIR" \
+  REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
+  REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
+  python3 - <<'PY'
+import csv
+import datetime as dt
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
+default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
+
+if default_expires:
+  try:
+    dt.date.fromisoformat(default_expires)
+  except Exception:
+    raise SystemExit(
+        "invalid --refresh-expected-failure-cases-default-expires-on: "
+        f"{default_expires}"
+    )
+
+existing_meta = {}
+if out_path.exists():
+  with out_path.open() as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    for row in reader:
+      suite = (row.get("suite") or "").strip()
+      mode = (row.get("mode") or "").strip()
+      case_id = (row.get("id") or "").strip()
+      id_kind = (row.get("id_kind") or "base").strip().lower() or "base"
+      status = (row.get("status") or "ANY").strip().upper() or "ANY"
+      if not suite or not mode or not case_id:
+        continue
+      key = (suite, mode, id_kind, case_id, status)
+      existing_meta[key] = {
+          "expires_on": (row.get("expires_on") or "").strip(),
+          "reason": row.get("reason", ""),
+      }
+
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+result_sources = [
+    ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+    ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+    ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+    ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+    ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+    ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("", "", out_dir / "avip-results.txt"),
+]
+detailed_pairs_observed = set()
+
+observed = []
+for default_suite, default_mode, path in result_sources:
+  if not path.exists():
+    continue
+  with path.open() as f:
+    for line in f:
+      line = line.rstrip("\n")
+      if not line:
+        continue
+      parts = line.split("\t")
+      status = parts[0].strip().upper() if parts else ""
+      if status not in fail_like_statuses:
+        continue
+      suite = (
+          parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+      )
+      mode = (
+          parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+      )
+      if not suite or not mode:
+        continue
+      base = parts[1].strip() if len(parts) > 1 else ""
+      file_path = parts[2].strip() if len(parts) > 2 else ""
+      detailed_pairs_observed.add((suite, mode))
+      observed.append(
+          {
+              "suite": suite,
+              "mode": mode,
+              "status": status,
+              "base": base,
+              "path": file_path,
+          }
+      )
+
+summary_path = out_dir / "summary.tsv"
+if summary_path.exists():
+  with summary_path.open() as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    for row in reader:
+      suite = row.get("suite", "")
+      mode = row.get("mode", "")
+      if not suite or not mode:
+        continue
+      if (suite, mode) in detailed_pairs_observed:
+        continue
+      summary = row.get("summary", "")
+      for summary_key, status in (
+          ("fail", "FAIL"),
+          ("error", "ERROR"),
+          ("xfail", "XFAIL"),
+          ("xpass", "XPASS"),
+      ):
+        try:
+          count = int(row.get(summary_key, "0"))
+        except Exception:
+          count = 0
+        if count <= 0:
+          continue
+        observed.append(
+            {
+                "suite": suite,
+                "mode": mode,
+                "status": status,
+                "base": "__aggregate__",
+                "path": summary,
+            }
+        )
+
+refreshed = []
+seen = set()
+for obs in observed:
+  if obs["base"] == "__aggregate__":
+    id_kind = "aggregate"
+    case_id = "__aggregate__"
+  elif obs["base"]:
+    id_kind = "base"
+    case_id = obs["base"]
+  else:
+    id_kind = "path"
+    case_id = obs["path"]
+  key = (obs["suite"], obs["mode"], id_kind, case_id, obs["status"])
+  if key in seen:
+    continue
+  seen.add(key)
+  meta = existing_meta.get(key, {})
+  refreshed.append(
+      {
+          "suite": obs["suite"],
+          "mode": obs["mode"],
+          "id": case_id,
+          "id_kind": id_kind,
+          "status": obs["status"],
+          "expires_on": meta.get("expires_on", "") or default_expires,
+          "reason": meta.get("reason", ""),
+      }
+  )
+
+refreshed.sort(key=lambda r: (r["suite"], r["mode"], r["id_kind"], r["id"], r["status"]))
+out_path.parent.mkdir(parents=True, exist_ok=True)
+with out_path.open("w", newline="") as f:
+  writer = csv.DictWriter(
+      f,
+      fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
+      delimiter="\t",
+  )
+  writer.writeheader()
+  for row in refreshed:
+    writer.writerow(row)
+
+print(f"refreshed expected-failure-cases file: {out_path}")
+print(f"refreshed expected-failure-cases rows: {len(refreshed)}")
 PY
 fi
 

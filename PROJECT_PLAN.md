@@ -17141,6 +17141,48 @@ ninja -C build circt-verilog
   - Unused-budget gate is currently binary (no warning-only mode).
   - No automatic baseline/budget file rewrite for stale-row cleanup.
 
+### Iteration 649
+- Formal expectation-file refresh automation in `utils/run_formal_all.sh`:
+  - Added `--refresh-expected-failures-file <file>`:
+    - rewrites expected-failure budgets from current `summary.tsv`
+    - preserves existing `notes` by `(suite, mode)` when refreshing
+  - Added `--refresh-expected-failure-cases-file <file>`:
+    - rewrites expected-case rows from currently observed fail-like statuses
+      (`FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`)
+    - preserves existing `expires_on`/`reason` by
+      `(suite, mode, id_kind, id, status)` key
+  - Added `--refresh-expected-failure-cases-default-expires-on YYYY-MM-DD`:
+    - default expiry for newly discovered refreshed case rows
+- Refresh-specific fallback hardening:
+  - Case-refresh summary fallback now synthesizes aggregate rows when no
+    detailed fail-like rows were observed for a suite/mode lane.
+  - This closes the gap where summary-only lanes (e.g. fake/summary-only test
+    harness lanes) could drop aggregate expected-case rows during refresh.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - validates budget refresh output (`REFRESHBUDGET`)
+    - validates case refresh output (`REFRESHCASE`)
+    - verifies metadata preservation (`notes`, `reason`, `expires_on`)
+  - Updated `test/Tools/run-formal-all-baselines.test` header check to match
+    the current baseline TSV schema
+    (`date suite mode total pass fail xfail xpass error skip pass_rate result`)
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-refresh-cases-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+- Current limitations / debt:
+  - Refresh is full-rewrite only (no selective include/exclude filters by suite,
+    mode, status, or case-id).
+  - Case refresh currently emits one row per observed status; no collapsing to
+    status=`ANY` policy.
+  - No built-in "prune only unmatched/expired rows" workflow yet.
+
 ---
 
 ## Architecture Reference
