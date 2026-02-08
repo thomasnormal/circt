@@ -1,0 +1,71 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf '# base\nghost\tpass\tknown\tpass\nghost\tpass\tknown\tpass\nghost\tpass\tknown\txfail\n*\t*\t*\tpass\nsimple\t*\t*\tpass\nsimple\tpass\txprop\tfail\n' > %t/expect-template.txt
+// RUN: cp %t/expect-template.txt %t/expect-dry.txt
+// RUN: cp %t/expect-template.txt %t/expect-apply.txt
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-dry.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=dry-run \
+// RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/dry.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
+// RUN: FileCheck %s --check-prefix=DRYOUT < %t/dry.out
+// RUN: sed 's/\t/|/g' %t/expect-dry.txt | FileCheck %s --check-prefix=DRYFILE
+// RUN: sed 's/\t/|/g' %t/dry.diff | FileCheck %s --check-prefix=DRYDIFF
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=apply \
+// RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN: FileCheck %s --check-prefix=APPLYOUT < %t/apply.out
+// RUN: sed 's/\t/|/g' %t/expect-apply.txt | FileCheck %s --check-prefix=APPLYFILE
+// RUN: sed 's/\t/|/g' %t/apply.diff | FileCheck %s --check-prefix=APPLYDIFF
+
+// DRYOUT: EXPECT_LINT_APPLY: mode=dry-run file={{.*expect-dry.txt}} drop=2 set=1 changed=1
+// DRYOUT: EXPECT_LINT_APPLY: mode=dry-run files=1 changed=1
+// DRYOUT: EXPECT_LINT_SUMMARY: issues=5
+// DRYOUT: PASS(pass): simple
+// DRYOUT: SKIP(fail-no-macro): simple
+// DRYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// DRYFILE: # base
+// DRYFILE-DAG: ghost|pass|known|pass
+// DRYFILE-DAG: ghost|pass|known|xfail
+// DRYFILE-DAG: *|*|*|pass
+// DRYFILE-DAG: simple|*|*|pass
+// DRYFILE-DAG: simple|pass|xprop|fail
+
+// DRYDIFF: --- {{.*}}
+// DRYDIFF: +++ {{.*}}
+// DRYDIFF-DAG: -ghost|pass|known|pass
+// DRYDIFF-DAG: -ghost|pass|known|xfail
+// DRYDIFF-DAG: -*|*|*|pass
+// DRYDIFF-DAG: -simple|*|*|pass
+// DRYDIFF-DAG: +simple|*|*|fail
+
+// APPLYOUT: EXPECT_LINT_APPLY: mode=apply file={{.*expect-apply.txt}} drop=2 set=1 changed=1
+// APPLYOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1
+// APPLYOUT: EXPECT_LINT_SUMMARY: issues=5
+// APPLYOUT: PASS(pass): simple
+// APPLYOUT: SKIP(fail-no-macro): simple
+// APPLYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// APPLYFILE: # base
+// APPLYFILE-NOT: ghost|pass|known
+// APPLYFILE-NOT: *|*|*|pass
+// APPLYFILE-DAG: simple|pass|xprop|fail
+// APPLYFILE-DAG: simple|*|*|fail
+
+// APPLYDIFF: --- {{.*}}
+// APPLYDIFF: +++ {{.*}}
+// APPLYDIFF-DAG: -ghost|pass|known|pass
+// APPLYDIFF-DAG: -ghost|pass|known|xfail
+// APPLYDIFF-DAG: -*|*|*|pass
+// APPLYDIFF-DAG: -simple|*|*|pass
+// APPLYDIFF-DAG: +simple|*|*|fail

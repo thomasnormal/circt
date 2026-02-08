@@ -10606,6 +10606,67 @@ ninja -C build circt-verilog
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
   - Continue first-class four-state value/unknown propagation work.
 
+### Iteration 531
+- Yosys SVA BMC safe lint auto-apply with dry-run diffs:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_LINT_APPLY_MODE` (`off`, `dry-run`, `apply`)
+    - `EXPECT_LINT_APPLY_DIFF_FILE`
+  - Added safe fix application engine for concrete lint artifacts:
+    - consumes `EXPECT_LINT_FIXES_FILE` rows
+    - applies only safe actions:
+      - `drop-row`
+      - `set-row`
+    - intentionally ignores non-safe suggestions (for example `add-row`).
+  - Added source-label resolution for artifact rows:
+    - `EXPECT_FILE` -> actual `EXPECT_FILE` path
+    - `EXPECT_REGEN_OVERRIDE_FILE` -> actual override file path
+  - Added deterministic per-file apply summary:
+    - `EXPECT_LINT_APPLY: mode=<...> file=<...> drop=<n> set=<n> changed=<0|1>`
+    - aggregate:
+      - `EXPECT_LINT_APPLY: mode=<...> files=<n> changed=<n>`
+  - Added optional unified diff emission to `EXPECT_LINT_APPLY_DIFF_FILE`.
+  - Preserved safety semantics:
+    - drop wins over set for the same key
+    - unchanged files are left untouched.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-lint-apply.test`:
+    - validates dry-run does not modify expectation files
+    - validates apply mode rewrites only safe fix classes
+    - validates diff artifact output and per-file/app aggregate summaries
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 16/16 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Auto-apply is intentionally restricted to safe classes and still skips
+    `add-row` suggestions from ambiguity findings.
+  - Apply mode currently rewrites only keys touched by lint fixes and does not
+    yet support conflict-aware canonical sorting of untouched rows.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add optional reviewed apply mode for selected `add-row` ambiguity fixes.
+  - Add canonical row ordering/normalization mode with stable formatter output.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

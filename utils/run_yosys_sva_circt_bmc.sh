@@ -57,6 +57,8 @@ EXPECT_LINT_FAIL_ON_ISSUES="${EXPECT_LINT_FAIL_ON_ISSUES:-0}"
 EXPECT_LINT_FILE="${EXPECT_LINT_FILE:-}"
 EXPECT_LINT_HINTS_FILE="${EXPECT_LINT_HINTS_FILE:-}"
 EXPECT_LINT_FIXES_FILE="${EXPECT_LINT_FIXES_FILE:-}"
+EXPECT_LINT_APPLY_MODE="${EXPECT_LINT_APPLY_MODE:-off}"
+EXPECT_LINT_APPLY_DIFF_FILE="${EXPECT_LINT_APPLY_DIFF_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -88,6 +90,17 @@ declare -A expected_cases
 declare -A observed_cases
 declare -A regen_override_cases
 declare -A suite_tests
+
+case "$EXPECT_LINT_APPLY_MODE" in
+  off|dry-run|apply) ;;
+  *)
+    echo "invalid EXPECT_LINT_APPLY_MODE: $EXPECT_LINT_APPLY_MODE (expected off|dry-run|apply)" >&2
+    exit 1
+    ;;
+esac
+if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_APPLY_MODE" != "off" ]] && [[ -z "$EXPECT_LINT_FIXES_FILE" ]]; then
+  EXPECT_LINT_FIXES_FILE="$tmpdir/expect-lint-fixes.tsv"
+fi
 if [[ "$EXPECT_LINT" == "1" && -n "$EXPECT_LINT_FILE" ]]; then
   : > "$EXPECT_LINT_FILE"
 fi
@@ -144,6 +157,180 @@ format_row_spec() {
   local key="$1"
   local expected="$2"
   printf '%s|%s' "$key" "$expected"
+}
+
+resolve_lint_fix_source_file() {
+  local source="$1"
+  case "$source" in
+    EXPECT_FILE)
+      if [[ -n "$EXPECT_FILE" ]]; then
+        echo "$EXPECT_FILE"
+      else
+        echo ""
+      fi
+      ;;
+    EXPECT_REGEN_OVERRIDE_FILE)
+      if [[ -n "$EXPECT_REGEN_OVERRIDE_FILE" ]]; then
+        echo "$EXPECT_REGEN_OVERRIDE_FILE"
+      else
+        echo ""
+      fi
+      ;;
+    *)
+      echo "$source"
+      ;;
+  esac
+}
+
+append_apply_diff() {
+  local diff_file="$1"
+  local source_file="$2"
+  local changed="$3"
+  if [[ -z "$EXPECT_LINT_APPLY_DIFF_FILE" ]]; then
+    return 0
+  fi
+  if [[ "$changed" == "1" ]]; then
+    {
+      printf '=== %s ===\n' "$source_file"
+      cat "$diff_file"
+      printf '\n'
+    } >> "$EXPECT_LINT_APPLY_DIFF_FILE"
+  fi
+  return 0
+}
+
+apply_expect_lint_fixes() {
+  local fixes_file="$1"
+  local mode="$2"
+  local -A drop_keys=()
+  local -A set_rows=()
+  local -A touched_files=()
+  local kind source action key row note
+  local source_file map_key
+
+  [[ -f "$fixes_file" ]] || return 0
+  if [[ -n "$EXPECT_LINT_APPLY_DIFF_FILE" ]]; then
+    : > "$EXPECT_LINT_APPLY_DIFF_FILE"
+  fi
+
+  while IFS=$'\t' read -r kind source action key row note; do
+    [[ "$kind" == "kind" && "$source" == "source" ]] && continue
+    [[ -z "$action" || -z "$source" ]] && continue
+    source_file="$(resolve_lint_fix_source_file "$source")"
+    [[ -z "$source_file" ]] && continue
+    [[ "$source_file" == "/dev/null" ]] && continue
+    if [[ ! -f "$source_file" ]]; then
+      continue
+    fi
+    map_key="$source_file|$key"
+    touched_files["$source_file"]=1
+    case "$action" in
+      drop-row)
+        drop_keys["$map_key"]=1
+        unset 'set_rows[$map_key]'
+        ;;
+      set-row)
+        if [[ -z "${drop_keys["$map_key"]+x}" ]]; then
+          set_rows["$map_key"]="$row"
+        fi
+        ;;
+      *)
+        ;;
+    esac
+  done < "$fixes_file"
+
+  local -a file_list=()
+  local file
+  for file in "${!touched_files[@]}"; do
+    file_list+=("$file")
+  done
+  if ((${#file_list[@]} == 0)); then
+    echo "EXPECT_LINT_APPLY: mode=$mode files=0 changed=0"
+    return 0
+  fi
+
+  local changed_files=0
+  local processed=0
+  local line test mode_field profile expected extra row_spec row_key row_expected
+  local drop_count set_count changed
+  local old_file new_file diff_file
+  local -a append_rows=()
+  local mk
+  while IFS= read -r file; do
+    processed=$((processed + 1))
+    old_file="$tmpdir/lint-apply-old-$processed.tsv"
+    new_file="$tmpdir/lint-apply-new-$processed.tsv"
+    diff_file="$tmpdir/lint-apply-diff-$processed.txt"
+    cp "$file" "$old_file"
+
+    drop_count=0
+    set_count=0
+    while IFS= read -r mk; do
+      if [[ "$mk" == "$file|"* ]]; then
+        if [[ -n "${drop_keys["$mk"]+x}" ]]; then
+          drop_count=$((drop_count + 1))
+        fi
+        if [[ -n "${set_rows["$mk"]+x}" ]]; then
+          set_count=$((set_count + 1))
+        fi
+      fi
+    done < <(printf '%s\n' "${!drop_keys[@]}" "${!set_rows[@]}" | sort -u)
+
+    : > "$new_file"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ -z "$line" || "$line" =~ ^# ]]; then
+        echo "$line" >> "$new_file"
+        continue
+      fi
+      IFS=$'\t' read -r test mode_field profile expected extra <<<"$line"
+      if [[ -n "${extra:-}" ]]; then
+        echo "$line" >> "$new_file"
+        continue
+      fi
+      if [[ -z "$test" || -z "$mode_field" || -z "$profile" || -z "$expected" ]]; then
+        echo "$line" >> "$new_file"
+        continue
+      fi
+      map_key="$file|$test|$mode_field|$profile"
+      if [[ -n "${drop_keys["$map_key"]+x}" || -n "${set_rows["$map_key"]+x}" ]]; then
+        continue
+      fi
+      echo "$line" >> "$new_file"
+    done < "$file"
+
+    append_rows=()
+    while IFS= read -r mk; do
+      if [[ "$mk" != "$file|"* ]]; then
+        continue
+      fi
+      row_spec="${set_rows["$mk"]}"
+      row_expected="${row_spec##*|}"
+      row_key="${row_spec%|*}"
+      IFS='|' read -r test mode_field profile <<<"$row_key"
+      append_rows+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$row_expected")
+    done < <(printf '%s\n' "${!set_rows[@]}" | sort)
+    if ((${#append_rows[@]} > 0)); then
+      while IFS= read -r line; do
+        echo "$line" >> "$new_file"
+      done < <(printf '%s\n' "${append_rows[@]}" | sort -u)
+    fi
+
+    changed=0
+    if ! cmp -s "$old_file" "$new_file"; then
+      changed=1
+      changed_files=$((changed_files + 1))
+      diff -u "$old_file" "$new_file" > "$diff_file" || true
+      if [[ "$mode" == "apply" ]]; then
+        cp "$new_file" "$file"
+      fi
+      append_apply_diff "$diff_file" "$file" "1"
+    else
+      append_apply_diff "$diff_file" "$file" "0"
+    fi
+    echo "EXPECT_LINT_APPLY: mode=$mode file=$file drop=$drop_count set=$set_count changed=$changed"
+  done < <(printf '%s\n' "${file_list[@]}" | sort)
+  echo "EXPECT_LINT_APPLY: mode=$mode files=${#file_list[@]} changed=$changed_files"
+  return 0
 }
 
 load_expected_cases() {
@@ -457,6 +644,9 @@ if [[ "$EXPECT_LINT" == "1" ]]; then
   lint_shadowed_patterns_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
   lint_precedence_ambiguity_for_map expected_cases "EXPECT_FILE"
   lint_precedence_ambiguity_for_map regen_override_cases "EXPECT_REGEN_OVERRIDE_FILE"
+  if [[ "$EXPECT_LINT_APPLY_MODE" != "off" ]]; then
+    apply_expect_lint_fixes "$EXPECT_LINT_FIXES_FILE" "$EXPECT_LINT_APPLY_MODE"
+  fi
   echo "EXPECT_LINT_SUMMARY: issues=$lint_issues"
 fi
 
