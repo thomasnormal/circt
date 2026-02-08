@@ -51,6 +51,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX="${YOSYS_SVA_MOD
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2004,6 +2006,8 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_reason_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX"
   local drop_events_rewrite_schema_version_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX"
   local drop_events_rewrite_history_file_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX"
+  local drop_events_rewrite_schema_version_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST"
+  local drop_events_rewrite_history_file_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3006,7 +3010,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import json
 import re
@@ -3028,8 +3032,10 @@ rewrite_run_id_regex = sys.argv[9]
 rewrite_reason_regex = sys.argv[10]
 rewrite_schema_version_regex = sys.argv[11]
 rewrite_history_file_regex = sys.argv[12]
-rewrite_row_generated_at_utc_min = sys.argv[13]
-rewrite_row_generated_at_utc_max = sys.argv[14]
+rewrite_schema_version_list_raw = sys.argv[13]
+rewrite_history_file_list_raw = sys.argv[14]
+rewrite_row_generated_at_utc_min = sys.argv[15]
+rewrite_row_generated_at_utc_max = sys.argv[16]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3043,6 +3049,24 @@ def parse_utc_epoch(value: str, field_name: str) -> int:
             f"error: invalid {field_name}: {value} (expected YYYY-MM-DDTHH:MM:SSZ)"
         )
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
+
+
+def parse_selector_list(raw: str, field_name: str):
+    if not raw:
+        return None
+    values = []
+    for token in raw.split(","):
+        value = token.strip()
+        if not value:
+            fail(
+                f"error: invalid {field_name}: empty entry in comma-separated list"
+            )
+        values.append(value)
+    if not values:
+        fail(
+            f"error: invalid {field_name}: empty entry in comma-separated list"
+        )
+    return set(values)
 
 try:
     effective_id_hash_version = int(effective_id_hash_version_raw)
@@ -3104,6 +3128,15 @@ if rewrite_history_file_regex:
             "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX: "
             f"{rewrite_history_file_regex} ({ex})"
         )
+
+rewrite_schema_version_set = parse_selector_list(
+    rewrite_schema_version_list_raw,
+    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST",
+)
+rewrite_history_file_set = parse_selector_list(
+    rewrite_history_file_list_raw,
+    "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST",
+)
 
 rewrite_row_generated_at_min_epoch = None
 if rewrite_row_generated_at_utc_min:
@@ -3263,6 +3296,10 @@ def selected_for_rewrite(
         rewrite_history_file_pattern is not None
         and rewrite_history_file_pattern.search(history_file) is None
     ):
+        return False
+    if rewrite_schema_version_set is not None and schema_version not in rewrite_schema_version_set:
+        return False
+    if rewrite_history_file_set is not None and history_file not in rewrite_history_file_set:
         return False
     if (
         rewrite_row_generated_at_min_epoch is not None
