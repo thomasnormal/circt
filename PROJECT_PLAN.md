@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 498)
+## Current Status - February 8, 2026 (Iteration 499)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed step-0 sequence arm activity reporting in counterexamples; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed solver-witness-aware activity decoding in counterexamples; next: emit witness signals in lowering + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,61 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 499
+
+1. **Solver witness-aware event-arm activity decoding**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample arm reporting now prefers a direct
+     `bmc_event_source_details.witness_name` waveform when present in the
+     solver model.
+   - When witness data is available, output switches from estimated headers to:
+     - `event-arm activity:`
+     - `fired arms by step:`
+   - Existing fallback logic remains unchanged for arms without witness data.
+
+2. **Name-anchor stability for witness symbols**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Wave-table anchor collection now includes `witness_name`, preventing
+     accidental `_N` step-suffix splitting of witness symbols.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-activity.mlir`
+   - New regression checks:
+     - witness-driven activity attribution for a signal arm
+     - witness-mode section headers and step summary output
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Witness handling is consumer-side only; lowering does not yet emit
+     dedicated arm witness signals broadly.
+   - Arms without witness symbols still use model-derived estimation.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit per-arm witness signals in lowering/VerifToSMT and thread
+       `witness_name` end-to-end,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 498
 
