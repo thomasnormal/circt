@@ -1,5 +1,82 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 503 - February 8, 2026
+
+### Summary
+
+Fixed non-SMTLIB (`--run`) mixed event-source counterexample rendering by
+capturing runtime SMT model values and preserving event metadata across SMT to
+LLVM lowering.
+
+### Fixes
+
+1. **SMT model capture APIs for runtime/JIT path**
+   - Updated:
+     - `include/circt/Support/SMTModel.h`
+     - `lib/Support/SMTModel.cpp`
+   - Added thread-safe capture/reset APIs:
+     - `resetCapturedSMTModelValues()`
+     - `getCapturedSMTModelValues()`
+   - Runtime callback `circt_smt_print_model_value` now stores normalized model
+     values in addition to existing textual output.
+
+2. **Correct pass-pipeline staging for metadata preservation**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Reworked `runPassPipeline` to execute in two stages for non-SMTLIB mode:
+     - pre-lowering conversion pipeline (through SMT conversion and DCE),
+     - module-attr metadata copy from live `smt.solver` ops,
+     - post-lowering SMT-to-LLVM pipeline.
+   - Fixes previous no-op metadata copy that ran before the conversion pipeline.
+
+3. **Fallback metadata consumption after SMT lowering**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Mixed event-source rendering now uses module-level fallback attrs when
+     solver ops are no longer present.
+   - Event-wave anchor extraction (`collectEventWaveNames`) also reads fallback
+     module attrs, improving witness/model name stability after lowering.
+
+4. **Unit test coverage**
+   - Added:
+     - `unittests/Support/SMTModelTest.cpp`
+   - Updated:
+     - `unittests/Support/CMakeLists.txt`
+   - New test verifies model value capture, normalization, overwrite behavior,
+     and reset semantics.
+
+5. **Validation**
+   - Unit test:
+     - `SMTModelTest.CapturesAndResetsModelValues`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - Manual runtime check:
+     - `circt-bmc --run --print-counterexample` now reports mixed event-source
+       activity: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Witness synthesis still requires source/`iff` expressions that resolve to
+  named BMC inputs.
+- Complex expression-level event arms still rely on estimated attribution.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 502 - February 8, 2026
 
 ### Summary

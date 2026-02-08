@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 502)
+## Current Status - February 8, 2026 (Iteration 503)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed mixed-arm witness parity for SMT-LIB and non-SMTLIB export; next: expression-level witnesses, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed non-SMTLIB witness activity recovery via runtime model capture + metadata carry-forward; next: expression-level witnesses, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,83 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 503
+
+1. **Runtime model capture support for JIT/non-SMTLIB BMC**
+   - Updated:
+     - `include/circt/Support/SMTModel.h`
+     - `lib/Support/SMTModel.cpp`
+   - Added thread-safe model capture APIs used by the runtime callback path:
+     - `resetCapturedSMTModelValues()`
+     - `getCapturedSMTModelValues()`
+   - `circt_smt_print_model_value` now records normalized values while
+     preserving existing printed counterexample output.
+
+2. **Correct metadata handoff timing in non-SMTLIB pipeline**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Fixed a pipeline-ordering bug where fallback event metadata was copied
+     before conversion passes had produced `smt.solver` attributes.
+   - `runPassPipeline` now runs in two phases for non-SMTLIB output:
+     - pre-lowering pipeline through SMT conversion/DCE,
+     - metadata copy from `smt.solver` to module attrs,
+     - post-lowering SMT-to-LLVM pipeline.
+   - This restores mixed event-source reporting in `--run` mode.
+
+3. **Counterexample event reporting robustness after SMT lowering**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Extended fallback behavior so mixed-arm printing and witness-wave anchoring
+     can consume module-level attrs (`circt.bmc_*`) when solver ops are gone.
+   - Verified direct non-SMTLIB runtime output now includes:
+     - `mixed event sources:`
+     - `event-arm activity:`
+
+4. **Unit test coverage**
+   - Added:
+     - `unittests/Support/SMTModelTest.cpp`
+   - Updated:
+     - `unittests/Support/CMakeLists.txt`
+   - New test validates callback capture/update/reset behavior for normalized
+     model values.
+
+5. **Validation**
+   - Unit test:
+     - `SMTModelTest.CapturesAndResetsModelValues`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - Manual runtime repro:
+     - `circt-bmc --run --print-counterexample` mixed-arm output: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+6. **Current limitations and best long-term next features**
+   - Witness synthesis still depends on resolvable named BMC inputs for source
+     and optional `iff` expressions.
+   - Complex/non-trivial source expressions still fall back to model-derived
+     attribution instead of explicit witness signals.
+   - Legacy alias attributes are still mirrored for compatibility.
+   - Slang capabilities worth exploiting more aggressively:
+     - preserve canonical expression identity for event-source subexpressions
+       so witnesses can be emitted for non-trivial arm logic,
+     - propagate richer property/procedural origin metadata to unblock robust
+       `always @(property)` lowering diagnostics,
+     - carry explicit clocking/edge provenance from Slang analyses to reduce
+       heuristic reconstruction in multi-clock arm firing.
 
 ### Session Summary - Iteration 502
 
