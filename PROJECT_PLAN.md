@@ -17912,6 +17912,54 @@ ninja -C build circt-verilog
   - Keyring and key-file digest pins are still externally supplied trust roots.
   - No native signature/certificate chain verification for manifests yet.
 
+### Iteration 670
+- Signed keyring manifest verification for dry-run report verifier:
+  - Extended `utils/verify_formal_dryrun_report.py` with:
+    - `--hmac-keyring-manifest-json FILE`
+    - `--hmac-keyring-manifest-hmac-key-file FILE`
+    - `--expected-keyring-signer-id ID`
+  - Manifest verification semantics:
+    - manifest must be JSON object with:
+      - `keyring_sha256`
+      - `signer_id`
+      - `signature_hmac_sha256`
+      - optional `schema_version` (must be `1` when present)
+      - optional `expires_on` (`YYYY-MM-DD`)
+    - signature is HMAC-SHA256 over canonical JSON payload excluding
+      `signature_hmac_sha256`.
+    - manifest `keyring_sha256` is enforced against keyring file content.
+    - optional expected signer-id is enforced.
+    - expired manifests are rejected.
+  - Added strict CLI gating:
+    - manifest options require `--hmac-keyring-tsv`
+    - manifest HMAC key file requires manifest json option
+    - expected signer-id requires manifest json option.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive manifest-signed keyring verification
+    - negative signer-id mismatch rejection
+- Documentation:
+  - Updated `docs/FormalRegression.md` with manifest options and behavior.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Filtered external sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright` -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip` -> PASS
+- Current limitations / debt:
+  - Manifest trust still relies on symmetric HMAC key distribution.
+  - No asymmetric signature/certificate chain support yet.
+
 ---
 
 ## Architecture Reference
