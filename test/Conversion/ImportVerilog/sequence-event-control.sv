@@ -531,16 +531,20 @@ module SequenceSignalEventListStructuredGrouping;
   // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredGrouping
   // CHECK: moore.event_source_details =
   // CHECK-DAG: signal_group
+  // CHECK-DAG: signal_group_depth = 1 : i32
   // CHECK-DAG: signal_bin_op = "and"
+  // CHECK-DAG: signal_lhs_group
+  // CHECK-DAG: signal_lhs_group_depth = 2 : i32
   // CHECK-DAG: signal_lhs_name = "bus"
   // CHECK-DAG: signal_lhs_lsb = 0 : i32
   // CHECK-DAG: signal_lhs_msb = 0 : i32
   // CHECK-DAG: signal_rhs_name = "en"
   // CHECK-DAG: iff_group
+  // CHECK-DAG: iff_group_depth = 2 : i32
   // CHECK-DAG: iff_name = "bus"
   // CHECK-DAG: iff_lsb = 1 : i32
   // CHECK-DAG: iff_msb = 1 : i32
-  always @(seq or posedge (bus[0] & en) iff (bus[1])) begin
+  always @(seq or posedge (((((bus[0])) & en))) iff ((bus[1]))) begin
     q <= ~q;
   end
 endmodule

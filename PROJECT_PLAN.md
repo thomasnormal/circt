@@ -9478,6 +9478,53 @@ ninja -C build circt-verilog
   - Continue value-aware compare generalization for richer mixed-width trees.
   - Expand `circt-sim` ref provenance tests to additional branch/resume paths.
 
+### Iteration 469
+- Nested structured grouping-depth metadata:
+  - ImportVerilog now emits `<prefix>_group_depth` alongside `<prefix>_group`.
+  - `group_depth` is derived from explicit outer parenthesis nesting in source
+    syntax (with fallback depth `1` when only parenthesized-tracking is known).
+  - Applied uniformly across structured nodes, including nested subtrees (for
+    example `signal_lhs_group_depth`, `iff_group_depth`, `signal_arg_group_depth`).
+- VerifToSMT grouped-depth lowering support:
+  - Structured resolver now parses `*_group_depth` in addition to `*_group`.
+  - Group wrapping now applies `Group` nodes by the parsed depth (not only
+    boolean presence).
+  - Fast-path leaf collapse is disabled when `group_depth > 0`, preserving
+    explicit grouping shape in structured witness trees.
+  - IFF-constraint detection now recognizes `iff_group_depth` as structured
+    metadata.
+- Test additions and updates:
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+    - `SequenceSignalEventListStructuredGrouping` now checks depth attrs.
+  - Updated `test/Conversion/VerifToSMT/bmc-event-arm-witness-group-structured.mlir`
+    to exercise depth-only metadata (`*_group_depth` without `*_group`).
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (18 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS (no `interpretOperation failed`)
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Group depth tracks only fully wrapping outer-parenthesis nesting; it is
+    not yet a complete parenthesis-tree encoding for arbitrary grouped forms.
+  - Some structured compare families still rely on partial mixed-type fallback
+    semantics.
+  - Simulator ref-provenance hardening still needs broader function-level CFG
+    coverage.
+- Long-term features to prioritize:
+  - Introduce explicit structured grouping nodes for non-wrapper group shapes
+    (full parenthesis-tree fidelity).
+  - Continue value-aware compare generalization for richer mixed-width trees.
+  - Expand `circt-sim` ref provenance tests to additional branch/resume paths.
+
 ---
 
 ## Architecture Reference
