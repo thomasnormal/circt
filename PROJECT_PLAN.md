@@ -12761,6 +12761,71 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 567
+- Yosys SVA BMC drop-events legacy normalization/migration:
+  - Added normalization pass for
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE` before retention.
+  - Legacy drop-event rows are now upgraded in place to canonical shape:
+    - injects `schema_version` if missing (uses configured
+      `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION`)
+    - injects `event_id` if missing (stable derivation from
+      `reason|history_format|run_id|row_generated_at_utc`)
+    - rewrites row to canonical field order
+  - Added strict required-key checks for drop-events rows during migration:
+    - `generated_at_utc`
+    - `reason`
+    - `history_file`
+    - `history_format`
+    - `line`
+    - `row_generated_at_utc`
+    - `run_id`
+  - Enabled mode-summary maintenance path when only drop-events JSONL is
+    configured, so migration/retention runs in drop-events-only workflows.
+- Regression tests:
+  - Added
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`:
+    - verifies legacy drop-event row is migrated with `schema_version` +
+      generated `event_id`
+    - verifies malformed legacy row is rejected with explicit error
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 49/49 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Drop-event reason taxonomy remains narrow (`future_skew` only).
+  - Drop-events rows currently drop unknown keys during canonical migration.
+  - Parser-backed validation still depends on `python3`.
+  - `cksum` remains a required dependency for event ID generation.
+  - xprop pass-mode failures remain baseline-tracked.
+  - Remaining gaps here are mostly harness/policy and portability work, not core
+    Slang frontend capability gaps.
+- Long-term features to prioritize:
+  - Expand drop-event reasons/counters beyond `future_skew`.
+  - Preserve extensible metadata during drop-event migration while still
+    validating canonical keys.
+  - Add optional compression/rotation for drop-events logs.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

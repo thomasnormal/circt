@@ -2552,6 +2552,96 @@ PY
     local cutoff_epoch
     local start i
     [[ -f "$file" ]] || return 0
+
+    prepare_drop_events_jsonl_file() {
+      local migrate_file="$1"
+      local -a migrate_lines=()
+      local line_text
+      local generated_at
+      local reason
+      local history_file
+      local history_format
+      local event_line
+      local row_generated_at
+      local run_id
+      local schema_version
+      local event_id
+      local escaped_generated_at
+      local escaped_reason
+      local escaped_history_file
+      local escaped_history_format
+      local escaped_row_generated_at
+      local escaped_run_id
+      local escaped_schema_version
+      local escaped_event_id
+      mapfile -t migrate_lines < "$migrate_file"
+      : > "$migrate_file"
+      for ((i = 0; i < ${#migrate_lines[@]}; ++i)); do
+        line_text="${migrate_lines[$i]}"
+        [[ -z "$line_text" ]] && continue
+        generated_at="$(printf '%s\n' "$line_text" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        reason="$(printf '%s\n' "$line_text" | sed -nE 's/.*"reason"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        history_file="$(printf '%s\n' "$line_text" | sed -nE 's/.*"history_file"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        history_format="$(printf '%s\n' "$line_text" | sed -nE 's/.*"history_format"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        event_line="$(printf '%s\n' "$line_text" | sed -nE 's/.*"line"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p')"
+        row_generated_at="$(printf '%s\n' "$line_text" | sed -nE 's/.*"row_generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        run_id="$(printf '%s\n' "$line_text" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        schema_version="$(printf '%s\n' "$line_text" | sed -nE 's/.*"schema_version"[[:space:]]*:[[:space:]]*"([0-9]+)".*/\1/p')"
+        event_id="$(printf '%s\n' "$line_text" | sed -nE 's/.*"event_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        if [[ -z "$generated_at" ]]; then
+          echo "error: missing key 'generated_at_utc' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$reason" ]]; then
+          echo "error: missing key 'reason' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$history_file" ]]; then
+          echo "error: missing key 'history_file' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$history_format" ]]; then
+          echo "error: missing key 'history_format' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$event_line" ]]; then
+          echo "error: missing key 'line' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$row_generated_at" ]]; then
+          echo "error: missing key 'row_generated_at_utc' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$run_id" ]]; then
+          echo "error: missing key 'run_id' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$schema_version" ]]; then
+          schema_version="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION"
+        fi
+        if [[ ! "$schema_version" =~ ^[0-9]+$ ]]; then
+          echo "error: invalid key 'schema_version' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $migrate_file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if [[ -z "$event_id" ]]; then
+          event_id="$(stable_event_id "${reason}|${history_format}|${run_id}|${row_generated_at}")"
+        fi
+        escaped_generated_at="$(json_escape "$generated_at")"
+        escaped_reason="$(json_escape "$reason")"
+        escaped_history_file="$(json_escape "$history_file")"
+        escaped_history_format="$(json_escape "$history_format")"
+        escaped_row_generated_at="$(json_escape "$row_generated_at")"
+        escaped_run_id="$(json_escape "$run_id")"
+        escaped_schema_version="$(json_escape "$schema_version")"
+        escaped_event_id="$(json_escape "$event_id")"
+        printf '{"schema_version":"%s","event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}\n' \
+          "$escaped_schema_version" "$escaped_event_id" "$escaped_generated_at" "$escaped_reason" "$escaped_history_file" "$escaped_history_format" "$event_line" "$escaped_row_generated_at" "$escaped_run_id" \
+          >> "$migrate_file"
+      done
+    }
+
+    prepare_drop_events_jsonl_file "$file"
+
     if ((max_age_days > 0)); then
       mapfile -t lines < "$file"
       if ! now_epoch="$(date -u +%s 2>/dev/null)"; then
@@ -2936,7 +3026,8 @@ if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && 
 fi
 
 if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" || -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" || \
-      -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" || -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" ]]; then
+      -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" || -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" || \
+      -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]]; then
   emit_mode_summary_outputs
 fi
 
