@@ -270,6 +270,8 @@ Expected-failure budget file:
   The first row per run is `operation=run_meta` with `schema_version=1` and
   `run_id`, operation rows carry the same `run_id`, and the final row is
   `operation=run_end` with `exit_code`, `row_count`, and `payload_sha256`.
+- `python3 utils/verify_formal_dryrun_report.py <file>` verifies JSONL run
+  envelopes and checks `run_end.row_count`/`run_end.payload_sha256`.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.

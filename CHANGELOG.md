@@ -32706,3 +32706,48 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
+
+## Iteration 660 - February 8, 2026
+
+### Dry-Run JSONL Integrity Verifier Utility
+
+- Added new tool: `utils/verify_formal_dryrun_report.py`.
+- Verifier checks report invariants per run segment:
+  - `run_meta` start row and `run_end` completion row
+  - consistent `run_id` across segment rows
+  - `run_end.row_count` equals observed pre-end rows
+  - `run_end.payload_sha256` matches canonical hash of pre-end rows
+  - `run_end.exit_code` type correctness
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive verification of generated dry-run report
+    - negative verification after tampering `row_count` (expected failure)
+  - `docs/FormalRegression.md`
+    - documented verifier invocation:
+      - `python3 utils/verify_formal_dryrun_report.py <file>`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated smoke verification:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+    - report includes `run_end.row_count` + `run_end.payload_sha256`
+    - `python3 utils/verify_formal_dryrun_report.py /tmp/formal-dryrun-meta-smoke.jsonl`:
+      - PASS
+
+### Remaining Limitations
+
+- Integrity hashes are unauthenticated (no signature/trust chain).
+- Operation rows remain summary-only and do not provide row-level diffs.
