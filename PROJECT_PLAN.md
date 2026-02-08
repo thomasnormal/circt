@@ -17809,6 +17809,31 @@ ninja -C build circt-verilog
   - AVIP compile regression remains unrelated and unresolved in current
     workspace (`circt-verilog` MLIR verifier failure).
 
+### Iteration 667
+- Keyring status policy (`active` / `revoked`) for dry-run verifier:
+  - Extended `utils/verify_formal_dryrun_report.py` keyring format with
+    optional status column:
+    - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]`
+  - Added strict status validation:
+    - keyring rows now allow 2-5 columns
+    - `status` must be one of `active`, `revoked` when provided
+  - Added per-run policy gate:
+    - verifier now rejects any run using a `revoked` key ID.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - negative revoked-key keyring path
+- Documentation:
+  - Updated `docs/FormalRegression.md` with keyring `status` semantics.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+- Current limitations / debt:
+  - Policy is still local TSV metadata (no signed/distributed key trust model).
+  - Rotation/revocation governance and key distribution remain external process.
+  - AVIP compile regression remains unresolved and appears unrelated.
+
 ---
 
 ## Architecture Reference

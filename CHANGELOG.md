@@ -33048,6 +33048,46 @@ CIRCT/slang correctly enforces LRM restrictions.
 - AVIP compile regression remains unresolved and appears unrelated to formal
   verifier changes.
 
+## Iteration 667 - February 8, 2026
+
+### HMAC Keyring Status Policy (`active` / `revoked`)
+
+- Extended keyring row format in
+  `utils/verify_formal_dryrun_report.py`:
+  - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]`
+- Added strict parser validation:
+  - keyring rows now allow 2-5 columns
+  - when provided, `status` must be one of `active`, `revoked`
+- Added enforcement:
+  - verifier now rejects runs that reference a keyring entry with
+    `status=revoked`.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added revoked-key negative keyring path
+  - `docs/FormalRegression.md`
+    - documented keyring `status` field semantics
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+
+### Remaining Limitations
+
+- Policy remains local TSV metadata; no signed/distributed trust model.
+- Key lifecycle governance remains external to the verifier.
+- AVIP compile regression remains unresolved and appears unrelated to this work.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
