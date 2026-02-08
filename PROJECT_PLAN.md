@@ -16835,6 +16835,44 @@ ninja -C build circt-verilog
     secret-injection support yet.
   - No schema-version contract for webhook config payload evolution yet.
 
+### Iteration 641
+- Native email notifier in `utils/run_formal_cadence.sh`:
+  - Added repeatable `--on-fail-email <addr>` recipient option.
+  - Added `--sendmail-path <path>` to select sendmail binary/command.
+  - Added `--email-subject-prefix <text>` for subject customization.
+  - Added email delivery function invoked on iteration failure before fail-fast
+    exit, alongside hook/webhook delivery.
+  - Email body now includes standard failure context:
+    - timestamp, iteration, exit_code, run_dir, out_root, cadence log/state.
+  - Added cadence state telemetry:
+    - `on_fail_emails`
+    - `sendmail_path`
+    - `email_subject_prefix`
+- Validation/robustness:
+  - Added non-empty recipient validation.
+  - Added sendmail availability validation (PATH command or executable path).
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - fake sendmail scenario validates:
+      - `-t` invocation
+      - recipient header
+      - subject prefix and failure metadata content.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with native email usage and option list.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-email-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+- Current limitations / debt:
+  - Email delivery currently assumes sendmail-compatible transport; no direct
+    SMTP auth/TLS backend is implemented.
+  - Email template is fixed text/plain (no templating/localization hooks yet).
+
 ---
 
 ## Architecture Reference

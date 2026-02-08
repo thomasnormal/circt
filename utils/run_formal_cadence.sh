@@ -18,6 +18,12 @@ Options:
   --retain-hours N       Prune run-* directories older than N hours
                          (-1=disabled, default: -1)
   --on-fail-hook PATH    Executable hook invoked on iteration failure
+  --on-fail-email ADDR   Email recipient for failure notifications
+                         (repeatable; requires sendmail)
+  --sendmail-path PATH   sendmail binary path (default: sendmail)
+  --email-subject-prefix TEXT
+                         Subject prefix for failure emails
+                         (default: [formal-cadence])
   --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
                          (repeatable; can specify multiple endpoints)
   --on-fail-webhook-config FILE
@@ -58,6 +64,8 @@ ITERATIONS=0
 RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
+SENDMAIL_PATH="sendmail"
+EMAIL_SUBJECT_PREFIX="[formal-cadence]"
 WEBHOOK_CONFIG_FILE=""
 WEBHOOK_RETRIES=0
 WEBHOOK_FANOUT_MODE="sequential"
@@ -71,6 +79,7 @@ RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
 
 declare -a FORWARD_ARGS=()
+declare -a ON_FAIL_EMAILS=()
 declare -a ON_FAIL_WEBHOOKS=()
 declare -a CONFIG_WEBHOOK_URLS=()
 declare -a CONFIG_WEBHOOK_RETRIES=()
@@ -94,6 +103,12 @@ while [[ $# -gt 0 ]]; do
       RETAIN_HOURS="$2"; shift 2 ;;
     --on-fail-hook)
       ON_FAIL_HOOK="$2"; shift 2 ;;
+    --on-fail-email)
+      ON_FAIL_EMAILS+=("$2"); shift 2 ;;
+    --sendmail-path)
+      SENDMAIL_PATH="$2"; shift 2 ;;
+    --email-subject-prefix)
+      EMAIL_SUBJECT_PREFIX="$2"; shift 2 ;;
     --on-fail-webhook)
       ON_FAIL_WEBHOOKS+=("$2"); shift 2 ;;
     --on-fail-webhook-config)
@@ -197,6 +212,25 @@ fi
 if [[ -n "$ON_FAIL_HOOK" && ! -x "$ON_FAIL_HOOK" ]]; then
   echo "on-fail hook not executable: $ON_FAIL_HOOK" >&2
   exit 1
+fi
+for email_addr in "${ON_FAIL_EMAILS[@]}"; do
+  if [[ -z "$email_addr" ]]; then
+    echo "invalid --on-fail-email: expected non-empty address" >&2
+    exit 1
+  fi
+done
+if [[ "${#ON_FAIL_EMAILS[@]}" -gt 0 ]]; then
+  if [[ "$SENDMAIL_PATH" == */* ]]; then
+    if [[ ! -x "$SENDMAIL_PATH" ]]; then
+      echo "sendmail path not executable: $SENDMAIL_PATH" >&2
+      exit 1
+    fi
+  else
+    if ! command -v "$SENDMAIL_PATH" >/dev/null 2>&1; then
+      echo "sendmail not found in PATH: $SENDMAIL_PATH" >&2
+      exit 1
+    fi
+  fi
 fi
 if [[ -n "$WEBHOOK_CONFIG_FILE" ]]; then
   if [[ ! -r "$WEBHOOK_CONFIG_FILE" ]]; then
@@ -310,6 +344,9 @@ echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
 echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
+echo "on_fail_emails=$(IFS=,; echo "${ON_FAIL_EMAILS[*]}")" >> "$STATE_FILE"
+echo "sendmail_path=$SENDMAIL_PATH" >> "$STATE_FILE"
+echo "email_subject_prefix=$EMAIL_SUBJECT_PREFIX" >> "$STATE_FILE"
 echo "on_fail_webhooks=$on_fail_webhooks_csv" >> "$STATE_FILE"
 echo "on_fail_webhook_config=$WEBHOOK_CONFIG_FILE" >> "$STATE_FILE"
 echo "webhook_fanout_mode=$WEBHOOK_FANOUT_MODE" >> "$STATE_FILE"
@@ -394,6 +431,44 @@ invoke_fail_hook() {
 
   if [[ "$hook_ec" -ne 0 ]]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail hook failed with exit code $hook_ec" \
+      | tee -a "$CADENCE_LOG"
+  fi
+}
+
+invoke_fail_email() {
+  local iteration="$1"
+  local exit_code="$2"
+  local run_dir="$3"
+  if [[ "${#ON_FAIL_EMAILS[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  local email_ts recipients subject
+  email_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  recipients="$(IFS=,; echo "${ON_FAIL_EMAILS[*]}")"
+  subject="${EMAIL_SUBJECT_PREFIX} iteration ${iteration} failed (exit ${exit_code})"
+  echo "[$email_ts] sending failure email via $SENDMAIL_PATH to $recipients" \
+    | tee -a "$CADENCE_LOG"
+
+  set +e
+  {
+    printf "To: %s\n" "$recipients"
+    printf "Subject: %s\n" "$subject"
+    printf "Content-Type: text/plain; charset=UTF-8\n"
+    printf "\n"
+    printf "formal cadence failure\n"
+    printf "timestamp_utc=%s\n" "$email_ts"
+    printf "iteration=%s\n" "$iteration"
+    printf "exit_code=%s\n" "$exit_code"
+    printf "run_dir=%s\n" "$run_dir"
+    printf "out_root=%s\n" "$OUT_ROOT"
+    printf "cadence_log=%s\n" "$CADENCE_LOG"
+    printf "cadence_state=%s\n" "$STATE_FILE"
+  } | "$SENDMAIL_PATH" -t >> "$CADENCE_LOG" 2>&1
+  local mail_ec=$?
+  set -e
+  if [[ "$mail_ec" -ne 0 ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] on-fail email delivery failed with exit code $mail_ec" \
       | tee -a "$CADENCE_LOG"
   fi
 }
@@ -607,6 +682,7 @@ while true; do
 
   if [[ "$ec" -ne 0 ]]; then
     invoke_fail_hook "$iteration" "$ec" "$run_dir"
+    invoke_fail_email "$iteration" "$ec" "$run_dir"
     invoke_fail_webhooks "$iteration" "$ec" "$run_dir"
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] failing fast: iteration $iteration failed" \
       | tee -a "$CADENCE_LOG"
