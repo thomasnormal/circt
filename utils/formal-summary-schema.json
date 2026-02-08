@@ -251,7 +251,8 @@
                 "type": "string",
                 "enum": [
                   "base",
-                  "path"
+                  "path",
+                  "aggregate"
                 ]
               },
               "id": {
