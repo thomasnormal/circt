@@ -17494,7 +17494,43 @@ ninja -C build circt-verilog
       - lanes: `sv-tests`/`verilator-verification`/`yosys`/`opentitan` PASS,
         AVIP `axi4Lite_avip` known FAIL
 - Current limitations / debt:
-  - JSONL is still append-only and has no explicit end-of-run marker.
+  - JSONL is append-only and has no integrity marker/checksum across rows.
+  - Operation rows remain summary-only (no row-level textual diff data).
+
+### Iteration 658
+- Dry-run JSONL explicit run completion marker:
+  - Added `operation=run_end` emission in `utils/run_formal_all.sh`.
+  - `run_end` is emitted from an `EXIT` trap so it is appended for both success
+    and non-zero script exits.
+  - `run_end` payload fields:
+    - `operation`: `run_end`
+    - `schema_version`: `1`
+    - `date`
+    - `run_id`
+    - `out_dir`
+    - `exit_code`
+- Reporting contract after this change:
+  - first row per run: `run_meta`
+  - middle rows: mutator operations (`prune_*` / `refresh_*`)
+  - final row per run: `run_end`
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - `DRYRUNREPORT` now checks `run_end` presence and `exit_code=0`.
+- Documentation:
+  - Updated `docs/FormalRegression.md` to document `run_end` with `exit_code`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke verification:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-dryrun-meta-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --refresh-expected-failures-file /tmp/formal-expected-failures-dryrun-meta-smoke.tsv --expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --prune-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-file /tmp/formal-expected-cases-dryrun-meta-smoke.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --expectations-dry-run --expectations-dry-run-report-jsonl /tmp/formal-dryrun-meta-smoke.jsonl`
+      - report segment contains: `run_meta`, 4 mutator rows, `run_end`
+      - all rows share one `run_id`; `run_end.exit_code=0`
+      - lanes: `sv-tests`/`verilator-verification`/`yosys`/`opentitan` PASS,
+        AVIP `axi4Lite_avip` known FAIL
+- Current limitations / debt:
+  - JSONL rows are not signed and do not include row ordering/hash integrity.
   - Operation rows remain summary-only (no row-level textual diff data).
 
 ---
