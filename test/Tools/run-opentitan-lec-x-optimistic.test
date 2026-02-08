@@ -9,8 +9,10 @@
 // RUN: chmod +x %t/bin/circt-opt
 // RUN: printf '#!/bin/sh\nfound=0\nfor arg in \"$@\"; do if [ \"$arg\" = \"--x-optimistic\" ]; then found=1; fi; done\n[ $found -eq 1 ] || exit 1\nexit 0\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/bin/circt-lec
-// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 LEC_X_OPTIMISTIC=1 %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 LEC_X_OPTIMISTIC=1 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: FileCheck %s --check-prefix=RESULTPASS < %t/results.tsv
 
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
 // CHECK: aes_sbox_canright OK
 // CHECK: LEC completed successfully.
+// RESULTPASS: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC

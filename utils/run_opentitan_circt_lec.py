@@ -103,6 +103,11 @@ def main() -> int:
         action="store_true",
         help="Do not clamp invalid op_i values to a supported enum value.",
     )
+    parser.add_argument(
+        "--results-file",
+        default=os.environ.get("OUT", ""),
+        help="Optional TSV output path for per-implementation case rows.",
+    )
     args = parser.parse_args()
 
     ot_root = Path(args.opentitan_root).resolve()
@@ -215,6 +220,7 @@ def main() -> int:
         keep_workdir = args.keep_workdir
 
     failures = 0
+    case_rows: list[tuple[str, str, str, str, str]] = []
     try:
         print(
             f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
@@ -322,11 +328,15 @@ def main() -> int:
                                 f"{impl:24} XPROP_ONLY (accepted)",
                                 flush=True,
                             )
+                            case_rows.append(
+                                ("XFAIL", impl, str(impl_dir), "opentitan", "LEC")
+                            )
                             continue
                         raise subprocess.CalledProcessError(
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
                 print(f"{impl:24} OK", flush=True)
+                case_rows.append(("PASS", impl, str(impl_dir), "opentitan", "LEC"))
             except subprocess.CalledProcessError:
                 failures += 1
                 extra = ""
@@ -339,10 +349,18 @@ def main() -> int:
                 except Exception:
                     pass
                 print(f"{impl:24} FAIL{extra} (logs in {impl_dir})", flush=True)
+                case_rows.append(("FAIL", impl, str(impl_dir), "opentitan", "LEC"))
 
     finally:
         if not keep_workdir:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    if args.results_file:
+        results_path = Path(args.results_file)
+        results_path.parent.mkdir(parents=True, exist_ok=True)
+        with results_path.open("w") as handle:
+            for row in sorted(case_rows, key=lambda item: (item[1], item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
 
     if failures:
         print(f"LEC failures: {failures}", file=sys.stderr)

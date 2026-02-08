@@ -395,6 +395,7 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
   opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
   : > "$opentitan_case_results"
   opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
+    OUT="$opentitan_case_results"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
   if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
     opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
@@ -402,8 +403,9 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
   run_suite opentitan-lec \
     env "${opentitan_env[@]}" \
     utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
-  OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
-  OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
+  if [[ ! -s "$opentitan_case_results" ]]; then
+    OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
+    OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
 import os
 import re
 from pathlib import Path
@@ -434,6 +436,7 @@ with out_path.open("w") as f:
   for row in rows:
     f.write("\t".join(row) + "\n")
 PY
+  fi
   line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
   total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
   failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
