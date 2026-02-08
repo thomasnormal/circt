@@ -17078,6 +17078,38 @@ ninja -C build circt-verilog
     non-smoke solver runs (expected).
   - AVIP detailed stream is still per-directory (not per-source-file/testcase).
 
+### Iteration 647
+- Stale expected-case cleanup gate in `utils/run_formal_all.sh`:
+  - Added `--fail-on-unmatched-expected-failure-cases`.
+  - Gate fails when expected-case rows have no observed match.
+  - Complements existing:
+    - `--fail-on-unexpected-failure-cases`
+    - `--fail-on-expired-expected-failure-cases`
+- Validation/diagnostics:
+  - Added explicit `unmatched expected failure cases:` diagnostics with:
+    - `suite`, `mode`, `id_kind`, `id`, `status`
+  - Reuses existing matched-count accounting from
+    `expected-failure-cases-summary.tsv`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - negative stale-entry scenario for unmatched expected case gate.
+- Documentation:
+  - Updated `docs/FormalRegression.md` expected-case options with unmatched gate.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-unmatched-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-unmatched-gate-smoke.tsv --fail-on-unexpected-failure-cases --fail-on-unmatched-expected-failure-cases`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (matched by expected-case row)
+- Current limitations / debt:
+  - Unmatched gate currently treats all unmatched rows equally; no severity or
+    grace-window semantics yet.
+  - No built-in assistant for auto-pruning stale expected-case rows.
+
 ---
 
 ## Architecture Reference

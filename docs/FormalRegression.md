@@ -226,6 +226,8 @@ Expected-failure cases file:
   not matched by the expected-cases file.
 - `--fail-on-expired-expected-failure-cases` fails if any expected case is past
   its `expires_on` date.
+- `--fail-on-unmatched-expected-failure-cases` fails when expected-case rows
+  have no observed match (stale expectation cleanup gate).
 
 ## Notes
 

@@ -32045,3 +32045,54 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OpenTitan smoke mode remains pass-only; `XFAIL` case rows are produced in
   non-smoke solver runs.
 - AVIP detailed stream remains per-directory, not per-source-file/test granularity.
+
+## Iteration 647 - February 8, 2026
+
+### Unmatched Expected-Case Strict Gate
+
+- Added `--fail-on-unmatched-expected-failure-cases` to
+  `utils/run_formal_all.sh`.
+- Gate fails when rows in `--expected-failure-cases-file` have no observed
+  fail-like case match.
+- This closes the stale-expectation loophole where expected-case rows could
+  silently drift out of relevance without failing CI.
+
+### Diagnostics
+
+- Added explicit unmatched-case diagnostics:
+  - `unmatched expected failure cases:`
+  - row details include:
+    - `suite`
+    - `mode`
+    - `id_kind`
+    - `id`
+    - `status`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added stale expected-case scenario that triggers unmatched gate failure
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - documented `--fail-on-unmatched-expected-failure-cases`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`: 3/3 PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-unmatched-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-unmatched-gate-smoke.tsv --fail-on-unexpected-failure-cases --fail-on-unmatched-expected-failure-cases`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (matched by expected-case row)
+
+### Remaining Limitations
+
+- Unmatched-gate policy is currently binary (no severity tiers or grace windows).
+- No automatic stale-row remediation workflow is implemented yet.
