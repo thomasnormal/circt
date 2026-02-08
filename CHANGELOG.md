@@ -23465,3 +23465,63 @@ CIRCT/slang correctly enforces LRM restrictions.
   mixed-width expression trees.
 - Simulator ref-provenance handling is hardened for process CFG transfers, but
   further coverage for additional function-level branch/ref patterns is still open.
+
+---
+
+## Iteration 468 - February 8, 2026
+
+### Structured Grouping Nodes for Event-Arm Metadata
+
+- Added explicit grouping metadata for structured event expressions in
+  ImportVerilog:
+  - emits `<prefix>_group` when source expressions are parenthesized.
+- Group detection combines:
+  - Slang parenthesized-expression tracking (`Expression::isParenthesized()`),
+  - conservative outer-parentheses syntax detection for preserved source text.
+- This enables structured metadata to carry explicit grouping intent instead of
+  relying solely on inferred operator precedence.
+
+### VerifToSMT Group-Aware Structured Witness Lowering
+
+- Added `ResolvedNamedBoolExpr::Kind::Group`.
+- `resolveStructuredExprFromDetail` now parses `*_group` and wraps the parsed
+  subtree in a Group node.
+- Grouped simple leaves now preserve structure as explicit nodes (instead of
+  collapsing to `argIndex` fast-path).
+- Group handling added to:
+  - bool evaluation (`evalResolvedExpr`)
+  - value-aware compare evaluation (`evalSubExprAsValue`)
+- `iff_group` is now included in iff-constraint-presence detection.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-group-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added `SequenceSignalEventListStructuredGrouping`
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (17 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (no `interpretOperation failed`)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Group metadata currently captures grouping presence as a boolean marker, not
+  full nested parenthesis depth.
+- Value-aware compare semantics remain partial for some richer mixed-type /
+  mixed-width trees.
+- Simulator ref-provenance hardening still needs broader function-level CFG
+  coverage.

@@ -518,3 +518,29 @@ module SequenceSignalEventListStructuredEqNonLeaf;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for explicit parenthesized grouping nodes.
+module SequenceSignalEventListStructuredGrouping;
+  logic clk, q, en;
+  logic [1:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredGrouping
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_group
+  // CHECK-DAG: signal_bin_op = "and"
+  // CHECK-DAG: signal_lhs_name = "bus"
+  // CHECK-DAG: signal_lhs_lsb = 0 : i32
+  // CHECK-DAG: signal_lhs_msb = 0 : i32
+  // CHECK-DAG: signal_rhs_name = "en"
+  // CHECK-DAG: iff_group
+  // CHECK-DAG: iff_name = "bus"
+  // CHECK-DAG: iff_lsb = 1 : i32
+  // CHECK-DAG: iff_msb = 1 : i32
+  always @(seq or posedge (bus[0] & en) iff (bus[1])) begin
+    q <= ~q;
+  end
+endmodule
