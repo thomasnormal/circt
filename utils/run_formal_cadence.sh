@@ -15,6 +15,8 @@ Options:
   --iterations N         Number of iterations to run (0=infinite, default: 0)
   --retain-runs N        Keep only newest N run-* directories (0=keep all,
                          default: 0)
+  --retain-hours N       Prune run-* directories older than N hours
+                         (-1=disabled, default: -1)
   --on-fail-hook PATH    Executable hook invoked on iteration failure
   --run-formal-all PATH  Path to run_formal_all.sh
                          (default: utils/run_formal_all.sh)
@@ -33,6 +35,7 @@ OUT_ROOT="${PWD}/formal-cadence-results-${DATE_STR}"
 INTERVAL_SECS=21600
 ITERATIONS=0
 RETAIN_RUNS=0
+RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
 RUN_FORMAL_ALL="utils/run_formal_all.sh"
 STRICT_GATE=1
@@ -49,6 +52,8 @@ while [[ $# -gt 0 ]]; do
       ITERATIONS="$2"; shift 2 ;;
     --retain-runs)
       RETAIN_RUNS="$2"; shift 2 ;;
+    --retain-hours)
+      RETAIN_HOURS="$2"; shift 2 ;;
     --on-fail-hook)
       ON_FAIL_HOOK="$2"; shift 2 ;;
     --run-formal-all)
@@ -87,6 +92,14 @@ if ! [[ "$RETAIN_RUNS" =~ ^[0-9]+$ ]]; then
   echo "invalid --retain-runs: expected non-negative integer" >&2
   exit 1
 fi
+if ! [[ "$RETAIN_HOURS" =~ ^-?[0-9]+$ ]]; then
+  echo "invalid --retain-hours: expected integer >= -1" >&2
+  exit 1
+fi
+if [[ "$RETAIN_HOURS" -lt -1 ]]; then
+  echo "invalid --retain-hours: expected integer >= -1" >&2
+  exit 1
+fi
 if [[ ! -x "$RUN_FORMAL_ALL" ]]; then
   echo "run_formal_all script not executable: $RUN_FORMAL_ALL" >&2
   exit 1
@@ -104,6 +117,7 @@ echo "start_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_FILE"
 echo "interval_secs=$INTERVAL_SECS" >> "$STATE_FILE"
 echo "iterations_target=$ITERATIONS" >> "$STATE_FILE"
 echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
+echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
 echo "strict_gate=$STRICT_GATE" >> "$STATE_FILE"
 echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
@@ -111,15 +125,32 @@ echo "run_formal_all=$RUN_FORMAL_ALL" >> "$STATE_FILE"
 prune_old_runs() {
   local root="$1"
   local retain="$2"
-  if [[ "$retain" -le 0 ]]; then
-    return 0
-  fi
+  local retain_hours="$3"
 
   local -a run_dirs=()
   local run_name
   while IFS= read -r run_name; do
     run_dirs+=("$run_name")
   done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'run-[0-9][0-9][0-9][0-9]-*' -printf '%f\n' | LC_ALL=C sort)
+
+  if [[ "$retain_hours" -ge 0 ]]; then
+    local cutoff_mins=$((retain_hours * 60))
+    for run_name in "${run_dirs[@]}"; do
+      local run_dir="$root/$run_name"
+      if find "$run_dir" -maxdepth 0 -mmin "+$cutoff_mins" -print -quit | grep -q .; then
+        rm -rf "$run_dir"
+        echo "pruned_run_dir=$run_dir" | tee -a "$CADENCE_LOG"
+      fi
+    done
+    run_dirs=()
+    while IFS= read -r run_name; do
+      run_dirs+=("$run_name")
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name 'run-[0-9][0-9][0-9][0-9]-*' -printf '%f\n' | LC_ALL=C sort)
+  fi
+
+  if [[ "$retain" -le 0 ]]; then
+    return 0
+  fi
 
   local count="${#run_dirs[@]}"
   if [[ "$count" -le "$retain" ]]; then
@@ -200,7 +231,7 @@ while true; do
     exit "$ec"
   fi
 
-  prune_old_runs "$OUT_ROOT" "$RETAIN_RUNS"
+  prune_old_runs "$OUT_ROOT" "$RETAIN_RUNS" "$RETAIN_HOURS"
 
   if [[ "$ITERATIONS" -ne 0 && "$iteration" -ge "$ITERATIONS" ]]; then
     echo "completed_iterations=$iteration" | tee -a "$CADENCE_LOG"
