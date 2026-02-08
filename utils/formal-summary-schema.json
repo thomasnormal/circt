@@ -212,6 +212,146 @@
         }
       },
       "additionalProperties": false
+    },
+    "expected_failure_cases": {
+      "type": "object",
+      "required": [
+        "file",
+        "rows",
+        "totals",
+        "unexpected_observed"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "suite",
+              "mode",
+              "id_kind",
+              "id",
+              "status",
+              "expires_on",
+              "matched_count",
+              "expired",
+              "reason"
+            ],
+            "properties": {
+              "suite": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "id_kind": {
+                "type": "string",
+                "enum": [
+                  "base",
+                  "path"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "expires_on": {
+                "type": "string"
+              },
+              "matched_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expired": {
+                "type": "string",
+                "enum": [
+                  "yes",
+                  "no"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "unexpected_observed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "suite",
+              "mode",
+              "status",
+              "base",
+              "path"
+            ],
+            "properties": {
+              "suite": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "totals": {
+          "type": "object",
+          "required": [
+            "observed_fail_like",
+            "matched_expected",
+            "unexpected_observed",
+            "expected_rows",
+            "unmatched_expected",
+            "expired_expected"
+          ],
+          "properties": {
+            "observed_fail_like": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "matched_expected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unexpected_observed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expected_rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unmatched_expected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expired_expected": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

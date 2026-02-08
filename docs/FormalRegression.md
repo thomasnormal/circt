@@ -67,6 +67,12 @@ Gate on known expected-failure budgets per suite/mode:
 utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --fail-on-unexpected-failures
 ```
 
+Gate on per-test expected failure cases with expiry policy:
+
+```bash
+utils/run_formal_all.sh --expected-failure-cases-file utils/formal-expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases
+```
+
 Run formal suites on a fixed cadence (6-hour interval example):
 
 ```bash
@@ -177,6 +183,10 @@ Each run writes:
   `--json-summary`)
 - `<out-dir>/expected-failures-summary.tsv` expected-failure budget comparison
   (when `--expected-failures-file` is used)
+- `<out-dir>/expected-failure-cases-summary.tsv` expected per-test failure case
+  matching summary (when `--expected-failure-cases-file` is used)
+- `<out-dir>/unexpected-failure-cases.tsv` observed fail-like cases not covered
+  by expected failure cases (when `--expected-failure-cases-file` is used)
 - Harnesses treat `BMC_RESULT=SAT|UNSAT|UNKNOWN` and
   `LEC_RESULT=EQ|NEQ|UNKNOWN` tokens as the source of truth for pass/fail
   classification when not in smoke mode.
@@ -196,6 +206,20 @@ Expected-failure budget file:
 - `--expected-failures-file` expects TSV with header:
   - `suite	mode	expected_fail	expected_error	notes`
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
+
+Expected-failure cases file:
+
+- `--expected-failure-cases-file` expects TSV with required columns:
+  - `suite	mode	id`
+- Optional columns:
+  - `id_kind` (`base` or `path`, default: `base`)
+  - `status` (`ANY`, `FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`; default: `ANY`)
+  - `expires_on` (`YYYY-MM-DD`)
+  - `reason`
+- `--fail-on-unexpected-failure-cases` fails if observed fail-like test cases are
+  not matched by the expected-cases file.
+- `--fail-on-expired-expected-failure-cases` fails if any expected case is past
+  its `expires_on` date.
 
 ## Notes
 
