@@ -203,6 +203,10 @@ struct ResolvedNamedBoolExpr {
     Xor,
     Implies,
     Iff,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     Eq,
     Ne
   };
@@ -210,6 +214,7 @@ struct ResolvedNamedBoolExpr {
   unsigned argIndex = 0;
   std::optional<ArgSlice> argSlice;
   bool constValue = false;
+  bool compareSigned = false;
   std::unique_ptr<ResolvedNamedBoolExpr> lhs;
   std::unique_ptr<ResolvedNamedBoolExpr> rhs;
 };
@@ -1011,12 +1016,30 @@ static bool resolveStructuredExprFromDetail(
       binKind = ResolvedNamedBoolExpr::Kind::Implies;
     else if (binOp == "iff")
       binKind = ResolvedNamedBoolExpr::Kind::Iff;
+    else if (binOp == "lt")
+      binKind = ResolvedNamedBoolExpr::Kind::Lt;
+    else if (binOp == "le")
+      binKind = ResolvedNamedBoolExpr::Kind::Le;
+    else if (binOp == "gt")
+      binKind = ResolvedNamedBoolExpr::Kind::Gt;
+    else if (binOp == "ge")
+      binKind = ResolvedNamedBoolExpr::Kind::Ge;
     else if (binOp == "eq")
       binKind = ResolvedNamedBoolExpr::Kind::Eq;
     else if (binOp == "ne")
       binKind = ResolvedNamedBoolExpr::Kind::Ne;
     else
       return false;
+    bool cmpSigned = false;
+    if (*binKind == ResolvedNamedBoolExpr::Kind::Lt ||
+        *binKind == ResolvedNamedBoolExpr::Kind::Le ||
+        *binKind == ResolvedNamedBoolExpr::Kind::Gt ||
+        *binKind == ResolvedNamedBoolExpr::Kind::Ge) {
+      auto cmpSignedAttr = parseBoolLikeAttr("cmp_signed");
+      if (!cmpSignedAttr)
+        return false;
+      cmpSigned = *cmpSignedAttr;
+    }
 
     std::string lhsPrefix = (prefix + "_lhs").str();
     std::string rhsPrefix = (prefix + "_rhs").str();
@@ -1037,6 +1060,7 @@ static bool resolveStructuredExprFromDetail(
 
     auto node = std::make_unique<ResolvedNamedBoolExpr>();
     node->kind = *binKind;
+    node->compareSigned = cmpSigned;
     node->lhs = std::move(lhsNode);
     node->rhs = std::move(rhsNode);
     std::unique_ptr<ResolvedNamedBoolExpr> current = std::move(node);
@@ -5968,6 +5992,114 @@ struct VerifBoundedModelCheckingOpConversion
         }
         return failure();
       };
+      auto getIntegralWidth = [&](Type ty) -> std::optional<unsigned> {
+        if (isa<smt::BoolType>(ty))
+          return 1;
+        if (auto bvTy = dyn_cast<smt::BitVectorType>(ty))
+          return bvTy.getWidth();
+        if (auto intTy = dyn_cast<IntegerType>(ty); intTy &&
+                                                    intTy.getWidth() > 0)
+          return static_cast<unsigned>(intTy.getWidth());
+        return std::nullopt;
+      };
+      auto materializeAsSMTBVForCmp = [&](Value input, unsigned width,
+                                          bool signExtend)
+          -> FailureOr<Value> {
+        auto targetTy = smt::BitVectorType::get(builder.getContext(), width);
+        Value bv = input;
+        if (isa<smt::BoolType>(input.getType())) {
+          auto one = smt::BVConstantOp::create(builder, loc, APInt(1, 1));
+          auto zero = smt::BVConstantOp::create(builder, loc, APInt(1, 0));
+          bv = smt::IteOp::create(builder, loc, input, one, zero);
+        } else if (!isa<smt::BitVectorType>(input.getType())) {
+          bv = typeConverter->materializeTargetConversion(builder, loc, targetTy,
+                                                          input);
+          if (!bv)
+            return failure();
+        }
+        auto bvTy = dyn_cast<smt::BitVectorType>(bv.getType());
+        if (!bvTy)
+          return failure();
+        if (bvTy.getWidth() == width)
+          return bv;
+        if (bvTy.getWidth() > width)
+          return Value(smt::ExtractOp::create(builder, loc, targetTy, 0, bv));
+        unsigned padWidth = width - bvTy.getWidth();
+        Value pad;
+        if (!signExtend || bvTy.getWidth() == 0) {
+          pad = smt::BVConstantOp::create(builder, loc, APInt(padWidth, 0));
+        } else {
+          auto oneBitTy = smt::BitVectorType::get(builder.getContext(), 1);
+          Value signBit = smt::ExtractOp::create(builder, loc, oneBitTy,
+                                                 bvTy.getWidth() - 1, bv);
+          pad = smt::RepeatOp::create(builder, loc, padWidth, signBit);
+        }
+        return Value(smt::ConcatOp::create(builder, loc, pad, bv));
+      };
+      auto evalRelCompare = [&](Value lhs, Value rhs,
+                                ResolvedNamedBoolExpr::Kind kind,
+                                bool compareSigned) -> FailureOr<Value> {
+        auto lhsWidth = getIntegralWidth(lhs.getType());
+        auto rhsWidth = getIntegralWidth(rhs.getType());
+        if (lhsWidth && rhsWidth) {
+          unsigned commonWidth = std::max(*lhsWidth, *rhsWidth);
+          auto lhsBvOr =
+              materializeAsSMTBVForCmp(lhs, commonWidth, compareSigned);
+          auto rhsBvOr =
+              materializeAsSMTBVForCmp(rhs, commonWidth, compareSigned);
+          if (succeeded(lhsBvOr) && succeeded(rhsBvOr)) {
+            smt::BVCmpPredicate pred;
+            switch (kind) {
+            case ResolvedNamedBoolExpr::Kind::Lt:
+              pred = compareSigned ? smt::BVCmpPredicate::slt
+                                   : smt::BVCmpPredicate::ult;
+              break;
+            case ResolvedNamedBoolExpr::Kind::Le:
+              pred = compareSigned ? smt::BVCmpPredicate::sle
+                                   : smt::BVCmpPredicate::ule;
+              break;
+            case ResolvedNamedBoolExpr::Kind::Gt:
+              pred = compareSigned ? smt::BVCmpPredicate::sgt
+                                   : smt::BVCmpPredicate::ugt;
+              break;
+            case ResolvedNamedBoolExpr::Kind::Ge:
+              pred = compareSigned ? smt::BVCmpPredicate::sge
+                                   : smt::BVCmpPredicate::uge;
+              break;
+            default:
+              return failure();
+            }
+            return Value(
+                smt::BVCmpOp::create(builder, loc, pred, *lhsBvOr, *rhsBvOr));
+          }
+        }
+        auto lhsBoolOr = toSMTBool(builder, lhs);
+        auto rhsBoolOr = toSMTBool(builder, rhs);
+        if (failed(lhsBoolOr) || failed(rhsBoolOr))
+          return failure();
+        Value lhsBool = *lhsBoolOr;
+        Value rhsBool = *rhsBoolOr;
+        switch (kind) {
+        case ResolvedNamedBoolExpr::Kind::Lt:
+          return Value(smt::AndOp::create(
+              builder, loc, Value(smt::NotOp::create(builder, loc, lhsBool)),
+              rhsBool));
+        case ResolvedNamedBoolExpr::Kind::Le:
+          return Value(smt::OrOp::create(
+              builder, loc, Value(smt::NotOp::create(builder, loc, lhsBool)),
+              rhsBool));
+        case ResolvedNamedBoolExpr::Kind::Gt:
+          return Value(smt::AndOp::create(
+              builder, loc, lhsBool,
+              Value(smt::NotOp::create(builder, loc, rhsBool))));
+        case ResolvedNamedBoolExpr::Kind::Ge:
+          return Value(smt::OrOp::create(
+              builder, loc, lhsBool,
+              Value(smt::NotOp::create(builder, loc, rhsBool))));
+        default:
+          return failure();
+        }
+      };
       auto evalSubExprAsValue = [&](auto &selfValue,
                                     const ResolvedNamedBoolExpr &subexpr)
           -> FailureOr<Value> {
@@ -5989,7 +6121,11 @@ struct VerifBoundedModelCheckingOpConversion
         case ResolvedNamedBoolExpr::Kind::ReduceNor:
         case ResolvedNamedBoolExpr::Kind::ReduceXnor:
         case ResolvedNamedBoolExpr::Kind::Implies:
-        case ResolvedNamedBoolExpr::Kind::Iff: {
+        case ResolvedNamedBoolExpr::Kind::Iff:
+        case ResolvedNamedBoolExpr::Kind::Lt:
+        case ResolvedNamedBoolExpr::Kind::Le:
+        case ResolvedNamedBoolExpr::Kind::Gt:
+        case ResolvedNamedBoolExpr::Kind::Ge: {
           auto boolOr = self(self, builder, values, subexpr);
           if (failed(boolOr))
             return failure();
@@ -6137,6 +6273,17 @@ struct VerifBoundedModelCheckingOpConversion
         default:
           return failure();
         }
+      }
+      case ResolvedNamedBoolExpr::Kind::Lt:
+      case ResolvedNamedBoolExpr::Kind::Le:
+      case ResolvedNamedBoolExpr::Kind::Gt:
+      case ResolvedNamedBoolExpr::Kind::Ge: {
+        auto lhsValueOr = evalSubExprAsValue(evalSubExprAsValue, *expr.lhs);
+        auto rhsValueOr = evalSubExprAsValue(evalSubExprAsValue, *expr.rhs);
+        if (failed(lhsValueOr) || failed(rhsValueOr))
+          return failure();
+        return evalRelCompare(*lhsValueOr, *rhsValueOr, expr.kind,
+                              expr.compareSigned);
       }
       case ResolvedNamedBoolExpr::Kind::Eq:
       case ResolvedNamedBoolExpr::Kind::Ne: {
