@@ -2127,6 +2127,51 @@ PY
     validate_history_jsonl_line_python "$line" "$file" "$lineno"
   }
 
+  extract_history_jsonl_generated_at_and_run_id() {
+    local line="$1"
+    local file="$2"
+    local lineno="$3"
+    python3 - "$line" "$file" "$lineno" <<'PY'
+import json
+import sys
+
+line = sys.argv[1]
+file = sys.argv[2]
+lineno = sys.argv[3]
+
+try:
+    obj = json.loads(line)
+except Exception:
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if not isinstance(obj, dict):
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+generated_at = obj.get("generated_at_utc")
+if not isinstance(generated_at, str) or not generated_at:
+    print(
+        f"error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+run_id = obj.get("run_id")
+if not isinstance(run_id, str):
+    run_id = ""
+
+print(generated_at)
+print(run_id)
+PY
+  }
+
   utc_to_epoch() {
     local timestamp="$1"
     local epoch
@@ -2545,6 +2590,7 @@ PY
     local line
     local generated_at
     local run_id
+    local -a parsed_fields=()
     local row_epoch
     local now_epoch
     local cutoff_epoch
@@ -2563,11 +2609,9 @@ PY
       for ((i = 0; i < ${#lines[@]}; ++i)); do
         line="${lines[$i]}"
         [[ -z "$line" ]] && continue
-        generated_at="$(printf '%s\n' "$line" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-        if [[ -z "$generated_at" ]]; then
-          echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1))" >&2
-          exit 1
-        fi
+        mapfile -t parsed_fields < <(extract_history_jsonl_generated_at_and_run_id "$line" "$file" "$((i + 1))")
+        generated_at="${parsed_fields[0]:-}"
+        run_id="${parsed_fields[1]:-}"
         if ! row_epoch="$(utc_to_epoch "$generated_at")"; then
           echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1))" >&2
           exit 1
@@ -2576,7 +2620,6 @@ PY
           if [[ "$YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY" == "warn" ]]; then
             echo "warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE $file at line $((i + 1)); dropping row due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
             history_drop_future_jsonl=$((history_drop_future_jsonl + 1))
-            run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
             emit_history_drop_event \
               "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "future_skew"
             continue
@@ -2588,7 +2631,6 @@ PY
           printf '%s\n' "$line" >> "$file"
         else
           history_drop_age_jsonl=$((history_drop_age_jsonl + 1))
-          run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
           emit_history_drop_event \
             "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "age_retention"
         fi
@@ -2604,8 +2646,9 @@ PY
     for ((i = 0; i < start; ++i)); do
       line="${lines[$i]}"
       [[ -z "$line" ]] && continue
-      generated_at="$(printf '%s\n' "$line" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
-      run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+      mapfile -t parsed_fields < <(extract_history_jsonl_generated_at_and_run_id "$line" "$file" "$((i + 1))")
+      generated_at="${parsed_fields[0]:-}"
+      run_id="${parsed_fields[1]:-}"
       history_drop_max_entries_jsonl=$((history_drop_max_entries_jsonl + 1))
       emit_history_drop_event \
         "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "max_entries"
