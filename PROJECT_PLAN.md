@@ -12453,6 +12453,65 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 562
+- Yosys SVA BMC portable lock backend for drop-event files:
+  - Added lock backend policy:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND`
+    - allowed values: `auto|flock|mkdir|none`
+  - Added lock timeout policy:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS`
+    - non-negative integer, default `30`
+  - `auto` behavior now prefers `flock` and falls back to `mkdir` lockdir with
+    one-time warning.
+  - `mkdir` backend uses lock directory:
+    - `${LOCK_FILE}.d`
+    - bounded wait with timeout-based failure.
+  - `flock` backend now errors explicitly when `flock` is unavailable.
+  - `none` backend allows explicit unlocked operation.
+  - Lock backend is consistently applied to both append and trim operations.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`:
+    - runs with `...LOCK_BACKEND=mkdir`.
+    - validates lockdir cleanup (`test ! -d %t/drop-events.lock.d`).
+    - validates invalid backend rejection.
+    - validates invalid timeout rejection.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 45/45 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - `mkdir` lockdir fallback does not yet include stale-lock recovery policy.
+  - Advisory lock semantics still depend on host/filesystem behavior.
+  - Drop-event schema still lacks stable event IDs for dedup/merge.
+  - Parser-backed validation still depends on `python3`.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add stale lockdir age detection and safe recovery policy.
+  - Add per-reason/per-source aggregate counters in summary JSON output.
+  - Add stable event IDs and optional compression/rotation policy.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

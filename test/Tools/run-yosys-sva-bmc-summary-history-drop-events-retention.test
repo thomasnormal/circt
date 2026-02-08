@@ -24,6 +24,8 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE=%t/drop-events.lock \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=mkdir \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS=3 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES=2 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS=1 \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run1.out 2> %t/run1.err
@@ -45,12 +47,15 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE=%t/drop-events.lock \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=mkdir \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS=3 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES=2 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS=1 \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run2.out 2> %t/run2.err
 
 // RUN: test "$(wc -l < %t/drop-events.jsonl)" -eq 2
 // RUN: test -f %t/drop-events.lock
+// RUN: test ! -d %t/drop-events.lock.d
 // RUN: cat %t/drop-events.jsonl | FileCheck %s --check-prefix=DROP
 
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -60,9 +65,25 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES=bogus \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADENTRIES
 
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=bogus \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADBACKEND
+
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS=bogus \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADTIMEOUT
+
 // DROP-NOT: "run_id":"legacy"
 // DROP-NOT: "run_id":"run-future-1"
 // DROP: {"generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
 // DROP: {"generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
 
 // BADENTRIES: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES: bogus (expected non-negative integer)
+// BADBACKEND: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND: bogus (expected auto|flock|mkdir|none)
+// BADTIMEOUT: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS: bogus (expected non-negative integer)
