@@ -30,6 +30,12 @@ Options:
                          TSV with suite/mode expected fail+error budgets
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
+  --expected-failure-cases-file FILE
+                         TSV with expected failing test cases (suite/mode/id)
+  --fail-on-unexpected-failure-cases
+                         Fail when observed failing cases are not expected
+  --fail-on-expired-expected-failure-cases
+                         Fail when any expected case is expired by expires_on
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -72,6 +78,9 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURES=0
+EXPECTED_FAILURE_CASES_FILE=""
+FAIL_ON_UNEXPECTED_FAILURE_CASES=0
+FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -136,6 +145,12 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
+    --expected-failure-cases-file)
+      EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
+    --fail-on-unexpected-failure-cases)
+      FAIL_ON_UNEXPECTED_FAILURE_CASES=1; shift ;;
+    --fail-on-expired-expected-failure-cases)
+      FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=1; shift ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -165,6 +180,18 @@ if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; 
 fi
 if [[ -n "$EXPECTED_FAILURES_FILE" && ! -r "$EXPECTED_FAILURES_FILE" ]]; then
   echo "expected-failures file not readable: $EXPECTED_FAILURES_FILE" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
+  echo "--fail-on-unexpected-failure-cases requires --expected-failure-cases-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
+  echo "--fail-on-expired-expected-failure-cases requires --expected-failure-cases-file" >&2
+  exit 1
+fi
+if [[ -n "$EXPECTED_FAILURE_CASES_FILE" && ! -r "$EXPECTED_FAILURE_CASES_FILE" ]]; then
+  echo "expected-failure-cases file not readable: $EXPECTED_FAILURE_CASES_FILE" >&2
   exit 1
 fi
 
@@ -646,6 +673,255 @@ if fail_on_unexpected and (
           f"fail {row['fail']} (expected {row['expected_fail']}), "
           f"error {row['error']} (expected {row['expected_error']})"
       )
+  raise SystemExit(1)
+PY
+fi
+
+if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
+      "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" || \
+      "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" ]]; then
+  OUT_DIR="$OUT_DIR" \
+  JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
+  EXPECTED_FAILURE_CASES_FILE="$EXPECTED_FAILURE_CASES_FILE" \
+  FAIL_ON_UNEXPECTED_FAILURE_CASES="$FAIL_ON_UNEXPECTED_FAILURE_CASES" \
+  FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
+  python3 - <<'PY'
+import csv
+import datetime as dt
+import json
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
+expected_file_raw = os.environ.get("EXPECTED_FAILURE_CASES_FILE", "")
+expected_path = Path(expected_file_raw) if expected_file_raw else None
+fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == "1"
+fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
+today = dt.date.today()
+
+case_summary_path = out_dir / "expected-failure-cases-summary.tsv"
+unexpected_path = out_dir / "unexpected-failure-cases.tsv"
+
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+result_sources = [
+    ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+    ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+    ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+    ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+    ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+]
+
+observed = []
+for suite, mode, path in result_sources:
+  if not path.exists():
+    continue
+  with path.open() as f:
+    for line in f:
+      line = line.rstrip("\n")
+      if not line:
+        continue
+      parts = line.split("\t")
+      status = parts[0].strip().upper() if parts else ""
+      if status not in fail_like_statuses:
+        continue
+      base = parts[1].strip() if len(parts) > 1 else ""
+      file_path = parts[2].strip() if len(parts) > 2 else ""
+      observed.append(
+          {
+              "suite": suite,
+              "mode": mode,
+              "status": status,
+              "base": base,
+              "path": file_path,
+          }
+      )
+
+expected_rows = []
+if expected_path is not None:
+  with expected_path.open() as f:
+    reader = csv.DictReader(f, delimiter="\t")
+    required_cols = {"suite", "mode", "id"}
+    fieldnames = set(reader.fieldnames or [])
+    if not required_cols.issubset(fieldnames):
+      missing = sorted(required_cols - fieldnames)
+      raise SystemExit(
+          "invalid expected-failure-cases file: "
+          f"missing required columns: {', '.join(missing)}"
+      )
+    seen = set()
+    for idx, row in enumerate(reader):
+      suite = row.get("suite", "").strip()
+      mode = row.get("mode", "").strip()
+      case_id = row.get("id", "").strip()
+      if not suite or not mode or not case_id:
+        raise SystemExit(
+            "invalid expected-failure-cases row: "
+            f"suite/mode/id must be non-empty at data row {idx + 1}"
+        )
+      id_kind = row.get("id_kind", "base").strip().lower() or "base"
+      if id_kind not in {"base", "path"}:
+        raise SystemExit(
+            "invalid expected-failure-cases row for "
+            f"suite={suite} mode={mode} id={case_id}: "
+            "id_kind must be one of base,path"
+        )
+      status = row.get("status", "ANY").strip().upper() or "ANY"
+      if status != "ANY" and status not in fail_like_statuses:
+        raise SystemExit(
+            "invalid expected-failure-cases row for "
+            f"suite={suite} mode={mode} id={case_id}: "
+            f"unsupported status '{status}'"
+        )
+      expires_on = row.get("expires_on", "").strip()
+      expires_date = None
+      if expires_on:
+        try:
+          expires_date = dt.date.fromisoformat(expires_on)
+        except Exception:
+          raise SystemExit(
+              "invalid expected-failure-cases row for "
+              f"suite={suite} mode={mode} id={case_id}: "
+              f"invalid expires_on '{expires_on}' (expected YYYY-MM-DD)"
+          )
+      key = (suite, mode, id_kind, case_id, status)
+      if key in seen:
+        raise SystemExit(
+            "invalid expected-failure-cases file: "
+            f"duplicate row for suite={suite} mode={mode} "
+            f"id_kind={id_kind} id={case_id} status={status}"
+        )
+      seen.add(key)
+      expected_rows.append(
+          {
+              "suite": suite,
+              "mode": mode,
+              "id_kind": id_kind,
+              "id": case_id,
+              "status": status,
+              "expires_on": expires_on,
+              "expires_date": expires_date,
+              "reason": row.get("reason", ""),
+          }
+      )
+
+matched_observed_idx = set()
+expected_summary_rows = []
+for row in expected_rows:
+  matches = []
+  for idx, obs in enumerate(observed):
+    if obs["suite"] != row["suite"] or obs["mode"] != row["mode"]:
+      continue
+    observed_id = obs["base"] if row["id_kind"] == "base" else obs["path"]
+    if observed_id != row["id"]:
+      continue
+    if row["status"] != "ANY" and obs["status"] != row["status"]:
+      continue
+    matches.append(idx)
+  for idx in matches:
+    matched_observed_idx.add(idx)
+  expired = "yes" if row["expires_date"] is not None and row["expires_date"] < today else "no"
+  expected_summary_rows.append(
+      {
+          "suite": row["suite"],
+          "mode": row["mode"],
+          "id_kind": row["id_kind"],
+          "id": row["id"],
+          "status": row["status"],
+          "expires_on": row["expires_on"],
+          "matched_count": len(matches),
+          "expired": expired,
+          "reason": row["reason"],
+      }
+  )
+
+unexpected_observed = []
+for idx, obs in enumerate(observed):
+  if idx in matched_observed_idx:
+    continue
+  unexpected_observed.append(obs)
+
+with case_summary_path.open("w", newline="") as f:
+  writer = csv.DictWriter(
+      f,
+      fieldnames=[
+          "suite",
+          "mode",
+          "id_kind",
+          "id",
+          "status",
+          "expires_on",
+          "matched_count",
+          "expired",
+          "reason",
+      ],
+      delimiter="\t",
+  )
+  writer.writeheader()
+  for row in expected_summary_rows:
+    writer.writerow(row)
+
+with unexpected_path.open("w", newline="") as f:
+  writer = csv.DictWriter(
+      f,
+      fieldnames=["suite", "mode", "status", "base", "path"],
+      delimiter="\t",
+  )
+  writer.writeheader()
+  for row in unexpected_observed:
+    writer.writerow(row)
+
+expired_rows = [row for row in expected_summary_rows if row["expired"] == "yes"]
+unmatched_rows = [row for row in expected_summary_rows if row["matched_count"] == 0]
+totals = {
+    "observed_fail_like": len(observed),
+    "matched_expected": len(matched_observed_idx),
+    "unexpected_observed": len(unexpected_observed),
+    "expected_rows": len(expected_summary_rows),
+    "unmatched_expected": len(unmatched_rows),
+    "expired_expected": len(expired_rows),
+}
+
+try:
+  payload = json.loads(json_summary_path.read_text())
+except Exception:
+  payload = {}
+
+payload["expected_failure_cases"] = {
+    "file": str(expected_path) if expected_path is not None else "",
+    "rows": expected_summary_rows,
+    "unexpected_observed": unexpected_observed,
+    "totals": totals,
+}
+json_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+print(f"expected-failure-cases summary: {case_summary_path}")
+print(f"unexpected-failure-cases summary: {unexpected_path}")
+print(
+    "expected-failure-cases totals: "
+    f"observed_fail_like={totals['observed_fail_like']} "
+    f"matched_expected={totals['matched_expected']} "
+    f"unexpected_observed={totals['unexpected_observed']} "
+    f"expired_expected={totals['expired_expected']} "
+    f"unmatched_expected={totals['unmatched_expected']}"
+)
+
+if fail_on_unexpected and unexpected_observed:
+  print("unexpected observed failure cases:")
+  for row in unexpected_observed:
+    print(
+        f"  {row['suite']} {row['mode']} {row['status']} "
+        f"base={row['base']} path={row['path']}"
+    )
+  raise SystemExit(1)
+
+if fail_on_expired and expired_rows:
+  print("expired expected failure cases:")
+  for row in expired_rows:
+    print(
+        f"  {row['suite']} {row['mode']} id_kind={row['id_kind']} "
+        f"id={row['id']} expires_on={row['expires_on']} matched_count={row['matched_count']}"
+    )
   raise SystemExit(1)
 PY
 fi

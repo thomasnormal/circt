@@ -31804,3 +31804,79 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Budgeting is currently aggregate-count based only (no per-test identifier
   matching).
 - No expectation-expiry policy (staleness enforcement) yet.
+
+## Iteration 643 - February 8, 2026
+
+### Per-Test Expected Failure Case Gating in `run_formal_all.sh`
+
+- Added case-level expected-failure input:
+  - `--expected-failure-cases-file <file>`
+- Added case-level gates:
+  - `--fail-on-unexpected-failure-cases`
+  - `--fail-on-expired-expected-failure-cases`
+- Added case-level artifacts:
+  - `<out-dir>/expected-failure-cases-summary.tsv`
+  - `<out-dir>/unexpected-failure-cases.tsv`
+- Added JSON summary enrichment:
+  - top-level `expected_failure_cases` object
+
+### Expected-Cases File Contract
+
+- Required TSV columns:
+  - `suite`, `mode`, `id`
+- Optional TSV columns:
+  - `id_kind` (`base|path`, default `base`)
+  - `status` (`ANY|FAIL|ERROR|XFAIL|XPASS|EFAIL`, default `ANY`)
+  - `expires_on` (`YYYY-MM-DD`)
+  - `reason`
+- Matching currently consumes fail-like rows from suite result files for:
+  - `sv-tests` BMC/LEC
+  - `verilator-verification` BMC/LEC
+  - `yosys/tests/sva` LEC
+
+### Validation and Diagnostics
+
+- Added strict expected-cases validation:
+  - required columns present
+  - duplicate row rejection
+  - `id_kind` enum validation
+  - `status` enum validation
+  - `expires_on` date validation
+- Added explicit diagnostics on gate failures:
+  - unexpected observed cases
+  - expired expected cases
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - case-level positive match scenario
+    - case-level unexpected observed scenario (failure)
+    - case-level expired expectation scenario (failure)
+    - JSON summary check for `expected_failure_cases`
+
+### Documentation and Schema
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added case-level gate usage and expected-cases TSV format
+  - `utils/formal-summary-schema.json`
+    - added optional `expected_failure_cases` object schema
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-expected-cases-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-smoke.tsv --fail-on-unexpected-failure-cases`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Case-level ingestion does not yet cover `yosys/tests/sva` BMC, OpenTitan LEC,
+  or AVIP compile lanes.
+- Case matching supports exact `base`/`path` keys only (no regex groups).
+- No built-in auto-prune/update flow yet for matched-and-expired expectations.

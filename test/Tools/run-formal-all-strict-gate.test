@@ -23,7 +23,7 @@
 // RUN: FileCheck %s --check-prefix=AVIPENV < %t/out-avip/avip-foo_avip.log
 // RUN: FileCheck %s --check-prefix=OPENTITANPATH < %t/out-avip/summary.tsv
 // RUN: FileCheck %s --check-prefix=OPENTITANENV < %t/out-avip/opentitan-lec.log
-// RUN: printf '#!/usr/bin/env bash\necho "sv-tests LEC summary: total=10 pass=9 fail=1 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: printf '#!/usr/bin/env bash\nprintf "FAIL\\tbasic02\\t%t/sv-tests/tests/basic02.sv\\n" > "${OUT:-/dev/null}"\necho "sv-tests LEC summary: total=10 pass=9 fail=1 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
 // RUN: chmod +x %t/utils/run_sv_tests_circt_lec.sh
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t1\t0\tknown_issue\n' > %t/expected-failures.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/expected-failures.tsv --fail-on-unexpected-failures --json-summary %t/out-expected-ok/summary.json
@@ -31,7 +31,15 @@
 // RUN: FileCheck %s --check-prefix=JSONEXPECTED < %t/out-expected-ok/summary.json
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\nsv-tests\tLEC\t0\t0\n' > %t/expected-failures-tight.tsv
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-fail --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/expected-failures-tight.tsv --fail-on-unexpected-failures' 2>&1 | FileCheck %s --check-prefix=EXPECTEDFAIL
-// RUN: printf '#!/usr/bin/env bash\necho "sv-tests LEC summary: total=10 pass=10 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tknown_case\n' > %t/expected-failure-cases.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases --json-summary %t/out-expected-cases-ok/summary.json
+// RUN: FileCheck %s --check-prefix=CASEOK < %t/out-expected-cases-ok/expected-failure-cases-summary.tsv
+// RUN: FileCheck %s --check-prefix=JSONCASE < %t/out-expected-cases-ok/summary.json
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tother_case\tbase\tFAIL\t2099-01-01\twrong_case\n' > %t/expected-failure-cases-unexpected.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-unexpected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases-unexpected.tsv --fail-on-unexpected-failure-cases' 2>&1 | FileCheck %s --check-prefix=CASEUNEXPECTED
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2000-01-01\texpired_case\n' > %t/expected-failure-cases-expired.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-expired --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases-expired.tsv --fail-on-expired-expected-failure-cases' 2>&1 | FileCheck %s --check-prefix=CASEEXPIRED
+// RUN: printf '#!/usr/bin/env bash\nprintf "PASS\\tbasic01\\t%t/sv-tests/tests/basic01.sv\\n" > "${OUT:-/dev/null}"\necho "sv-tests LEC summary: total=10 pass=10 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
 // RUN: chmod +x %t/utils/run_sv_tests_circt_lec.sh
 //
 // RUN: printf '#!/usr/bin/env bash\necho "verilator-verification summary: total=10 pass=10 fail=0 xfail=0 xpass=1 error=0 skip=0"\n' > %t/utils/run_verilator_verification_circt_bmc.sh
@@ -64,6 +72,13 @@
 // JSONEXPECTED: "unexpected_fail": 0
 // EXPECTEDFAIL: unexpected failure budget overruns:
 // EXPECTEDFAIL: sv-tests LEC: fail 1 (expected 0), error 0 (expected 0)
+// CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
+// JSONCASE: "expected_failure_cases"
+// JSONCASE: "matched_count": 1
+// CASEUNEXPECTED: unexpected observed failure cases:
+// CASEUNEXPECTED: sv-tests LEC FAIL base=basic02 path={{.*}}basic02.sv
+// CASEEXPIRED: expired expected failure cases:
+// CASEEXPIRED: sv-tests LEC id_kind=base id=basic02 expires_on=2000-01-01 matched_count=1
 //
 // STRICTXPASS: strict gate failures:
 // STRICTXPASS: verilator-verification BMC: xpass increased (0 -> 1, window=1)
