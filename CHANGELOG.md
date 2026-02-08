@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 506 - February 8, 2026
+
+### Summary
+
+Extended expression-backed mixed-event witness synthesis from bit-selects to
+constant part-select ranges (for example `signal_expr = "bus[3:1]"`) so
+event-arm activity can be attributed for common packed-vector slices.
+
+### Fixes
+
+1. **Part-select parsing and resolution for expression-backed witnesses**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended expression-name resolution to accept:
+     - direct input names (`foo`)
+     - constant bit-select names (`foo[0]`)
+     - constant part-select names (`foo[3:1]`)
+   - Added validation for malformed range syntax and unsupported `msb < lsb`
+     cases.
+
+2. **SMT evaluation support for range-selected arguments**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `ResolvedNamedBoolExpr::Arg` lowering now supports:
+     - width-1 slice truthiness via `== 1`
+     - width>1 slice truthiness via `!= 0`
+   - Lowering uses `smt.bv.extract` and explicit compare operations, preserving
+     deterministic witness generation.
+
+3. **New conversion regression**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-part-select.mlir`
+   - Verifies witness declaration and firing logic for:
+     - `signal_expr = "bus[3:1]"`
+     - `iff_expr = "en"`
+   - Covers both `for-smtlib-export=true` and runtime lowering.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witness-part-select.mlir`: PASS
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Expression witness lowering still reparses syntax text instead of consuming
+  canonical Slang expression IDs/graphs.
+- Reductions, casts, concatenations/replications, and indexed part-selects
+  (`+:`/`-:`) remain unsupported in expression-backed witness synthesis.
+- Property/procedural origin metadata is still too shallow for robust
+  `always @(property)` diagnostics.
+
 ## Iteration 505 - February 8, 2026
 
 ### Summary

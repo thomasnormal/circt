@@ -161,10 +161,14 @@ struct ParsedNamedBoolExpr {
 };
 
 struct ResolvedNamedBoolExpr {
+  struct ArgSlice {
+    unsigned lsb = 0;
+    unsigned msb = 0;
+  };
   enum class Kind { Arg, Const, Not, And, Or, Xor, Eq, Ne };
   Kind kind = Kind::Arg;
   unsigned argIndex = 0;
-  std::optional<unsigned> bitIndex;
+  std::optional<ArgSlice> argSlice;
   bool constValue = false;
   std::unique_ptr<ResolvedNamedBoolExpr> lhs;
   std::unique_ptr<ResolvedNamedBoolExpr> rhs;
@@ -212,7 +216,7 @@ private:
 
   static bool isIdentifierChar(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' ||
-           c == '.' || c == '[' || c == ']';
+           c == '.' || c == '[' || c == ']' || c == ':';
   }
 
   static std::optional<bool> parseBoolLiteral(StringRef text) {
@@ -451,11 +455,13 @@ static std::unique_ptr<ResolvedNamedBoolExpr>
 resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
                      const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
                      size_t numNonStateArgs) {
-  auto resolveArgName = [&](StringRef name) -> std::optional<std::pair<unsigned, std::optional<unsigned>>> {
+  auto resolveArgName = [&](StringRef name)
+      -> std::optional<std::pair<unsigned, std::optional<ResolvedNamedBoolExpr::ArgSlice>>> {
     if (auto it = inputNameToArgIndex.find(name);
         it != inputNameToArgIndex.end() && it->second < numNonStateArgs)
-      return std::pair<unsigned, std::optional<unsigned>>{it->second,
-                                                           std::nullopt};
+      return std::pair<unsigned,
+                       std::optional<ResolvedNamedBoolExpr::ArgSlice>>{
+          it->second, std::nullopt};
 
     size_t lbracket = name.find_last_of('[');
     size_t rbracket = name.find_last_of(']');
@@ -464,15 +470,29 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
       return std::nullopt;
     StringRef base = name.take_front(lbracket);
     StringRef indexText = name.slice(lbracket + 1, rbracket);
-    if (indexText.contains(':'))
-      return std::nullopt;
-    unsigned bit = 0;
-    if (indexText.getAsInteger(10, bit))
-      return std::nullopt;
+    std::optional<ResolvedNamedBoolExpr::ArgSlice> slice;
+    if (size_t colon = indexText.find(':'); colon != StringRef::npos) {
+      StringRef msbText = indexText.take_front(colon);
+      StringRef lsbText = indexText.drop_front(colon + 1);
+      if (msbText.empty() || lsbText.empty())
+        return std::nullopt;
+      unsigned msb = 0;
+      unsigned lsb = 0;
+      if (msbText.getAsInteger(10, msb) || lsbText.getAsInteger(10, lsb) ||
+          msb < lsb)
+        return std::nullopt;
+      slice = ResolvedNamedBoolExpr::ArgSlice{lsb, msb};
+    } else {
+      unsigned bit = 0;
+      if (indexText.getAsInteger(10, bit))
+        return std::nullopt;
+      slice = ResolvedNamedBoolExpr::ArgSlice{bit, bit};
+    }
     auto it = inputNameToArgIndex.find(base);
     if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
       return std::nullopt;
-    return std::pair<unsigned, std::optional<unsigned>>{it->second, bit};
+    return std::pair<unsigned, std::optional<ResolvedNamedBoolExpr::ArgSlice>>{
+        it->second, slice};
   };
 
   auto resolved = std::make_unique<ResolvedNamedBoolExpr>();
@@ -487,7 +507,7 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
       return {};
     resolved->kind = ResolvedNamedBoolExpr::Kind::Arg;
     resolved->argIndex = argOr->first;
-    resolved->bitIndex = argOr->second;
+    resolved->argSlice = argOr->second;
     return resolved;
   }
   case ParsedNamedBoolExpr::Kind::Not: {
@@ -5193,27 +5213,38 @@ struct VerifBoundedModelCheckingOpConversion
       case ResolvedNamedBoolExpr::Kind::Arg:
         if (expr.argIndex >= values.size())
           return failure();
-        if (!expr.bitIndex)
+        if (!expr.argSlice)
           return toSMTBool(builder, values[expr.argIndex]);
         {
           Value value = values[expr.argIndex];
-          unsigned bit = *expr.bitIndex;
+          auto slice = *expr.argSlice;
+          unsigned lsb = slice.lsb;
+          unsigned msb = slice.msb;
+          if (lsb > msb)
+            return failure();
           if (isa<smt::BoolType>(value.getType())) {
-            if (bit != 0)
+            if (lsb != 0 || msb != 0)
               return failure();
             return value;
           }
           if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
-            if (bit >= bvTy.getWidth())
+            if (msb >= bvTy.getWidth())
               return failure();
-            auto bitTy = smt::BitVectorType::get(builder.getContext(), 1);
-            auto bitValue =
-                smt::ExtractOp::create(builder, loc, bitTy, bit, value);
-            auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
-            return Value(smt::EqOp::create(builder, loc, bitValue, one));
+            unsigned width = msb - lsb + 1;
+            auto extractTy =
+                smt::BitVectorType::get(builder.getContext(), width);
+            auto extractValue =
+                smt::ExtractOp::create(builder, loc, extractTy, lsb, value);
+            if (width == 1) {
+              auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
+              return Value(smt::EqOp::create(builder, loc, extractValue, one));
+            }
+            auto zero = smt::BVConstantOp::create(builder, loc, 0, width);
+            return Value(
+                smt::DistinctOp::create(builder, loc, extractValue, zero));
           }
           if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
-            if (intTy.getWidth() == 1 && bit == 0)
+            if (intTy.getWidth() == 1 && lsb == 0 && msb == 0)
               return toSMTBool(builder, value);
           }
           return failure();
