@@ -23253,3 +23253,55 @@ CIRCT/slang correctly enforces LRM restrictions.
   rely on text fallback.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 464 - February 8, 2026
+
+### Structured Binary Operator Expansion: `implies` / `iff` and Case Equality Families
+
+- Extended ImportVerilog structured event extraction to recognize additional
+  binary operator families:
+  - Logical implication / equivalence:
+    - `a -> b`  -> `*_bin_op = "implies"`
+    - `a <-> b` -> `*_bin_op = "iff"`
+  - Case / wildcard equality families now map into structured equality metadata:
+    - `===`, `==?` -> `*_bin_op = "eq"`
+    - `!==`, `!=?` -> `*_bin_op = "ne"`
+- Extended VerifToSMT structured resolver and evaluator with new expression
+  kinds:
+  - `Implies`: lowered as `or(not(lhs), rhs)`
+  - `Iff`: lowered as boolean equality
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-implies-iff-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added `SequenceSignalEventListStructuredImplication`
+    - Added `SequenceSignalEventListStructuredCaseEquality`
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (14 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured metadata still lacks explicit grouping/parenthesis nodes.
+- Structured comparison/operator lowering is still boolean-tree oriented and
+  does not yet cover full SystemVerilog width/sign comparison semantics.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.

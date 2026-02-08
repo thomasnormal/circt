@@ -9255,6 +9255,52 @@ ninja -C build circt-verilog
   - Investigate and regression-test the `llhd.drv` struct-ref diagnostic path
     in `circt-sim`.
 
+### Iteration 464
+- Structured binary operator coverage expansion:
+  - ImportVerilog structured metadata now captures:
+    - logical implication / equivalence (`implies`, `iff`)
+    - case / wildcard equality families (mapped to `eq` / `ne` metadata)
+  - VerifToSMT structured resolver now supports `signal_bin_op` / `iff_bin_op`
+    values:
+    - `implies`
+    - `iff`
+  - Added new resolver node kinds and lowering:
+    - `Implies` lowers as `or(not(lhs), rhs)`.
+    - `Iff` lowers as boolean equality.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-implies-iff-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+    - `SequenceSignalEventListStructuredImplication`
+    - `SequenceSignalEventListStructuredCaseEquality`
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (14 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured metadata still lacks explicit grouping/parenthesis nodes.
+  - VerifToSMT structured expression lowering still models comparisons as
+    boolean-expression trees and does not yet implement full SystemVerilog
+    width/sign comparison semantics for all operator families.
+  - OpenTitan `prim_fifo_sync` still reports repeated `llhd.drv`
+    `interpretOperation` diagnostics.
+- Long-term features to prioritize:
+  - Add structured grouping nodes and extend tree lowering to preserve all
+    precedence-sensitive shapes without text fallback.
+  - Implement width/sign-aware value comparison semantics in structured witness
+    lowering for broader operator coverage.
+  - Diagnose and fix `circt-sim` `llhd.drv` struct-ref diagnostics (then lock
+    with targeted simulator regressions).
+
 ---
 
 ## Architecture Reference

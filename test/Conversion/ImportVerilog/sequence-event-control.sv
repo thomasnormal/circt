@@ -452,3 +452,45 @@ module SequenceSignalEventListStructuredUnaryTree;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for implication/equivalence binary operators.
+module SequenceSignalEventListStructuredImplication;
+  logic clk, q, a, b;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredImplication
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "implies"
+  // CHECK-DAG: signal_lhs_name = "a"
+  // CHECK-DAG: signal_rhs_name = "b"
+  // CHECK-DAG: iff_bin_op = "iff"
+  // CHECK-DAG: iff_lhs_name = "a"
+  // CHECK-DAG: iff_rhs_name = "b"
+  always @(seq or posedge (a -> b) iff (a <-> b)) begin
+    q <= ~q;
+  end
+endmodule
+
+// Test structured metadata for case/wildcard equality families.
+module SequenceSignalEventListStructuredCaseEquality;
+  logic clk, q, a, b;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredCaseEquality
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "eq"
+  // CHECK-DAG: signal_lhs_name = "a"
+  // CHECK-DAG: signal_rhs_name = "b"
+  // CHECK-DAG: iff_bin_op = "ne"
+  // CHECK-DAG: iff_lhs_name = "a"
+  // CHECK-DAG: iff_rhs_name = "b"
+  always @(seq or posedge (a === b) iff (a !== b)) begin
+    q <= ~q;
+  end
+endmodule
