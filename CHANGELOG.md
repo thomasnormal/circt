@@ -28860,3 +28860,91 @@ CIRCT/slang correctly enforces LRM restrictions.
   routing yet.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 594 - February 8, 2026
+
+### Yosys SVA BMC Environment-Aware Profile Routing
+
+- Added route selector env:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE`
+- Added route catalog env:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON`
+- Route specs support profile layer keys:
+  - `default_list`, `profile_list`, `overlay_list`
+- Selected route layers are merged with explicit layer env vars in deterministic
+  order:
+  - route defaults, route profiles, route overlays, explicit defaults,
+    explicit profiles, explicit overlays
+
+### Migration Semantics
+
+- Added strict route schema validation:
+  - routes JSON must be a non-empty object
+  - route names must match `[A-Za-z0-9][A-Za-z0-9_.-]*`
+  - route entries must be non-empty objects
+  - only `default_list`, `profile_list`, `overlay_list` keys are accepted
+- Route list fields accept either:
+  - comma-separated profile-name string
+  - JSON array of profile-name strings
+- Added diagnostics for:
+  - route selection without route catalog JSON
+  - unknown route name
+  - invalid route schema/keys
+- Reused source-scoped unknown-profile diagnostics for route-derived list
+  entries.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-routes.test`
+    - positive route-based layering + explicit merge behavior
+    - missing route-catalog rejection
+    - unknown route rejection
+    - invalid routes JSON-shape rejection
+    - invalid route-key rejection
+    - missing profiles JSON rejection when route layers are active
+- Focused lit run:
+  - 10/10 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-routes.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Route selection is explicit; there is no built-in auto-resolution by suite
+  or CI environment.
+- Selector macros are non-parameterized and local to one JSON policy payload.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.

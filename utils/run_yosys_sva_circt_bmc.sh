@@ -60,6 +60,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON="${YOS
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2022,6 +2024,8 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_profile_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST"
   local drop_events_rewrite_selector_profile_default_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_DEFAULT_LIST"
   local drop_events_rewrite_selector_profile_overlay_list="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST"
+  local drop_events_rewrite_selector_profile_route="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE"
+  local drop_events_rewrite_selector_profile_routes_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3024,7 +3028,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3056,8 +3060,10 @@ rewrite_selector_profiles_json_raw = sys.argv[18]
 rewrite_selector_profile_list_raw = sys.argv[19]
 rewrite_selector_profile_default_list_raw = sys.argv[20]
 rewrite_selector_profile_overlay_list_raw = sys.argv[21]
-rewrite_row_generated_at_utc_min = sys.argv[22]
-rewrite_row_generated_at_utc_max = sys.argv[23]
+rewrite_selector_profile_route_raw = sys.argv[22]
+rewrite_selector_profile_routes_json_raw = sys.argv[23]
+rewrite_row_generated_at_utc_min = sys.argv[24]
+rewrite_row_generated_at_utc_max = sys.argv[25]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3553,6 +3559,100 @@ def parse_selector_profile_name_list(raw: str, field_name: str):
     return names
 
 
+def parse_selector_profile_name_array(payload, field_name: str):
+    if not isinstance(payload, list) or not payload:
+        fail(
+            f"error: invalid {field_name}: expected non-empty array of profile names"
+        )
+    names = []
+    seen = set()
+    for token in payload:
+        if not isinstance(token, str) or not token.strip():
+            fail(
+                f"error: invalid {field_name}: expected non-empty string entries"
+            )
+        name = token.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            fail(
+                f"error: invalid {field_name}: invalid profile name '{name}'"
+            )
+        if name in seen:
+            fail(
+                f"error: invalid {field_name}: duplicate profile name '{name}'"
+            )
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def parse_selector_profile_routes(raw: str):
+    if not raw:
+        return None
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
+    )
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        fail(f"error: invalid {field_name}: expected JSON object")
+    if not isinstance(payload, dict) or not payload:
+        fail(f"error: invalid {field_name}: expected non-empty JSON object")
+
+    routes = {}
+    for route_name, route_spec in payload.items():
+        if not isinstance(route_name, str) or not route_name:
+            fail(
+                f"error: invalid {field_name}: route names must be non-empty strings"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", route_name):
+            fail(
+                f"error: invalid {field_name}: invalid route name '{route_name}'"
+            )
+        route_field = f"{field_name}.{route_name}"
+        if not isinstance(route_spec, dict) or not route_spec:
+            fail(
+                f"error: invalid {route_field}: expected non-empty object"
+            )
+        unknown_keys = sorted(
+            set(route_spec.keys()) - {"default_list", "profile_list", "overlay_list"}
+        )
+        if unknown_keys:
+            fail(
+                f"error: invalid {route_field}: unknown key '{unknown_keys[0]}'"
+            )
+
+        def parse_route_name_list(route_value, route_field_name: str):
+            if isinstance(route_value, str):
+                return parse_selector_profile_name_list(route_value, route_field_name)
+            return parse_selector_profile_name_array(route_value, route_field_name)
+
+        default_names = []
+        if "default_list" in route_spec:
+            default_names = parse_route_name_list(
+                route_spec["default_list"], f"{route_field}.default_list"
+            )
+        profile_names = []
+        if "profile_list" in route_spec:
+            profile_names = parse_route_name_list(
+                route_spec["profile_list"], f"{route_field}.profile_list"
+            )
+        overlay_names = []
+        if "overlay_list" in route_spec:
+            overlay_names = parse_route_name_list(
+                route_spec["overlay_list"], f"{route_field}.overlay_list"
+            )
+        if not default_names and not profile_names and not overlay_names:
+            fail(
+                f"error: invalid {route_field}: expected at least one list key"
+            )
+        routes[route_name] = {
+            "default_names": default_names,
+            "profile_names": profile_names,
+            "overlay_names": overlay_names,
+        }
+    return routes
+
+
 def parse_selector_profiles(raw: str, macro_specs):
     if not raw:
         return None
@@ -3702,10 +3802,56 @@ rewrite_selector_profile_overlay_names = parse_selector_profile_name_list(
     rewrite_selector_profile_overlay_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
 )
+rewrite_selector_profile_routes = parse_selector_profile_routes(
+    rewrite_selector_profile_routes_json_raw
+)
+rewrite_selector_profile_route = rewrite_selector_profile_route_raw.strip()
+if rewrite_selector_profile_route:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", rewrite_selector_profile_route):
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE: "
+            f"invalid route name '{rewrite_selector_profile_route}'"
+        )
+    if rewrite_selector_profile_routes is None:
+        fail(
+            "error: "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE "
+            "requires "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
+        )
+selected_route_spec = None
+if rewrite_selector_profile_route:
+    selected_route_spec = rewrite_selector_profile_routes.get(
+        rewrite_selector_profile_route
+    )
+    if selected_route_spec is None:
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE: "
+            f"unknown route '{rewrite_selector_profile_route}'"
+        )
 rewrite_selector_profiles = parse_selector_profiles(
     rewrite_selector_profiles_json_raw, rewrite_selector_macros
 )
 rewrite_selector_profile_requests = []
+if selected_route_spec is not None:
+    route_base_field = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON"
+        f".{rewrite_selector_profile_route}"
+    )
+    for profile_name in selected_route_spec["default_names"]:
+        rewrite_selector_profile_requests.append(
+            (profile_name, f"{route_base_field}.default_list")
+        )
+    for profile_name in selected_route_spec["profile_names"]:
+        rewrite_selector_profile_requests.append(
+            (profile_name, f"{route_base_field}.profile_list")
+        )
+    for profile_name in selected_route_spec["overlay_names"]:
+        rewrite_selector_profile_requests.append(
+            (profile_name, f"{route_base_field}.overlay_list")
+        )
 for profile_name in rewrite_selector_profile_default_names:
     rewrite_selector_profile_requests.append(
         (
