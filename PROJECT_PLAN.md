@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 511)
+## Current Status - February 8, 2026 (Iteration 512)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions + indexed dynamic selects, including affine indices (`i +/- c`, `c + i`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + affine indexed selects and now affine dynamic text-parser fallback (`bus[idx-1]`, `bus[idx+1+:w]`, `bus[idx-1-:w]`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,65 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 512
+
+1. **Text-parser fallback now supports affine dynamic slice expressions**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended expression-name resolution for fallback `*_expr` paths to handle:
+     - dynamic bit-selects: `bus[idx - 1]`, `bus[idx + 1]`
+     - indexed part-selects: `bus[idx + 1 +: w]`, `bus[idx - 1 -: w]`
+   - This closes a practical robustness gap when structured `*_dyn_*` attrs are
+     not present and we must rely on expression text.
+
+2. **Parser normalization and tokenization hardening**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added whitespace compaction before expression parsing so bracketed forms
+     with spaces are accepted consistently.
+   - Extended identifier token support to include `+` / `-` for index text
+     inside `[...]`.
+   - Added affine index string normalization in resolver with one-symbol affine
+     transforms (scale/offset) reused across bit-select and indexed part-select
+     fallback handling.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-text.mlir`
+   - New coverage validates fallback text expressions for:
+     - `bus[idx - 1]`
+     - `bus[jdx + 1 +: 2]`
+     - `bus[idx - 1 -: 1]`
+   - Existing affine structured frontend regression remains in:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt circt-verilog`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (8/8)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Dynamic fallback now handles one-symbol affine index forms, but does not
+     model multi-symbol or non-linear index arithmetic.
+   - Long-term best path remains canonical Slang expression graph/ID metadata so
+     VerifToSMT does not need to reparse syntax text.
+   - Highest-value missing semantics remain:
+     - typed casts (including 4-state behavior),
+     - concatenation/replication,
+     - richer builtin/system expression coverage.
 
 ### Session Summary - Iteration 511
 

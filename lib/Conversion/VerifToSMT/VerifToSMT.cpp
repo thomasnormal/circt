@@ -254,7 +254,8 @@ private:
 
   static bool isIdentifierChar(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' ||
-           c == '.' || c == '[' || c == ']' || c == ':';
+           c == '.' || c == '[' || c == ']' || c == ':' || c == '+' ||
+           c == '-';
   }
 
   static std::optional<bool> parseBoolLiteral(StringRef text) {
@@ -552,7 +553,12 @@ private:
 
 static std::unique_ptr<ParsedNamedBoolExpr>
 parseNamedBoolExpr(StringRef text) {
-  NamedBoolExprParser parser(text.trim());
+  std::string compact;
+  compact.reserve(text.size());
+  for (char c : text)
+    if (!std::isspace(static_cast<unsigned char>(c)))
+      compact.push_back(c);
+  NamedBoolExprParser parser(compact);
   return parser.parse();
 }
 
@@ -560,8 +566,80 @@ static std::unique_ptr<ResolvedNamedBoolExpr>
 resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
                      const DenseMap<StringRef, unsigned> &inputNameToArgIndex,
                      size_t numNonStateArgs) {
+  struct ParsedAffineIndex {
+    StringRef name;
+    int64_t scale = 1;
+    int64_t offset = 0;
+  };
   auto resolveArgName = [&](StringRef name)
       -> std::optional<std::pair<unsigned, std::optional<ResolvedNamedBoolExpr::ArgSlice>>> {
+    auto parseSignedInt = [&](StringRef text) -> std::optional<int64_t> {
+      int64_t value = 0;
+      if (text.empty() || text.getAsInteger(10, value))
+        return std::nullopt;
+      return value;
+    };
+    auto isNameChar = [](char c) {
+      return std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+             c == '$' || c == '.';
+    };
+    auto parseSignedName = [&](StringRef text)
+        -> std::optional<std::pair<StringRef, int64_t>> {
+      if (text.empty())
+        return std::nullopt;
+      int64_t scale = 1;
+      if (text.front() == '+' || text.front() == '-') {
+        scale = text.front() == '-' ? -1 : 1;
+        text = text.drop_front();
+      }
+      if (text.empty())
+        return std::nullopt;
+      if (!std::isalpha(static_cast<unsigned char>(text.front())) &&
+          text.front() != '_' && text.front() != '$')
+        return std::nullopt;
+      if (llvm::any_of(text, [&](char c) { return !isNameChar(c); }))
+        return std::nullopt;
+      return std::pair<StringRef, int64_t>{text, scale};
+    };
+    auto parseAffineIndex = [&](StringRef text) -> std::optional<ParsedAffineIndex> {
+      if (auto sym = parseSignedName(text))
+        return ParsedAffineIndex{sym->first, sym->second, 0};
+
+      size_t opPos = StringRef::npos;
+      for (size_t i = 1; i < text.size(); ++i) {
+        if (text[i] == '+' || text[i] == '-') {
+          opPos = i;
+          break;
+        }
+      }
+      if (opPos == StringRef::npos)
+        return std::nullopt;
+
+      char op = text[opPos];
+      StringRef lhs = text.take_front(opPos);
+      StringRef rhs = text.drop_front(opPos + 1);
+      if (lhs.empty() || rhs.empty())
+        return std::nullopt;
+
+      if (auto lhsSym = parseSignedName(lhs)) {
+        if (auto rhsConst = parseSignedInt(rhs)) {
+          int64_t offset = op == '+' ? *rhsConst : -*rhsConst;
+          return ParsedAffineIndex{lhsSym->first, lhsSym->second, offset};
+        }
+      }
+
+      if (auto lhsConst = parseSignedInt(lhs)) {
+        if (auto rhsSym = parseSignedName(rhs)) {
+          int64_t scale = rhsSym->second;
+          int64_t offset = *lhsConst;
+          if (op == '-')
+            scale = -scale;
+          return ParsedAffineIndex{rhsSym->first, scale, offset};
+        }
+      }
+      return std::nullopt;
+    };
+
     if (auto it = inputNameToArgIndex.find(name);
         it != inputNameToArgIndex.end() && it->second < numNonStateArgs)
       return std::pair<unsigned,
@@ -576,7 +654,49 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
     StringRef base = name.take_front(lbracket);
     StringRef indexText = name.slice(lbracket + 1, rbracket);
     std::optional<ResolvedNamedBoolExpr::ArgSlice> slice;
-    if (size_t colon = indexText.find(':'); colon != StringRef::npos) {
+    if (size_t upPos = indexText.find("+:"); upPos != StringRef::npos ||
+        indexText.find("-:") != StringRef::npos) {
+      size_t downPos = indexText.find("-:");
+      bool indexedDown =
+          downPos != StringRef::npos &&
+          (upPos == StringRef::npos || downPos < upPos);
+      size_t opPos = indexedDown ? downPos : upPos;
+      StringRef startText = indexText.take_front(opPos);
+      StringRef widthText = indexText.drop_front(opPos + 2);
+      if (startText.empty() || widthText.empty())
+        return std::nullopt;
+      int64_t width = 0;
+      if (widthText.getAsInteger(10, width) || width <= 0)
+        return std::nullopt;
+      int64_t downAdjust = indexedDown ? (width - 1) : 0;
+      if (auto startConst = parseSignedInt(startText)) {
+        int64_t lsb = *startConst - downAdjust;
+        int64_t msb = lsb + width - 1;
+        if (lsb < 0 || msb < lsb ||
+            msb > std::numeric_limits<unsigned>::max())
+          return std::nullopt;
+        slice = ResolvedNamedBoolExpr::ArgSlice{static_cast<unsigned>(lsb),
+                                                 static_cast<unsigned>(msb)};
+      } else if (auto affine = parseAffineIndex(startText)) {
+        auto dynIt = inputNameToArgIndex.find(affine->name);
+        if (dynIt == inputNameToArgIndex.end() ||
+            dynIt->second >= numNonStateArgs)
+          return std::nullopt;
+        if ((affine->scale != 1 && affine->scale != -1) ||
+            affine->offset < std::numeric_limits<int32_t>::min() ||
+            affine->offset > std::numeric_limits<int32_t>::max())
+          return std::nullopt;
+        ResolvedNamedBoolExpr::ArgSlice dynSlice;
+        dynSlice.dynamicIndexArg = dynIt->second;
+        dynSlice.dynamicIndexSign = static_cast<int32_t>(affine->scale);
+        dynSlice.dynamicIndexOffset =
+            static_cast<int32_t>(affine->offset - downAdjust);
+        dynSlice.dynamicWidth = static_cast<unsigned>(width);
+        slice = dynSlice;
+      } else {
+        return std::nullopt;
+      }
+    } else if (size_t colon = indexText.find(':'); colon != StringRef::npos) {
       StringRef msbText = indexText.take_front(colon);
       StringRef lsbText = indexText.drop_front(colon + 1);
       if (msbText.empty() || lsbText.empty())
@@ -588,10 +708,29 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
         return std::nullopt;
       slice = ResolvedNamedBoolExpr::ArgSlice{lsb, msb};
     } else {
-      unsigned bit = 0;
-      if (indexText.getAsInteger(10, bit))
+      if (auto bitConst = parseSignedInt(indexText)) {
+        if (*bitConst < 0 || *bitConst > std::numeric_limits<unsigned>::max())
+          return std::nullopt;
+        unsigned bit = static_cast<unsigned>(*bitConst);
+        slice = ResolvedNamedBoolExpr::ArgSlice{bit, bit};
+      } else if (auto affine = parseAffineIndex(indexText)) {
+        auto dynIt = inputNameToArgIndex.find(affine->name);
+        if (dynIt == inputNameToArgIndex.end() ||
+            dynIt->second >= numNonStateArgs)
+          return std::nullopt;
+        if ((affine->scale != 1 && affine->scale != -1) ||
+            affine->offset < std::numeric_limits<int32_t>::min() ||
+            affine->offset > std::numeric_limits<int32_t>::max())
+          return std::nullopt;
+        ResolvedNamedBoolExpr::ArgSlice dynSlice;
+        dynSlice.dynamicIndexArg = dynIt->second;
+        dynSlice.dynamicIndexSign = static_cast<int32_t>(affine->scale);
+        dynSlice.dynamicIndexOffset = static_cast<int32_t>(affine->offset);
+        dynSlice.dynamicWidth = 1;
+        slice = dynSlice;
+      } else {
         return std::nullopt;
-      slice = ResolvedNamedBoolExpr::ArgSlice{bit, bit};
+      }
     }
     auto it = inputNameToArgIndex.find(base);
     if (it == inputNameToArgIndex.end() || it->second >= numNonStateArgs)
