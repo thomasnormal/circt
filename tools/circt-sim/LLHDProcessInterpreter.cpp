@@ -7982,6 +7982,15 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
   // Get the signal ID
   SignalId sigId = getSignalId(signal);
+  // Force sigId to 0 for struct extract and array get operations so the
+  // read-modify-write handlers inside the sigId==0 block are reached.
+  // getSignalId() returns the parent signal ID for these ops (set during
+  // signal registration), but we need the special handling path that reads
+  // the parent, modifies the field/element, and writes back the full value.
+  if (signal.getDefiningOp<llhd::SigStructExtractOp>() ||
+      signal.getDefiningOp<llhd::SigArrayGetOp>()) {
+    sigId = 0;
+  }
   if (sigId == 0) {
     // Handle llhd.sig.extract on alloca-backed refs.
     // Pattern: %alloca -> cast to !llhd.ref<i32> -> sig.extract -> !llhd.ref<i1>
