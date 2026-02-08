@@ -29212,3 +29212,90 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector macros are non-parameterized and local to one JSON policy payload.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 598 - February 8, 2026
+
+### Yosys SVA BMC Typed + Versioned Route Context Schema
+
+- Added schema envs:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION`
+- Schema structure supports:
+  - `schema_version` (must match expected version env)
+  - `allow_unknown_keys` (default `true`)
+  - `keys` map with per-key constraints:
+    - `type`: `string | integer | boolean`
+    - `required`: bool
+    - `regex`: optional regex
+
+### Context Validation Semantics
+
+- Context registry JSON now supports typed scalar values for schema-managed
+  keys:
+  - strings, integers, booleans
+- Canonicalized context values for regex matching:
+  - booleans -> `true` / `false`
+  - integers -> decimal string
+- Added strict diagnostics for:
+  - schema shape and key validation issues
+  - schema-version mismatch
+  - missing required keys
+  - type mismatches
+  - unknown keys when `allow_unknown_keys=false`
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive typed-schema auto-route match
+    - schema-version mismatch rejection
+    - missing required-key rejection
+    - type mismatch rejection
+    - unknown-key rejection under strict schema mode
+- Focused lit run:
+  - 11/11 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-routes.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Typed schema currently validates only explicit registry context values; it
+  does not validate inferred built-in context fields.
+- Schema constraints are limited to `type`/`required`/`regex`; no enums,
+  ranges, or composite constraints yet.
+- Selector macros are non-parameterized and local to one JSON policy payload.
+- jtag compatibility currently relies on import-time rewrite shims.
