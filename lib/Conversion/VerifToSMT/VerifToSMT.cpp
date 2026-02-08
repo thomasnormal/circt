@@ -937,13 +937,25 @@ static bool resolveStructuredExprFromDetail(
   if (!groupAttr)
     return false;
   bool grouped = *groupAttr;
+  auto groupDepthAttr =
+      dyn_cast_or_null<IntegerAttr>(detail.get(key("group_depth")));
+  unsigned groupDepth = grouped ? 1u : 0u;
+  if (groupDepthAttr) {
+    int64_t depth = groupDepthAttr.getInt();
+    if (depth < 0)
+      return false;
+    groupDepth = std::max<unsigned>(groupDepth, static_cast<unsigned>(depth));
+  }
   auto maybeWrapGroup = [&](std::unique_ptr<ResolvedNamedBoolExpr> node) {
-    if (!grouped)
+    if (groupDepth == 0)
       return node;
-    auto groupNode = std::make_unique<ResolvedNamedBoolExpr>();
-    groupNode->kind = ResolvedNamedBoolExpr::Kind::Group;
-    groupNode->lhs = std::move(node);
-    return groupNode;
+    for (unsigned i = 0; i < groupDepth; ++i) {
+      auto groupNode = std::make_unique<ResolvedNamedBoolExpr>();
+      groupNode->kind = ResolvedNamedBoolExpr::Kind::Group;
+      groupNode->lhs = std::move(node);
+      node = std::move(groupNode);
+    }
+    return node;
   };
   auto unaryOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("unary_op")));
   if (unaryOpAttr) {
@@ -1131,7 +1143,8 @@ static bool resolveStructuredExprFromDetail(
       return false;
   }
 
-  if (!argSlice && !reductionKind && !bitwiseNot && !logicalNot && !grouped) {
+  if (!argSlice && !reductionKind && !bitwiseNot && !logicalNot &&
+      groupDepth == 0) {
     argIndex = sourceIndex;
     return true;
   }
@@ -5529,6 +5542,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
               detail.get("iff_logical_not") ||
               detail.get("iff_group") ||
+              detail.get("iff_group_depth") ||
               detail.get("iff_bin_op") || detail.get("iff_unary_op") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
               detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");

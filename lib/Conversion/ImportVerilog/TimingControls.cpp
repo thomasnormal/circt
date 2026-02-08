@@ -576,29 +576,38 @@ static bool maybeAddStructuredEventExprAttrs(
   };
 
   bool emittedAny = false;
-  auto hasExplicitOuterParens = [&](const slang::ast::Expression *inputExpr) {
+  auto countExplicitOuterParens = [&](const slang::ast::Expression *inputExpr) {
     if (!inputExpr || !inputExpr->syntax)
-      return false;
+      return 0u;
     StringRef text = inputExpr->syntax->toString();
     text = text.trim();
-    if (text.size() < 2 || text.front() != '(' || text.back() != ')')
-      return false;
-    unsigned depth = 0;
-    for (size_t i = 0, e = text.size(); i < e; ++i) {
-      char c = text[i];
-      if (c == '(')
-        ++depth;
-      else if (c == ')') {
-        if (depth == 0)
-          return false;
-        --depth;
-        // If we close depth at 0 before the last character, outer parentheses
-        // do not wrap the full expression.
-        if (depth == 0 && i + 1 != e)
-          return false;
+    auto hasFullOuterParens = [&](StringRef candidate) {
+      if (candidate.size() < 2 || candidate.front() != '(' ||
+          candidate.back() != ')')
+        return false;
+      unsigned depth = 0;
+      for (size_t i = 0, e = candidate.size(); i < e; ++i) {
+        char c = candidate[i];
+        if (c == '(')
+          ++depth;
+        else if (c == ')') {
+          if (depth == 0)
+            return false;
+          --depth;
+          // If we close depth at 0 before the last character, outer
+          // parentheses do not wrap the full expression.
+          if (depth == 0 && i + 1 != e)
+            return false;
+        }
       }
+      return depth == 0;
+    };
+    unsigned count = 0;
+    while (hasFullOuterParens(text)) {
+      ++count;
+      text = text.drop_front().drop_back().trim();
     }
-    return depth == 0;
+    return count;
   };
   StructuredEventExprInfo info;
   if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
@@ -657,8 +666,17 @@ static bool maybeAddStructuredEventExprAttrs(
   // Preserve explicit parenthesized grouping in structured metadata so
   // downstream lowering can distinguish grouped nodes from precedence-only
   // parse trees.
-  if (emittedAny && (expr->isParenthesized() || hasExplicitOuterParens(expr)))
-    addAttrIfMissing(keyFor("group"), builder.getBoolAttr(true));
+  if (emittedAny) {
+    unsigned explicitDepth = countExplicitOuterParens(expr);
+    unsigned groupDepth = explicitDepth;
+    if (groupDepth == 0 && expr->isParenthesized())
+      groupDepth = 1;
+    if (groupDepth > 0) {
+      addAttrIfMissing(keyFor("group"), builder.getBoolAttr(true));
+      addAttrIfMissing(keyFor("group_depth"),
+                       builder.getI32IntegerAttr(groupDepth));
+    }
+  }
 
   return emittedAny;
 }

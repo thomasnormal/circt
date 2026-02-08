@@ -23525,3 +23525,61 @@ CIRCT/slang correctly enforces LRM restrictions.
   mixed-width trees.
 - Simulator ref-provenance hardening still needs broader function-level CFG
   coverage.
+
+---
+
+## Iteration 469 - February 8, 2026
+
+### Nested Grouping-Depth Metadata for Structured Event Expressions
+
+- Extended ImportVerilog structured event metadata with explicit depth:
+  - emits `<prefix>_group_depth` alongside `<prefix>_group`.
+- Group depth is computed from explicit outer parenthesis nesting in source
+  syntax, with fallback depth `1` when parenthesization is known but nesting
+  cannot be fully recovered from syntax.
+- This depth metadata propagates across nested structured nodes, including
+  subterms like `signal_lhs_group_depth` and `iff_group_depth`.
+
+### VerifToSMT Depth-Aware Group Lowering
+
+- Extended structured resolver to parse `*_group_depth` in addition to
+  `*_group`.
+- Group wrapping now honors depth by materializing nested `Group` nodes
+  according to parsed depth.
+- Leaf fast-path collapsing is disabled when `group_depth > 0`, preserving
+  explicit grouping structure in witness expression trees.
+- Added `iff_group_depth` to iff-constraint metadata presence detection.
+
+### Regression Tests
+
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - `SequenceSignalEventListStructuredGrouping` now checks depth attrs.
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-group-structured.mlir`
+    - now exercises depth-only metadata (`*_group_depth`) without relying on
+      `*_group` boolean attrs.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (18 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (no `interpretOperation failed`)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Group depth currently captures only full outer-wrapper parenthesis nesting,
+  not a complete parenthesis-tree encoding for all grouped shapes.
+- Value-aware compare semantics remain partial for richer mixed-type /
+  mixed-width trees.
+- Simulator ref-provenance hardening still needs broader function-level CFG
+  coverage.
