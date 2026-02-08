@@ -17,6 +17,6 @@ module sva_sequence_signal_event_list_provenance_emit_mlir(
 endmodule
 
 // CHECK: hw.module @sva_sequence_signal_event_list_provenance_emit_mlir
-// CHECK-SAME: moore.mixed_event_sources
+// CHECK-SAME: moore.event_sources
 // CHECK-SAME: "sequence"
 // CHECK-SAME: "signal[0]:posedge:iff"

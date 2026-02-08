@@ -2,13 +2,13 @@
 // RUN:   -allow-unregistered-dialect | FileCheck %s
 
 // CHECK: smt.solver
-// CHECK-SAME: bmc_mixed_event_sources =
+// CHECK-SAME: bmc_event_sources =
 // CHECK-SAME: "sequence"
 // CHECK-SAME: "signal[0]:posedge:iff"
 // CHECK-SAME: "signal[0]:both"
 func.func @bmc_mixed_event_sources() -> i1 {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
-    bmc_mixed_event_sources = [
+    bmc_event_sources = [
       ["sequence", "signal[0]:posedge:iff"],
       ["sequence", "signal[0]:both"]
     ]

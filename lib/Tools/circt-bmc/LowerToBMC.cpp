@@ -1303,9 +1303,16 @@ void LowerToBMCPass::runOnOperation() {
                    builder.getArrayAttr(clockSourceAttrs));
   if (!clockKeyAttrs.empty())
     bmcOp->setAttr("bmc_clock_keys", builder.getArrayAttr(clockKeyAttrs));
-  if (auto mixedEventSources =
-          hwModule->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
+  if (auto eventSources = hwModule->getAttrOfType<ArrayAttr>(
+          "moore.event_sources")) {
+    bmcOp->setAttr("bmc_event_sources", eventSources);
+    bmcOp->setAttr("bmc_mixed_event_sources", eventSources);
+  } else if (auto mixedEventSources =
+                 hwModule->getAttrOfType<ArrayAttr>(
+                     "moore.mixed_event_sources")) {
+    bmcOp->setAttr("bmc_event_sources", mixedEventSources);
     bmcOp->setAttr("bmc_mixed_event_sources", mixedEventSources);
+  }
   if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks"))
     bmcOp->setAttr("bmc_reg_clocks", regClocks);
   if (auto regClockSources =
