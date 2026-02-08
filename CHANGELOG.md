@@ -33495,6 +33495,65 @@ CIRCT/slang correctly enforces LRM restrictions.
 - External closure is still filtered/smoke-heavy unless full-lane schedules are
   run continuously.
 
+## Iteration 675 - February 8, 2026
+
+### Persistent Lane Checkpoints in `run_formal_all.sh`
+
+- Added lane-state controls:
+  - `--lane-state-tsv <file>`
+  - `--resume-from-lane-state`
+  - `--reset-lane-state`
+- Added strict flag validation:
+  - resume/reset each require `--lane-state-tsv`
+  - resume and reset are mutually exclusive
+  - resume requires an existing lane-state file
+- Added lane-state persistence and upsert behavior:
+  - stores per-lane counters (`total/pass/fail/xfail/xpass/error/skip`)
+  - stores `updated_at_utc` per lane
+  - lane key is deterministic lane-id (`<suite>/<mode>` and `avip/<name>/compile`)
+- Added resume execution mode:
+  - if a lane has persisted state and resume mode is enabled, lane execution is
+    skipped
+  - persisted counters are replayed into `summary.tsv` for normal gate handling
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive resume replay case
+    - positive reset/re-run case
+    - negative conflicting-flag diagnostic
+  - `docs/FormalRegression.md`
+    - lane-state usage and semantics
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep + resume replay:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-smoke-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke.tsv --reset-lane-state`:
+    - `sv-tests` BMC/LEC PASS
+    - `verilator-verification` BMC/LEC PASS
+    - `yosys/tests/sva` BMC/LEC PASS
+    - `opentitan` LEC PASS
+    - all filtered AVIP variants PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-state-smoke-resume --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-state-smoke.tsv --resume-from-lane-state`:
+    - all lanes resumed from checkpoint rows
+
+### Remaining Limitations
+
+- Lane-state compatibility is lane-id keyed only; no options/config hash guard
+  yet.
+- Resume granularity is lane-level only, not per-test within a lane.
+- No merge utility yet for federating multiple worker lane-state files.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
