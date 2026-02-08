@@ -576,6 +576,30 @@ static bool maybeAddStructuredEventExprAttrs(
   };
 
   bool emittedAny = false;
+  auto hasExplicitOuterParens = [&](const slang::ast::Expression *inputExpr) {
+    if (!inputExpr || !inputExpr->syntax)
+      return false;
+    StringRef text = inputExpr->syntax->toString();
+    text = text.trim();
+    if (text.size() < 2 || text.front() != '(' || text.back() != ')')
+      return false;
+    unsigned depth = 0;
+    for (size_t i = 0, e = text.size(); i < e; ++i) {
+      char c = text[i];
+      if (c == '(')
+        ++depth;
+      else if (c == ')') {
+        if (depth == 0)
+          return false;
+        --depth;
+        // If we close depth at 0 before the last character, outer parentheses
+        // do not wrap the full expression.
+        if (depth == 0 && i + 1 != e)
+          return false;
+      }
+    }
+    return depth == 0;
+  };
   StructuredEventExprInfo info;
   if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
     emittedAny = true;
@@ -629,6 +653,12 @@ static bool maybeAddStructuredEventExprAttrs(
       emittedAny = true;
     }
   }
+
+  // Preserve explicit parenthesized grouping in structured metadata so
+  // downstream lowering can distinguish grouped nodes from precedence-only
+  // parse trees.
+  if (emittedAny && (expr->isParenthesized() || hasExplicitOuterParens(expr)))
+    addAttrIfMissing(keyFor("group"), builder.getBoolAttr(true));
 
   return emittedAny;
 }

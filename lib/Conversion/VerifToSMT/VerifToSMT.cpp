@@ -189,6 +189,7 @@ struct ResolvedNamedBoolExpr {
   enum class Kind {
     Arg,
     Const,
+    Group,
     Not,
     BitwiseNot,
     ReduceAnd,
@@ -932,6 +933,18 @@ static bool resolveStructuredExprFromDetail(
   if (!logicalNotAttr)
     return false;
   bool logicalNot = *logicalNotAttr;
+  auto groupAttr = parseBoolLikeAttr("group");
+  if (!groupAttr)
+    return false;
+  bool grouped = *groupAttr;
+  auto maybeWrapGroup = [&](std::unique_ptr<ResolvedNamedBoolExpr> node) {
+    if (!grouped)
+      return node;
+    auto groupNode = std::make_unique<ResolvedNamedBoolExpr>();
+    groupNode->kind = ResolvedNamedBoolExpr::Kind::Group;
+    groupNode->lhs = std::move(node);
+    return groupNode;
+  };
   auto unaryOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("unary_op")));
   if (unaryOpAttr) {
     std::optional<ResolvedNamedBoolExpr::Kind> unaryKind;
@@ -968,7 +981,7 @@ static bool resolveStructuredExprFromDetail(
     auto node = std::make_unique<ResolvedNamedBoolExpr>();
     node->kind = *unaryKind;
     node->lhs = std::move(argNode);
-    resolvedExpr = std::move(node);
+    resolvedExpr = maybeWrapGroup(std::move(node));
     return true;
   }
 
@@ -1021,7 +1034,7 @@ static bool resolveStructuredExprFromDetail(
       notNode->lhs = std::move(current);
       current = std::move(notNode);
     }
-    resolvedExpr = std::move(current);
+    resolvedExpr = maybeWrapGroup(std::move(current));
     return true;
   }
 
@@ -1118,7 +1131,7 @@ static bool resolveStructuredExprFromDetail(
       return false;
   }
 
-  if (!argSlice && !reductionKind && !bitwiseNot && !logicalNot) {
+  if (!argSlice && !reductionKind && !bitwiseNot && !logicalNot && !grouped) {
     argIndex = sourceIndex;
     return true;
   }
@@ -1143,7 +1156,7 @@ static bool resolveStructuredExprFromDetail(
     notNode->lhs = std::move(current);
     current = std::move(notNode);
   }
-  resolvedExpr = std::move(current);
+  resolvedExpr = maybeWrapGroup(std::move(current));
   return true;
 }
 
@@ -5515,6 +5528,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_lsb") || detail.get("iff_msb") ||
               detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
               detail.get("iff_logical_not") ||
+              detail.get("iff_group") ||
               detail.get("iff_bin_op") || detail.get("iff_unary_op") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
               detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");
@@ -5949,6 +5963,10 @@ struct VerifBoundedModelCheckingOpConversion
         case ResolvedNamedBoolExpr::Kind::Const:
           return Value(
               smt::BoolConstantOp::create(builder, loc, subexpr.constValue));
+        case ResolvedNamedBoolExpr::Kind::Group:
+          if (!subexpr.lhs)
+            return failure();
+          return selfValue(selfValue, *subexpr.lhs);
         case ResolvedNamedBoolExpr::Kind::Not:
         case ResolvedNamedBoolExpr::Kind::ReduceAnd:
         case ResolvedNamedBoolExpr::Kind::ReduceOr:
@@ -6040,6 +6058,10 @@ struct VerifBoundedModelCheckingOpConversion
         }
       case ResolvedNamedBoolExpr::Kind::Const:
         return Value(smt::BoolConstantOp::create(builder, loc, expr.constValue));
+      case ResolvedNamedBoolExpr::Kind::Group:
+        if (!expr.lhs)
+          return failure();
+        return self(self, builder, values, *expr.lhs);
       case ResolvedNamedBoolExpr::Kind::Not: {
         auto operandOr = self(self, builder, values, *expr.lhs);
         if (failed(operandOr))
