@@ -34,6 +34,10 @@ Options:
                          Fail when expected-failures rows are unused
   --refresh-expected-failures-file FILE
                          Rewrite expected-failures TSV from current run
+  --refresh-expected-failures-include-suite-regex REGEX
+                         Refresh only suite rows matching REGEX
+  --refresh-expected-failures-include-mode-regex REGEX
+                         Refresh only mode rows matching REGEX
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
   --fail-on-unexpected-failure-cases
@@ -48,6 +52,14 @@ Options:
                          Default expires_on for newly added refreshed case rows
   --refresh-expected-failure-cases-collapse-status-any
                          Collapse refreshed case statuses to ANY per case key
+  --refresh-expected-failure-cases-include-suite-regex REGEX
+                         Refresh only case rows with suite matching REGEX
+  --refresh-expected-failure-cases-include-mode-regex REGEX
+                         Refresh only case rows with mode matching REGEX
+  --refresh-expected-failure-cases-include-status-regex REGEX
+                         Refresh only case rows with status matching REGEX
+  --refresh-expected-failure-cases-include-id-regex REGEX
+                         Refresh only case rows with id matching REGEX
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -92,6 +104,8 @@ EXPECTED_FAILURES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 REFRESH_EXPECTED_FAILURES_FILE=""
+REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX=""
+REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX=""
 EXPECTED_FAILURE_CASES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURE_CASES=0
 FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
@@ -99,6 +113,10 @@ FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=0
 REFRESH_EXPECTED_FAILURE_CASES_FILE=""
 REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON=""
 REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY=0
+REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_SUITE_REGEX=""
+REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX=""
+REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX=""
+REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX=""
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -167,6 +185,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_UNUSED_EXPECTED_FAILURES=1; shift ;;
     --refresh-expected-failures-file)
       REFRESH_EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
+    --refresh-expected-failures-include-suite-regex)
+      REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$2"; shift 2 ;;
+    --refresh-expected-failures-include-mode-regex)
+      REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX="$2"; shift 2 ;;
     --expected-failure-cases-file)
       EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
     --fail-on-unexpected-failure-cases)
@@ -181,6 +203,14 @@ while [[ $# -gt 0 ]]; do
       REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$2"; shift 2 ;;
     --refresh-expected-failure-cases-collapse-status-any)
       REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY=1; shift ;;
+    --refresh-expected-failure-cases-include-suite-regex)
+      REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_SUITE_REGEX="$2"; shift 2 ;;
+    --refresh-expected-failure-cases-include-mode-regex)
+      REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX="$2"; shift 2 ;;
+    --refresh-expected-failure-cases-include-status-regex)
+      REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX="$2"; shift 2 ;;
+    --refresh-expected-failure-cases-include-id-regex)
+      REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX="$2"; shift 2 ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -781,13 +811,33 @@ if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   SUMMARY_FILE="$OUT_DIR/summary.tsv" \
   REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
+  REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX" \
+  REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX" \
   python3 - <<'PY'
 import csv
 import os
+import re
 from pathlib import Path
 
 summary_path = Path(os.environ["SUMMARY_FILE"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
+suite_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX", "")
+mode_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX", "")
+
+def compile_optional_regex(raw: str, field: str):
+  if not raw:
+    return None
+  try:
+    return re.compile(raw)
+  except re.error as ex:
+    raise SystemExit(f"invalid {field}: {ex}")
+
+suite_filter = compile_optional_regex(
+    suite_filter_raw, "--refresh-expected-failures-include-suite-regex"
+)
+mode_filter = compile_optional_regex(
+    mode_filter_raw, "--refresh-expected-failures-include-mode-regex"
+)
 
 existing_notes = {}
 if out_path.exists():
@@ -806,6 +856,10 @@ with summary_path.open() as f:
   for row in reader:
     suite = row["suite"]
     mode = row["mode"]
+    if suite_filter is not None and suite_filter.search(suite) is None:
+      continue
+    if mode_filter is not None and mode_filter.search(mode) is None:
+      continue
     rows.append(
         {
             "suite": suite,
@@ -1188,10 +1242,15 @@ if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
   REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY="$REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY" \
+  REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_SUITE_REGEX" \
+  REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX="$REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX" \
+  REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX="$REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX" \
+  REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX="$REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX" \
   python3 - <<'PY'
 import csv
 import datetime as dt
 import os
+import re
 from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
@@ -1199,6 +1258,37 @@ out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
 collapse_status_any = (
     os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY", "0") == "1"
+)
+suite_filter_raw = os.environ.get(
+    "REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_SUITE_REGEX", ""
+)
+mode_filter_raw = os.environ.get(
+    "REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_MODE_REGEX", ""
+)
+status_filter_raw = os.environ.get(
+    "REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX", ""
+)
+id_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX", "")
+
+def compile_optional_regex(raw: str, field: str):
+  if not raw:
+    return None
+  try:
+    return re.compile(raw)
+  except re.error as ex:
+    raise SystemExit(f"invalid {field}: {ex}")
+
+suite_filter = compile_optional_regex(
+    suite_filter_raw, "--refresh-expected-failure-cases-include-suite-regex"
+)
+mode_filter = compile_optional_regex(
+    mode_filter_raw, "--refresh-expected-failure-cases-include-mode-regex"
+)
+status_filter = compile_optional_regex(
+    status_filter_raw, "--refresh-expected-failure-cases-include-status-regex"
+)
+id_filter = compile_optional_regex(
+    id_filter_raw, "--refresh-expected-failure-cases-include-id-regex"
 )
 
 if default_expires:
@@ -1310,18 +1400,31 @@ if summary_path.exists():
 
 refreshed = []
 seen = set()
+
+def derive_case_id(obs_row):
+  if obs_row["base"] == "__aggregate__":
+    return ("aggregate", "__aggregate__")
+  if obs_row["base"]:
+    return ("base", obs_row["base"])
+  return ("path", obs_row["path"])
+
+def include_obs(obs_row, id_kind: str, case_id: str):
+  if suite_filter is not None and suite_filter.search(obs_row["suite"]) is None:
+    return False
+  if mode_filter is not None and mode_filter.search(obs_row["mode"]) is None:
+    return False
+  if status_filter is not None and status_filter.search(obs_row["status"]) is None:
+    return False
+  if id_filter is not None and id_filter.search(case_id) is None:
+    return False
+  return True
+
 if collapse_status_any:
   grouped = {}
   for obs in observed:
-    if obs["base"] == "__aggregate__":
-      id_kind = "aggregate"
-      case_id = "__aggregate__"
-    elif obs["base"]:
-      id_kind = "base"
-      case_id = obs["base"]
-    else:
-      id_kind = "path"
-      case_id = obs["path"]
+    id_kind, case_id = derive_case_id(obs)
+    if not include_obs(obs, id_kind, case_id):
+      continue
     base_key = (obs["suite"], obs["mode"], id_kind, case_id)
     grouped.setdefault(base_key, set()).add(obs["status"])
   for base_key, statuses in grouped.items():
@@ -1350,15 +1453,9 @@ if collapse_status_any:
     )
 else:
   for obs in observed:
-    if obs["base"] == "__aggregate__":
-      id_kind = "aggregate"
-      case_id = "__aggregate__"
-    elif obs["base"]:
-      id_kind = "base"
-      case_id = obs["base"]
-    else:
-      id_kind = "path"
-      case_id = obs["path"]
+    id_kind, case_id = derive_case_id(obs)
+    if not include_obs(obs, id_kind, case_id):
+      continue
     key = (obs["suite"], obs["mode"], id_kind, case_id, obs["status"])
     if key in seen:
       continue

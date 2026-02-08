@@ -73,6 +73,12 @@ Refresh expected-failure budgets from the current run:
 utils/run_formal_all.sh --refresh-expected-failures-file utils/formal-expected-failures.tsv
 ```
 
+Refresh expected-failure budgets for a scoped subset:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failures-file utils/formal-expected-failures.tsv --refresh-expected-failures-include-suite-regex '^sv-tests$' --refresh-expected-failures-include-mode-regex '^LEC$'
+```
+
 Gate on per-test expected failure cases with expiry policy:
 
 ```bash
@@ -89,6 +95,12 @@ Refresh expected failure cases while collapsing per-status rows to `status=ANY`:
 
 ```bash
 utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-collapse-status-any
+```
+
+Refresh expected failure cases with scoped filters:
+
+```bash
+utils/run_formal_all.sh --refresh-expected-failure-cases-file utils/formal-expected-failure-cases.tsv --refresh-expected-failure-cases-include-suite-regex '^sv-tests$' --refresh-expected-failure-cases-include-mode-regex '^BMC$' --refresh-expected-failure-cases-include-status-regex '^XFAIL$' --refresh-expected-failure-cases-include-id-regex '^__aggregate__$'
 ```
 
 Run formal suites on a fixed cadence (6-hour interval example):
@@ -232,6 +244,10 @@ Expected-failure budget file:
   match any suite/mode in current run results.
 - `--refresh-expected-failures-file <file>` rewrites expected-failures rows from
   current summary fail/error counts (preserves existing notes by suite/mode).
+- `--refresh-expected-failures-include-suite-regex <regex>` keeps only matching
+  suite rows during budget refresh.
+- `--refresh-expected-failures-include-mode-regex <regex>` keeps only matching
+  mode rows during budget refresh.
 
 Expected-failure cases file:
 
@@ -257,6 +273,14 @@ Expected-failure cases file:
 - `--refresh-expected-failure-cases-collapse-status-any` collapses refreshed
   rows to one `status=ANY` row per `(suite, mode, id_kind, id)`, preserving
   metadata from matching existing `ANY` rows first, then exact-status rows.
+- `--refresh-expected-failure-cases-include-suite-regex <regex>` keeps only
+  matching suite rows during case refresh.
+- `--refresh-expected-failure-cases-include-mode-regex <regex>` keeps only
+  matching mode rows during case refresh.
+- `--refresh-expected-failure-cases-include-status-regex <regex>` keeps only
+  matching status rows during case refresh.
+- `--refresh-expected-failure-cases-include-id-regex <regex>` keeps only
+  matching case IDs during case refresh.
 
 ## Notes
 
