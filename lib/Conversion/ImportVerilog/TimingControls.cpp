@@ -247,7 +247,8 @@ static moore::Edge convertClockEdge(const ltl::ClockEdge edge) {
 
 static LogicalResult lowerClockedSequenceEventControl(
     Context &context, Location loc, Value seqValue, Value clockValue,
-    ltl::ClockEdge edge) {
+    ltl::ClockEdge edge,
+    std::span<const slang::ast::SignalEventControl *const> signalEvents = {}) {
   OpBuilder &builder = context.builder;
   Block *startBlock = builder.getInsertionBlock();
   if (!startBlock)
@@ -339,6 +340,28 @@ static LogicalResult lowerClockedSequenceEventControl(
   }
   if (!accepting.empty())
     match = comb::OrOp::create(builder, loc, accepting, true);
+
+  // For mixed event lists `@(seq or signal_event)`, allow equivalent
+  // same-clock signal events to trigger the wait independently of sequence
+  // acceptance.
+  if (!signalEvents.empty()) {
+    SmallVector<Value, 4> signalMatches;
+    signalMatches.push_back(match);
+    for (auto *signalCtrl : signalEvents) {
+      Value term = trueVal;
+      if (signalCtrl && signalCtrl->iffCondition) {
+        term = context.convertRvalueExpression(*signalCtrl->iffCondition);
+        term = context.convertToBool(term, Domain::TwoValued);
+        if (!term)
+          return failure();
+        term = context.convertToI1(term);
+        if (!term)
+          return failure();
+      }
+      signalMatches.push_back(term);
+    }
+    match = comb::OrOp::create(builder, loc, signalMatches, true);
+  }
 
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, nextVals);
@@ -443,22 +466,34 @@ static bool equivalentClockSignals(Value lhs, Value rhs) {
 static LogicalResult
 lowerSequenceEventListControl(Context &context, Location loc,
                               const slang::ast::EventListControl &ctrl) {
-  OpBuilder &builder = context.builder;
   if (ctrl.events.empty())
     return mlir::emitError(loc) << "empty event list control";
+
+  SmallVector<const slang::ast::SignalEventControl *, 4> sequenceEvents;
+  SmallVector<const slang::ast::SignalEventControl *, 4> signalEvents;
+  for (const auto *event : ctrl.events) {
+    auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
+                             : nullptr;
+    if (!signalCtrl)
+      return mlir::emitError(loc)
+             << "unsupported event kind in sequence event list";
+    if (isAssertionEventControl(signalCtrl->expr))
+      sequenceEvents.push_back(signalCtrl);
+    else
+      signalEvents.push_back(signalCtrl);
+  }
+  if (sequenceEvents.empty())
+    return mlir::emitError(loc)
+           << "sequence event-list lowering requires at least one "
+              "sequence/property event";
 
   std::optional<ltl::ClockEdge> commonEdge;
   Value commonClock;
   SmallVector<Value, 4> sequenceInputs;
   SmallVector<Value, 4> clockedValues;
+  SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
 
-  for (const auto *event : ctrl.events) {
-    auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
-                             : nullptr;
-    if (!signalCtrl || !isAssertionEventControl(signalCtrl->expr))
-      return mlir::emitError(loc)
-             << "event lists mixing sequence/property and signal events are "
-                "not yet supported";
+  for (auto *signalCtrl : sequenceEvents) {
     if (signalCtrl->edge != slang::ast::EdgeKind::None ||
         signalCtrl->iffCondition)
       return mlir::emitError(loc)
@@ -515,11 +550,34 @@ lowerSequenceEventListControl(Context &context, Location loc,
     clockedValues.push_back(clockedValue);
   }
 
+  for (auto *signalCtrl : signalEvents) {
+    if (signalCtrl->edge == slang::ast::EdgeKind::None)
+      return mlir::emitError(loc)
+             << "mixed sequence/signal event lists require explicit signal "
+                "event edges";
+    auto signalEdge = convertEdgeKindLTL(signalCtrl->edge);
+    if (signalEdge != *commonEdge)
+      return mlir::emitError(loc)
+             << "mixed sequence/signal event lists with non-equivalent edges "
+                "are not yet supported";
+    Value signalClock = context.convertRvalueExpression(signalCtrl->expr);
+    signalClock = context.convertToI1(signalClock);
+    if (!signalClock)
+      return failure();
+    if (!equivalentClockSignals(commonClock, signalClock))
+      return mlir::emitError(loc)
+             << "mixed sequence/signal event lists with non-equivalent clocks "
+                "are not yet supported";
+    equivalentSignals.push_back(signalCtrl);
+  }
+
+  OpBuilder &builder = context.builder;
   Value combinedSequence = sequenceInputs.front();
   if (sequenceInputs.size() > 1)
     combinedSequence = ltl::OrOp::create(builder, loc, sequenceInputs);
   auto result = lowerClockedSequenceEventControl(
-      context, loc, combinedSequence, commonClock, *commonEdge);
+      context, loc, combinedSequence, commonClock, *commonEdge,
+      equivalentSignals);
   for (Value clockedValue : clockedValues)
     eraseLTLDeadOps(clockedValue);
   return result;
@@ -759,19 +817,13 @@ static LogicalResult handleRoot(Context &context,
   case TimingControlKind::EventList: {
     auto &eventListCtrl = ctrl.as<slang::ast::EventListControl>();
     bool hasAssertionEvents = false;
-    bool allAssertionEvents = true;
     for (const auto *event : eventListCtrl.events) {
       auto *signalCtrl = event ? event->as_if<slang::ast::SignalEventControl>()
                                : nullptr;
       bool isAssertion = signalCtrl && isAssertionEventControl(signalCtrl->expr);
       hasAssertionEvents |= isAssertion;
-      allAssertionEvents &= isAssertion;
     }
     if (hasAssertionEvents) {
-      if (!allAssertionEvents)
-        return mlir::emitError(loc)
-               << "event lists mixing sequence/property and signal events are "
-                  "not yet supported";
       return lowerSequenceEventListControl(context, loc, eventListCtrl);
     }
     auto waitOp = moore::WaitEventOp::create(builder, loc);

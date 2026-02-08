@@ -47,3 +47,23 @@ module SequenceEventListControl;
     a <= ~a;
   end
 endmodule
+
+// Test mixed sequence/signal event list on equivalent clock edge.
+module SequenceSignalEventListControl;
+  logic clk, a, b, c;
+
+  sequence seq;
+    @(posedge clk) a;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListControl
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK: moore.detect_event posedge
+  // CHECK: moore.read %b
+  // CHECK: comb.or
+  // CHECK: cf.cond_br
+  always @(seq or posedge clk iff b) begin
+    c <= ~c;
+  end
+endmodule

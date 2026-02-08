@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 479 - February 8, 2026
+
+### Summary
+
+Implemented equivalent-clock mixed sequence/signal event-list lowering
+(`@(seq or signal_event)`), added deterministic regression coverage for the new
+path, and revalidated BMC/LEC smoke suites.
+
+### Fixes
+
+1. **Mixed sequence/signal event-list support (equivalent clock/edge)**
+   - Extended `lib/Conversion/ImportVerilog/TimingControls.cpp` to lower mixed
+     event lists that combine a sequence/property-style event and one or more
+     signal events when clock/edge are equivalent.
+   - Added checks and diagnostics for unsupported mixed forms:
+     - missing explicit signal edge,
+     - non-equivalent signal edge,
+     - non-equivalent signal clock.
+   - Mixed-list trigger condition now ORs sequence acceptance with sampled
+     signal-event `iff` terms.
+
+2. **Regression stabilization for mixed-list lowering**
+   - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` mixed-list
+     case to use `@(seq or posedge clk iff b)`, avoiding constant-folded trivial
+     forms and keeping FileCheck coverage on the mixed lowering path.
+
+3. **New BMC end-to-end regression**
+   - Added
+     `test/Tools/circt-bmc/sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`.
+   - Validates mixed-list wakeup semantics against a sampled-value reference
+     counter under BMC.
+
+### Validation
+
+- Build:
+  - `ninja -C build circt-verilog circt-bmc`: PASS
+- Lit/targeted:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+- Direct BMC:
+  - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - `sva-sequence-event-dynamic-equivalence-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+  - `sva-sequence-event-list-or-unsat-e2e.sv`: `BMC_RESULT=UNSAT`
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan AES S-Box LEC (`canright`, `XPROP_ONLY` accepted): PASS
+  - AVIP compile smoke (`apb_avip`): PASS
+
 ## Iteration 478 - February 8, 2026
 
 ### Summary
