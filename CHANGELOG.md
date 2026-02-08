@@ -27905,3 +27905,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
 - Event-ID rewrite is currently global (no scoped selectors by run/reason/age).
 - xprop-profile expected failures remain baseline-tracked.
+
+## Iteration 580 - February 8, 2026
+
+### Yosys SVA BMC Drop-Events Scoped Rewrite Selectors
+
+- Added selector env controls:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX`
+- Selectors now scope `rewrite` behavior for both:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY`
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY`
+- This enables staged migration rollouts where only selected legacy rows are
+  rewritten while other rows retain legacy IDs/metadata.
+
+### Migration Semantics
+
+- Added regex compilation/validation for both selector env vars.
+- Invalid selector regex now fails with explicit, stable diagnostics.
+- Fixed migration helper ordering bug that could produce a Python traceback on
+  invalid selector regex (pre-`fail()` call path).
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - targeted rewrite by `run_id` selector
+    - non-target row preservation in the same JSONL file
+    - invalid selector regex rejection
+- Focused lit run:
+  - 4/4 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.12--property$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_named$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Selector scope supports regex matching over `run_id` and `reason` only.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
+- xprop-profile expected failures remain baseline-tracked.

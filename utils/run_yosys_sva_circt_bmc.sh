@@ -47,6 +47,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMM
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH:-auto}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY:-infer}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY:-infer}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
@@ -1994,6 +1996,8 @@ emit_mode_summary_outputs() {
   local drop_events_id_hash_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH"
   local drop_events_event_id_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY"
   local drop_events_id_metadata_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY"
+  local drop_events_rewrite_run_id_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX"
+  local drop_events_rewrite_reason_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX"
   local drop_events_id_hash_mode_effective
   local drop_events_id_hash_algorithm
   local drop_events_id_hash_version
@@ -2994,8 +2998,9 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" <<'PY'
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -3010,6 +3015,12 @@ effective_id_hash_algorithm = sys.argv[5]
 effective_id_hash_version_raw = sys.argv[6]
 event_id_policy = sys.argv[7]
 id_metadata_policy = sys.argv[8]
+rewrite_run_id_regex = sys.argv[9]
+rewrite_reason_regex = sys.argv[10]
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    sys.exit(1)
 
 try:
     effective_id_hash_version = int(effective_id_hash_version_raw)
@@ -3031,6 +3042,24 @@ if id_metadata_policy not in {"preserve", "infer", "rewrite"}:
         file=sys.stderr,
     )
     sys.exit(1)
+
+rewrite_run_id_pattern = None
+if rewrite_run_id_regex:
+    try:
+        rewrite_run_id_pattern = re.compile(rewrite_run_id_regex)
+    except re.error as ex:
+        fail(
+            f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX: {rewrite_run_id_regex} ({ex})"
+        )
+
+rewrite_reason_pattern = None
+if rewrite_reason_regex:
+    try:
+        rewrite_reason_pattern = re.compile(rewrite_reason_regex)
+    except re.error as ex:
+        fail(
+            f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX: {rewrite_reason_regex} ({ex})"
+        )
 
 REQUIRED_STRING_KEYS = (
     "generated_at_utc",
@@ -3054,11 +3083,6 @@ CANONICAL_KEYS = (
     "id_hash_algorithm",
     "id_hash_version",
 )
-
-
-def fail(message: str) -> None:
-    print(message, file=sys.stderr)
-    sys.exit(1)
 
 
 def parse_json_object(line: str, lineno: int) -> dict:
@@ -3143,6 +3167,14 @@ def derive_event_id(reason: str, history_format: str, run_id: str, row_generated
     return f"drop-{digest}"
 
 
+def selected_for_rewrite(reason: str, run_id: str) -> bool:
+    if rewrite_run_id_pattern is not None and rewrite_run_id_pattern.search(run_id) is None:
+        return False
+    if rewrite_reason_pattern is not None and rewrite_reason_pattern.search(reason) is None:
+        return False
+    return True
+
+
 with open(file, "r", encoding="utf-8") as f:
     lines = f.read().splitlines()
 
@@ -3164,6 +3196,7 @@ for lineno, line in enumerate(lines, start=1):
         )
 
     schema_version = normalize_schema(obj.get("schema_version"), lineno)
+    rewrite_selected = selected_for_rewrite(obj["reason"], obj["run_id"])
     event_id = obj.get("event_id")
     had_event_id = isinstance(event_id, str) and bool(event_id)
     if event_id_policy == "preserve":
@@ -3171,7 +3204,7 @@ for lineno, line in enumerate(lines, start=1):
             fail(
                 f"error: missing key 'event_id' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
             )
-    if event_id_policy == "rewrite":
+    if event_id_policy == "rewrite" and rewrite_selected:
         event_id = derive_event_id(
             obj["reason"], obj["history_format"], obj["run_id"], obj["row_generated_at_utc"]
         )
@@ -3217,7 +3250,7 @@ for lineno, line in enumerate(lines, start=1):
     elif (not had_event_id) or id_metadata_policy in {"infer", "rewrite"}:
         id_hash_version_value = effective_id_hash_version
 
-    if had_event_id and id_metadata_policy == "rewrite":
+    if had_event_id and id_metadata_policy == "rewrite" and rewrite_selected:
         id_hash_mode_value = effective_id_hash_mode
         id_hash_algorithm_value = effective_id_hash_algorithm
         id_hash_version_value = effective_id_hash_version

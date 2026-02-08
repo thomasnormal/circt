@@ -13580,6 +13580,61 @@ ninja -C build circt-verilog
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
   - Continue semantic expected-failure retirement.
 
+### Iteration 580
+- Yosys SVA BMC drop-events scoped rewrite selectors:
+  - Added selector env controls:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX`
+  - Selectors scope rewrite behavior for both:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite`
+  - Non-selected rows now preserve existing IDs/metadata semantics (or infer
+    semantics if explicitly configured), enabling staged migrations.
+- Migration engine updates:
+  - Added regex compilation + validation for both selector env vars.
+  - Invalid selector regex now emits stable, explicit diagnostics.
+  - Fixed migration bug where selector regex validation could emit a Python
+    traceback if compilation failed before `fail()` helper initialization.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+      covering:
+      - targeted rewrite by `run_id` selector
+      - non-target row preservation in same file
+      - invalid selector regex error handling
+  - Focused lit run:
+    - 4/4 PASS (`rewrite-selectors`, `event-id-policy`,
+      `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.12--property$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_named$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+- Current limitations / debt:
+  - Selector scope is regex over `run_id` and `reason`; no first-class
+    timestamp/age selector yet.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+  - Result schema harmonization across harness scripts is still incomplete.
+  - xprop-profile expected failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add native selectors for timestamp/age windows to support policy-by-era
+    migrations without regex coupling.
+  - Add native shell strict JSON validator to reduce Python dependence.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+  - Continue semantic expected-failure retirement.
+
 ---
 
 ## Architecture Reference
