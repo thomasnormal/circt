@@ -9742,6 +9742,56 @@ ninja -C build circt-verilog
   - Split `yosys` `counter` expectations by assumption profile (or add dual-run
     classification) so BMC harness results remain stable and actionable.
 
+### Iteration 516
+- VerifToSMT cast-domain semantics for four-state direct arguments:
+  - Structured cast lowering now uses `cast_four_state` when the cast source is
+    a direct four-state input (`!hw.struct<value, unknown>` lowered to
+    `!smt.bv<2w>`).
+  - For `*_cast_four_state = false` (two-state target), lowering projects:
+    - `value_bits = extract(high half)`
+    - `unknown_bits = extract(low half)`
+    - `two_state_value = value_bits & ~unknown_bits`
+  - For `*_cast_four_state = true`, lowering currently projects value bits
+    only (unknown marker is dropped in this path; full four-state cast result
+    propagation is deferred).
+- New structured witness regression:
+  - Extended
+    `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+    with `bmc_event_arm_witness_cast_two_state_projection`.
+  - The new test checks emitted SMT ops for four-state source projection:
+    `smt.bv.extract`, `smt.bv.not`, `smt.bv.and`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+      PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (21 tests)
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+  - External matrix:
+    - `sv-tests` BMC: 26/26 PASS
+    - `sv-tests` LEC: 23/23 PASS
+    - `verilator-verification` BMC: 17/17 PASS
+    - `verilator-verification` LEC: 17/17 PASS
+    - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+    - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY` accepted)
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Cast-domain semantic use currently handles direct unsliced four-state arg
+    sources; derived four-state expressions and sliced sources still fall back
+    to generic bitvector casting.
+  - `cast_four_state = true` currently drops unknown markers (value projection
+    approximation), not full four-state result propagation.
+  - `yosys` `counter` pass/fail polarity remains assumption-profile sensitive.
+- Long-term features to prioritize:
+  - Propagate four-state cast-domain semantics through derived expression trees
+    (concat/replicate/binop sources), not only direct args.
+  - Introduce first-class four-state value/result handling in structured witness
+    lowering (retain unknown markers through casts and compares).
+  - Split `yosys` `counter` harness expectations by
+    `--assume-known-inputs` profile.
+
 ---
 
 ## Architecture Reference

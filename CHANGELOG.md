@@ -23839,3 +23839,60 @@ CIRCT/slang correctly enforces LRM restrictions.
   graph metadata for fully general mixed-domain cases.
 - `yosys` `counter` pass/fail polarity remains sensitive to
   `--assume-known-inputs`; harness expectation split is still pending.
+
+---
+
+## Iteration 516 - February 8, 2026
+
+### VerifToSMT Cast Semantics: Four-State to Two-State Projection
+
+- Extended structured cast lowering to use `cast_four_state` semantics when the
+  cast source is a direct four-state input argument
+  (`!hw.struct<value, unknown>` lowered as `!smt.bv<2w>`):
+  - for `*_cast_four_state = false` (two-state target), cast now projects:
+    - `value_bits = extract(high half)`
+    - `unknown_bits = extract(low half)`
+    - result = `value_bits & ~unknown_bits`
+  - for `*_cast_four_state = true`, cast currently projects value bits only
+    (unknown marker retention is deferred to follow-up work).
+- This fixes prior behavior where generic cast width materialization could slice
+  the low half of four-state encodings and accidentally treat unknown bits as
+  value bits.
+
+### Regression Tests
+
+- Extended
+  `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`:
+  - added `@bmc_event_arm_witness_cast_two_state_projection`
+  - checks generated ops:
+    - `smt.bv.extract` (value / unknown halves)
+    - `smt.bv.not`
+    - `smt.bv.and`
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (21 tests)
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+- External matrix:
+  - `sv-tests` BMC: 26/26 PASS
+  - `sv-tests` LEC: 23/23 PASS
+  - `verilator-verification` BMC: 17/17 PASS
+  - `verilator-verification` LEC: 17/17 PASS
+  - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+  - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`):
+    PASS (`XPROP_ONLY` accepted)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Cast-domain semantic handling currently targets direct unsliced four-state
+  arg sources; derived/sliced four-state expressions still use generic
+  bitvector cast fallback.
+- `cast_four_state = true` currently uses value-projection approximation and
+  does not preserve unknown markers through cast results.
+- `yosys` `counter` pass/fail polarity remains sensitive to
+  `--assume-known-inputs` profile.
