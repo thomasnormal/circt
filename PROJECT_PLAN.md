@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 510)
+## Current Status - February 8, 2026 (Iteration 511)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions + indexed dynamic selects (`[i]`, `[i +: w]`, `[i -: w]`) with matching VerifToSMT semantics; next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions + indexed dynamic selects, including affine indices (`i +/- c`, `c + i`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,65 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 511
+
+1. **Structured dynamic select metadata now supports affine index forms**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Extended structured extraction for dynamic selectors to accept affine
+     index expressions:
+     - `i + c`
+     - `i - c`
+     - `c + i`
+     - unary sign (`+i`, `-i`)
+   - This applies to both:
+     - bit-selects (`a[i - 1]`)
+     - indexed part-select bases (`a[(j + 1) +: w]`, `a[(j - 1) -: w]`)
+   - Result: we preserve semantic index transforms in structured attrs instead
+     of dropping to text fallback for common affine forms.
+
+2. **Normalized affine extraction details**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Added affine index normalization helper that resolves selectors into:
+     - index symbol name
+     - scale (`+1` / `-1`)
+     - constant offset
+   - Existing `*_dyn_sign` / `*_dyn_offset` emission now incorporates affine
+     offsets consistently across element and indexed-range selection kinds.
+
+3. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Added explicit coverage for affine dynamic event terms:
+     - `signal_dyn_offset = -1` from `bus[i - 1]`
+     - `iff_dyn_offset = 1` from `bus[(j + 1) +: 2]`
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (7/7)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Affine one-symbol indices are now covered, but we still do not preserve
+     canonical semantics for richer index expressions (for example multi-symbol
+     arithmetic and non-linear transforms).
+   - Highest-value next additions:
+     - typed cast semantics in structured event expressions,
+     - concat/replication semantics,
+     - canonical Slang expression IDs/graphs to retire parser fallback.
 
 ### Session Summary - Iteration 510
 

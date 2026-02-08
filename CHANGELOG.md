@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 511 - February 8, 2026
+
+### Summary
+
+Extended structured Slang event metadata to preserve affine dynamic-index
+selectors (`i +/- const`, `const + i`) for event-arm witness lowering.
+
+### Fixes
+
+1. **Affine dynamic index extraction in ImportVerilog**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Added affine selector normalization for dynamic bit/indexed part selects:
+     - `i + c`
+     - `i - c`
+     - `c + i`
+     - unary `+/-`
+   - Handles conversion wrappers on selector expressions, avoiding false
+     fallback to text-based metadata.
+
+2. **Structured attr emission now preserves affine offsets**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Existing dynamic structured attrs (`*_dyn_*`) now encode affine offsets for
+     element and indexed-range forms when representable with one symbol.
+   - This improves semantic fidelity for BMC/LEC witness activity without
+     parser dependence.
+
+3. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Added affine dynamic event-control case verifying:
+     - `signal_dyn_offset = -1` for `bus[i - 1]`
+     - `iff_dyn_offset = 1` for `bus[(j + 1) +: 2]`
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-verilog`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (7/7)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Structured witness metadata still lacks canonical Slang expression graph/ID
+  propagation.
+- Multi-symbol and non-linear index arithmetic is still unsupported in
+  structured dynamic selector encoding.
+- Cast, concat, and replication semantics are still missing in structured
+  witness lowering.
+
 ## Iteration 510 - February 8, 2026
 
 ### Summary

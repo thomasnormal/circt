@@ -286,6 +286,12 @@ struct StructuredEventExprInfo {
   std::optional<StringRef> reduction;
 };
 
+struct AffineIndexInfo {
+  StringRef name;
+  int64_t scale = 1;
+  int64_t offset = 0;
+};
+
 static std::optional<int32_t>
 getConstInt32(const slang::ast::Expression &expr) {
   auto *constant = expr.getConstant();
@@ -294,6 +300,62 @@ getConstInt32(const slang::ast::Expression &expr) {
   if (constant->integer().hasUnknown())
     return std::nullopt;
   return constant->integer().as<int32_t>();
+}
+
+static bool extractAffineIndexInfo(const slang::ast::Expression &expr,
+                                   AffineIndexInfo &info) {
+  using slang::ast::BinaryOperator;
+  using slang::ast::UnaryOperator;
+
+  if (auto *conv = expr.as_if<slang::ast::ConversionExpression>())
+    return extractAffineIndexInfo(conv->operand(), info);
+
+  if (auto *symRef = expr.getSymbolReference()) {
+    info.name = symRef->name;
+    info.scale = 1;
+    info.offset = 0;
+    return true;
+  }
+
+  if (auto *unary = expr.as_if<slang::ast::UnaryExpression>()) {
+    if (unary->op == UnaryOperator::Plus)
+      return extractAffineIndexInfo(unary->operand(), info);
+    if (unary->op == UnaryOperator::Minus) {
+      if (!extractAffineIndexInfo(unary->operand(), info))
+        return false;
+      info.scale = -info.scale;
+      info.offset = -info.offset;
+      return true;
+    }
+    return false;
+  }
+
+  if (auto *binary = expr.as_if<slang::ast::BinaryExpression>()) {
+    if (binary->op != BinaryOperator::Add &&
+        binary->op != BinaryOperator::Subtract)
+      return false;
+
+    auto rhsConst = getConstInt32(binary->right());
+    if (rhsConst && extractAffineIndexInfo(binary->left(), info)) {
+      info.offset += binary->op == BinaryOperator::Add ? *rhsConst : -*rhsConst;
+      return true;
+    }
+
+    auto lhsConst = getConstInt32(binary->left());
+    AffineIndexInfo rhsInfo;
+    if (lhsConst && extractAffineIndexInfo(binary->right(), rhsInfo)) {
+      if (binary->op == BinaryOperator::Add) {
+        rhsInfo.offset += *lhsConst;
+      } else {
+        rhsInfo.scale = -rhsInfo.scale;
+        rhsInfo.offset = *lhsConst - rhsInfo.offset;
+      }
+      info = rhsInfo;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
@@ -346,19 +408,21 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
       info.msb = static_cast<unsigned>(bit);
       return extractStructuredEventExprInfo(element->value(), info);
     }
-    if (auto *symRef = element->selector().getSymbolReference()) {
-      info.dynIndexName = symRef->name;
-      info.dynWidth = 1;
-      if (range.isLittleEndian()) {
-        info.dynSign = 1;
-        info.dynOffset = -range.lower();
-      } else {
-        info.dynSign = -1;
-        info.dynOffset = range.upper();
-      }
-      return extractStructuredEventExprInfo(element->value(), info);
-    }
-    return false;
+    AffineIndexInfo indexInfo;
+    if (!extractAffineIndexInfo(element->selector(), indexInfo))
+      return false;
+    int64_t sign = range.isLittleEndian() ? indexInfo.scale : -indexInfo.scale;
+    int64_t offset = range.isLittleEndian() ? indexInfo.offset - range.lower()
+                                            : range.upper() - indexInfo.offset;
+    if ((sign != 1 && sign != -1) ||
+        offset < std::numeric_limits<int32_t>::min() ||
+        offset > std::numeric_limits<int32_t>::max())
+      return false;
+    info.dynIndexName = indexInfo.name;
+    info.dynSign = static_cast<int32_t>(sign);
+    info.dynOffset = static_cast<int32_t>(offset);
+    info.dynWidth = 1;
+    return extractStructuredEventExprInfo(element->value(), info);
   }
 
   if (auto *rangeSelect = expr.as_if<slang::ast::RangeSelectExpression>()) {
@@ -392,12 +456,11 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
     case RangeSelectionKind::IndexedDown: {
       if (!right || *right <= 0)
         return false;
-      auto *indexSym = rangeSelect->left().getSymbolReference();
-      if (!indexSym)
+      AffineIndexInfo indexInfo;
+      if (!extractAffineIndexInfo(rangeSelect->left(), indexInfo))
         return false;
       int64_t width = *right;
-      int64_t a = 1;
-      int64_t b = 0;
+      int64_t b = indexInfo.offset;
       if (rangeSelect->getSelectionKind() == RangeSelectionKind::IndexedUp) {
         if (!range.isLittleEndian())
           b += width - 1;
@@ -406,7 +469,8 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
           b -= width - 1;
       }
 
-      int64_t sign = range.isLittleEndian() ? a : -a;
+      int64_t sign =
+          range.isLittleEndian() ? indexInfo.scale : -indexInfo.scale;
       int64_t offset = range.isLittleEndian() ? b - range.lower()
                                               : range.upper() - b;
       if ((sign != 1 && sign != -1) ||
@@ -414,7 +478,7 @@ static bool extractStructuredEventExprInfo(const slang::ast::Expression &expr,
           offset > std::numeric_limits<int32_t>::max())
         return false;
 
-      info.dynIndexName = indexSym->name;
+      info.dynIndexName = indexInfo.name;
       info.dynSign = static_cast<int32_t>(sign);
       info.dynOffset = static_cast<int32_t>(offset);
       info.dynWidth = static_cast<unsigned>(width);
