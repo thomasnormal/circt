@@ -3765,6 +3765,10 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_gt_const",
             "int_ge_const",
             "int_between",
+            "int_lt_offset",
+            "int_le_offset",
+            "int_gt_offset",
+            "int_ge_offset",
         }
     )
     if unknown_keys:
@@ -4185,6 +4189,150 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_between_seen.add(range_key)
             int_between_ranges.append((key, min_value, max_value))
+    int_lt_offset_triples = None
+    if "int_lt_offset" in payload:
+        int_lt_offset_raw = payload["int_lt_offset"]
+        if not isinstance(int_lt_offset_raw, list) or not int_lt_offset_raw:
+            fail(
+                f"error: invalid {field_name}.int_lt_offset: expected non-empty array"
+            )
+        int_lt_offset_triples = []
+        int_lt_offset_seen = set()
+        for triple_index, triple in enumerate(int_lt_offset_raw):
+            triple_field = f"{field_name}.int_lt_offset[{triple_index}]"
+            if (
+                not isinstance(triple, list)
+                or len(triple) != 3
+                or not isinstance(triple[0], str)
+                or not isinstance(triple[1], str)
+            ):
+                fail(
+                    f"error: invalid {triple_field}: expected [lhs, rhs, delta] key/key/integer triple"
+                )
+            lhs = triple[0]
+            rhs = triple[1]
+            delta = parse_context_integer(triple[2])
+            validate_context_key_name(lhs, triple_field)
+            validate_context_key_name(rhs, triple_field)
+            if delta is None:
+                fail(
+                    f"error: invalid {triple_field}: expected integer delta literal"
+                )
+            triple_key = (lhs, rhs, delta)
+            if triple_key in int_lt_offset_seen:
+                fail(
+                    f"error: invalid {field_name}.int_lt_offset: duplicate triple '{lhs},{rhs},{delta}'"
+                )
+            int_lt_offset_seen.add(triple_key)
+            int_lt_offset_triples.append((lhs, rhs, delta))
+    int_le_offset_triples = None
+    if "int_le_offset" in payload:
+        int_le_offset_raw = payload["int_le_offset"]
+        if not isinstance(int_le_offset_raw, list) or not int_le_offset_raw:
+            fail(
+                f"error: invalid {field_name}.int_le_offset: expected non-empty array"
+            )
+        int_le_offset_triples = []
+        int_le_offset_seen = set()
+        for triple_index, triple in enumerate(int_le_offset_raw):
+            triple_field = f"{field_name}.int_le_offset[{triple_index}]"
+            if (
+                not isinstance(triple, list)
+                or len(triple) != 3
+                or not isinstance(triple[0], str)
+                or not isinstance(triple[1], str)
+            ):
+                fail(
+                    f"error: invalid {triple_field}: expected [lhs, rhs, delta] key/key/integer triple"
+                )
+            lhs = triple[0]
+            rhs = triple[1]
+            delta = parse_context_integer(triple[2])
+            validate_context_key_name(lhs, triple_field)
+            validate_context_key_name(rhs, triple_field)
+            if delta is None:
+                fail(
+                    f"error: invalid {triple_field}: expected integer delta literal"
+                )
+            triple_key = (lhs, rhs, delta)
+            if triple_key in int_le_offset_seen:
+                fail(
+                    f"error: invalid {field_name}.int_le_offset: duplicate triple '{lhs},{rhs},{delta}'"
+                )
+            int_le_offset_seen.add(triple_key)
+            int_le_offset_triples.append((lhs, rhs, delta))
+    int_gt_offset_triples = None
+    if "int_gt_offset" in payload:
+        int_gt_offset_raw = payload["int_gt_offset"]
+        if not isinstance(int_gt_offset_raw, list) or not int_gt_offset_raw:
+            fail(
+                f"error: invalid {field_name}.int_gt_offset: expected non-empty array"
+            )
+        int_gt_offset_triples = []
+        int_gt_offset_seen = set()
+        for triple_index, triple in enumerate(int_gt_offset_raw):
+            triple_field = f"{field_name}.int_gt_offset[{triple_index}]"
+            if (
+                not isinstance(triple, list)
+                or len(triple) != 3
+                or not isinstance(triple[0], str)
+                or not isinstance(triple[1], str)
+            ):
+                fail(
+                    f"error: invalid {triple_field}: expected [lhs, rhs, delta] key/key/integer triple"
+                )
+            lhs = triple[0]
+            rhs = triple[1]
+            delta = parse_context_integer(triple[2])
+            validate_context_key_name(lhs, triple_field)
+            validate_context_key_name(rhs, triple_field)
+            if delta is None:
+                fail(
+                    f"error: invalid {triple_field}: expected integer delta literal"
+                )
+            triple_key = (lhs, rhs, delta)
+            if triple_key in int_gt_offset_seen:
+                fail(
+                    f"error: invalid {field_name}.int_gt_offset: duplicate triple '{lhs},{rhs},{delta}'"
+                )
+            int_gt_offset_seen.add(triple_key)
+            int_gt_offset_triples.append((lhs, rhs, delta))
+    int_ge_offset_triples = None
+    if "int_ge_offset" in payload:
+        int_ge_offset_raw = payload["int_ge_offset"]
+        if not isinstance(int_ge_offset_raw, list) or not int_ge_offset_raw:
+            fail(
+                f"error: invalid {field_name}.int_ge_offset: expected non-empty array"
+            )
+        int_ge_offset_triples = []
+        int_ge_offset_seen = set()
+        for triple_index, triple in enumerate(int_ge_offset_raw):
+            triple_field = f"{field_name}.int_ge_offset[{triple_index}]"
+            if (
+                not isinstance(triple, list)
+                or len(triple) != 3
+                or not isinstance(triple[0], str)
+                or not isinstance(triple[1], str)
+            ):
+                fail(
+                    f"error: invalid {triple_field}: expected [lhs, rhs, delta] key/key/integer triple"
+                )
+            lhs = triple[0]
+            rhs = triple[1]
+            delta = parse_context_integer(triple[2])
+            validate_context_key_name(lhs, triple_field)
+            validate_context_key_name(rhs, triple_field)
+            if delta is None:
+                fail(
+                    f"error: invalid {triple_field}: expected integer delta literal"
+                )
+            triple_key = (lhs, rhs, delta)
+            if triple_key in int_ge_offset_seen:
+                fail(
+                    f"error: invalid {field_name}.int_ge_offset: duplicate triple '{lhs},{rhs},{delta}'"
+                )
+            int_ge_offset_seen.add(triple_key)
+            int_ge_offset_triples.append((lhs, rhs, delta))
     if (
         keys_all is None
         and keys_any is None
@@ -4199,10 +4347,14 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_gt_const_pairs is None
         and int_ge_const_pairs is None
         and int_between_ranges is None
+        and int_lt_offset_triples is None
+        and int_le_offset_triples is None
+        and int_gt_offset_triples is None
+        and int_ge_offset_triples is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, or int_between"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, or int_ge_offset"
         )
     return {
         "keys_all": keys_all,
@@ -4218,6 +4370,10 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_gt_const_pairs": int_gt_const_pairs,
         "int_ge_const_pairs": int_ge_const_pairs,
         "int_between_ranges": int_between_ranges,
+        "int_lt_offset_triples": int_lt_offset_triples,
+        "int_le_offset_triples": int_le_offset_triples,
+        "int_gt_offset_triples": int_gt_offset_triples,
+        "int_ge_offset_triples": int_ge_offset_triples,
     }
 
 
@@ -4340,6 +4496,58 @@ def is_context_presence_clause_satisfied(context, clause):
             key_value = parse_context_integer(context[key])
             if key_value is None or key_value < min_value or key_value > max_value:
                 return False
+    int_lt_offset_triples = clause["int_lt_offset_triples"]
+    if int_lt_offset_triples is not None:
+        for lhs, rhs, delta in int_lt_offset_triples:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            rhs_value = parse_context_integer(context[rhs])
+            if (
+                lhs_value is None
+                or rhs_value is None
+                or lhs_value >= rhs_value + delta
+            ):
+                return False
+    int_le_offset_triples = clause["int_le_offset_triples"]
+    if int_le_offset_triples is not None:
+        for lhs, rhs, delta in int_le_offset_triples:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            rhs_value = parse_context_integer(context[rhs])
+            if (
+                lhs_value is None
+                or rhs_value is None
+                or lhs_value > rhs_value + delta
+            ):
+                return False
+    int_gt_offset_triples = clause["int_gt_offset_triples"]
+    if int_gt_offset_triples is not None:
+        for lhs, rhs, delta in int_gt_offset_triples:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            rhs_value = parse_context_integer(context[rhs])
+            if (
+                lhs_value is None
+                or rhs_value is None
+                or lhs_value <= rhs_value + delta
+            ):
+                return False
+    int_ge_offset_triples = clause["int_ge_offset_triples"]
+    if int_ge_offset_triples is not None:
+        for lhs, rhs, delta in int_ge_offset_triples:
+            if lhs not in context or rhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            rhs_value = parse_context_integer(context[rhs])
+            if (
+                lhs_value is None
+                or rhs_value is None
+                or lhs_value < rhs_value + delta
+            ):
+                return False
     return True
 
 
@@ -4431,6 +4639,42 @@ def format_context_presence_clause(clause):
             )
             + "]"
         )
+    int_lt_offset_triples = clause["int_lt_offset_triples"]
+    if int_lt_offset_triples is not None:
+        parts.append(
+            "int_lt_offset=["
+            + ", ".join(
+                f"{lhs}<{rhs}{delta:+d}" for lhs, rhs, delta in int_lt_offset_triples
+            )
+            + "]"
+        )
+    int_le_offset_triples = clause["int_le_offset_triples"]
+    if int_le_offset_triples is not None:
+        parts.append(
+            "int_le_offset=["
+            + ", ".join(
+                f"{lhs}<={rhs}{delta:+d}" for lhs, rhs, delta in int_le_offset_triples
+            )
+            + "]"
+        )
+    int_gt_offset_triples = clause["int_gt_offset_triples"]
+    if int_gt_offset_triples is not None:
+        parts.append(
+            "int_gt_offset=["
+            + ", ".join(
+                f"{lhs}>{rhs}{delta:+d}" for lhs, rhs, delta in int_gt_offset_triples
+            )
+            + "]"
+        )
+    int_ge_offset_triples = clause["int_ge_offset_triples"]
+    if int_ge_offset_triples is not None:
+        parts.append(
+            "int_ge_offset=["
+            + ", ".join(
+                f"{lhs}>={rhs}{delta:+d}" for lhs, rhs, delta in int_ge_offset_triples
+            )
+            + "]"
+        )
     return ", ".join(parts)
 
 
@@ -4486,6 +4730,26 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
     if int_between_ranges is not None:
         for key, _, _ in int_between_ranges:
             require_integer_key(key, f"{field_name}.int_between")
+    int_lt_offset_triples = clause["int_lt_offset_triples"]
+    if int_lt_offset_triples is not None:
+        for lhs, rhs, _ in int_lt_offset_triples:
+            require_integer_key(lhs, f"{field_name}.int_lt_offset")
+            require_integer_key(rhs, f"{field_name}.int_lt_offset")
+    int_le_offset_triples = clause["int_le_offset_triples"]
+    if int_le_offset_triples is not None:
+        for lhs, rhs, _ in int_le_offset_triples:
+            require_integer_key(lhs, f"{field_name}.int_le_offset")
+            require_integer_key(rhs, f"{field_name}.int_le_offset")
+    int_gt_offset_triples = clause["int_gt_offset_triples"]
+    if int_gt_offset_triples is not None:
+        for lhs, rhs, _ in int_gt_offset_triples:
+            require_integer_key(lhs, f"{field_name}.int_gt_offset")
+            require_integer_key(rhs, f"{field_name}.int_gt_offset")
+    int_ge_offset_triples = clause["int_ge_offset_triples"]
+    if int_ge_offset_triples is not None:
+        for lhs, rhs, _ in int_ge_offset_triples:
+            require_integer_key(lhs, f"{field_name}.int_ge_offset")
+            require_integer_key(rhs, f"{field_name}.int_ge_offset")
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
