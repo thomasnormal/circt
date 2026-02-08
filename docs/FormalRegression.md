@@ -100,6 +100,7 @@ utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-webho
 Webhook options:
 
 - `--on-fail-webhook <url>` can be specified multiple times.
+- `--webhook-fanout-mode <sequential|parallel>` controls endpoint dispatch.
 - `--webhook-retries <n>` controls retries per endpoint.
 - `--webhook-backoff-mode <fixed|exponential>` controls retry timing policy.
 - `--webhook-backoff-secs <n>` controls retry backoff delay.

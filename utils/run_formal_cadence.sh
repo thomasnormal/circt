@@ -20,6 +20,8 @@ Options:
   --on-fail-hook PATH    Executable hook invoked on iteration failure
   --on-fail-webhook URL  HTTP webhook POSTed on iteration failure
                          (repeatable; can specify multiple endpoints)
+  --webhook-fanout-mode MODE
+                         Webhook fanout: sequential | parallel (default: sequential)
   --webhook-retries N    Retry count per webhook endpoint (default: 0)
   --webhook-backoff-mode MODE
                          Retry backoff mode: fixed | exponential (default: fixed)
@@ -52,6 +54,7 @@ RETAIN_RUNS=0
 RETAIN_HOURS=-1
 ON_FAIL_HOOK=""
 WEBHOOK_RETRIES=0
+WEBHOOK_FANOUT_MODE="sequential"
 WEBHOOK_BACKOFF_MODE="fixed"
 WEBHOOK_BACKOFF_SECS=5
 WEBHOOK_BACKOFF_MAX_SECS=300
@@ -81,6 +84,8 @@ while [[ $# -gt 0 ]]; do
       ON_FAIL_WEBHOOKS+=("$2"); shift 2 ;;
     --webhook-retries)
       WEBHOOK_RETRIES="$2"; shift 2 ;;
+    --webhook-fanout-mode)
+      WEBHOOK_FANOUT_MODE="$2"; shift 2 ;;
     --webhook-backoff-mode)
       WEBHOOK_BACKOFF_MODE="$2"; shift 2 ;;
     --webhook-backoff-secs)
@@ -137,6 +142,10 @@ if [[ "$RETAIN_HOURS" -lt -1 ]]; then
 fi
 if ! [[ "$WEBHOOK_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --webhook-retries: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ "$WEBHOOK_FANOUT_MODE" != "sequential" && "$WEBHOOK_FANOUT_MODE" != "parallel" ]]; then
+  echo "invalid --webhook-fanout-mode: expected sequential or parallel" >&2
   exit 1
 fi
 if [[ "$WEBHOOK_BACKOFF_MODE" != "fixed" && "$WEBHOOK_BACKOFF_MODE" != "exponential" ]]; then
@@ -196,6 +205,7 @@ echo "retain_runs=$RETAIN_RUNS" >> "$STATE_FILE"
 echo "retain_hours=$RETAIN_HOURS" >> "$STATE_FILE"
 echo "on_fail_hook=$ON_FAIL_HOOK" >> "$STATE_FILE"
 echo "on_fail_webhooks=$on_fail_webhooks_csv" >> "$STATE_FILE"
+echo "webhook_fanout_mode=$WEBHOOK_FANOUT_MODE" >> "$STATE_FILE"
 echo "webhook_retries=$WEBHOOK_RETRIES" >> "$STATE_FILE"
 echo "webhook_backoff_mode=$WEBHOOK_BACKOFF_MODE" >> "$STATE_FILE"
 echo "webhook_backoff_secs=$WEBHOOK_BACKOFF_SECS" >> "$STATE_FILE"
@@ -373,11 +383,27 @@ PY
 
   local webhook_url
   local failures=0
-  for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
-    if ! post_fail_webhook "$webhook_url" "$payload" "$webhook_ts"; then
-      failures=$((failures + 1))
-    fi
-  done
+  if [[ "$WEBHOOK_FANOUT_MODE" == "parallel" ]]; then
+    echo "[$webhook_ts] posting on-fail webhooks in parallel: ${#ON_FAIL_WEBHOOKS[@]} endpoints" \
+      | tee -a "$CADENCE_LOG"
+    local -a webhook_pids=()
+    for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
+      post_fail_webhook "$webhook_url" "$payload" "$webhook_ts" &
+      webhook_pids+=("$!")
+    done
+    local pid
+    for pid in "${webhook_pids[@]}"; do
+      if ! wait "$pid"; then
+        failures=$((failures + 1))
+      fi
+    done
+  else
+    for webhook_url in "${ON_FAIL_WEBHOOKS[@]}"; do
+      if ! post_fail_webhook "$webhook_url" "$payload" "$webhook_ts"; then
+        failures=$((failures + 1))
+      fi
+    done
+  fi
   if [[ "$failures" -gt 0 ]]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] webhook delivery failures: $failures/${#ON_FAIL_WEBHOOKS[@]}" \
       | tee -a "$CADENCE_LOG"

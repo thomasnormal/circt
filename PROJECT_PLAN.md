@@ -16743,6 +16743,33 @@ ninja -C build circt-verilog
   - No explicit calendar-policy controls (business-day windows, timezone policy
     knobs, etc.) yet.
 
+### Iteration 638
+- Parallel webhook fan-out in `utils/run_formal_cadence.sh`:
+  - Added `--webhook-fanout-mode sequential|parallel` (default `sequential`).
+  - `parallel` mode dispatches all configured webhook endpoints concurrently and
+    aggregates failures after `wait`.
+  - Added `webhook_fanout_mode` state metadata in `cadence.state`.
+  - Added explicit cadence log marker for parallel dispatch mode.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - parallel fan-out scenario with two webhook endpoints
+    - verifies parallel-mode log marker and both endpoint calls.
+- Documentation:
+  - Updated `docs/FormalRegression.md` webhook options with
+    `--webhook-fanout-mode`.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-par-webhook-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+- Current limitations / debt:
+  - Parallel fan-out currently has no explicit max-concurrency throttle.
+  - Endpoint delivery ordering is non-deterministic in parallel mode.
+
 ---
 
 ## Architecture Reference
