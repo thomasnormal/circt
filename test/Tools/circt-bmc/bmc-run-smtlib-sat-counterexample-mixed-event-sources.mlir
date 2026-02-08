@@ -11,6 +11,8 @@ hw.module @top(in %in: i1, out out: i1) attributes {initial_values = [], moore.e
 // CHECK-DAG: [0] sequence, signal[0]:both
 // CHECK-DAG: estimated event-arm activity:
 // CHECK-DAG: [0][1] signal[0]:both -> step 1
+// CHECK-DAG: estimated fired arms by step:
+// CHECK-DAG: [0] step 1 -> signal[0]:both
 // CHECK-DAG: counterexample inputs:
 // CHECK-DAG: in = 1'd1
 // CHECK-DAG: in_0 = 1'd0

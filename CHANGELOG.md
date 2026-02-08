@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 495 - February 8, 2026
+
+### Summary
+
+Added a per-step fired-arm summary to SAT counterexample diagnostics so mixed
+event-list debugging now has both arm-centric and step-centric views.
+
+### Fixes
+
+1. **Per-step fired-arm reporting**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - In addition to:
+     - `estimated event-arm activity:`
+   - Counterexample output now also prints:
+     - `estimated fired arms by step:`
+   - Format:
+     - `  [set] step N -> armA, armB`
+   - This aggregates the already-computed sequence/signal arm activity into a
+     direct step-to-arm summary.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+   - New checks verify:
+     - per-step summary section header
+     - expected step-to-arm lines
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`:
+       PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `sequence-event-control.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Fired-arm reporting is still waveform-derived (diagnostic estimate), not an
+  explicit solver witness signal.
+- Attribution for complex/internal expressions remains limited by available
+  naming metadata.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 494 - February 8, 2026
 
 ### Summary

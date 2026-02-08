@@ -362,6 +362,7 @@ static void printMixedEventSources(
   if (modelValues)
     waves = buildWaveTable(*modelValues, maxStep);
   bool printedActivityHeader = false;
+  bool printedByStepHeader = false;
   module.walk([&](mlir::smt::SolverOp solver) {
     auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
     if (!eventSources)
@@ -405,6 +406,7 @@ static void printMixedEventSources(
 
       if (!modelValues || maxStep == 0 || !detailSet)
         continue;
+      std::map<unsigned, SmallVector<std::string, 4>> activeArmsByStep;
       for (unsigned j = 0; j < detailSet.size(); ++j) {
         auto detail = dyn_cast<DictionaryAttr>(detailSet[j]);
         if (!detail)
@@ -445,6 +447,10 @@ static void printMixedEventSources(
           if (iffIt != waves.end())
             iffWave = &iffIt->second;
         }
+        StringRef label = kind;
+        if (auto detailLabel =
+                dyn_cast_or_null<StringAttr>(detail.get("label")))
+          label = detailLabel.getValue();
         SmallVector<unsigned, 8> activeSteps;
         for (unsigned step = 1; step <= maxStep; ++step) {
           bool armFired = false;
@@ -473,14 +479,12 @@ static void printMixedEventSources(
               continue;
           }
           activeSteps.push_back(step);
+          activeArmsByStep[step].push_back(label.str());
         }
         if (!printedActivityHeader) {
           llvm::errs() << "\nestimated event-arm activity:\n";
           printedActivityHeader = true;
         }
-        StringRef label = kind;
-        if (auto detailLabel = dyn_cast_or_null<StringAttr>(detail.get("label")))
-          label = detailLabel.getValue();
         llvm::errs() << "  [" << i << "][" << j << "] " << label << " ->";
         if (activeSteps.empty()) {
           llvm::errs() << " none\n";
@@ -491,6 +495,24 @@ static void printMixedEventSources(
               llvm::errs() << ",";
             llvm::errs() << " step " << step;
             firstStep = false;
+          }
+          llvm::errs() << "\n";
+        }
+      }
+      if (!activeArmsByStep.empty()) {
+        if (!printedByStepHeader) {
+          llvm::errs() << "\nestimated fired arms by step:\n";
+          printedByStepHeader = true;
+        }
+        for (const auto &stepAndArms : activeArmsByStep) {
+          llvm::errs() << "  [" << i << "] step " << stepAndArms.first
+                       << " -> ";
+          bool firstArm = true;
+          for (const auto &arm : stepAndArms.second) {
+            if (!firstArm)
+              llvm::errs() << ", ";
+            llvm::errs() << arm;
+            firstArm = false;
           }
           llvm::errs() << "\n";
         }

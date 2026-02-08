@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 494)
+## Current Status - February 8, 2026 (Iteration 495)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed sequence+signal per-step estimated event-arm activity; next: exact fired-arm witness attribution + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed per-step fired-arm summaries (sequence+signal) in counterexamples; next: exact witness extraction + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,53 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 495
+
+1. **Per-step fired-arm summary in counterexamples**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample diagnostics now additionally emit:
+     - `estimated fired arms by step:`
+   - For each mixed event-source set, output now includes:
+     - `[set] step N -> arm0, arm1, ...`
+   - This is computed from previously derived per-arm activity and gives a
+     direct step-to-arm view for debugging.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+   - Checks now validate both:
+     - per-arm activity lines
+     - per-step fired-arm summary lines
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`:
+       PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `sequence-event-control.sv`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Arm attribution remains estimated from model waveforms and metadata, not
+     explicit solver witness signals.
+   - We still lack exact wake-arm witness extraction for complex/internal
+     expressions without stable names.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit dedicated witness signals in lowering and report those directly,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 494
 

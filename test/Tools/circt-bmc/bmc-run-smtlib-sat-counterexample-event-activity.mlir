@@ -12,3 +12,5 @@ hw.module @top(in %in: i1, in %seq: i1, in %en: i1, out out: i1) attributes {ini
 // CHECK-DAG: estimated event-arm activity:
 // CHECK-DAG: [0][0] sequence[0]:iff -> step 1
 // CHECK-DAG: [0][1] signal[0]:both:iff -> step 1
+// CHECK-DAG: estimated fired arms by step:
+// CHECK-DAG: [0] step 1 -> sequence[0]:iff, signal[0]:both:iff
