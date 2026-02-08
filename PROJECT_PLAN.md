@@ -16873,6 +16873,39 @@ ninja -C build circt-verilog
     SMTP auth/TLS backend is implemented.
   - Email template is fixed text/plain (no templating/localization hooks yet).
 
+### Iteration 642
+- Expected-failure budget accounting in `utils/run_formal_all.sh`:
+  - Added `--expected-failures-file <file>` (TSV budget input).
+  - Added `--fail-on-unexpected-failures` gate.
+  - Added budget comparison output:
+    - `<out-dir>/expected-failures-summary.tsv`
+  - Added JSON summary enrichment (`summary.json`):
+    - top-level `expected_failures` object with per-suite rows and totals.
+  - Default behavior when expectations are missing:
+    - `expected_fail=0`, `expected_error=0` for unmatched suite/mode rows.
+- Validation/robustness:
+  - Added validation for readable expected-failures file.
+  - Added schema validation for required TSV columns:
+    - `suite`, `mode`, `expected_fail`, `expected_error`.
+  - Added duplicate-key and non-negative integer validation in budget parsing.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - budget-satisfied gate case (passes)
+    - budget overrun gate case (fails with precise diagnostics)
+    - JSON summary coverage for `expected_failures`.
+- Documentation/schema:
+  - Updated `docs/FormalRegression.md` with budget-gate usage and TSV format.
+  - Updated `utils/formal-summary-schema.json` with optional
+    `expected_failures` schema.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Expected-failure budgeting is currently count-based only; no per-test-id
+    matching or reason taxonomy enforcement yet.
+  - No temporal policy on expectation expiry/staleness yet.
+
 ---
 
 ## Architecture Reference

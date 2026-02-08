@@ -26,6 +26,10 @@ Options:
   --fail-on-new-xpass    Fail when xpass count increases vs baseline
   --fail-on-passrate-regression
                          Fail when pass-rate decreases vs baseline
+  --expected-failures-file FILE
+                         TSV with suite/mode expected fail+error budgets
+  --fail-on-unexpected-failures
+                         Fail when fail/error exceed expected-failure budgets
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -66,6 +70,8 @@ BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
+EXPECTED_FAILURES_FILE=""
+FAIL_ON_UNEXPECTED_FAILURES=0
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -126,6 +132,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_XPASS=1; shift ;;
     --fail-on-passrate-regression)
       FAIL_ON_PASSRATE_REGRESSION=1; shift ;;
+    --expected-failures-file)
+      EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
+    --fail-on-unexpected-failures)
+      FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -147,6 +157,14 @@ if ! [[ "$BASELINE_WINDOW" =~ ^[0-9]+$ ]] || [[ "$BASELINE_WINDOW" == "0" ]]; th
 fi
 if ! [[ "$BASELINE_WINDOW_DAYS" =~ ^[0-9]+$ ]]; then
   echo "invalid --baseline-window-days: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
+  echo "--fail-on-unexpected-failures requires --expected-failures-file" >&2
+  exit 1
+fi
+if [[ -n "$EXPECTED_FAILURES_FILE" && ! -r "$EXPECTED_FAILURES_FILE" ]]; then
+  echo "expected-failures file not readable: $EXPECTED_FAILURES_FILE" >&2
   exit 1
 fi
 
@@ -461,6 +479,176 @@ payload = {
 json_summary_path.parent.mkdir(parents=True, exist_ok=True)
 json_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
+
+if [[ -n "$EXPECTED_FAILURES_FILE" || "$FAIL_ON_UNEXPECTED_FAILURES" == "1" ]]; then
+  OUT_DIR="$OUT_DIR" \
+  JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
+  EXPECTED_FAILURES_FILE="$EXPECTED_FAILURES_FILE" \
+  FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
+  python3 - <<'PY'
+import csv
+import json
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+summary_path = out_dir / "summary.tsv"
+json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
+expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
+fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
+expected_path = Path(expected_file_raw) if expected_file_raw else None
+expected_summary_path = out_dir / "expected-failures-summary.tsv"
+
+required_cols = {"suite", "mode", "expected_fail", "expected_error"}
+expected = {}
+if expected_path is not None:
+  with expected_path.open() as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    fieldnames = set(reader.fieldnames or [])
+    if not required_cols.issubset(fieldnames):
+      missing = sorted(required_cols - fieldnames)
+      raise SystemExit(
+          f"invalid expected-failures file: missing required columns: {', '.join(missing)}"
+      )
+    for row in reader:
+      suite = row.get("suite", "").strip()
+      mode = row.get("mode", "").strip()
+      if not suite or not mode:
+        raise SystemExit("invalid expected-failures row: suite/mode must be non-empty")
+      key = (suite, mode)
+      if key in expected:
+        raise SystemExit(
+            f"invalid expected-failures file: duplicate row for suite={suite} mode={mode}"
+        )
+      try:
+        expected_fail = int(row.get("expected_fail", "0"))
+        expected_error = int(row.get("expected_error", "0"))
+      except ValueError:
+        raise SystemExit(
+            f"invalid expected-failures row for suite={suite} mode={mode}: "
+            "expected_fail/expected_error must be integers"
+        )
+      if expected_fail < 0 or expected_error < 0:
+        raise SystemExit(
+            f"invalid expected-failures row for suite={suite} mode={mode}: "
+            "expected_fail/expected_error must be non-negative"
+        )
+      expected[key] = {
+          "expected_fail": expected_fail,
+          "expected_error": expected_error,
+          "notes": row.get("notes", ""),
+      }
+
+rows = []
+seen = set()
+totals = {
+    "actual_fail": 0,
+    "actual_error": 0,
+    "expected_fail": 0,
+    "expected_error": 0,
+    "unexpected_fail": 0,
+    "unexpected_error": 0,
+}
+
+with summary_path.open() as f:
+  reader = csv.DictReader(f, delimiter='\t')
+  for row in reader:
+    suite = row["suite"]
+    mode = row["mode"]
+    key = (suite, mode)
+    seen.add(key)
+    actual_fail = int(row["fail"])
+    actual_error = int(row["error"])
+    exp = expected.get(key, {"expected_fail": 0, "expected_error": 0, "notes": ""})
+    expected_fail = exp["expected_fail"]
+    expected_error = exp["expected_error"]
+    unexpected_fail = max(actual_fail - expected_fail, 0)
+    unexpected_error = max(actual_error - expected_error, 0)
+    totals["actual_fail"] += actual_fail
+    totals["actual_error"] += actual_error
+    totals["expected_fail"] += expected_fail
+    totals["expected_error"] += expected_error
+    totals["unexpected_fail"] += unexpected_fail
+    totals["unexpected_error"] += unexpected_error
+    rows.append(
+        {
+            "suite": suite,
+            "mode": mode,
+            "fail": actual_fail,
+            "error": actual_error,
+            "expected_fail": expected_fail,
+            "expected_error": expected_error,
+            "unexpected_fail": unexpected_fail,
+            "unexpected_error": unexpected_error,
+            "within_budget": "yes" if unexpected_fail == 0 and unexpected_error == 0 else "no",
+            "notes": exp["notes"],
+        }
+    )
+
+unused_expectations = []
+for suite, mode in sorted(expected.keys() - seen):
+  unused_expectations.append({"suite": suite, "mode": mode})
+
+with expected_summary_path.open("w", newline="") as f:
+  writer = csv.DictWriter(
+      f,
+      fieldnames=[
+          "suite",
+          "mode",
+          "fail",
+          "error",
+          "expected_fail",
+          "expected_error",
+          "unexpected_fail",
+          "unexpected_error",
+          "within_budget",
+          "notes",
+      ],
+      delimiter='\t',
+  )
+  writer.writeheader()
+  for row in rows:
+    writer.writerow(row)
+
+try:
+  payload = json.loads(json_summary_path.read_text())
+except Exception:
+  payload = {}
+
+payload["expected_failures"] = {
+    "file": str(expected_path) if expected_path is not None else "",
+    "rows": rows,
+    "totals": totals,
+    "unused_expectations": unused_expectations,
+}
+json_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+print(f"expected-failures summary: {expected_summary_path}")
+print(
+    "expected-failures totals: "
+    f"actual_fail={totals['actual_fail']} actual_error={totals['actual_error']} "
+    f"expected_fail={totals['expected_fail']} expected_error={totals['expected_error']} "
+    f"unexpected_fail={totals['unexpected_fail']} unexpected_error={totals['unexpected_error']}"
+)
+if unused_expectations:
+  print("expected-failures unused entries:")
+  for item in unused_expectations:
+    print(f"  {item['suite']} {item['mode']}")
+
+if fail_on_unexpected and (
+    totals["unexpected_fail"] > 0 or totals["unexpected_error"] > 0
+):
+  print("unexpected failure budget overruns:")
+  for row in rows:
+    if row["unexpected_fail"] > 0 or row["unexpected_error"] > 0:
+      print(
+          f"  {row['suite']} {row['mode']}: "
+          f"fail {row['fail']} (expected {row['expected_fail']}), "
+          f"error {row['error']} (expected {row['expected_error']})"
+      )
+  raise SystemExit(1)
+PY
+fi
 
 if [[ "$UPDATE_BASELINES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" DATE_STR="$DATE_STR" BASELINE_FILE="$BASELINE_FILE" PLAN_FILE="$PLAN_FILE" python3 - <<'PY'

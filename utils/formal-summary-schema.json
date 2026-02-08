@@ -79,6 +79,139 @@
         },
         "additionalProperties": false
       }
+    },
+    "expected_failures": {
+      "type": "object",
+      "required": [
+        "file",
+        "rows",
+        "totals",
+        "unused_expectations"
+      ],
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "suite",
+              "mode",
+              "fail",
+              "error",
+              "expected_fail",
+              "expected_error",
+              "unexpected_fail",
+              "unexpected_error",
+              "within_budget",
+              "notes"
+            ],
+            "properties": {
+              "suite": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              },
+              "fail": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "error": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expected_fail": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expected_error": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unexpected_fail": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "unexpected_error": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "within_budget": {
+                "type": "string",
+                "enum": [
+                  "yes",
+                  "no"
+                ]
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "totals": {
+          "type": "object",
+          "required": [
+            "actual_fail",
+            "actual_error",
+            "expected_fail",
+            "expected_error",
+            "unexpected_fail",
+            "unexpected_error"
+          ],
+          "properties": {
+            "actual_fail": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "actual_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expected_fail": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "expected_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unexpected_fail": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unexpected_error": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "unused_expectations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "suite",
+              "mode"
+            ],
+            "properties": {
+              "suite": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

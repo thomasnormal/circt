@@ -31745,3 +31745,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Email delivery uses sendmail-compatible transport only (no native SMTP auth/TLS
   backend).
 - Email message format is fixed text/plain (no templating or provider abstraction).
+
+## Iteration 642 - February 8, 2026
+
+### Expected-Failure Budget Gating in `run_formal_all.sh`
+
+- Added `--expected-failures-file <file>` to load suite/mode fail+error budget
+  expectations from TSV.
+- Added `--fail-on-unexpected-failures` gate to fail when observed fail/error
+  counts exceed configured expectations.
+- Added budget comparison artifact:
+  - `<out-dir>/expected-failures-summary.tsv`
+- Added JSON summary enrichment:
+  - top-level `expected_failures` object containing:
+    - per-suite/mode comparisons
+    - aggregate totals
+    - unused expectation rows
+
+### Validation and Diagnostics
+
+- Added expected-failures file checks:
+  - file readability validation
+  - required TSV header columns:
+    - `suite`, `mode`, `expected_fail`, `expected_error`
+  - duplicate suite/mode row rejection
+  - non-negative integer validation for expectation counts
+- Missing expectation rows default to:
+  - `expected_fail=0`
+  - `expected_error=0`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - budget-satisfied case (`--fail-on-unexpected-failures` passes)
+    - budget-overrun case (`--fail-on-unexpected-failures` fails with
+      suite/mode diagnostics)
+    - JSON summary check for `expected_failures`
+
+### Documentation and Schema
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added expected-failure budget usage
+    - documented expected-failures TSV format
+    - documented `expected-failures-summary.tsv` output
+  - `utils/formal-summary-schema.json`
+    - added optional `expected_failures` object schema
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+
+### Remaining Limitations
+
+- Budgeting is currently aggregate-count based only (no per-test identifier
+  matching).
+- No expectation-expiry policy (staleness enforcement) yet.
