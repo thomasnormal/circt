@@ -1119,6 +1119,12 @@ private:
   /// memory location has changed.
   void checkMemoryEventWaiters();
 
+  /// Track the realTime (in femtoseconds) when each event was triggered.
+  /// Per IEEE 1800-2017 §15.5.3, `.triggered` returns true only within the
+  /// same time slot where the event was triggered. Events auto-clear when
+  /// realTime advances.
+  llvm::DenseMap<uint64_t, uint64_t> eventTriggerTime;
+
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
 

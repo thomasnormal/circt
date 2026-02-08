@@ -2748,20 +2748,38 @@ struct EventTriggeredOpConversion
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i1Ty = IntegerType::get(ctx, 1);
 
-    // __moore_event_triggered takes a pointer to the event and returns i1.
+    // __moore_event_triggered takes a pointer (event identifier) and
+    // returns i1. The pointer must match what __moore_event_trigger used.
     auto fnTy = LLVM::LLVMFunctionType::get(i1Ty, {ptrTy});
     auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_event_triggered",
                                      fnTy);
 
-    // Store the event value to an alloca and pass a pointer to it.
-    auto one =
-        LLVM::ConstantOp::create(rewriter, loc, rewriter.getI64IntegerAttr(1));
-    auto eventAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, i1Ty, one);
-    LLVM::StoreOp::create(rewriter, loc, adaptor.getEvent(), eventAlloca);
+    Value eventVal = adaptor.getEvent();
+    Value eventPtr;
+
+    // Try to trace back through ProbeOp to get the signal reference.
+    // This ensures we use the same event identifier as EventTriggerOp.
+    if (auto probeOp = eventVal.getDefiningOp<llhd::ProbeOp>()) {
+      Value eventRef = probeOp.getSignal();
+      eventPtr =
+          UnrealizedConversionCastOp::create(rewriter, loc, ptrTy, eventRef)
+              .getResult(0);
+    } else if (isa<LLVM::LLVMPointerType>(eventVal.getType())) {
+      // Already a pointer (memory-backed event).
+      eventPtr = eventVal;
+    } else {
+      // Fallback: store the event value to an alloca and pass a pointer.
+      auto one = LLVM::ConstantOp::create(rewriter, loc,
+                                           rewriter.getI64IntegerAttr(1));
+      auto eventAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, i1Ty, one);
+      LLVM::StoreOp::create(rewriter, loc, eventVal, eventAlloca);
+      eventPtr = eventAlloca;
+    }
 
     auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{i1Ty},
                                      SymbolRefAttr::get(fn),
-                                     ValueRange{eventAlloca});
+                                     ValueRange{eventPtr});
     rewriter.replaceOp(op, call.getResult());
     return success();
   }
@@ -2783,6 +2801,20 @@ struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
     // The event reference is converted to llhd.ref<i1>.
     Value eventRef = adaptor.getEvent();
 
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto voidTy = LLVM::LLVMVoidType::get(ctx);
+
+    // Helper: emit __moore_event_trigger(ptr) to set the triggered flag
+    // immediately (within this time slot), per IEEE 1800-2017 §15.5.3.
+    auto emitTriggerCall = [&](Value eventPtr) {
+      auto fnTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_event_trigger", fnTy);
+      LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                           SymbolRefAttr::get(fn), ValueRange{eventPtr});
+    };
+
     // Check if this is an LLHD ref type (signal).
     auto refType = dyn_cast<llhd::RefType>(eventRef.getType());
     if (!refType) {
@@ -2796,6 +2828,8 @@ struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
             rewriter, loc, i1Ty, rewriter.getIntegerAttr(i1Ty, 1));
         Value toggled = LLVM::XOrOp::create(rewriter, loc, currentVal, one);
         LLVM::StoreOp::create(rewriter, loc, toggled, eventRef);
+        // Also set the immediate trigger flag.
+        emitTriggerCall(eventRef);
         rewriter.eraseOp(op);
         return success();
       }
@@ -2812,11 +2846,19 @@ struct EventTriggerOpConversion : public OpConversionPattern<EventTriggerOp> {
     Value toggled = comb::XorOp::create(rewriter, loc, currentVal, one, true);
 
     // Drive the toggled value back to the signal with delta delay.
+    // This wakes up processes using llhd.wait on the event signal.
     auto timeZero = llhd::ConstantTimeOp::create(
         rewriter, loc,
         llhd::TimeAttr::get(ctx, 0, "ns", 0, 1));
     llhd::DriveOp::create(rewriter, loc, eventRef, toggled,
                           timeZero.getResult(), Value{});
+
+    // Also call __moore_event_trigger to set the immediate triggered flag.
+    // This makes .triggered return true within the same time slot.
+    Value eventPtr =
+        UnrealizedConversionCastOp::create(rewriter, loc, ptrTy, eventRef)
+            .getResult(0);
+    emitTriggerCall(eventPtr);
 
     rewriter.eraseOp(op);
     return success();
