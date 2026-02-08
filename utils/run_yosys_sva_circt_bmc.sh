@@ -51,6 +51,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND="${YOSYS_SVA_MODE_SUMMAR
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS:-30}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS:-300}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -226,6 +227,14 @@ case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR" in
   auto|python) ;;
   *)
     echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR (expected auto|python)" >&2
+    exit 1
+    ;;
+esac
+YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE" in
+  auto|python|shell) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE: $YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE (expected auto|python|shell)" >&2
     exit 1
     ;;
 esac
@@ -1931,6 +1940,19 @@ emit_mode_summary_outputs() {
     echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=python requires python3 in PATH" >&2
     exit 1
   fi
+  local jsonl_migration_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE"
+  if [[ "$jsonl_migration_mode" == "auto" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+      jsonl_migration_mode="python"
+    else
+      jsonl_migration_mode="shell"
+    fi
+  fi
+  if [[ "$jsonl_migration_mode" == "python" ]] && ! command -v python3 >/dev/null 2>&1; then
+    echo "error: YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE=python requires python3 in PATH" >&2
+    exit 1
+  fi
+  local jsonl_migration_mode_resolved="$jsonl_migration_mode"
   local tsv_row
   local history_drop_future_tsv=0
   local history_drop_future_jsonl=0
@@ -2178,7 +2200,7 @@ PY
     local lineno="$3"
     local payload migrated
 
-    if command -v python3 >/dev/null 2>&1; then
+    if [[ "$jsonl_migration_mode_resolved" == "python" ]]; then
       python3 - "$line" "$file" "$lineno" <<'PY'
 import json
 import sys
@@ -2241,7 +2263,97 @@ PY
       return
     fi
 
-    if [[ "$line" == *\"schema_version\"* ]]; then
+    jsonl_line_has_top_level_key_shell() {
+      local line="$1"
+      local key="$2"
+      awk -v target="$key" '
+BEGIN {
+  depth = 0
+  in_string = 0
+  escaped = 0
+  token = ""
+  candidate = 0
+  found = 0
+  last_sig = ""
+}
+{
+  line = $0
+  n = length(line)
+  for (i = 1; i <= n; ++i) {
+    c = substr(line, i, 1)
+    if (in_string) {
+      if (escaped) {
+        token = token c
+        escaped = 0
+        continue
+      }
+      if (c == "\\") {
+        token = token c
+        escaped = 1
+        continue
+      }
+      if (c == "\"") {
+        in_string = 0
+        if (candidate) {
+          j = i + 1
+          while (j <= n) {
+            d = substr(line, j, 1)
+            if (d ~ /[[:space:]]/) {
+              ++j
+              continue
+            }
+            break
+          }
+          if (j <= n && substr(line, j, 1) == ":" && token == target) {
+            found = 1
+            break
+          }
+        }
+        candidate = 0
+        continue
+      }
+      token = token c
+      continue
+    }
+    if (c ~ /[[:space:]]/)
+      continue
+    if (c == "\"") {
+      in_string = 1
+      token = ""
+      candidate = (depth == 1 && (last_sig == "{" || last_sig == ","))
+      continue
+    }
+    if (c == "{") {
+      ++depth
+      if (depth == 1)
+        last_sig = "{"
+      continue
+    }
+    if (c == "}") {
+      if (depth == 1)
+        last_sig = "}"
+      if (depth > 0)
+        --depth
+      continue
+    }
+    if (depth == 1 && c == ",") {
+      last_sig = ","
+      continue
+    }
+    if (depth == 1 && c == ":") {
+      last_sig = ":"
+      continue
+    }
+    if (depth == 1)
+      last_sig = c
+  }
+}
+END {
+  exit(found ? 0 : 1)
+}' <<<"$line"
+    }
+
+    if jsonl_line_has_top_level_key_shell "$line" "schema_version"; then
       printf '%s\n' "$line"
       return
     fi
