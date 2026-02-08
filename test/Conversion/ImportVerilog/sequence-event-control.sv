@@ -135,3 +135,23 @@ module SequenceEventListDifferentClocks;
     c <= ~c;
   end
 endmodule
+
+// Test mixed sequence/signal event-list controls on different clocks.
+module SequenceSignalEventListDifferentClocks;
+  logic clk1, clk2, a, b, c;
+
+  sequence seq;
+    @(posedge clk1) a;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListDifferentClocks
+  // CHECK: moore.procedure always
+  // CHECK: moore.wait_event
+  // CHECK-DAG: moore.detect_event any
+  // CHECK-DAG: moore.detect_event any
+  // CHECK: moore.read %b
+  // CHECK: cf.cond_br
+  always @(seq or posedge clk2 iff b) begin
+    c <= ~c;
+  end
+endmodule
