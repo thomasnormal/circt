@@ -63,10 +63,10 @@ def read_hmac_keyring(
     if not line or line.startswith("#"):
       continue
     fields = line.split("\t")
-    if len(fields) < 2 or len(fields) > 5:
+    if len(fields) < 2 or len(fields) > 6:
       fail(
           f"{path}:{line_no}: expected '<hmac_key_id>\\t<key_file_path>"
-          "\\t[not_before]\\t[not_after]\\t[status]' row in keyring"
+          "\\t[not_before]\\t[not_after]\\t[status]\\t[key_sha256]' row in keyring"
       )
     key_id = fields[0].strip()
     key_file = fields[1].strip()
@@ -79,6 +79,7 @@ def read_hmac_keyring(
       key_path = path.parent / key_path
     if not key_path.is_file():
       fail(f"{path}:{line_no}: HMAC key file not found: {key_path}")
+    key_bytes = key_path.read_bytes()
     not_before = None
     not_after = None
     if len(fields) >= 3:
@@ -94,7 +95,17 @@ def read_hmac_keyring(
         status = "active"
       if status not in {"active", "revoked"}:
         fail(f"{path}:{line_no}: keyring.status must be one of active, revoked")
-    keyring[key_id] = (key_path.read_bytes(), not_before, not_after, status)
+    if len(fields) >= 6:
+      expected_key_hash = parse_sha256_hex(
+          fields[5], f"{path}:{line_no}: keyring.key_sha256"
+      )
+      actual_key_hash = hashlib.sha256(key_bytes).hexdigest()
+      if actual_key_hash != expected_key_hash:
+        fail(
+            f"{path}:{line_no}: keyring.key_sha256 mismatch; expected "
+            f"{expected_key_hash}, got {actual_key_hash}"
+        )
+    keyring[key_id] = (key_bytes, not_before, not_after, status)
   if not keyring:
     fail(f"{path}: keyring has no usable rows")
   return keyring
@@ -289,7 +300,7 @@ def main() -> int:
       "--hmac-keyring-tsv",
       help=(
           "Optional TSV mapping "
-          "'<hmac_key_id>\\t<key_file_path>\\t[not_before]\\t[not_after]\\t[status]' "
+          "'<hmac_key_id>\\t<key_file_path>\\t[not_before]\\t[not_after]\\t[status]\\t[key_sha256]' "
           "for keyed HMAC validation"
       ),
   )

@@ -88,6 +88,10 @@
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-sha256 0000000000000000000000000000000000000000000000000000000000000000 %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGSHABAD
 // RUN: cd %t && printf 'lit-key-1\tdryrun-hmac.key\n' > dryrun-hmac-keyring-relative.tsv
 // RUN: cd %t && python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv dryrun-hmac-keyring-relative.tsv dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGREL
+// RUN: KEY_SHA=$(sha256sum %t/dryrun-hmac.key | cut -d' ' -f1) && printf "lit-key-1\t%t/dryrun-hmac.key\t\t\tactive\t${KEY_SHA}\n" > %t/dryrun-hmac-keyring-keysha.tsv
+// RUN: python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring-keysha.tsv %t/dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGKEYSHA
+// RUN: printf 'lit-key-1\t%t/dryrun-hmac.key\t\t\tactive\t0000000000000000000000000000000000000000000000000000000000000000\n' > %t/dryrun-hmac-keyring-keysha-bad.tsv
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring-keysha-bad.tsv %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGKEYSHABAD
 // RUN: cp %t/dryrun-report.jsonl %t/dryrun-report-keyring-bad.jsonl
 // RUN: sed -i 's/"hmac_key_id": "lit-key-1"/"hmac_key_id": "missing-key"/g' %t/dryrun-report-keyring-bad.jsonl
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv %t/dryrun-report-keyring-bad.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGBAD
@@ -198,6 +202,8 @@
 // DRYRUNVERIFYKEYRINGSHA: verified dry-run report: runs=1
 // DRYRUNVERIFYKEYRINGSHABAD: error: HMAC keyring sha256 mismatch
 // DRYRUNVERIFYKEYRINGREL: verified dry-run report: runs=1
+// DRYRUNVERIFYKEYRINGKEYSHA: verified dry-run report: runs=1
+// DRYRUNVERIFYKEYRINGKEYSHABAD: error: {{.*}}keyring.key_sha256 mismatch
 // DRYRUNVERIFYKEYRINGBAD: error: {{.*}}unknown hmac_key_id 'missing-key'
 // DRYRUNVERIFYKEYRINGREVOKED: error: {{.*}}hmac_key_id 'lit-key-1' is revoked in keyring
 // DRYRUNVERIFYKEYRINGWINDOWBAD: error: {{.*}}run_meta.date '1999-01-01' is before keyring.not_before '2000-01-01'

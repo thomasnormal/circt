@@ -17876,6 +17876,31 @@ ninja -C build circt-verilog
     SHA-256 pin values.
   - No native signature/certificate verification for keyring manifests yet.
 
+### Iteration 669
+- Per-key file digest pinning in keyring rows:
+  - Extended keyring schema in
+    `utils/verify_formal_dryrun_report.py` with optional sixth column:
+    - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+  - Added strict digest validation:
+    - when `key_sha256` is present, verifier checks SHA-256 of the referenced
+      key file content during keyring parse.
+  - Parser hardening:
+    - keyring rows now allow 2-6 columns.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive per-key digest pin path
+    - negative per-key digest mismatch rejection
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `key_sha256` semantics.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+- Current limitations / debt:
+  - Keyring and key-file digest pins are still externally supplied trust roots.
+  - No native signature/certificate chain verification for manifests yet.
+
 ---
 
 ## Architecture Reference

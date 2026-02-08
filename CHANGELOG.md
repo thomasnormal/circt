@@ -33151,6 +33151,44 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Keyring authenticity still depends on trusted distribution of expected hashes.
 - No built-in signature/certificate verification for keyring manifests yet.
 
+## Iteration 669 - February 8, 2026
+
+### Per-Key File Digest Pinning in Keyring Rows
+
+- Extended keyring row format in
+  `utils/verify_formal_dryrun_report.py` with optional `key_sha256`:
+  - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+- Added parser support for 2-6 column keyring rows.
+- New enforcement:
+  - when `key_sha256` is present, verifier computes SHA-256 of the referenced
+    key file and rejects mismatches.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive per-key digest pin verification
+    - negative per-key digest mismatch rejection
+  - `docs/FormalRegression.md`
+    - documented `key_sha256` field in keyring rows
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+
+### Remaining Limitations
+
+- Keyring/key-file digest pins still rely on external trusted inputs.
+- No built-in signature/certificate trust chain for keyring distribution yet.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
