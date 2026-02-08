@@ -16538,6 +16538,31 @@ ninja -C build circt-verilog
   - Gate policy still lacks configurable tolerance thresholds beyond exact
     count/rate comparisons.
 
+### Iteration 631
+- Formal cadence age-based retention in `utils/run_formal_cadence.sh`:
+  - Added `--retain-hours N` (default `-1`, disabled).
+  - Added stale-run pruning pass for `run-*` directories older than `N` hours.
+  - Retention now supports combined policies:
+    - age-based pruning via `--retain-hours`
+    - count-based pruning via `--retain-runs`
+  - Added `retain_hours` to `cadence.state`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - seeds an old `run-0000-*` directory with historical mtime
+    - runs cadence with `--retain-hours 1`
+    - verifies old run directory is pruned and pruning is logged.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `--retain-hours` usage example.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+- Current limitations / debt:
+  - Age pruning currently uses filesystem mtime only; it does not inspect run
+    health/state metadata for retention decisions.
+  - Built-in webhook/email adapters are still not bundled (hook interface is
+    executable-path based).
+
 ---
 
 ## Architecture Reference

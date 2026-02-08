@@ -70,6 +70,12 @@ Limit retained run directories to cap disk usage:
 utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --retain-runs 12 -- --with-opentitan --opentitan ~/opentitan
 ```
 
+Prune stale run directories by age:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --retain-hours 72 -- --with-opentitan --opentitan ~/opentitan
+```
+
 Invoke an executable hook when a cadence iteration fails:
 
 ```bash

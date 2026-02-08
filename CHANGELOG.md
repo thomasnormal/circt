@@ -31268,3 +31268,41 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Baseline windowing is row-count based; duration-based windows are not yet
   supported.
 - Threshold/tolerance policies for noisy suites are not yet configurable.
+
+## Iteration 631 - February 8, 2026
+
+### Formal Cadence Age-Based Retention
+
+- Added `--retain-hours N` to `utils/run_formal_cadence.sh`:
+  - `-1` disables age pruning (default)
+  - `N >= 0` prunes `run-*` directories older than `N` hours
+- Added `retain_hours` recording in `cadence.state`.
+- Retention now supports combined age and count policies:
+  - age-first pruning via `--retain-hours`
+  - then count pruning via `--retain-runs`
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - adds age-prune scenario by seeding an old run directory
+    - validates stale run removal and prune-log emission
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added age-based pruning usage (`--retain-hours`)
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+
+### Remaining Limitations
+
+- Age pruning uses filesystem mtime and does not yet support policy based on
+  run health/state metadata.
+- Notification support is hook-based; built-in webhook/email adapters are not
+  provided yet.
