@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 506)
+## Current Status - February 8, 2026 (Iteration 507)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis with bit-select and part-select support (`signal_expr = "bus[0]"`, `signal_expr = "bus[3:1]"`); next: canonical Slang expression IDs/graphs, reductions/casts/concats, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis with bit-select, part-select, and reduction support (`|expr`, `&expr`, `^expr`); next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,69 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 507
+
+1. **Expression-backed witness lowering now supports reduction operators**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended expression parser/resolver to support unary reductions:
+     - `|expr` (reduce-or)
+     - `&expr` (reduce-and)
+     - `^expr` (reduce-xor/parity)
+   - This applies to expression-backed event-arm source and optional `iff`
+     metadata in `bmc_event_source_details`.
+
+2. **SMT lowering for reduction semantics**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Reduction lowering now evaluates on raw argument bitvectors:
+     - reduce-or: non-zero test
+     - reduce-and: equals all-ones
+     - reduce-xor: explicit parity fold over extracted bits
+   - Retains existing bool behavior and keeps deterministic witness naming.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-reduction.mlir`
+   - New test validates reduction-backed witness synthesis for mixed arms with:
+     - `signal_expr = "|bus"`
+     - `iff_expr = "&bus"`
+     - `signal_expr = "^bus"`
+   - Covers both SMT-LIB export and runtime lowering.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witness-reduction.mlir`: PASS
+     - `bmc-event-arm-witness-part-select.mlir`: PASS
+     - `bmc-event-arm-witness-bit-select.mlir`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Expression lowering still reparses syntax text instead of consuming
+     canonical Slang expression identity.
+   - Unsupported/high-value forms remain:
+     - casts (especially 4-state aware),
+     - concatenation/replication,
+     - indexed part-select (`a[i +: w]`, `a[i -: w]`),
+     - many builtin/system function forms.
+   - Best long-term direction:
+     - propagate Slang expression IDs/graphs plus type metadata into
+       `bmc_event_source_details`,
+     - lower canonical expression graphs directly in VerifToSMT,
+     - carry richer procedural/property origin metadata for robust
+       `always @(property)` and multi-clock diagnostics.
 
 ### Session Summary - Iteration 506
 
