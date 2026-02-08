@@ -1,6 +1,6 @@
 // RUN: circt-bmc -b 1 --run-smtlib --z3-path=%S/Inputs/fake-z3-sat-model.sh --print-counterexample --module top %s 2>&1 | FileCheck %s
 
-hw.module @top(in %in: i1, out out: i1) attributes {initial_values = [], moore.mixed_event_sources = [["sequence", "signal[0]:posedge:iff"]], num_regs = 0 : i32} {
+hw.module @top(in %in: i1, out out: i1) attributes {initial_values = [], moore.event_sources = [["sequence", "signal[0]:posedge:iff"]], num_regs = 0 : i32} {
   verif.assert %in : i1
   hw.output %in : i1
 }

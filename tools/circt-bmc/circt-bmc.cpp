@@ -298,16 +298,18 @@ static bool hasSMTSolver(mlir::ModuleOp module) {
 static void printMixedEventSources(ModuleOp module) {
   bool printedHeader = false;
   module.walk([&](mlir::smt::SolverOp solver) {
-    auto mixedSources =
-        solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
-    if (!mixedSources || mixedSources.empty())
+    auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
+    if (!eventSources)
+      eventSources =
+          solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
+    if (!eventSources || eventSources.empty())
       return;
     if (!printedHeader) {
       llvm::errs() << "mixed event sources:\n";
       printedHeader = true;
     }
-    for (unsigned i = 0; i < mixedSources.size(); ++i) {
-      auto sourceSet = dyn_cast<ArrayAttr>(mixedSources[i]);
+    for (unsigned i = 0; i < eventSources.size(); ++i) {
+      auto sourceSet = dyn_cast<ArrayAttr>(eventSources[i]);
       if (!sourceSet)
         continue;
       llvm::errs() << "  [" << i << "] ";

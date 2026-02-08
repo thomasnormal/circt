@@ -1,5 +1,84 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 492 - February 8, 2026
+
+### Summary
+
+Migrated provenance metadata to a generalized event-source schema
+(`*_event_sources`) across ImportVerilog, MooreToCore, BMC, and VerifToSMT,
+while keeping legacy `*_mixed_event_sources` aliases for compatibility.
+
+### Fixes
+
+1. **Generalized module-level event-source schema**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Module-level provenance now writes canonical:
+     - `moore.event_sources`
+   - Legacy alias is still mirrored:
+     - `moore.mixed_event_sources`
+   - This keeps downstream flows stable while standardizing naming.
+
+2. **Schema propagation through lowering pipeline**
+   - Updated:
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Canonical attributes now propagate as:
+     - `moore.event_sources` (module-level)
+     - `bmc_event_sources` (verif.bmc/smt.solver)
+   - Legacy compatibility attributes are still emitted:
+     - `moore.mixed_event_sources`
+     - `bmc_mixed_event_sources`
+
+3. **Counterexample consumer migration**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample provenance printing now prefers:
+     - `bmc_event_sources`
+   - Falls back to:
+     - `bmc_mixed_event_sources`
+   - This supports both old and new IR producers.
+
+4. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/sva-sequence-event-list-provenance-emit-mlir.sv`
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+   - Checks now target canonical `event_sources` naming.
+
+5. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-event-list-provenance-emit-mlir.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `utils/run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `utils/run_verilator_verification_circt_lec.sh` (`assert_rose`): PASS
+     - `utils/run_yosys_sva_circt_lec.sh` (`basic00`): PASS
+
+### Remaining Gaps
+
+- We still lack per-step trigger attribution in counterexample traces.
+- Legacy alias attributes remain for compatibility; eventual cleanup requires a
+  coordinated deprecation/removal window.
+- Direct procedural `always @(property)` remains frontend-blocked by Slang.
+
 ## Iteration 491 - February 8, 2026
 
 ### Summary

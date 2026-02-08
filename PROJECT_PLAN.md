@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 491)
+## Current Status - February 8, 2026 (Iteration 492)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed sequence-only event-list provenance; next: per-step trigger attribution + event-source schema cleanup + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed canonical `event_sources` schema + compatibility aliases; next: per-step trigger attribution + alias deprecation plan + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,67 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 492
+
+1. **Canonical event-source schema migration**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+     - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Canonical provenance attributes now flow as:
+     - `moore.event_sources`
+     - `bmc_event_sources`
+   - Legacy aliases are still mirrored for compatibility:
+     - `moore.mixed_event_sources`
+     - `bmc_mixed_event_sources`
+
+2. **Tool consumer migration**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample provenance printing now prefers `bmc_event_sources` and
+     falls back to legacy alias names.
+
+3. **Regression updates**
+   - Updated tests to check canonical naming:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+     - `test/Conversion/VerifToSMT/bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/lower-to-bmc-mixed-event-sources.mlir`
+     - `test/Tools/circt-bmc/sva-sequence-event-list-provenance-emit-mlir.sv`
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `sva-sequence-event-list-provenance-emit-mlir.sv` (`FileCheck`): PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`
+       (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - `sva-sequence-event-list-multiclock-sat-e2e.sv`: `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+   - LEC smoke:
+     - `run_sv_tests_circt_lec.sh` smoke subset: PASS
+     - `run_verilator_verification_circt_lec.sh` smoke subset: PASS
+     - `run_yosys_sva_circt_lec.sh` smoke subset: PASS
+
+5. **Current limitations and best long-term next features**
+   - Per-step trigger attribution is still missing from counterexample traces.
+   - Alias attributes are still required; we need a staged deprecation plan.
+   - Procedural `always @(property)` remains blocked by frontend legality.
+   - High-value next work:
+     - add per-step trigger attribution in model decode,
+     - define and execute alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural property-event handling.
 
 ### Session Summary - Iteration 491
 

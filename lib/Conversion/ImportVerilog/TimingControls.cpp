@@ -267,12 +267,16 @@ static void recordMixedEventSourcesOnModule(Context &context,
     return;
 
   SmallVector<Attribute, 4> entries;
-  if (auto existing =
-          module->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
+  if (auto existing = module->getAttrOfType<ArrayAttr>("moore.event_sources"))
+    entries.append(existing.begin(), existing.end());
+  else if (auto existing =
+               module->getAttrOfType<ArrayAttr>("moore.mixed_event_sources"))
     entries.append(existing.begin(), existing.end());
   entries.push_back(sources);
-  module->setAttr("moore.mixed_event_sources",
-                  ArrayAttr::get(module->getContext(), entries));
+  auto entriesAttr = ArrayAttr::get(module->getContext(), entries);
+  module->setAttr("moore.event_sources", entriesAttr);
+  // Keep legacy naming for compatibility with in-flight downstream users/tests.
+  module->setAttr("moore.mixed_event_sources", entriesAttr);
 }
 
 static LogicalResult lowerClockedSequenceEventControl(
