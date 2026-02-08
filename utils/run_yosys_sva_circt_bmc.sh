@@ -1974,10 +1974,34 @@ emit_mode_summary_outputs() {
   local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
   local drop_events_lock_stale_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS"
   local drop_events_id_hash_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH"
+  local drop_events_id_hash_mode_effective
   local drop_events_lock_warned=0
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] && [[ -z "$drop_events_lock_file" ]]; then
     drop_events_lock_file="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE}.lock"
   fi
+  resolve_drop_events_id_hash_mode_effective() {
+    case "$drop_events_id_hash_mode" in
+      cksum)
+        printf 'cksum\n'
+        ;;
+      crc32)
+        printf 'crc32\n'
+        ;;
+      auto)
+        if command -v cksum >/dev/null 2>&1; then
+          printf 'cksum\n'
+        elif command -v python3 >/dev/null 2>&1; then
+          printf 'crc32\n'
+        else
+          printf 'unavailable\n'
+        fi
+        ;;
+      *)
+        printf 'unavailable\n'
+        ;;
+    esac
+  }
+  drop_events_id_hash_mode_effective="$(resolve_drop_events_id_hash_mode_effective)"
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
     "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
@@ -2149,6 +2173,10 @@ if drop_events_summary is not None:
         value = history_format.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             fail(f"error: invalid numeric summary field 'drop_events_summary.history_format.{field}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    id_hash_mode = drop_events_summary.get("id_hash_mode")
+    if id_hash_mode is not None:
+        if not isinstance(id_hash_mode, str) or id_hash_mode not in ("auto", "cksum", "crc32", "unavailable"):
+            fail(f"error: invalid summary field 'drop_events_summary.id_hash_mode' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
 PY
   }
 
@@ -3155,7 +3183,7 @@ PY
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
     {
-      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d},"drop_events_summary":{"total":%d,"reasons":{"future_skew":%d,"age_retention":%d,"max_entries":%d},"history_format":{"tsv":%d,"jsonl":%d}}}\n' \
+      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d},"drop_events_summary":{"total":%d,"reasons":{"future_skew":%d,"age_retention":%d,"max_entries":%d},"history_format":{"tsv":%d,"jsonl":%d},"id_hash_mode":"%s"}}\n' \
         "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
         "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
         "$mode_total" "$mode_out_pass" "$mode_out_fail" "$mode_out_xfail" \
@@ -3169,7 +3197,8 @@ PY
         "$((history_drop_age_tsv + history_drop_age_jsonl))" \
         "$((history_drop_max_entries_tsv + history_drop_max_entries_jsonl))" \
         "$((history_drop_future_tsv + history_drop_age_tsv + history_drop_max_entries_tsv))" \
-        "$((history_drop_future_jsonl + history_drop_age_jsonl + history_drop_max_entries_jsonl))"
+        "$((history_drop_future_jsonl + history_drop_age_jsonl + history_drop_max_entries_jsonl))" \
+        "$drop_events_id_hash_mode_effective"
     } >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
     # Re-apply entry cap after appending this run row.
     trim_history_jsonl \
@@ -3224,7 +3253,8 @@ PY
       printf '    "history_format": {\n'
       printf '      "tsv": %d,\n' "$((history_drop_future_tsv + history_drop_age_tsv + history_drop_max_entries_tsv))"
       printf '      "jsonl": %d\n' "$((history_drop_future_jsonl + history_drop_age_jsonl + history_drop_max_entries_jsonl))"
-      printf '    }\n'
+      printf '    },\n'
+      printf '    "id_hash_mode": "%s"\n' "$drop_events_id_hash_mode_effective"
       printf '  }\n'
       printf '}\n'
     } > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"

@@ -48,7 +48,7 @@
 // JSONL-NOT: "run_id":"run-future"
 // JSONL: "run_id":"run-keep"
 // JSONL: "run_id":"run-new"
-// JSONL: "drop_events_summary":{"total":2,"reasons":{"future_skew":2,"age_retention":0,"max_entries":0},"history_format":{"tsv":1,"jsonl":1}}
+// JSONL: "drop_events_summary":{"total":2,"reasons":{"future_skew":2,"age_retention":0,"max_entries":0},"history_format":{"tsv":1,"jsonl":1},"id_hash_mode":"{{(cksum|crc32|unavailable)}}"}
 
 // JSONSUMMARY: "drop_events_summary": {
 // JSONSUMMARY: "future_skew": 2
@@ -56,6 +56,7 @@
 // JSONSUMMARY: "max_entries": 0
 // JSONSUMMARY: "tsv": 1
 // JSONSUMMARY: "jsonl": 1
+// JSONSUMMARY: "id_hash_mode": "{{(cksum|crc32|unavailable)}}"
 
 // DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future"}
 // DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future"}

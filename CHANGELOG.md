@@ -27580,3 +27580,71 @@ CIRCT/slang correctly enforces LRM restrictions.
   malformed-JSON diagnostics still rely on Python validation for parity.
 - Parser-backed validation still depends on `python3`.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 575 - February 8, 2026
+
+### Yosys SVA BMC Drop-Events Summary Hash Metadata
+
+- Added `drop_events_summary.id_hash_mode` to generated summary JSON and
+  history JSONL rows.
+- Added effective hash-mode resolution for summary metadata:
+  - `cksum` when explicitly selected
+  - `crc32` when explicitly selected
+  - `auto` resolved to `cksum` if available, otherwise `crc32` if `python3` is
+    available, otherwise `unavailable`
+- This makes drop-event ID provenance explicit in persisted summaries.
+
+### Validation / Schema
+
+- Extended history JSONL validation to accept and check optional
+  `drop_events_summary.id_hash_mode`.
+- Accepted values: `auto`, `cksum`, `crc32`, `unavailable`.
+- Added invalid-field coverage to ensure non-string / unsupported values fail
+  validation.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 57/57 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- `id_hash_mode` is now surfaced, but drop-event summaries still lack explicit
+  algorithm/version metadata for long-term forward-compat migration.
+- Shell-mode migration key detection is top-level aware, but duplicate-key and
+  malformed-JSON diagnostics still rely on Python validation for parity.
+- Parser-backed validation still depends on `python3`.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

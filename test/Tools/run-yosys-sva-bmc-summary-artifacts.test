@@ -36,3 +36,4 @@
 // JSON: "fail_no_macro": 1
 // JSON: "drop_events_summary": {
 // JSON: "future_skew": 0
+// JSON: "id_hash_mode": "{{(cksum|crc32|unavailable)}}"
