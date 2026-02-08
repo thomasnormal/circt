@@ -14606,6 +14606,78 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 596
+- Yosys SVA BMC CI-aware profile auto-route matching:
+  - Added route auto-context override envs:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_PROVIDER`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_JOB`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET`
+  - Added automatic context inference (when overrides are unset):
+    - provider from common CI markers (`GITHUB_ACTIONS`, `GITLAB_CI`,
+      `BUILDKITE`, `JENKINS_URL`, `CI`)
+    - job from CI job/workflow envs
+    - branch from CI branch/ref envs
+    - target from `TEST_FILTER`
+- Route schema enhancements:
+  - Extended route `when` matching keys:
+    - `ci_provider_regex`
+    - `ci_job_regex`
+    - `ci_branch_regex`
+    - `ci_target_regex`
+  - These keys compose with existing `suite_dir_regex`,
+    `test_filter_regex`, and `script_dir_regex` using conjunction semantics.
+- Migration engine updates:
+  - Extended shell-to-Python context wiring to include CI fields.
+  - Added CI key regex parsing/diagnostics in route `when` validation.
+  - Preserved explicit route precedence and existing auto-mode ambiguity rules.
+- Regression tests:
+  - Expanded:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+      with:
+      - positive CI-context auto-route match
+      - invalid `ci_provider_regex` rejection
+  - Focused lit run:
+    - 11/11 PASS (`rewrite-profile-route-auto`, `rewrite-profile-routes`,
+      `rewrite-macros`, `rewrite-cardinality`, `rewrite-profile-layers`,
+      `rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_stable$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_stable$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Auto-route context inference is heuristic and tied to common CI env vars;
+    there is no configurable context registry yet.
+  - Selector macros are non-parameterized and local to one JSON payload.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+- Long-term features to prioritize:
+  - Add a declarative route-context registry (custom keys + precedence).
+  - Add parameterized/importable selector macro libraries.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference
