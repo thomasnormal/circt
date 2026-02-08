@@ -15161,6 +15161,9 @@ struct QueueSortWithOpConversion
     else if (auto dynArrayType =
                  dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
       mooreElemType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(nestedType))
+      mooreElemType = fixedArrayType.getElementType();
     else
       return rewriter.notifyMatchFailure(op, "unsupported queue type");
 
@@ -15179,14 +15182,40 @@ struct QueueSortWithOpConversion
     if (!keyType)
       return rewriter.notifyMatchFailure(op, "failed to convert key type");
 
-    // Load the queue from the reference
-    Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+    Value queueLen, dataPtr;
+    bool isFixedArraySortWith = isa<moore::UnpackedArrayType>(nestedType);
 
-    // Extract queue length and data pointer
-    Value queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
-                                                   ArrayRef<int64_t>{1});
-    Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
-                                                  ArrayRef<int64_t>{0});
+    if (isFixedArraySortWith) {
+      // For fixed-size arrays: probe the ref, store to temp alloca
+      auto fixedArrayType = cast<moore::UnpackedArrayType>(nestedType);
+      int64_t numElements = fixedArrayType.getSize();
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      Value probedVal =
+          llhd::ProbeOp::create(rewriter, loc, adaptor.getQueue());
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType, probedVal)
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      queueLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      dataPtr = arrayAlloca;
+    } else {
+      // Load the queue from the reference
+      Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+
+      // Extract queue length and data pointer
+      queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
+                                               ArrayRef<int64_t>{1});
+      dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
+                                              ArrayRef<int64_t>{0});
+    }
 
     // Allocate arrays for keys and indices
     Value keysAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, queueLen);
@@ -15370,6 +15399,22 @@ struct QueueSortWithOpConversion
       rewriter.setInsertionPointAfter(copyBackLoop);
     }
 
+    // For fixed-size arrays, drive the sorted data back to the ref
+    if (isFixedArraySortWith) {
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      Value sortedArray =
+          LLVM::LoadOp::create(rewriter, loc, llvmArrayType, dataPtr);
+      Value sortedHwArray = UnrealizedConversionCastOp::create(
+                                rewriter, loc, convertedInnerType, sortedArray)
+                                .getResult(0);
+      auto timeAttr = llhd::TimeAttr::get(ctx, 0U, StringRef("ns"), 0, 1);
+      auto timeVal = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, adaptor.getQueue(), sortedHwArray,
+                             timeVal.getResult(), Value{});
+    }
+
     rewriter.eraseOp(op);
     return success();
   }
@@ -15422,6 +15467,9 @@ struct QueueRSortWithOpConversion
     else if (auto dynArrayType =
                  dyn_cast<moore::OpenUnpackedArrayType>(nestedType))
       mooreElemType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(nestedType))
+      mooreElemType = fixedArrayType.getElementType();
     else
       return rewriter.notifyMatchFailure(op, "unsupported queue type");
 
@@ -15440,14 +15488,40 @@ struct QueueRSortWithOpConversion
     if (!keyType)
       return rewriter.notifyMatchFailure(op, "failed to convert key type");
 
-    // Load the queue from the reference
-    Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+    Value queueLen, dataPtr;
+    bool isFixedArrayRSortWith = isa<moore::UnpackedArrayType>(nestedType);
 
-    // Extract queue length and data pointer
-    Value queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
-                                                   ArrayRef<int64_t>{1});
-    Value dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
-                                                  ArrayRef<int64_t>{0});
+    if (isFixedArrayRSortWith) {
+      // For fixed-size arrays: probe the ref, store to temp alloca
+      auto fixedArrayType = cast<moore::UnpackedArrayType>(nestedType);
+      int64_t numElements = fixedArrayType.getSize();
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      Value probedVal =
+          llhd::ProbeOp::create(rewriter, loc, adaptor.getQueue());
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType, probedVal)
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      queueLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+      dataPtr = arrayAlloca;
+    } else {
+      // Load the queue from the reference
+      Value queue = LLVM::LoadOp::create(rewriter, loc, queueTy, adaptor.getQueue());
+
+      // Extract queue length and data pointer
+      queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queue,
+                                               ArrayRef<int64_t>{1});
+      dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queue,
+                                              ArrayRef<int64_t>{0});
+    }
 
     // Allocate arrays for keys and indices
     Value keysAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy, keyType, queueLen);
@@ -15629,6 +15703,22 @@ struct QueueRSortWithOpConversion
       LLVM::StoreOp::create(rewriter, loc, elem, dstPtr);
 
       rewriter.setInsertionPointAfter(copyBackLoop);
+    }
+
+    // For fixed-size arrays, drive the sorted data back to the ref
+    if (isFixedArrayRSortWith) {
+      auto convertedInnerType = typeConverter->convertType(nestedType);
+      Type llvmArrayType = convertToLLVMType(convertedInnerType);
+
+      Value sortedArray =
+          LLVM::LoadOp::create(rewriter, loc, llvmArrayType, dataPtr);
+      Value sortedHwArray = UnrealizedConversionCastOp::create(
+                                rewriter, loc, convertedInnerType, sortedArray)
+                                .getResult(0);
+      auto timeAttr = llhd::TimeAttr::get(ctx, 0U, StringRef("ns"), 0, 1);
+      auto timeVal = llhd::ConstantTimeOp::create(rewriter, loc, timeAttr);
+      llhd::DriveOp::create(rewriter, loc, adaptor.getQueue(), sortedHwArray,
+                             timeVal.getResult(), Value{});
     }
 
     rewriter.eraseOp(op);
@@ -15990,6 +16080,15 @@ struct ArraySizeOpConversion : public RuntimeCallConversionBase<ArraySizeOp> {
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
 
+    // For fixed-size arrays, the size is known at compile time
+    if (auto fixedArrayType = dyn_cast<UnpackedArrayType>(inputType)) {
+      int64_t size = fixedArrayType.getSize();
+      Value result = arith::ConstantOp::create(
+          rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(size));
+      rewriter.replaceOp(op, result);
+      return success();
+    }
+
     // For queues and dynamic arrays, the size is field 1 of the struct
     if (isa<QueueType, OpenUnpackedArrayType>(inputType)) {
       // Extract field 1 (length) from the {ptr, i64} struct
@@ -16178,6 +16277,8 @@ struct StreamConcatOpConversion
       elementType = queueType.getElementType();
     } else if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(inputType)) {
       elementType = dynArrayType.getElementType();
+    } else if (auto fixedArrayType = dyn_cast<UnpackedArrayType>(inputType)) {
+      elementType = fixedArrayType.getElementType();
     } else {
       return rewriter.notifyMatchFailure(op, "unsupported input type");
     }
@@ -16319,6 +16420,9 @@ struct StreamUnpackOpConversion
       } else if (auto dynArrayType =
                      dyn_cast<OpenUnpackedArrayType>(nestedType)) {
         elementType = dynArrayType.getElementType();
+      } else if (auto fixedArrayType =
+                     dyn_cast<UnpackedArrayType>(nestedType)) {
+        elementType = fixedArrayType.getElementType();
       } else {
         return rewriter.notifyMatchFailure(op,
                                            "unsupported destination ref type");
@@ -16568,6 +16672,8 @@ struct StreamConcatMixedOpConversion
       elementType = queueType.getElementType();
     } else if (auto dynArrayType = dyn_cast<OpenUnpackedArrayType>(inputType)) {
       elementType = dynArrayType.getElementType();
+    } else if (auto fixedArrayType = dyn_cast<UnpackedArrayType>(inputType)) {
+      elementType = fixedArrayType.getElementType();
     }
 
     int64_t elementBitWidth = 8; // default
@@ -16676,6 +16782,9 @@ struct StreamUnpackMixedOpConversion
       } else if (auto dynArrayType =
                      dyn_cast<OpenUnpackedArrayType>(nestedType)) {
         elementType = dynArrayType.getElementType();
+      } else if (auto fixedArrayType =
+                     dyn_cast<UnpackedArrayType>(nestedType)) {
+        elementType = fixedArrayType.getElementType();
       }
       if (elementType) {
         if (auto intType = dyn_cast<IntType>(elementType)) {
