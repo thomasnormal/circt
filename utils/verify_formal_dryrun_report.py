@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -27,18 +28,33 @@ def hash_rows(rows: list[dict]) -> str:
   return digest.hexdigest()
 
 
-def read_hmac_keyring(path: Path) -> dict[str, bytes]:
+def parse_iso_date(value: object, field_name: str) -> Optional[date]:
+  if value is None:
+    return None
+  if not isinstance(value, str):
+    fail(f"{field_name} must be YYYY-MM-DD string")
+  raw = value.strip()
+  if not raw:
+    return None
+  try:
+    return date.fromisoformat(raw)
+  except ValueError:
+    fail(f"{field_name} must be YYYY-MM-DD string")
+
+
+def read_hmac_keyring(path: Path) -> dict[str, tuple[bytes, Optional[date], Optional[date]]]:
   if not path.is_file():
     fail(f"HMAC keyring file not found: {path}")
-  keyring: dict[str, bytes] = {}
+  keyring: dict[str, tuple[bytes, Optional[date], Optional[date]]] = {}
   for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
     line = raw_line.strip()
     if not line or line.startswith("#"):
       continue
     fields = line.split("\t")
-    if len(fields) != 2:
+    if len(fields) < 2 or len(fields) > 4:
       fail(
-          f"{path}:{line_no}: expected '<hmac_key_id>\\t<key_file_path>' row in keyring"
+          f"{path}:{line_no}: expected '<hmac_key_id>\\t<key_file_path>"
+          "\\t[not_before]\\t[not_after]' row in keyring"
       )
     key_id = fields[0].strip()
     key_file = fields[1].strip()
@@ -49,7 +65,15 @@ def read_hmac_keyring(path: Path) -> dict[str, bytes]:
     key_path = Path(key_file)
     if not key_path.is_file():
       fail(f"{path}:{line_no}: HMAC key file not found: {key_path}")
-    keyring[key_id] = key_path.read_bytes()
+    not_before = None
+    not_after = None
+    if len(fields) >= 3:
+      not_before = parse_iso_date(fields[2], f"{path}:{line_no}: keyring.not_before")
+    if len(fields) >= 4:
+      not_after = parse_iso_date(fields[3], f"{path}:{line_no}: keyring.not_after")
+    if not_before is not None and not_after is not None and not_before > not_after:
+      fail(f"{path}:{line_no}: keyring.not_before must be <= keyring.not_after")
+    keyring[key_id] = (key_path.read_bytes(), not_before, not_after)
   if not keyring:
     fail(f"{path}: keyring has no usable rows")
   return keyring
@@ -59,7 +83,7 @@ def verify_report(
     path: Path,
     allow_legacy_prefix: bool,
     hmac_key_bytes: Optional[bytes],
-    hmac_keyring: Optional[dict[str, bytes]],
+    hmac_keyring: Optional[dict[str, tuple[bytes, Optional[date], Optional[date]]]],
     expected_hmac_key_id: Optional[str],
 ) -> int:
   rows: list[dict] = []
@@ -115,11 +139,30 @@ def verify_report(
             f"{path}:{line_no}: run_meta.hmac_key_id must be non-empty when using "
             "--hmac-keyring-tsv"
         )
-      run_hmac_key_bytes = hmac_keyring.get(run_meta_hmac_key_id)
-      if run_hmac_key_bytes is None:
+      keyring_entry = hmac_keyring.get(run_meta_hmac_key_id)
+      if keyring_entry is None:
         fail(
             f"{path}:{line_no}: unknown hmac_key_id '{run_meta_hmac_key_id}' "
             f"(not found in keyring)"
+        )
+      run_hmac_key_bytes, not_before, not_after = keyring_entry
+      run_date = parse_iso_date(row.get("date"), f"{path}:{line_no}: run_meta.date")
+      if run_date is None:
+        fail(
+            f"{path}:{line_no}: run_meta.date must be non-empty YYYY-MM-DD when using "
+            "--hmac-keyring-tsv"
+        )
+      if not_before is not None and run_date < not_before:
+        fail(
+            f"{path}:{line_no}: run_meta.date '{run_date.isoformat()}' is before "
+            f"keyring.not_before '{not_before.isoformat()}' for hmac_key_id "
+            f"'{run_meta_hmac_key_id}'"
+        )
+      if not_after is not None and run_date > not_after:
+        fail(
+            f"{path}:{line_no}: run_meta.date '{run_date.isoformat()}' is after "
+            f"keyring.not_after '{not_after.isoformat()}' for hmac_key_id "
+            f"'{run_meta_hmac_key_id}'"
         )
 
     segment = [row]
@@ -219,7 +262,11 @@ def main() -> int:
   )
   parser.add_argument(
       "--hmac-keyring-tsv",
-      help="Optional TSV mapping '<hmac_key_id>\\t<key_file_path>' for keyed HMAC validation",
+      help=(
+          "Optional TSV mapping "
+          "'<hmac_key_id>\\t<key_file_path>\\t[not_before]\\t[not_after]' "
+          "for keyed HMAC validation"
+      ),
   )
   parser.add_argument(
       "--expected-hmac-key-id",

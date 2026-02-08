@@ -17766,6 +17766,49 @@ ninja -C build circt-verilog
     key-provider integration).
   - Rotation/revocation policy remains external to the verifier.
 
+### Iteration 666
+- Keyring policy windows for dry-run HMAC verification:
+  - Extended `utils/verify_formal_dryrun_report.py` keyring parsing to support
+    optional date bounds columns:
+    - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]`
+  - Added strict validation:
+    - row column count must be between 2 and 4
+    - optional bounds must be `YYYY-MM-DD`
+    - `not_before <= not_after` when both are provided
+  - Added per-run date policy checks in keyring mode:
+    - reads `run_meta.date`
+    - fails if report date is outside key validity window for selected
+      `hmac_key_id`
+    - requires non-empty `run_meta.date` when keyring mode is used
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - negative out-of-window keyring policy case with deterministic report-date
+      rewrite (`1999-01-01` vs `not_before=2000-01-01`)
+- Documentation:
+  - Updated `docs/FormalRegression.md` with keyring date-window format.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Filtered external sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright` -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip` -> FAIL (existing `circt-verilog` MLIR verifier failure in current workspace)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip` -> FAIL (same failure mode)
+- Current limitations / debt:
+  - Date-window policy is local and report-date based; no signed attestation or
+    trusted time source integration yet.
+  - Key lifecycle governance (rotation/revocation workflows) is still external.
+  - AVIP compile regression remains unrelated and unresolved in current
+    workspace (`circt-verilog` MLIR verifier failure).
+
 ---
 
 ## Architecture Reference
