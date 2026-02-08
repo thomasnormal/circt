@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 488 - February 8, 2026
+
+### Summary
+
+Added mixed event-list source provenance metadata to ImportVerilog timing
+control lowering, plus regression checks and BMC/external revalidation.
+
+### Fixes
+
+1. **Mixed event-list source provenance metadata**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Mixed sequence/signal event-list wakeup lowering now emits:
+     - `moore.event_sources = ["sequence", "signal[i]:<edge>[:iff]", ...]`
+   - Covered forms:
+     - equivalent-clock mixed lists,
+     - different-clock mixed lists,
+     - no-edge mixed signal-event lists.
+   - This improves multiclock traceability in Moore IR and creates a stable
+     hook for future SMT witness provenance.
+
+2. **Regression coverage**
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Added `CHECK` lines to lock metadata for:
+     - `@(seq or posedge clk iff b)`
+     - `@(seq or posedge clk2 iff b)`
+     - `@(seq or b)`
+
+3. **Validation**
+   - Import sanity:
+     - `circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv`
+       shows `moore.event_sources` annotations.
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Procedural property event controls remain blocked by frontend legality.
+- `moore.event_sources` is not yet propagated to SMT counterexample reporting.
+- Sequence-only multiclock OR lowering still lacks equivalent provenance tags.
+
 ## Iteration 487 - February 8, 2026
 
 ### Summary

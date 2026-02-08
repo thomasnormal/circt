@@ -245,6 +245,18 @@ static moore::Edge convertClockEdge(const ltl::ClockEdge edge) {
   return moore::Edge::AnyChange;
 }
 
+static StringRef formatClockEdge(ltl::ClockEdge edge) {
+  switch (edge) {
+  case ltl::ClockEdge::Pos:
+    return "posedge";
+  case ltl::ClockEdge::Neg:
+    return "negedge";
+  case ltl::ClockEdge::Both:
+    return "both";
+  }
+  return "both";
+}
+
 static LogicalResult lowerClockedSequenceEventControl(
     Context &context, Location loc, Value seqValue, Value clockValue,
     ltl::ClockEdge edge,
@@ -347,17 +359,19 @@ static LogicalResult lowerClockedSequenceEventControl(
   if (!signalEvents.empty()) {
     SmallVector<Value, 4> signalMatches;
     signalMatches.push_back(match);
-    for (auto *signalCtrl : signalEvents) {
-      Value term = trueVal;
+    for (auto [signalIdx, signalCtrl] : llvm::enumerate(signalEvents)) {
+      Value condition = trueVal;
       if (signalCtrl && signalCtrl->iffCondition) {
-        term = context.convertRvalueExpression(*signalCtrl->iffCondition);
-        term = context.convertToBool(term, Domain::TwoValued);
-        if (!term)
+        condition = context.convertRvalueExpression(*signalCtrl->iffCondition);
+        condition = context.convertToBool(condition, Domain::TwoValued);
+        if (!condition)
           return failure();
-        term = context.convertToI1(term);
-        if (!term)
+        condition = context.convertToI1(condition);
+        if (!condition)
           return failure();
       }
+      auto term = comb::AndOp::create(builder, loc,
+                                      ValueRange{condition, trueVal}, true);
       signalMatches.push_back(term);
     }
     match = comb::OrOp::create(builder, loc, signalMatches, true);
@@ -365,6 +379,18 @@ static LogicalResult lowerClockedSequenceEventControl(
 
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, nextVals);
+  if (!signalEvents.empty()) {
+    SmallVector<Attribute, 4> sources;
+    sources.push_back(builder.getStringAttr("sequence"));
+    for (auto [signalIdx, signalCtrl] : llvm::enumerate(signalEvents)) {
+      std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
+                          formatClockEdge(edge).str();
+      if (signalCtrl && signalCtrl->iffCondition)
+        entry += ":iff";
+      sources.push_back(builder.getStringAttr(entry));
+    }
+    waitOp->setAttr("moore.event_sources", builder.getArrayAttr(sources));
+  }
 
   builder.setInsertionPointToEnd(startBlock);
   auto initTrue = hw::ConstantOp::create(builder, loc, i1Type, 1);
@@ -608,7 +634,7 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   if (!signalEvents.empty()) {
     SmallVector<Value, 8> mixedMatches;
     mixedMatches.push_back(match);
-    for (const auto &signalEvent : signalEvents) {
+    for (auto [signalIdx, signalEvent] : llvm::enumerate(signalEvents)) {
       Value tick = clockEdgePredicate(signalEvent.clock, signalEvent.edge);
       if (!tick)
         return mlir::emitError(loc)
@@ -627,6 +653,7 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
         term = comb::AndOp::create(builder, loc, ValueRange{term, condition},
                                    true);
       }
+      term = comb::AndOp::create(builder, loc, ValueRange{term, trueVal}, true);
       mixedMatches.push_back(term);
     }
     match = comb::OrOp::create(builder, loc, mixedMatches, true);
@@ -638,6 +665,18 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
   loopArgs.append(nextVals.begin(), nextVals.end());
   cf::CondBranchOp::create(builder, loc, match, resumeBlock, ValueRange{},
                            loopBlock, loopArgs);
+  if (!signalEvents.empty()) {
+    SmallVector<Attribute, 8> sources;
+    sources.push_back(builder.getStringAttr("sequence"));
+    for (auto [signalIdx, signalEvent] : llvm::enumerate(signalEvents)) {
+      std::string entry = "signal[" + std::to_string(signalIdx) + "]:" +
+                          formatClockEdge(signalEvent.edge).str();
+      if (signalEvent.iffCondition)
+        entry += ":iff";
+      sources.push_back(builder.getStringAttr(entry));
+    }
+    waitOp->setAttr("moore.event_sources", builder.getArrayAttr(sources));
+  }
 
   builder.setInsertionPointToEnd(startBlock);
   SmallVector<Value, 8> initStates;
