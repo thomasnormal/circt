@@ -98,7 +98,12 @@
 // RUN: openssl genpkey -algorithm ed25519 -out %t/manifest-ed25519-wrong-private.pem
 // RUN: openssl pkey -in %t/manifest-ed25519-wrong-private.pem -pubout -out %t/manifest-ed25519-wrong-public.pem
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-manifest-json %t/dryrun-hmac-keyring.manifest.ed25519.json --hmac-keyring-manifest-ed25519-public-key-file %t/manifest-ed25519-wrong-public.pem %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGMANIFESTED25519BAD
+// RUN: PUB_KEY_SHA=$(sha256sum %t/manifest-ed25519-public.pem | cut -d' ' -f1) && printf "lit-ed25519\t%t/manifest-ed25519-public.pem\t\t\tactive\t${PUB_KEY_SHA}\n" > %t/manifest-ed25519-signer-keyring.tsv
+// RUN: SIGNER_KEYRING_SHA=$(sha256sum %t/manifest-ed25519-signer-keyring.tsv | cut -d' ' -f1) && python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-manifest-json %t/dryrun-hmac-keyring.manifest.ed25519.json --hmac-keyring-manifest-ed25519-keyring-tsv %t/manifest-ed25519-signer-keyring.tsv --hmac-keyring-manifest-ed25519-keyring-sha256 "$SIGNER_KEYRING_SHA" --expected-keyring-signer-id lit-ed25519 %t/dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGMANIFESTED25519RING
+// RUN: printf "other-signer\t%t/manifest-ed25519-public.pem\n" > %t/manifest-ed25519-signer-keyring-missing.tsv
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-manifest-json %t/dryrun-hmac-keyring.manifest.ed25519.json --hmac-keyring-manifest-ed25519-keyring-tsv %t/manifest-ed25519-signer-keyring-missing.tsv %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGMANIFESTED25519RINGBAD
 // RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-manifest-json %t/dryrun-hmac-keyring.manifest.ed25519.json --hmac-keyring-manifest-hmac-key-file %t/dryrun-hmac.key --hmac-keyring-manifest-ed25519-public-key-file %t/manifest-ed25519-public.pem %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGMANIFESTMODEBAD
+// RUN: not python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv %t/dryrun-hmac-keyring.tsv --hmac-keyring-manifest-json %t/dryrun-hmac-keyring.manifest.ed25519.json --hmac-keyring-manifest-ed25519-public-key-file %t/manifest-ed25519-public.pem --hmac-keyring-manifest-ed25519-keyring-tsv %t/manifest-ed25519-signer-keyring.tsv %t/dryrun-report.jsonl 2>&1 | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGMANIFESTMODEBAD
 // RUN: cd %t && printf 'lit-key-1\tdryrun-hmac.key\n' > dryrun-hmac-keyring-relative.tsv
 // RUN: cd %t && python3 %S/../../utils/verify_formal_dryrun_report.py --hmac-keyring-tsv dryrun-hmac-keyring-relative.tsv dryrun-report.jsonl | FileCheck %s --check-prefix=DRYRUNVERIFYKEYRINGREL
 // RUN: KEY_SHA=$(sha256sum %t/dryrun-hmac.key | cut -d' ' -f1) && printf "lit-key-1\t%t/dryrun-hmac.key\t\t\tactive\t${KEY_SHA}\n" > %t/dryrun-hmac-keyring-keysha.tsv
@@ -218,7 +223,9 @@
 // DRYRUNVERIFYKEYRINGMANIFESTBAD: error: {{.*}}manifest.signer_id mismatch
 // DRYRUNVERIFYKEYRINGMANIFESTED25519: verified dry-run report: runs=1
 // DRYRUNVERIFYKEYRINGMANIFESTED25519BAD: error: {{.*}}manifest.signature_ed25519_base64 verification failed
-// DRYRUNVERIFYKEYRINGMANIFESTMODEBAD: error: --hmac-keyring-manifest-hmac-key-file and --hmac-keyring-manifest-ed25519-public-key-file are mutually exclusive
+// DRYRUNVERIFYKEYRINGMANIFESTED25519RING: verified dry-run report: runs=1
+// DRYRUNVERIFYKEYRINGMANIFESTED25519RINGBAD: error: {{.*}}unknown manifest signer_id 'lit-ed25519'
+// DRYRUNVERIFYKEYRINGMANIFESTMODEBAD: error: {{.*}}are mutually exclusive
 // DRYRUNVERIFYKEYRINGREL: verified dry-run report: runs=1
 // DRYRUNVERIFYKEYRINGKEYSHA: verified dry-run report: runs=1
 // DRYRUNVERIFYKEYRINGKEYSHABAD: error: {{.*}}keyring.key_sha256 mismatch

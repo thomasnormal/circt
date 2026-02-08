@@ -297,7 +297,13 @@ Expected-failure budget file:
   - Ed25519 mode:
     - `--hmac-keyring-manifest-ed25519-public-key-file <file>`
     - manifest field: `signature_ed25519_base64`
-  These two manifest signature flags are mutually exclusive.
+  - Ed25519 signer-keyring mode:
+    - `--hmac-keyring-manifest-ed25519-keyring-tsv <file>`
+    - optional `--hmac-keyring-manifest-ed25519-keyring-sha256 <hex>`
+    - keyring rows:
+      `<signer_id>\t<public_key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+    - manifest `signer_id` must resolve to an active signer keyring row
+  Manifest signer-source flags are mutually exclusive.
   Use `--expected-keyring-signer-id <id>` to pin manifest signer identity.
   Use `--expected-hmac-key-id <id>` to enforce `hmac_key_id` match.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.

@@ -33385,6 +33385,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 - External closure remains filtered/smoke-oriented rather than full matrix.
 - OpenTitan `aes_sbox_canright` still requires `LEC_ACCEPT_XPROP_ONLY=1`.
 
+## Iteration 673 - February 8, 2026
+
+### Ed25519 Signer-Keyring Manifest Verification
+
+- Extended `utils/verify_formal_dryrun_report.py` with:
+  - `--hmac-keyring-manifest-ed25519-keyring-tsv <file>`
+  - `--hmac-keyring-manifest-ed25519-keyring-sha256 <hex>`
+- Added Ed25519 signer-keyring format:
+  - `<signer_id>\t<public_key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+- Added signer policy checks when manifest signer-keyring mode is used:
+  - signer must exist in keyring
+  - signer status must be `active`
+  - optional `not_before`/`not_after` windows are enforced
+  - optional `key_sha256` is verified against key-file content
+- Added strict mode gating for manifest signer sources:
+  - exactly one of:
+    - `--hmac-keyring-manifest-hmac-key-file`
+    - `--hmac-keyring-manifest-ed25519-public-key-file`
+    - `--hmac-keyring-manifest-ed25519-keyring-tsv`
+  - signer-source flags are mutually exclusive
+  - signer keyring hash pin requires signer keyring TSV
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive Ed25519 signer-keyring verification
+    - negative unknown signer-id in signer keyring
+    - negative signer-source conflict validation
+  - `docs/FormalRegression.md`
+    - documented Ed25519 signer-keyring mode and flags
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-ed25519-signer-keyring-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - `sv-tests` BMC/LEC PASS
+    - `verilator-verification` BMC/LEC PASS
+    - `yosys/tests/sva` BMC/LEC PASS
+    - `opentitan` LEC PASS
+    - all filtered AVIP variants PASS
+
+### Remaining Limitations
+
+- Ed25519 verification still depends on local `openssl` CLI availability.
+- Trust distribution remains key-file based (no certificate-chain trust policy).
+- External closure remains filtered/smoke-oriented, not full-matrix.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
