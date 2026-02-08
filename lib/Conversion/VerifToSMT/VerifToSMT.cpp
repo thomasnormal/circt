@@ -2885,10 +2885,36 @@ struct VerifBoundedModelCheckingOpConversion
 
     SmallVector<Type> oldLoopInputTy(op.getLoop().getArgumentTypes());
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
+    unsigned numRegs = op.getNumRegs();
+    DenseSet<unsigned> knownClockArgIndices;
+    auto collectKnownClockArgIndices = [&](ArrayAttr sourcesAttr) {
+      if (!sourcesAttr)
+        return;
+      for (auto attr : sourcesAttr) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto argAttr = dyn_cast_or_null<IntegerAttr>(dict.get("arg_index"));
+        if (!argAttr)
+          continue;
+        knownClockArgIndices.insert(argAttr.getValue().getZExtValue());
+      }
+    };
+    collectKnownClockArgIndices(
+        op->getAttrOfType<ArrayAttr>("bmc_clock_sources"));
+    collectKnownClockArgIndices(
+        op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources"));
     if (!assumeKnownInputs) {
       bool hasFourStateInputs = false;
-      for (Type ty : oldCircuitInputTy) {
-        if (isFourStateStruct(ty)) {
+      size_t numNonStateInputs = oldCircuitInputTy.size();
+      if (numRegs <= numNonStateInputs)
+        numNonStateInputs -= numRegs;
+      else
+        numNonStateInputs = 0;
+      for (auto [idx, ty] :
+           llvm::enumerate(TypeRange(oldCircuitInputTy).take_front(
+               numNonStateInputs))) {
+        if (isFourStateStruct(ty) && !knownClockArgIndices.contains(idx)) {
           hasFourStateInputs = true;
           break;
         }
@@ -2923,7 +2949,6 @@ struct VerifBoundedModelCheckingOpConversion
       return failure();
     }
 
-    unsigned numRegs = op.getNumRegs();
     auto initialValues = op.getInitialValues();
 
     // Count clocks from the original init yield types (BEFORE region conversion)
@@ -2950,9 +2975,9 @@ struct VerifBoundedModelCheckingOpConversion
       inputNamePrefixes.assign(originalArgCount, StringAttr{});
     }
 
-    auto maybeAssertKnown = [&](Type originalTy, Value smtVal,
+    auto maybeAssertKnown = [&](size_t argIndex, Type originalTy, Value smtVal,
                                 OpBuilder &builder) {
-      if (!assumeKnownInputs)
+      if (!assumeKnownInputs && !knownClockArgIndices.contains(argIndex))
         return;
       maybeAssertKnownInput(originalTy, smtVal, loc, builder);
     };
@@ -3882,7 +3907,7 @@ struct VerifBoundedModelCheckingOpConversion
         if (!useInitValues) {
           auto decl = declareInput(newTy, curIndex);
           inputDecls.push_back(decl);
-          maybeAssertKnown(oldTy, decl, rewriter);
+          maybeAssertKnown(curIndex, oldTy, decl, rewriter);
           continue;
         }
         auto initVal =
@@ -3894,14 +3919,14 @@ struct VerifBoundedModelCheckingOpConversion
                    "Width mismatch between initial value and target type");
             auto initVal = smt::BVConstantOp::create(rewriter, loc, cstInt);
             inputDecls.push_back(initVal);
-            maybeAssertKnown(oldTy, initVal, rewriter);
+            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           if (isa<smt::BoolType>(newTy)) {
             auto initVal =
                 smt::BoolConstantOp::create(rewriter, loc, !cstInt.isZero());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(oldTy, initVal, rewriter);
+            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           op.emitError("unsupported integer initial value in BMC conversion");
@@ -3913,14 +3938,14 @@ struct VerifBoundedModelCheckingOpConversion
                 rewriter, loc, initBoolAttr.getValue() ? 1 : 0,
                 bvTy.getWidth());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(oldTy, initVal, rewriter);
+            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           if (isa<smt::BoolType>(newTy)) {
             auto initVal = smt::BoolConstantOp::create(
                 rewriter, loc, initBoolAttr.getValue());
             inputDecls.push_back(initVal);
-            maybeAssertKnown(oldTy, initVal, rewriter);
+            maybeAssertKnown(curIndex, oldTy, initVal, rewriter);
             continue;
           }
           op.emitError("unsupported bool initial value in BMC conversion");
@@ -3933,7 +3958,7 @@ struct VerifBoundedModelCheckingOpConversion
       auto decl =
           smt::DeclareFunOp::create(rewriter, loc, newTy, namePrefix);
       inputDecls.push_back(decl);
-      maybeAssertKnown(oldTy, decl, rewriter);
+      maybeAssertKnown(curIndex, oldTy, decl, rewriter);
     }
 
     auto numStateArgs = initVals.size() - initIndex;
@@ -4587,10 +4612,11 @@ struct VerifBoundedModelCheckingOpConversion
         ValueRange iterRange(iterArgs);
 
         // Assert 2-state constraints on the current iteration inputs.
-        for (auto [oldTy, arg] :
-             llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
-                       iterRange.take_front(numCircuitArgs))) {
-          maybeAssertKnown(oldTy, arg, rewriter);
+        for (auto [index, pair] : llvm::enumerate(llvm::zip(
+                 TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
+                 iterRange.take_front(numCircuitArgs)))) {
+          auto [oldTy, arg] = pair;
+          maybeAssertKnown(index, oldTy, arg, rewriter);
         }
 
         // Call loop func to update clock & state arg values.
@@ -5038,7 +5064,7 @@ struct VerifBoundedModelCheckingOpConversion
                     ? inputNamePrefixes[argIndex]
                     : StringAttr{});
             newDecls.push_back(decl);
-            maybeAssertKnown(oldTy, decl, rewriter);
+            maybeAssertKnown(argIndex, oldTy, decl, rewriter);
           }
           nonRegIdx++;
           argIndex++;
@@ -5378,10 +5404,11 @@ struct VerifBoundedModelCheckingOpConversion
         [&](OpBuilder &builder, Location loc, Value i, ValueRange iterArgs) {
           // Assert 2-state constraints on the current iteration inputs.
           size_t numCircuitArgs = circuitFuncOp.getNumArguments();
-          for (auto [oldTy, arg] :
-               llvm::zip(TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
-                         iterArgs.take_front(numCircuitArgs))) {
-            maybeAssertKnown(oldTy, arg, builder);
+          for (auto [index, pair] : llvm::enumerate(llvm::zip(
+                   TypeRange(oldCircuitInputTy).take_front(numCircuitArgs),
+                   iterArgs.take_front(numCircuitArgs)))) {
+            auto [oldTy, arg] = pair;
+            maybeAssertKnown(index, oldTy, arg, builder);
           }
 
           // Call loop func to update clock & state arg values
@@ -5807,7 +5834,7 @@ struct VerifBoundedModelCheckingOpConversion
                       ? inputNamePrefixes[argIndex]
                       : StringAttr{});
               newDecls.push_back(decl);
-              maybeAssertKnown(oldTy, decl, builder);
+              maybeAssertKnown(argIndex, oldTy, decl, builder);
             }
             nonRegIdx++;
             argIndex++;

@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 471 - February 7, 2026
+
+### Summary
+
+Improved default BMC handling of 4-state clock-source inputs by constraining
+their unknown bits to zero without requiring global `--assume-known-inputs`,
+and reduced false unconstrained-input warnings.
+
+### Fixes
+
+1. **Clock-source-aware knownness in BMC conversion**
+   - Updated VerifToSMT BMC lowering to treat 4-state inputs referenced by
+     `bmc_clock_sources` / `bmc_reg_clock_sources` as known even when
+     `--assume-known-inputs` is not set.
+   - This applies knownness constraints to symbolic declarations and
+     per-iteration input arguments for those clock-source inputs.
+
+2. **Warning precision improvements**
+   - Refined the unconstrained 4-state warning to:
+     - ignore state/register tail arguments (`num_regs`) in `verif.bmc`
+     - suppress warnings for 4-state inputs already constrained via
+       clock-source mapping.
+
+3. **Regression test coverage**
+   - Added
+     `test/Tools/circt-bmc/bmc-clock-inputs-known-default-warning.mlir`.
+   - Confirms clock-source-only 4-state inputs do not trigger the generic
+     unconstrained-input warning.
+   - Existing `bmc-assume-known-inputs-warning.mlir` still verifies warnings for
+     non-clock 4-state inputs.
+
+### Validation
+
+- Lit:
+  - `test/Tools/circt-bmc/bmc-clock-inputs-known-default-warning.mlir`: PASS
+  - `test/Tools/circt-bmc/bmc-assume-known-inputs-warning.mlir`: PASS
+  - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-conflict.mlir`: PASS
+  - `test/Tools/circt-bmc/bmc-prune-registers-multiclock-induction.mlir`: PASS
+  - `test/Tools/circt-bmc/lower-to-bmc-multiclock.mlir`: PASS
+- External smoke:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - `verilator-verification` BMC (`assert_rose`) with
+    `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY (accepted)`
+  - AVIP APB compile smoke: PASS
+- Targeted check:
+  - `verilator-verification` BMC (`assert_rose`) without
+    `BMC_ASSUME_KNOWN_INPUTS=1`: still `SAT` (remaining gap).
+
 ## Iteration 470 - February 7, 2026
 
 ### Summary
