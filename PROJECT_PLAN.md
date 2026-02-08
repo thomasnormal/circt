@@ -15485,6 +15485,82 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 610
+- Yosys SVA BMC recursive integer expression comparators:
+  - Added composite clause operator:
+    - `int_expr`: list of `[lhs_expr, op, rhs_expr]` comparators.
+  - Supported comparator operators:
+    - `lt`, `le`, `gt`, `ge`, `eq`, `ne`.
+  - Added recursive integer expression parser with typed nodes:
+    - leafs: integer literal, context key
+    - unary: `neg`
+    - n-ary: `add`, `sub`, `mul`, `min`, `max`
+    - binary: `div`, `mod`
+  - Added strict parser diagnostics:
+    - malformed comparator shape
+    - malformed expression object shape
+    - unknown expression operator rejection
+    - invalid comparator operator rejection
+    - operand arity checks for each expression operator
+    - duplicate comparator rejection
+  - Added runtime expression evaluation and clause formatting diagnostics, e.g.
+    `int_expr=[(attempt+1)>=(min_attempt+retry_margin+3)]`.
+  - Extended schema-time comparator typing checks:
+    - all key references inside `int_expr` AST nodes must be declared in schema
+      `keys` with `type: integer`.
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive merged schema case including `int_expr`
+    - `int_expr` mismatch rejection
+    - invalid `int_expr` comparator-op rejection
+    - undeclared key reference inside `int_expr` AST rejection
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - `int_expr` is integer-only and currently omits boolean-valued expression
+    nodes (no nested logical combinators inside a single expression node).
+  - `div`/`mod` rely on Python integer semantics (`//`, `%`) and treat divide by
+    zero as unsatisfied; semantics are not yet explicitly schema-configurable.
+  - No expression-level constant folding / normalization / cost controls yet.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Add typed boolean expression nodes (and/or/not, comparison-as-expression)
+    to make `int_expr` a full predicate DSL.
+  - Define explicit expression semantics profile (division/mod rounding and
+    negative operand behavior) with schema versioning.
+  - Add expression normalization and complexity guards to keep route matching
+    deterministic and cheap.
+  - Add importable, parameterized selector/profile libraries built on the new
+    expression AST.
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference
