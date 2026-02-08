@@ -45,6 +45,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_F
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH:-auto}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY:-infer}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY:-infer}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
@@ -209,6 +210,14 @@ case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH" in
   auto|cksum|crc32) ;;
   *)
     echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH (expected auto|cksum|crc32)" >&2
+    exit 1
+    ;;
+esac
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY,,}"
+case "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY" in
+  preserve|infer|rewrite) ;;
+  *)
+    echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY (expected preserve|infer|rewrite)" >&2
     exit 1
     ;;
 esac
@@ -1983,6 +1992,7 @@ emit_mode_summary_outputs() {
   local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
   local drop_events_lock_stale_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS"
   local drop_events_id_hash_mode="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH"
+  local drop_events_event_id_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY"
   local drop_events_id_metadata_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY"
   local drop_events_id_hash_mode_effective
   local drop_events_id_hash_algorithm
@@ -2984,7 +2994,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_id_metadata_policy" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" <<'PY'
 import json
 import shutil
 import subprocess
@@ -2998,7 +3008,8 @@ id_hash_mode = sys.argv[3]
 effective_id_hash_mode = sys.argv[4]
 effective_id_hash_algorithm = sys.argv[5]
 effective_id_hash_version_raw = sys.argv[6]
-id_metadata_policy = sys.argv[7]
+event_id_policy = sys.argv[7]
+id_metadata_policy = sys.argv[8]
 
 try:
     effective_id_hash_version = int(effective_id_hash_version_raw)
@@ -3006,6 +3017,13 @@ except Exception:
     effective_id_hash_version = 0
 if effective_id_hash_version < 0:
     effective_id_hash_version = 0
+
+if event_id_policy not in {"preserve", "infer", "rewrite"}:
+    print(
+        f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY mode: {event_id_policy}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 if id_metadata_policy not in {"preserve", "infer", "rewrite"}:
     print(
@@ -3148,7 +3166,16 @@ for lineno, line in enumerate(lines, start=1):
     schema_version = normalize_schema(obj.get("schema_version"), lineno)
     event_id = obj.get("event_id")
     had_event_id = isinstance(event_id, str) and bool(event_id)
-    if not had_event_id:
+    if event_id_policy == "preserve":
+        if not had_event_id:
+            fail(
+                f"error: missing key 'event_id' in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE {file} at line {lineno}"
+            )
+    if event_id_policy == "rewrite":
+        event_id = derive_event_id(
+            obj["reason"], obj["history_format"], obj["run_id"], obj["row_generated_at_utc"]
+        )
+    elif not had_event_id:
         event_id = derive_event_id(
             obj["reason"], obj["history_format"], obj["run_id"], obj["row_generated_at_utc"]
         )
