@@ -131,7 +131,7 @@
 // PROFILES: {"schema_version":"1","event_id":"drop-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-c.tsv","history_format":"tsv","line":3,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"r9","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 
 // BADPROFILE: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST: unknown profile 'missing'
-// MISSINGPROFILESJSON: error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST requires YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON
+// MISSINGPROFILESJSON: error: selector profile lists require YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON
 // BADPROFILEJSON: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON: expected non-empty JSON object
 // BADPROFILENAME: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_LIST: invalid profile name 'bad/name'
 // BADPROFILECLAUSE: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON.schema-v2[1]: unknown key 'bogus'
