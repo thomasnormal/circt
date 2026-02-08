@@ -10725,6 +10725,67 @@ ninja -C build circt-verilog
   - Normalize skip accounting to explicit mode-level metrics in summary.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 533
+- Yosys SVA BMC per-row `add-row` approval filters:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_LINT_APPLY_ADDROW_FILTER_FILE`
+  - Added reviewed filter rules for `add-row` apply proposals:
+    - TSV columns:
+      - `source_pattern`
+      - `key_pattern`
+      - `row_pattern`
+    - matching supports shell-style wildcard patterns.
+  - Filter semantics:
+    - if `EXPECT_LINT_APPLY_ACTIONS` does not include `add-row`, rows are never
+      added.
+    - if `add-row` is enabled and no filter file is set, behavior stays
+      unchanged (all `add-row` proposals eligible).
+    - if filter file is set, only rows matching a review rule are eligible for
+      insertion.
+  - Added input validation:
+    - missing `EXPECT_LINT_APPLY_ADDROW_FILTER_FILE` now errors explicitly.
+  - Apply summary now includes filter provenance:
+    - `... actions=<csv> addrow_filter=<path|none>`
+- Regression tests:
+  - Updated `test/Tools/run-yosys-sva-bmc-lint-apply.test`:
+    - validates default-safe dry-run/apply mode (`drop-row,set-row`)
+    - validates `add-row` with deny filter (no insertion)
+    - validates `add-row` with allow filter (explicit tuple insertion)
+    - validates action+filter summaries.
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 16/16 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Filter rules are pattern-based and still coarse; they do not attach review
+    metadata (owner/rationale/expiry).
+  - Expectation-file canonical formatting/sorting is still missing.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add canonical expectation-table formatter/sorter (stable row ordering,
+    normalized comments and spacing).
+  - Add structured review metadata for `add-row` approvals.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

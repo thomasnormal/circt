@@ -6,7 +6,10 @@
 // RUN: printf '# base\nghost\tpass\tknown\tpass\nghost\tpass\tknown\tpass\nghost\tpass\tknown\txfail\n*\t*\t*\tpass\nsimple\t*\t*\tpass\nsimple\tpass\txprop\tfail\n' > %t/expect-template.txt
 // RUN: cp %t/expect-template.txt %t/expect-dry.txt
 // RUN: cp %t/expect-template.txt %t/expect-apply.txt
-// RUN: cp %t/expect-template.txt %t/expect-apply-add.txt
+// RUN: cp %t/expect-template.txt %t/expect-apply-add-deny.txt
+// RUN: cp %t/expect-template.txt %t/expect-apply-add-allow.txt
+// RUN: printf 'EXPECT_FILE\tnomatch|*|*\t*\n' > %t/addrow-deny.tsv
+// RUN: printf 'EXPECT_FILE\tsimple|*|*\tsimple|pass|known|pass\n' > %t/addrow-allow.tsv
 
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-dry.txt XFAIL_FILE=/dev/null \
@@ -29,18 +32,31 @@
 // RUN: sed 's/\t/|/g' %t/apply.diff | FileCheck %s --check-prefix=APPLYDIFF
 
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
-// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply-add.txt XFAIL_FILE=/dev/null \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply-add-deny.txt XFAIL_FILE=/dev/null \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=apply \
 // RUN:   EXPECT_LINT_APPLY_ACTIONS=drop-row,set-row,add-row \
-// RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply-add.diff \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add.out
-// RUN: FileCheck %s --check-prefix=APPLYADDOUT < %t/apply-add.out
-// RUN: sed 's/\t/|/g' %t/expect-apply-add.txt | FileCheck %s --check-prefix=APPLYADDFILE
-// RUN: sed 's/\t/|/g' %t/apply-add.diff | FileCheck %s --check-prefix=APPLYADDDIFF
+// RUN:   EXPECT_LINT_APPLY_ADDROW_FILTER_FILE=%t/addrow-deny.tsv \
+// RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply-add-deny.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-deny.out
+// RUN: FileCheck %s --check-prefix=DENYOUT < %t/apply-add-deny.out
+// RUN: sed 's/\t/|/g' %t/expect-apply-add-deny.txt | FileCheck %s --check-prefix=DENYFILE
+// RUN: sed 's/\t/|/g' %t/apply-add-deny.diff | FileCheck %s --check-prefix=DENYDIFF
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply-add-allow.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=apply \
+// RUN:   EXPECT_LINT_APPLY_ACTIONS=drop-row,set-row,add-row \
+// RUN:   EXPECT_LINT_APPLY_ADDROW_FILTER_FILE=%t/addrow-allow.tsv \
+// RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply-add-allow.diff \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-allow.out
+// RUN: FileCheck %s --check-prefix=ALLOWOUT < %t/apply-add-allow.out
+// RUN: sed 's/\t/|/g' %t/expect-apply-add-allow.txt | FileCheck %s --check-prefix=ALLOWFILE
+// RUN: sed 's/\t/|/g' %t/apply-add-allow.diff | FileCheck %s --check-prefix=ALLOWDIFF
 
 // DRYOUT: EXPECT_LINT_APPLY: mode=dry-run file={{.*expect-dry.txt}} drop=2 set=1 add=0 changed=1
-// DRYOUT: EXPECT_LINT_APPLY: mode=dry-run files=1 changed=1 actions=drop-row,set-row
+// DRYOUT: EXPECT_LINT_APPLY: mode=dry-run files=1 changed=1 actions=drop-row,set-row addrow_filter=none
 // DRYOUT: EXPECT_LINT_SUMMARY: issues=5
 // DRYOUT: PASS(pass): simple
 // DRYOUT: SKIP(fail-no-macro): simple
@@ -62,7 +78,7 @@
 // DRYDIFF-DAG: +simple|*|*|fail
 
 // APPLYOUT: EXPECT_LINT_APPLY: mode=apply file={{.*expect-apply.txt}} drop=2 set=1 add=0 changed=1
-// APPLYOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1 actions=drop-row,set-row
+// APPLYOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1 actions=drop-row,set-row addrow_filter=none
 // APPLYOUT: EXPECT_LINT_SUMMARY: issues=5
 // APPLYOUT: PASS(pass): simple
 // APPLYOUT: SKIP(fail-no-macro): simple
@@ -82,25 +98,47 @@
 // APPLYDIFF-DAG: -simple|*|*|pass
 // APPLYDIFF-DAG: +simple|*|*|fail
 
-// APPLYADDOUT: EXPECT_LINT_APPLY: mode=apply file={{.*expect-apply-add.txt}} drop=2 set=1 add=1 changed=1
-// APPLYADDOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1 actions=drop-row,set-row,add-row
-// APPLYADDOUT: EXPECT_LINT_SUMMARY: issues=5
-// APPLYADDOUT: PASS(pass): simple
-// APPLYADDOUT: SKIP(fail-no-macro): simple
-// APPLYADDOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+// DENYOUT: EXPECT_LINT_APPLY: mode=apply file={{.*expect-apply-add-deny.txt}} drop=2 set=1 add=0 changed=1
+// DENYOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1 actions=drop-row,set-row,add-row addrow_filter={{.*addrow-deny.tsv}}
+// DENYOUT: EXPECT_LINT_SUMMARY: issues=5
+// DENYOUT: PASS(pass): simple
+// DENYOUT: SKIP(fail-no-macro): simple
+// DENYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 
-// APPLYADDFILE: # base
-// APPLYADDFILE-NOT: ghost|pass|known
-// APPLYADDFILE-NOT: *|*|*|pass
-// APPLYADDFILE-DAG: simple|pass|xprop|fail
-// APPLYADDFILE-DAG: simple|*|*|fail
-// APPLYADDFILE-DAG: simple|pass|known|pass
+// DENYFILE: # base
+// DENYFILE-NOT: ghost|pass|known
+// DENYFILE-NOT: *|*|*|pass
+// DENYFILE-NOT: simple|pass|known|pass
+// DENYFILE-DAG: simple|pass|xprop|fail
+// DENYFILE-DAG: simple|*|*|fail
 
-// APPLYADDDIFF: --- {{.*}}
-// APPLYADDDIFF: +++ {{.*}}
-// APPLYADDDIFF-DAG: -ghost|pass|known|pass
-// APPLYADDDIFF-DAG: -ghost|pass|known|xfail
-// APPLYADDDIFF-DAG: -*|*|*|pass
-// APPLYADDDIFF-DAG: -simple|*|*|pass
-// APPLYADDDIFF-DAG: +simple|*|*|fail
-// APPLYADDDIFF-DAG: +simple|pass|known|pass
+// DENYDIFF: --- {{.*}}
+// DENYDIFF: +++ {{.*}}
+// DENYDIFF-DAG: -ghost|pass|known|pass
+// DENYDIFF-DAG: -ghost|pass|known|xfail
+// DENYDIFF-DAG: -*|*|*|pass
+// DENYDIFF-DAG: -simple|*|*|pass
+// DENYDIFF-DAG: +simple|*|*|fail
+
+// ALLOWOUT: EXPECT_LINT_APPLY: mode=apply file={{.*expect-apply-add-allow.txt}} drop=2 set=1 add=1 changed=1
+// ALLOWOUT: EXPECT_LINT_APPLY: mode=apply files=1 changed=1 actions=drop-row,set-row,add-row addrow_filter={{.*addrow-allow.tsv}}
+// ALLOWOUT: EXPECT_LINT_SUMMARY: issues=5
+// ALLOWOUT: PASS(pass): simple
+// ALLOWOUT: SKIP(fail-no-macro): simple
+// ALLOWOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// ALLOWFILE: # base
+// ALLOWFILE-NOT: ghost|pass|known
+// ALLOWFILE-NOT: *|*|*|pass
+// ALLOWFILE-DAG: simple|pass|xprop|fail
+// ALLOWFILE-DAG: simple|*|*|fail
+// ALLOWFILE-DAG: simple|pass|known|pass
+
+// ALLOWDIFF: --- {{.*}}
+// ALLOWDIFF: +++ {{.*}}
+// ALLOWDIFF-DAG: -ghost|pass|known|pass
+// ALLOWDIFF-DAG: -ghost|pass|known|xfail
+// ALLOWDIFF-DAG: -*|*|*|pass
+// ALLOWDIFF-DAG: -simple|*|*|pass
+// ALLOWDIFF-DAG: +simple|*|*|fail
+// ALLOWDIFF-DAG: +simple|pass|known|pass

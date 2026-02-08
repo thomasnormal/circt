@@ -60,6 +60,7 @@ EXPECT_LINT_FIXES_FILE="${EXPECT_LINT_FIXES_FILE:-}"
 EXPECT_LINT_APPLY_MODE="${EXPECT_LINT_APPLY_MODE:-off}"
 EXPECT_LINT_APPLY_DIFF_FILE="${EXPECT_LINT_APPLY_DIFF_FILE:-}"
 EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS:-drop-row,set-row}"
+EXPECT_LINT_APPLY_ADDROW_FILTER_FILE="${EXPECT_LINT_APPLY_ADDROW_FILTER_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -91,6 +92,9 @@ declare -A expected_cases
 declare -A observed_cases
 declare -A regen_override_cases
 declare -A suite_tests
+declare -a addrow_filter_source_patterns=()
+declare -a addrow_filter_key_patterns=()
+declare -a addrow_filter_row_patterns=()
 
 case "$EXPECT_LINT_APPLY_MODE" in
   off|dry-run|apply) ;;
@@ -118,6 +122,10 @@ if [[ -n "$EXPECT_LINT_APPLY_ACTIONS" ]]; then
         ;;
     esac
   done < <(printf '%s\n' "$EXPECT_LINT_APPLY_ACTIONS" | tr ',' '\n')
+fi
+if [[ -n "$EXPECT_LINT_APPLY_ADDROW_FILTER_FILE" ]] && [[ ! -f "$EXPECT_LINT_APPLY_ADDROW_FILTER_FILE" ]]; then
+  echo "EXPECT_LINT_APPLY_ADDROW_FILTER_FILE not found: $EXPECT_LINT_APPLY_ADDROW_FILTER_FILE" >&2
+  exit 1
 fi
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_APPLY_MODE" != "off" ]] && [[ -z "$EXPECT_LINT_FIXES_FILE" ]]; then
   EXPECT_LINT_FIXES_FILE="$tmpdir/expect-lint-fixes.tsv"
@@ -231,6 +239,56 @@ lint_apply_action_enabled() {
   esac
 }
 
+load_addrow_filter_rules() {
+  local source_pattern key_pattern row_pattern extra
+  addrow_filter_source_patterns=()
+  addrow_filter_key_patterns=()
+  addrow_filter_row_patterns=()
+  if [[ -z "$EXPECT_LINT_APPLY_ADDROW_FILTER_FILE" ]]; then
+    return 0
+  fi
+  while IFS=$'\t' read -r source_pattern key_pattern row_pattern extra; do
+    if [[ -n "${extra:-}" ]]; then
+      continue
+    fi
+    [[ -z "$source_pattern" || "$source_pattern" =~ ^# ]] && continue
+    [[ -z "$key_pattern" ]] && key_pattern="*"
+    [[ -z "$row_pattern" ]] && row_pattern="*"
+    addrow_filter_source_patterns+=("$source_pattern")
+    addrow_filter_key_patterns+=("$key_pattern")
+    addrow_filter_row_patterns+=("$row_pattern")
+  done < "$EXPECT_LINT_APPLY_ADDROW_FILTER_FILE"
+  return 0
+}
+
+addrow_filter_matches() {
+  local source_raw="$1"
+  local source_file="$2"
+  local key="$3"
+  local row="$4"
+  local i source_pattern key_pattern row_pattern
+
+  if [[ -z "$EXPECT_LINT_APPLY_ADDROW_FILTER_FILE" ]]; then
+    return 0
+  fi
+  for i in "${!addrow_filter_source_patterns[@]}"; do
+    source_pattern="${addrow_filter_source_patterns[$i]}"
+    key_pattern="${addrow_filter_key_patterns[$i]}"
+    row_pattern="${addrow_filter_row_patterns[$i]}"
+    if [[ "$source_raw" != $source_pattern && "$source_file" != $source_pattern ]]; then
+      continue
+    fi
+    if [[ "$key" != $key_pattern ]]; then
+      continue
+    fi
+    if [[ "$row" != $row_pattern ]]; then
+      continue
+    fi
+    return 0
+  done
+  return 1
+}
+
 apply_expect_lint_fixes() {
   local fixes_file="$1"
   local mode="$2"
@@ -242,6 +300,7 @@ apply_expect_lint_fixes() {
   local source_file map_key add_map_key
 
   [[ -f "$fixes_file" ]] || return 0
+  load_addrow_filter_rules
   if [[ -n "$EXPECT_LINT_APPLY_DIFF_FILE" ]]; then
     : > "$EXPECT_LINT_APPLY_DIFF_FILE"
   fi
@@ -282,6 +341,9 @@ apply_expect_lint_fixes() {
         if [[ -z "$row" ]]; then
           continue
         fi
+        if ! addrow_filter_matches "$source" "$source_file" "$key" "$row"; then
+          continue
+        fi
         add_map_key="$source_file|$row"
         add_rows["$add_map_key"]=1
         ;;
@@ -296,7 +358,7 @@ apply_expect_lint_fixes() {
     file_list+=("$file")
   done
   if ((${#file_list[@]} == 0)); then
-    echo "EXPECT_LINT_APPLY: mode=$mode files=0 changed=0 actions=$EXPECT_LINT_APPLY_ACTIONS"
+    echo "EXPECT_LINT_APPLY: mode=$mode files=0 changed=0 actions=$EXPECT_LINT_APPLY_ACTIONS addrow_filter=${EXPECT_LINT_APPLY_ADDROW_FILTER_FILE:-none}"
     return 0
   fi
 
@@ -436,7 +498,7 @@ apply_expect_lint_fixes() {
     fi
     echo "EXPECT_LINT_APPLY: mode=$mode file=$file drop=$drop_count set=$set_count add=$add_count changed=$changed"
   done < <(printf '%s\n' "${file_list[@]}" | sort)
-  echo "EXPECT_LINT_APPLY: mode=$mode files=${#file_list[@]} changed=$changed_files actions=$EXPECT_LINT_APPLY_ACTIONS"
+  echo "EXPECT_LINT_APPLY: mode=$mode files=${#file_list[@]} changed=$changed_files actions=$EXPECT_LINT_APPLY_ACTIONS addrow_filter=${EXPECT_LINT_APPLY_ADDROW_FILTER_FILE:-none}"
   return 0
 }
 
