@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 499)
+## Current Status - February 8, 2026 (Iteration 500)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed solver-witness-aware activity decoding in counterexamples; next: emit witness signals in lowering + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed signal-arm witness emission from VerifToSMT + witness-driven counterexamples; next: sequence-arm witnesses + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,73 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 500
+
+1. **Signal-arm witness emission in VerifToSMT (SMT-LIB export path)**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `verif.bmc` lowering now synthesizes per-arm witness symbols for
+     `kind = "signal"` entries in `bmc_event_source_details` when
+     `signal_name`/`iff_name` resolve to named BMC inputs.
+   - Witness declarations are emitted per step with deterministic names:
+     - `event_arm_witness_<set>_<arm>`
+   - Each witness is constrained to an exact edge predicate:
+     - `posedge`: `!prev && curr`
+     - `negedge`: `prev && !curr`
+     - `both`: `prev != curr`
+     - plus optional `iff` gating.
+
+2. **Event metadata enrichment**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Solver metadata now back-annotates generated witness symbols into
+     `bmc_event_source_details.witness_name` for signal arms, enabling
+     downstream counterexample consumers to use exact witness values.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+   - Updated:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-activity.mlir`
+   - New checks validate producer+consumer behavior:
+     - auto-generated `witness_name` in solver metadata
+     - witness declarations in converted SMT IR
+     - witness-driven `circt-bmc` activity output without hand-authored
+       `witness_name` input metadata.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Witness synthesis currently covers only signal arms (not sequence-arm
+     acceptance witnesses).
+   - Witness synthesis currently relies on resolvable input names; complex
+     internal expressions still fall back to estimated attribution.
+   - Non-SMT-LIB export path does not yet mirror witness emission.
+   - High-value next work:
+     - emit sequence-arm acceptance witnesses directly from lowered sequence/NFA
+       state,
+     - extend witness emission to non-SMT-LIB solver path for parity,
+     - stage alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 499
 
