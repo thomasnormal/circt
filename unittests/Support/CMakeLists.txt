@@ -12,6 +12,7 @@ add_circt_unittest(CIRCTSupportTests
   PrettyPrinterTest.cpp
   ProjectConfigTest.cpp
   ResourceGuardTest.cpp
+  SMTModelTest.cpp
   SMTDeadCodeEliminationTest.cpp
   TestReportingTest.cpp
   TwoStateUtilsTest.cpp

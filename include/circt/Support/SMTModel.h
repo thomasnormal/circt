@@ -14,12 +14,15 @@
 #define CIRCT_SUPPORT_SMTMODEL_H
 
 #include "circt/Support/LLVM.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include <string>
 
 namespace circt {
 
 std::string normalizeSMTModelValue(llvm::StringRef value);
+void resetCapturedSMTModelValues();
+llvm::StringMap<std::string> getCapturedSMTModelValues();
 
 } // namespace circt
 

@@ -9,9 +9,11 @@
 #include "circt/Support/SMTModel.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
+#include <mutex>
 
 using namespace llvm;
 
@@ -88,20 +90,39 @@ std::string circt::normalizeSMTModelValue(StringRef value) {
 }
 
 static bool modelHeaderPrinted = false;
+static std::mutex modelPrintMutex;
+static llvm::StringMap<std::string> capturedModelValues;
 
-extern "C" void circt_smt_print_model_header() {
+static void printModelHeaderLocked() {
   if (modelHeaderPrinted)
     return;
   modelHeaderPrinted = true;
   llvm::errs() << "counterexample inputs:\n";
 }
 
+void circt::resetCapturedSMTModelValues() {
+  std::lock_guard<std::mutex> lock(modelPrintMutex);
+  modelHeaderPrinted = false;
+  capturedModelValues.clear();
+}
+
+llvm::StringMap<std::string> circt::getCapturedSMTModelValues() {
+  std::lock_guard<std::mutex> lock(modelPrintMutex);
+  return capturedModelValues;
+}
+
+extern "C" void circt_smt_print_model_header() {
+  std::lock_guard<std::mutex> lock(modelPrintMutex);
+  printModelHeaderLocked();
+}
+
 extern "C" void circt_smt_print_model_value(const char *name,
                                             const char *value) {
   if (!name || !value)
     return;
-  if (!modelHeaderPrinted)
-    circt_smt_print_model_header();
   std::string formatted = circt::normalizeSMTModelValue(StringRef(value));
+  std::lock_guard<std::mutex> lock(modelPrintMutex);
+  printModelHeaderLocked();
+  capturedModelValues[name] = formatted;
   llvm::errs() << "  " << name << " = " << formatted << "\n";
 }

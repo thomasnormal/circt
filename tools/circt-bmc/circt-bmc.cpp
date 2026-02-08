@@ -324,9 +324,7 @@ using WaveTable = std::map<std::string, StepMap>;
 
 static llvm::StringSet<> collectEventWaveNames(ModuleOp module) {
   llvm::StringSet<> names;
-  module.walk([&](mlir::smt::SolverOp solver) {
-    auto detailSets =
-        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details");
+  auto collectFromDetails = [&](ArrayAttr detailSets) {
     if (!detailSets)
       return;
     for (Attribute detailSetAttr : detailSets) {
@@ -344,7 +342,14 @@ static llvm::StringSet<> collectEventWaveNames(ModuleOp module) {
         }
       }
     }
+  };
+
+  module.walk([&](mlir::smt::SolverOp solver) {
+    collectFromDetails(
+        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details"));
   });
+  collectFromDetails(
+      module->getAttrOfType<ArrayAttr>("circt.bmc_event_source_details"));
   return names;
 }
 
@@ -396,6 +401,7 @@ static void printMixedEventSources(
     ModuleOp module,
     const llvm::StringMap<std::string> *modelValues = nullptr) {
   bool printedHeader = false;
+  bool sawEventSources = false;
   bool hasWitnessActivity = false;
   unsigned maxStep = 0;
   WaveTable waves;
@@ -406,15 +412,10 @@ static void printMixedEventSources(
   }
   bool printedActivityHeader = false;
   bool printedByStepHeader = false;
-  module.walk([&](mlir::smt::SolverOp solver) {
-    auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
-    if (!eventSources)
-      eventSources =
-          solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
-    auto detailSets =
-        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details");
+  auto processEventAttrs = [&](ArrayAttr eventSources, ArrayAttr detailSets) {
     if (!eventSources || eventSources.empty())
       return;
+    sawEventSources = true;
     if (!printedHeader) {
       llvm::errs() << "mixed event sources:\n";
       printedHeader = true;
@@ -583,7 +584,27 @@ static void printMixedEventSources(
         }
       }
     }
+  };
+
+  module.walk([&](mlir::smt::SolverOp solver) {
+    auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
+    if (!eventSources)
+      eventSources =
+          solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
+    auto detailSets =
+        solver->getAttrOfType<ArrayAttr>("bmc_event_source_details");
+    processEventAttrs(eventSources, detailSets);
   });
+
+  if (sawEventSources)
+    return;
+  auto eventSources =
+      module->getAttrOfType<ArrayAttr>("circt.bmc_event_sources");
+  if (!eventSources)
+    eventSources = module->getAttrOfType<ArrayAttr>("circt.bmc_mixed_event_sources");
+  auto detailSets =
+      module->getAttrOfType<ArrayAttr>("circt.bmc_event_source_details");
+  processEventAttrs(eventSources, detailSets);
 }
 
 static bool parseDefineFun(StringRef text, size_t &pos, StringRef &name,
@@ -736,18 +757,22 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
                                      ConvertVerifToSMTOptions convertOptions,
                                      unsigned boundOverride,
                                      bool emitResultMessages) {
+  auto configurePassManager = [&](PassManager &pm) -> LogicalResult {
+    pm.enableVerifier(verifyPasses);
+    pm.enableTiming(ts);
+    if (failed(applyPassManagerCLOptions(pm)))
+      return failure();
+    pm.addInstrumentation(std::make_unique<ResourceGuardPassInstrumentation>());
+    if (verbosePassExecutions)
+      pm.addInstrumentation(
+          std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
+              "circt-bmc"));
+    return success();
+  };
+
   PassManager pm(&context);
-  pm.enableVerifier(verifyPasses);
-  pm.enableTiming(ts);
-  if (failed(applyPassManagerCLOptions(pm)))
+  if (failed(configurePassManager(pm)))
     return failure();
-
-  pm.addInstrumentation(std::make_unique<ResourceGuardPassInstrumentation>());
-
-  if (verbosePassExecutions)
-    pm.addInstrumentation(
-        std::make_unique<VerbosePassInstrumentation<mlir::ModuleOp>>(
-            "circt-bmc"));
 
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
@@ -852,19 +877,46 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
     pm.addPass(createStripUnreachableSymbols(pruneOptions));
   }
 
-  if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
-      outputFormat != OutputRunSMTLIB) {
-    LowerSMTToZ3LLVMOptions options;
-    options.debug = printSolverOutput;
-    options.printModelInputs = printSolverOutput || printCounterexample;
-    pm.addPass(createLowerSMTToZ3LLVM(options));
-    pm.addPass(createCSEPass());
-    pm.addPass(createBottomUpSimpleCanonicalizerPass());
-    pm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
+  circt::setResourceGuardPhase("pass pipeline (pre-lowering)");
+  if (failed(pm.run(module)))
+    return failure();
+
+  if (outputFormat == OutputMLIR || outputFormat == OutputSMTLIB ||
+      outputFormat == OutputRunSMTLIB)
+    return success();
+
+  if (printCounterexample || printSolverOutput) {
+    bool copiedEventAttrs = false;
+    module.walk([&](mlir::smt::SolverOp solver) {
+      if (copiedEventAttrs)
+        return;
+      auto eventSources = solver->getAttrOfType<ArrayAttr>("bmc_event_sources");
+      if (!eventSources)
+        eventSources =
+            solver->getAttrOfType<ArrayAttr>("bmc_mixed_event_sources");
+      if (!eventSources)
+        return;
+      copiedEventAttrs = true;
+      module->setAttr("circt.bmc_event_sources", eventSources);
+      if (auto details =
+              solver->getAttrOfType<ArrayAttr>("bmc_event_source_details"))
+        module->setAttr("circt.bmc_event_source_details", details);
+    });
   }
 
-  circt::setResourceGuardPhase("pass pipeline");
-  if (failed(pm.run(module)))
+  PassManager lowerPM(&context);
+  if (failed(configurePassManager(lowerPM)))
+    return failure();
+  LowerSMTToZ3LLVMOptions options;
+  options.debug = printSolverOutput;
+  options.printModelInputs = printSolverOutput || printCounterexample;
+  lowerPM.addPass(createLowerSMTToZ3LLVM(options));
+  lowerPM.addPass(createCSEPass());
+  lowerPM.addPass(createBottomUpSimpleCanonicalizerPass());
+  lowerPM.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
+
+  circt::setResourceGuardPhase("pass pipeline (lower smt)");
+  if (failed(lowerPM.run(module)))
     return failure();
   return success();
 }
@@ -1144,6 +1196,7 @@ static FailureOr<BMCResult> runJITSolver(ModuleOp module, TimingScope &ts) {
 
   auto timer = ts.nest("JIT Execution");
   bmcJitResult.store(-1, std::memory_order_relaxed);
+  circt::resetCapturedSMTModelValues();
   if (auto err = engine->invokePacked(moduleName))
     return handleErr(std::move(err));
   int result = bmcJitResult.load(std::memory_order_relaxed);
@@ -1152,7 +1205,16 @@ static FailureOr<BMCResult> runJITSolver(ModuleOp module, TimingScope &ts) {
     return failure();
   }
 
-  return result ? BMCResult::Unsat : BMCResult::Sat;
+  BMCResult bmcResult = result ? BMCResult::Unsat : BMCResult::Sat;
+  if (printCounterexample && bmcResult == BMCResult::Sat) {
+    auto modelValues = circt::getCapturedSMTModelValues();
+    if (!modelValues.empty())
+      printMixedEventSources(module, &modelValues);
+    else
+      printMixedEventSources(module);
+  }
+
+  return bmcResult;
 }
 #endif
 
