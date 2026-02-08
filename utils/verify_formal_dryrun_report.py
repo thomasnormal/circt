@@ -2,10 +2,14 @@
 """Verify run-level integrity in formal dry-run JSONL reports."""
 
 import argparse
+import base64
+import binascii
 import hmac
 import hashlib
 import json
+import subprocess
 import sys
+import tempfile
 from datetime import date
 from string import hexdigits
 from pathlib import Path
@@ -65,6 +69,18 @@ def parse_non_empty_string(value: object, field_name: str) -> str:
   return raw
 
 
+def parse_base64_bytes(value: object, field_name: str) -> bytes:
+  if not isinstance(value, str):
+    fail(f"{field_name} must be non-empty base64 string")
+  raw = value.strip()
+  if not raw:
+    fail(f"{field_name} must be non-empty base64 string")
+  try:
+    return base64.b64decode(raw, validate=True)
+  except (binascii.Error, ValueError):
+    fail(f"{field_name} must be non-empty base64 string")
+
+
 def parse_schema_version_one(value: object, field_name: str) -> None:
   if value is None:
     return
@@ -72,11 +88,62 @@ def parse_schema_version_one(value: object, field_name: str) -> None:
     fail(f"{field_name} must be 1")
 
 
+def verify_ed25519_manifest_signature(
+    manifest_path: Path,
+    manifest_payload: dict,
+    signature_base64: object,
+    public_key_path: Path,
+) -> None:
+  if not public_key_path.is_file():
+    fail(f"manifest Ed25519 public key file not found: {public_key_path}")
+  signature_bytes = parse_base64_bytes(
+      signature_base64,
+      f"{manifest_path}: manifest.signature_ed25519_base64",
+  )
+  payload_bytes = canonical_json_bytes(manifest_payload)
+  with tempfile.TemporaryDirectory(prefix="formal-manifest-verify-") as temp_dir:
+    temp_dir_path = Path(temp_dir)
+    payload_file = temp_dir_path / "manifest_payload.json"
+    signature_file = temp_dir_path / "manifest_signature.bin"
+    payload_file.write_bytes(payload_bytes)
+    signature_file.write_bytes(signature_bytes)
+    verify_proc = subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-verify",
+            "-pubin",
+            "-inkey",
+            str(public_key_path),
+            "-sigfile",
+            str(signature_file),
+            "-rawin",
+            "-in",
+            str(payload_file),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+  if verify_proc.returncode != 0:
+    fail(
+        f"{manifest_path}: manifest.signature_ed25519_base64 verification failed "
+        f"for {public_key_path}"
+    )
+
+
 def read_keyring_manifest(
     manifest_path: Path,
-    manifest_hmac_key_bytes: bytes,
+    manifest_hmac_key_bytes: Optional[bytes],
+    manifest_ed25519_public_key_path: Optional[Path],
     expected_signer_id: Optional[str],
 ) -> str:
+  if (manifest_hmac_key_bytes is None) == (manifest_ed25519_public_key_path is None):
+    fail(
+        "internal: exactly one of manifest_hmac_key_bytes or "
+        "manifest_ed25519_public_key_path must be set"
+    )
   if not manifest_path.is_file():
     fail(f"keyring manifest file not found: {manifest_path}")
   try:
@@ -107,19 +174,41 @@ def read_keyring_manifest(
     fail(
         f"{manifest_path}: manifest.expires_on '{expires_on.isoformat()}' is expired"
     )
-  signature = parse_sha256_hex(
-      manifest.get("signature_hmac_sha256"),
-      f"{manifest_path}: manifest.signature_hmac_sha256",
-  )
-  payload = {k: v for k, v in manifest.items() if k != "signature_hmac_sha256"}
-  expected_signature = hmac.new(
-      manifest_hmac_key_bytes, canonical_json_bytes(payload), hashlib.sha256
-  ).hexdigest()
-  if not hmac.compare_digest(signature, expected_signature):
+  payload = {
+      k: v
+      for k, v in manifest.items()
+      if k not in {"signature_hmac_sha256", "signature_ed25519_base64"}
+  }
+  if manifest_hmac_key_bytes is not None:
+    if manifest.get("signature_ed25519_base64") is not None:
+      fail(
+          f"{manifest_path}: manifest.signature_ed25519_base64 is not allowed when "
+          "using --hmac-keyring-manifest-hmac-key-file"
+      )
+    signature = parse_sha256_hex(
+        manifest.get("signature_hmac_sha256"),
+        f"{manifest_path}: manifest.signature_hmac_sha256",
+    )
+    expected_signature = hmac.new(
+        manifest_hmac_key_bytes, canonical_json_bytes(payload), hashlib.sha256
+    ).hexdigest()
+    if hmac.compare_digest(signature, expected_signature):
+      return keyring_sha256
     fail(
         f"{manifest_path}: manifest.signature_hmac_sha256 mismatch; expected "
         f"{expected_signature}, got {signature}"
     )
+  if manifest.get("signature_hmac_sha256") is not None:
+    fail(
+        f"{manifest_path}: manifest.signature_hmac_sha256 is not allowed when using "
+        "--hmac-keyring-manifest-ed25519-public-key-file"
+    )
+  verify_ed25519_manifest_signature(
+      manifest_path,
+      payload,
+      manifest.get("signature_ed25519_base64"),
+      manifest_ed25519_public_key_path,
+  )
   return keyring_sha256
 
 
@@ -385,7 +474,17 @@ def main() -> int:
   )
   parser.add_argument(
       "--hmac-keyring-manifest-hmac-key-file",
-      help="HMAC key file used to validate --hmac-keyring-manifest-json signature",
+      help=(
+          "HMAC key file used when --hmac-keyring-manifest-json carries "
+          "signature_hmac_sha256"
+      ),
+  )
+  parser.add_argument(
+      "--hmac-keyring-manifest-ed25519-public-key-file",
+      help=(
+          "Ed25519 public key used when --hmac-keyring-manifest-json carries "
+          "signature_ed25519_base64"
+      ),
   )
   parser.add_argument(
       "--expected-keyring-signer-id",
@@ -412,22 +511,53 @@ def main() -> int:
     keyring_path = Path(args.hmac_keyring_tsv)
     expected_keyring_hash = None
     if args.hmac_keyring_manifest_json:
-      if not args.hmac_keyring_manifest_hmac_key_file:
+      if (
+          args.hmac_keyring_manifest_hmac_key_file
+          and args.hmac_keyring_manifest_ed25519_public_key_file
+      ):
+        fail(
+            "--hmac-keyring-manifest-hmac-key-file and "
+            "--hmac-keyring-manifest-ed25519-public-key-file are mutually exclusive"
+        )
+      if (
+          not args.hmac_keyring_manifest_hmac_key_file
+          and not args.hmac_keyring_manifest_ed25519_public_key_file
+      ):
         fail(
             "--hmac-keyring-manifest-json requires "
-            "--hmac-keyring-manifest-hmac-key-file"
+            "one of --hmac-keyring-manifest-hmac-key-file or "
+            "--hmac-keyring-manifest-ed25519-public-key-file"
         )
-      manifest_key_path = Path(args.hmac_keyring_manifest_hmac_key_file)
-      if not manifest_key_path.is_file():
-        fail(f"keyring manifest HMAC key file not found: {manifest_key_path}")
+      manifest_hmac_key_bytes = None
+      manifest_ed25519_public_key_path = None
+      if args.hmac_keyring_manifest_hmac_key_file:
+        manifest_key_path = Path(args.hmac_keyring_manifest_hmac_key_file)
+        if not manifest_key_path.is_file():
+          fail(f"keyring manifest HMAC key file not found: {manifest_key_path}")
+        manifest_hmac_key_bytes = manifest_key_path.read_bytes()
+      else:
+        manifest_ed25519_public_key_path = Path(
+            args.hmac_keyring_manifest_ed25519_public_key_file
+        )
+        if not manifest_ed25519_public_key_path.is_file():
+          fail(
+              "manifest Ed25519 public key file not found: "
+              f"{manifest_ed25519_public_key_path}"
+          )
       expected_keyring_hash = read_keyring_manifest(
           Path(args.hmac_keyring_manifest_json),
-          manifest_key_path.read_bytes(),
+          manifest_hmac_key_bytes=manifest_hmac_key_bytes,
+          manifest_ed25519_public_key_path=manifest_ed25519_public_key_path,
           expected_signer_id=args.expected_keyring_signer_id,
       )
     elif args.hmac_keyring_manifest_hmac_key_file:
       fail(
           "--hmac-keyring-manifest-hmac-key-file requires "
+          "--hmac-keyring-manifest-json"
+      )
+    elif args.hmac_keyring_manifest_ed25519_public_key_file:
+      fail(
+          "--hmac-keyring-manifest-ed25519-public-key-file requires "
           "--hmac-keyring-manifest-json"
       )
     elif args.expected_keyring_signer_id:
@@ -458,6 +588,11 @@ def main() -> int:
     fail("--hmac-keyring-manifest-json requires --hmac-keyring-tsv")
   elif args.hmac_keyring_manifest_hmac_key_file:
     fail("--hmac-keyring-manifest-hmac-key-file requires --hmac-keyring-manifest-json")
+  elif args.hmac_keyring_manifest_ed25519_public_key_file:
+    fail(
+        "--hmac-keyring-manifest-ed25519-public-key-file requires "
+        "--hmac-keyring-manifest-json"
+    )
   elif args.expected_keyring_signer_id:
     fail("--expected-keyring-signer-id requires --hmac-keyring-manifest-json")
   if hmac_key_bytes is not None and hmac_keyring is not None:

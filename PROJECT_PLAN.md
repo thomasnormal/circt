@@ -17960,6 +17960,51 @@ ninja -C build circt-verilog
   - Manifest trust still relies on symmetric HMAC key distribution.
   - No asymmetric signature/certificate chain support yet.
 
+### Iteration 671
+- Ed25519 keyring-manifest signature verification for dry-run verifier:
+  - Extended `utils/verify_formal_dryrun_report.py` with:
+    - `--hmac-keyring-manifest-ed25519-public-key-file FILE`
+  - Manifest validation now supports asymmetric mode:
+    - expected manifest field: `signature_ed25519_base64`
+    - signature verification uses `openssl pkeyutl -verify` over canonical JSON
+      payload (excluding signature fields).
+  - Existing HMAC-manifest mode remains supported:
+    - `--hmac-keyring-manifest-hmac-key-file FILE`
+    - expected manifest field: `signature_hmac_sha256`
+  - Added strict mode gating:
+    - exactly one of HMAC or Ed25519 manifest key options is required when
+      `--hmac-keyring-manifest-json` is used.
+    - HMAC and Ed25519 manifest key options are mutually exclusive.
+    - signature fields are mode-constrained (cross-mode signature fields are
+      rejected).
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive Ed25519-signed manifest verification
+    - negative Ed25519 verification failure with wrong public key
+    - negative CLI conflict when both manifest key modes are specified
+- Documentation:
+  - Updated `docs/FormalRegression.md` with Ed25519 manifest mode and flag
+    semantics.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated filtered sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-ed25519-manifest-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+      - `sv-tests` BMC/LEC PASS
+      - `verilator-verification` BMC/LEC PASS
+      - `yosys/tests/sva` BMC/LEC PASS
+      - `opentitan` LEC PASS
+      - AVIP compile PASS except `avip/axi4Lite_avip` FAIL
+- Current limitations / debt:
+  - Ed25519 manifest verification currently depends on local `openssl` CLI.
+  - Trust root remains raw public-key distribution (no certificate chain /
+    trust-store policy).
+  - `avip/axi4Lite_avip` compile currently fails in integrated sweep:
+    - `missing hierarchical interface value for axi4LiteInterface.axi4LiteMasterInterface.axi4LiteMasterWriteInterface`.
+
 ---
 
 ## Architecture Reference

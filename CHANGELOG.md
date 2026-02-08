@@ -33277,6 +33277,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Manifest trust still depends on symmetric key distribution discipline.
 - No asymmetric signature/certificate verification path yet.
 
+## Iteration 671 - February 8, 2026
+
+### Ed25519 Manifest Verification
+
+- Extended `utils/verify_formal_dryrun_report.py` with:
+  - `--hmac-keyring-manifest-ed25519-public-key-file <file>`
+- Added asymmetric manifest verification mode:
+  - manifest carries `signature_ed25519_base64`
+  - verifier checks signature via `openssl pkeyutl -verify` over canonical JSON
+    payload excluding signature fields
+- Retained existing HMAC manifest mode:
+  - `--hmac-keyring-manifest-hmac-key-file <file>`
+  - manifest carries `signature_hmac_sha256`
+- Added strict manifest mode checks:
+  - exactly one manifest signature key mode is required when
+    `--hmac-keyring-manifest-json` is provided
+  - HMAC and Ed25519 manifest key flags are mutually exclusive
+  - cross-mode signature fields in manifest are rejected
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive Ed25519-signed manifest verification
+    - negative wrong-public-key rejection
+    - negative mixed-mode CLI conflict
+  - `docs/FormalRegression.md`
+    - documented Ed25519 manifest flag and mode semantics
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-ed25519-manifest-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - `sv-tests` BMC/LEC: PASS
+    - `verilator-verification` BMC/LEC: PASS
+    - `yosys/tests/sva` BMC/LEC: PASS
+    - `opentitan` LEC: PASS
+    - AVIP compile: PASS except `avip/axi4Lite_avip` FAIL
+
+### Remaining Limitations
+
+- Ed25519 manifest verification currently depends on `openssl` CLI
+  availability.
+- Trust model is still raw public-key distribution (no x509/certificate chain
+  verification yet).
+- Integrated sweep currently has one AVIP compile failure:
+  `avip/axi4Lite_avip` (`missing hierarchical interface value`).
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
