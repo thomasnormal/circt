@@ -3929,7 +3929,75 @@ def parse_context_int_arithmetic_presets(value, field_name: str):
     return presets
 
 
-def parse_context_schema_import_modules(value, field_name: str, import_stack=None):
+def parse_context_schema_import_registry(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    registry = {}
+    for module_name, module_spec in value.items():
+        validate_context_key_name(module_name, field_name)
+        module_field = f"{field_name}.{module_name}"
+        if not isinstance(module_spec, dict) or not module_spec:
+            fail(
+                f"error: invalid {module_field}: expected non-empty object"
+            )
+        unknown_keys = sorted(
+            set(module_spec.keys()) - {"version", "path", "schema_versions"}
+        )
+        if unknown_keys:
+            fail(
+                f"error: invalid {module_field}: unknown key '{unknown_keys[0]}'"
+            )
+        module_version = module_spec.get("version")
+        if not isinstance(module_version, str) or not module_version.strip():
+            fail(
+                f"error: invalid {module_field}.version: expected non-empty string"
+            )
+        module_path = module_spec.get("path")
+        if not isinstance(module_path, str) or not module_path.strip():
+            fail(
+                f"error: invalid {module_field}.path: expected non-empty string path"
+            )
+        module_schema_versions = None
+        if "schema_versions" in module_spec:
+            module_schema_versions = module_spec["schema_versions"]
+            if (
+                not isinstance(module_schema_versions, list)
+                or not module_schema_versions
+            ):
+                fail(
+                    f"error: invalid {module_field}.schema_versions: expected non-empty array"
+                )
+            validated_schema_versions = []
+            for idx, module_schema_version in enumerate(module_schema_versions):
+                schema_field = f"{module_field}.schema_versions[{idx}]"
+                if (
+                    not isinstance(module_schema_version, str)
+                    or not module_schema_version.strip()
+                ):
+                    fail(
+                        f"error: invalid {schema_field}: expected non-empty string"
+                    )
+                validated_schema_versions.append(module_schema_version.strip())
+            module_schema_versions = validated_schema_versions
+        registry[module_name] = {
+            "version": module_version.strip(),
+            "path": module_path.strip(),
+            "schema_versions": module_schema_versions,
+        }
+    return registry
+
+
+def parse_context_schema_import_modules(
+    value,
+    field_name: str,
+    import_stack=None,
+    import_registry=None,
+    schema_version=None,
+):
     if value is None:
         return []
     if not isinstance(value, list) or not value:
@@ -3941,11 +4009,62 @@ def parse_context_schema_import_modules(value, field_name: str, import_stack=Non
     modules = []
     for idx, entry in enumerate(value):
         import_field = f"{field_name}[{idx}]"
-        if not isinstance(entry, str) or not entry.strip():
+        import_path = None
+        if isinstance(entry, str):
+            if not entry.strip():
+                fail(
+                    f"error: invalid {import_field}: expected non-empty string import path"
+                )
+            import_path = entry.strip()
+        elif isinstance(entry, dict):
+            unknown_keys = sorted(set(entry.keys()) - {"module", "version"})
+            if unknown_keys:
+                fail(
+                    f"error: invalid {import_field}: unknown key '{unknown_keys[0]}'"
+                )
+            module_name = entry.get("module")
+            if not isinstance(module_name, str) or not module_name.strip():
+                fail(
+                    f"error: invalid {import_field}.module: expected non-empty string"
+                )
+            validate_context_key_name(module_name, f"{import_field}.module")
+            requested_version = entry.get("version")
+            if (
+                not isinstance(requested_version, str)
+                or not requested_version.strip()
+            ):
+                fail(
+                    f"error: invalid {import_field}.version: expected non-empty string"
+                )
+            if not import_registry:
+                fail(
+                    f"error: invalid {import_field}: import_registry is not configured"
+                )
+            module_ref = import_registry.get(module_name)
+            if module_ref is None:
+                fail(
+                    f"error: invalid {import_field}.module: unknown import_registry module '{module_name}'"
+                )
+            requested_version = requested_version.strip()
+            module_version = module_ref["version"]
+            if requested_version != module_version:
+                fail(
+                    f"error: invalid {import_field}.version: expected '{module_version}', got '{requested_version}'"
+                )
+            module_schema_versions = module_ref["schema_versions"]
+            if (
+                schema_version is not None
+                and module_schema_versions is not None
+                and schema_version not in module_schema_versions
+            ):
+                fail(
+                    f"error: invalid {import_field}.module: import_registry module '{module_name}' is incompatible with schema_version '{schema_version}'"
+                )
+            import_path = module_ref["path"]
+        else:
             fail(
-                f"error: invalid {import_field}: expected non-empty string import path"
+                f"error: invalid {import_field}: expected non-empty string import path or import registry object"
             )
-        import_path = entry.strip()
         import_real_path = os.path.realpath(import_path)
         if import_real_path in import_stack:
             cycle_paths = list(import_stack)
@@ -3983,6 +4102,8 @@ def parse_context_schema_import_modules(value, field_name: str, import_stack=Non
                 import_payload.get("imports"),
                 f"{import_field}.imports",
                 import_stack + [import_real_path],
+                import_registry,
+                schema_version,
             )
         )
         modules.append((import_path, import_payload, import_field))
@@ -6022,6 +6143,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "keys",
             "regex_defs",
             "limits",
+            "import_registry",
             "imports",
             "int_arithmetic",
             "int_arithmetic_ref",
@@ -6058,9 +6180,15 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(
             f"error: invalid {field_name}.keys: expected non-empty object"
         )
+    import_registry = parse_context_schema_import_registry(
+        payload.get("import_registry"),
+        f"{field_name}.import_registry",
+    )
     import_modules = parse_context_schema_import_modules(
         payload.get("imports"),
         f"{field_name}.imports",
+        import_registry=import_registry,
+        schema_version=schema_version,
     )
     imported_regex_defs = {}
     imported_limit_overrides = {}

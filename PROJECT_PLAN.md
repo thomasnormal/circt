@@ -16244,6 +16244,63 @@ ninja -C build circt-verilog
   - Arithmetic mode selection remains schema/clause scoped (no per-expression
     override).
 
+### Iteration 622
+- Yosys SVA BMC named/versioned import registry for route-context schemas:
+  - Added top-level `import_registry` schema field with named module entries:
+    - `version` (required string)
+    - `path` (required file path)
+    - `schema_versions` (optional compatibility allow-list)
+  - Extended `imports` entries to accept either:
+    - string path imports (existing behavior)
+    - object refs: `{"module":"<name>","version":"<v>"}`
+  - Added compatibility and integrity checks:
+    - unknown `import_registry` module refs rejected
+    - requested import version must match registered module version
+    - schema-version compatibility checked when `schema_versions` is provided
+  - Kept recursive imports + cycle diagnostics and merge rules intact.
+- Parser and diagnostics:
+  - Added field-qualified diagnostics for import registry errors.
+  - Preserved deterministic import closure handling for regex/limits/arithmetic
+    preset overlays.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive import via `import_registry` module ref
+    - negative unknown module ref
+    - negative version mismatch
+    - negative schema-version incompatibility
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`
+      -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+- Current limitations / debt:
+  - Registry modules still resolve to file paths only; no repository/package
+    source abstraction.
+  - Repeated shared imports are still reloaded per reference (no cache/dedup).
+  - Arithmetic mode remains schema/clause scoped (no per-expression override).
+
 ---
 
 ## Architecture Reference
