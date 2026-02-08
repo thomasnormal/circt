@@ -10029,6 +10029,59 @@ ninja -C build circt-verilog
   - Continue semantic root-cause work to retire xprop xfails and improve
     four-state fidelity.
 
+### Iteration 522
+- Yosys SVA BMC expectation-diff machine-readable artifacts:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_DIFF_TSV_FILE`
+    - `EXPECT_DIFF_JSON_FILE`
+  - Diff report now supports deterministic artifact generation in addition to
+    text output:
+    - TSV columns: `kind`, `test`, `mode`, `profile`, `old`, `new`
+    - JSON object with:
+      - `summary` (`added`, `removed`, `changed`)
+      - `entries[]` rows (`kind`, `test`, `mode`, `profile`, `old`, `new`)
+  - Ordering is stable (`added`, `removed`, `changed`, key-sorted within kind)
+    for CI friendliness.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`:
+    - validates TSV artifact contents
+    - validates JSON artifact contents
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 6/6 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Harness still lacks observed-outcome snapshot emission to support automatic
+    baseline regeneration and review.
+  - xprop pass-mode failures remain baseline-tracked rather than semantically
+    fixed.
+  - Four-state witness unknown propagation remains approximation-based in
+    cast/slice paths.
+- Long-term features to prioritize:
+  - Add observed-outcome snapshot output and a baseline update workflow.
+  - Integrate expectation-diff JSON into CI reporting/dashboards.
+  - Continue semantic fixes to retire xprop expected-failure rows.
+  - Continue first-class four-state value/unknown propagation work.
+
 ---
 
 ## Architecture Reference

@@ -1,0 +1,22 @@
+// RUN: rm -rf %t && mkdir -p %t/empty
+// RUN: printf 'a\tpass\tknown\txfail\nb\tpass\tknown\tfail\nd\tfail\tknown\txfail\n' > %t/base.txt
+// RUN: printf 'a\tpass\tknown\txfail\nb\tpass\tknown\txfail\nc\tpass\tknown\tfail\n' > %t/new.txt
+// RUN: env EXPECT_FILE=%t/new.txt EXPECT_DIFF_BASELINE=%t/base.txt XFAIL_FILE=/dev/null \
+// RUN:   EXPECT_DIFF_TSV_FILE=%t/diff.tsv EXPECT_DIFF_JSON_FILE=%t/diff.json \
+// RUN:   EXPECT_DIFF_FAIL_ON_CHANGE=0 \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
+// RUN: sed 's/\t/|/g' %t/diff.tsv | FileCheck %s --check-prefix=TSV
+// RUN: cat %t/diff.json | FileCheck %s --check-prefix=JSON
+
+// OUT: expect-diff summary: added=1, removed=1, changed=1
+// OUT: yosys SVA summary: 0 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// TSV: kind|test|mode|profile|old|new
+// TSV: added|c|pass|known||fail
+// TSV: removed|d|fail|known|xfail|
+// TSV: changed|b|pass|known|fail|xfail
+
+// JSON: "summary": {"added": 1, "removed": 1, "changed": 1}
+// JSON: {"kind":"added","test":"c","mode":"pass","profile":"known","old":"","new":"fail"}
+// JSON: {"kind":"removed","test":"d","mode":"fail","profile":"known","old":"xfail","new":""}
+// JSON: {"kind":"changed","test":"b","mode":"pass","profile":"known","old":"fail","new":"xfail"}
