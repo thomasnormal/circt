@@ -573,3 +573,30 @@ module SequenceSignalEventListStructuredRelCompare;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for concatenation/replication event terms.
+module SequenceSignalEventListStructuredConcatReplicate;
+  logic clk, q, en;
+  logic [1:0] bus, mask;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredConcatReplicate
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "eq"
+  // CHECK-DAG: signal_lhs_concat_arity = 2 : i32
+  // CHECK-DAG: signal_lhs_cat0_name = "bus"
+  // CHECK-DAG: signal_lhs_cat0_lsb = 0 : i32
+  // CHECK-DAG: signal_lhs_cat0_msb = 0 : i32
+  // CHECK-DAG: signal_lhs_cat1_name = "en"
+  // CHECK-DAG: signal_rhs_name = "mask"
+  // CHECK-DAG: iff_bin_op = "ne"
+  // CHECK-DAG: iff_lhs_replicate_count = 2 : i32
+  // CHECK-DAG: iff_lhs_arg_name = "en"
+  // CHECK-DAG: iff_rhs_name = "bus"
+  always @(seq or posedge ({bus[0], en} == mask) iff ({2{en}} != bus)) begin
+    q <= ~q;
+  end
+endmodule

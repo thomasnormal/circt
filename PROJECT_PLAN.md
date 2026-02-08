@@ -9579,6 +9579,64 @@ ninja -C build circt-verilog
   - Continue `circt-sim` ref-provenance hardening with additional CFG-path
     regressions.
 
+### Iteration 471
+- Structured concatenation/replication metadata from Slang:
+  - ImportVerilog structured extraction now recognizes concatenation trees and
+    emits:
+    - `<prefix>_concat_arity`
+    - child nodes under `<prefix>_cat0`, `<prefix>_cat1`, ...
+  - ImportVerilog now recognizes replication with constant counts and emits:
+    - `<prefix>_replicate_count`
+    - replicated operand under `<prefix>_arg`
+  - Structured extraction now unwraps conversion wrappers before matching,
+    which avoids false fallback to text for parenthesized / conversion-wrapped
+    concat/replicate forms.
+- VerifToSMT structured concat/replicate witness lowering:
+  - Added structured node kinds:
+    - `Concat`
+    - `Replicate`
+  - Structured resolver now parses `*_concat_arity` / `*_replicate_count` and
+    builds nested resolved expression trees.
+  - Event-arm witness evaluation now lowers:
+    - `Concat` -> `smt.bv.concat`
+    - `Replicate` -> `smt.bv.repeat`
+  - Concat/replicate values are now consumable in both:
+    - value-aware comparisons (`eq/ne`, relational operators)
+    - bool-context witness evaluation (via non-zero conversion).
+  - IFF structured-presence detection now includes concat/replicate attrs.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-concat-replicate-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+    `SequenceSignalEventListStructuredConcatReplicate`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (19 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS (no `interpretOperation failed`)
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured cast semantics are still missing (only conversion-wrapper
+    unwrapping is implemented, no explicit cast node metadata yet).
+  - Structured compare lowering still lacks canonical Slang type graph metadata
+    for all mixed-width/mixed-domain operand combinations.
+  - Group depth captures wrapper nesting but is not yet a full
+    parenthesis-tree encoding for arbitrary grouped forms.
+- Long-term features to prioritize:
+  - Add explicit structured cast nodes (signedness, width, domain intent) and
+    lower them value-accurately in VerifToSMT.
+  - Carry canonical Slang expression/type graph metadata into event-source
+    attrs to retire text fallback and ad-hoc wrapper unwrapping.
+  - Extend structured grouping encoding beyond wrapper depth to full tree
+    fidelity.
+
 ---
 
 ## Architecture Reference

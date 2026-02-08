@@ -569,6 +569,9 @@ static bool maybeAddStructuredEventExprAttrs(
     StringRef prefix, const slang::ast::Expression *expr) {
   if (!expr)
     return false;
+  if (auto *conv = expr->as_if<slang::ast::ConversionExpression>())
+    return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
+                                            &conv->operand());
   auto addAttrIfMissing = [&](StringRef key, Attribute value) {
     if (llvm::any_of(detailAttrs, [&](NamedAttribute namedAttr) {
           return namedAttr.getName().strref() == key;
@@ -653,6 +656,43 @@ static bool maybeAddStructuredEventExprAttrs(
         return false;
       emittedAny = true;
     }
+  }
+
+  if (auto *concat = expr->as_if<slang::ast::ConcatenationExpression>()) {
+    SmallVector<const slang::ast::Expression *, 8> operands;
+    for (auto *operand : concat->operands()) {
+      if (!operand || operand->type->isVoid())
+        continue;
+      operands.push_back(operand);
+    }
+    if (operands.empty())
+      return false;
+    if (operands.size() == 1)
+      return maybeAddStructuredEventExprAttrs(builder, detailAttrs, prefix,
+                                              operands.front());
+    addAttrIfMissing(keyFor("concat_arity"),
+                     builder.getI32IntegerAttr(
+                         static_cast<int64_t>(operands.size())));
+    for (auto [i, operand] : llvm::enumerate(operands)) {
+      std::string elemPrefix = (Twine(prefix) + "_cat" + Twine(i)).str();
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, elemPrefix,
+                                            operand))
+        return false;
+    }
+    emittedAny = true;
+  }
+
+  if (auto *replicate = expr->as_if<slang::ast::ReplicationExpression>()) {
+    auto count = getConstInt32(replicate->count());
+    if (!count || *count <= 0)
+      return false;
+    addAttrIfMissing(keyFor("replicate_count"),
+                     builder.getI32IntegerAttr(*count));
+    std::string argPrefix = (prefix + "_arg").str();
+    if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
+                                          &replicate->concat()))
+      return false;
+    emittedAny = true;
   }
 
   if (auto *binary = expr->as_if<slang::ast::BinaryExpression>()) {
