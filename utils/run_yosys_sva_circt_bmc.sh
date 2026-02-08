@@ -3128,6 +3128,7 @@ import subprocess
 import sys
 import zlib
 from collections import OrderedDict
+from functools import lru_cache
 
 file = sys.argv[1]
 default_schema = sys.argv[2]
@@ -3349,6 +3350,50 @@ def parse_regex_flags(value, field_name: str):
         seen.add(ch)
     canonical = "".join(ch for ch in "ims" if ch in seen)
     return (canonical, flag_bits)
+
+
+@lru_cache(maxsize=256)
+def compile_bool_expression_regex(pattern: str, flags: int):
+    return re.compile(pattern, flags)
+
+
+def parse_regex_definitions(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    regex_defs = {}
+    for regex_name, regex_spec in value.items():
+        validate_context_key_name(regex_name, field_name)
+        regex_field = f"{field_name}.{regex_name}"
+        pattern = None
+        flags_value = None
+        if isinstance(regex_spec, str):
+            pattern = regex_spec
+        elif isinstance(regex_spec, dict):
+            unknown_keys = sorted(set(regex_spec.keys()) - {"pattern", "flags"})
+            if unknown_keys:
+                fail(
+                    f"error: invalid {regex_field}: unknown key '{unknown_keys[0]}'"
+                )
+            pattern = regex_spec.get("pattern")
+            flags_value = regex_spec.get("flags")
+        else:
+            fail(
+                f"error: invalid {regex_field}: expected non-empty pattern string or object"
+            )
+        if not isinstance(pattern, str) or not pattern:
+            fail(
+                f"error: invalid {regex_field}.pattern: expected non-empty string"
+            )
+        canonical_flags, regex_flags = parse_regex_flags(
+            flags_value, f"{regex_field}.flags"
+        )
+        compile_clause_regex(pattern, f"{regex_field}.pattern", regex_flags)
+        regex_defs[regex_name] = (pattern, canonical_flags, regex_flags)
+    return regex_defs
 
 
 def parse_selector_clause_array(payload, field_name: str, macro_specs=None, macro_field_name=None):
@@ -3923,7 +3968,7 @@ def collect_int_expression_keys(expr, out_keys):
         collect_int_expression_keys(expr[2], out_keys)
 
 
-def parse_bool_expression(expr, field_name: str):
+def parse_bool_expression(expr, field_name: str, regex_defs=None):
     if not isinstance(expr, dict) or not expr:
         fail(
             f"error: invalid {field_name}: expected non-empty bool expression object"
@@ -4003,10 +4048,34 @@ def parse_bool_expression(expr, field_name: str):
         canonical_flags, regex_flags = parse_regex_flags(
             flags_text, f"{field_name}.regex[2]"
         )
-        compiled_pattern = compile_clause_regex(
+        compile_clause_regex(
             pattern, f"{field_name}.regex[1]", regex_flags
         )
-        return ("regex", key, pattern, canonical_flags, compiled_pattern)
+        return ("regex", key, pattern, canonical_flags, regex_flags)
+    if op == "regex_ref":
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 2
+            or not isinstance(payload[0], str)
+            or not isinstance(payload[1], str)
+        ):
+            fail(
+                f"error: invalid {field_name}.regex_ref: expected [key, regex_name]"
+            )
+        key = payload[0]
+        regex_name = payload[1]
+        validate_context_key_name(key, f"{field_name}.regex_ref[0]")
+        validate_context_key_name(regex_name, f"{field_name}.regex_ref[1]")
+        if not regex_defs:
+            fail(
+                f"error: invalid {field_name}.regex_ref[1]: regex_defs are not configured"
+            )
+        regex_spec = regex_defs.get(regex_name)
+        if regex_spec is None:
+            fail(
+                f"error: invalid {field_name}.regex_ref[1]: unknown regex definition '{regex_name}'"
+            )
+        return ("regex", key, regex_spec[0], regex_spec[1], regex_spec[2])
     if op in {"all", "any"}:
         if not isinstance(payload, list) or not payload:
             fail(
@@ -4015,11 +4084,18 @@ def parse_bool_expression(expr, field_name: str):
         children = []
         for idx, child in enumerate(payload):
             children.append(
-                parse_bool_expression(child, f"{field_name}.{op}[{idx}]")
+                parse_bool_expression(
+                    child,
+                    f"{field_name}.{op}[{idx}]",
+                    regex_defs,
+                )
             )
         return (op, tuple(children))
     if op == "not":
-        return ("not", parse_bool_expression(payload, f"{field_name}.not"))
+        return (
+            "not",
+            parse_bool_expression(payload, f"{field_name}.not", regex_defs),
+        )
     fail(
         f"error: invalid {field_name}: unknown bool expression operator '{op}'"
     )
@@ -4081,7 +4157,8 @@ def evaluate_bool_expression(expr, context):
         return lhs_value != rhs_value
     if kind == "regex":
         key = expr[1]
-        pattern = expr[4]
+        pattern = expr[2]
+        regex_flags = expr[4]
         if key not in context:
             return False
         context_value = context[key]
@@ -4089,7 +4166,7 @@ def evaluate_bool_expression(expr, context):
             haystack = context_value
         else:
             haystack = format_context_scalar(context_value)
-        return pattern.search(haystack) is not None
+        return compile_bool_expression_regex(pattern, regex_flags).search(haystack) is not None
     if kind == "all":
         return all(evaluate_bool_expression(child, context) for child in expr[1])
     if kind == "any":
@@ -4176,7 +4253,7 @@ def validate_bool_expression_key_types(
         )
 
 
-def parse_context_presence_clause(payload, field_name: str):
+def parse_context_presence_clause(payload, field_name: str, regex_defs=None):
     if not isinstance(payload, dict) or not payload:
         fail(
             f"error: invalid {field_name}: expected non-empty object"
@@ -4942,6 +5019,7 @@ def parse_context_presence_clause(payload, field_name: str):
             term_expr = parse_bool_expression(
                 term,
                 f"{field_name}.bool_expr[{term_index}]",
+                regex_defs,
             )
             if term_expr in bool_expr_seen:
                 fail(
@@ -5624,6 +5702,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "allow_unknown_keys",
             "validate_merged_context",
             "keys",
+            "regex_defs",
             "all_of",
             "any_of",
         }
@@ -5656,6 +5735,10 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
         fail(
             f"error: invalid {field_name}.keys: expected non-empty object"
         )
+    regex_defs = parse_regex_definitions(
+        payload.get("regex_defs"),
+        f"{field_name}.regex_defs",
+    )
     all_of_clauses = None
     if "all_of" in payload:
         all_of_raw = payload["all_of"]
@@ -5669,6 +5752,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                 parse_context_presence_clause(
                     clause,
                     f"{field_name}.all_of[{idx}]",
+                    regex_defs,
                 )
             )
     any_of_clauses = None
@@ -5684,6 +5768,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                 parse_context_presence_clause(
                     clause,
                     f"{field_name}.any_of[{idx}]",
+                    regex_defs,
                 )
             )
     key_specs = {}
