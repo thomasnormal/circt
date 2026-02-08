@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 512)
+## Current Status - February 8, 2026 (Iteration 513)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + affine indexed selects and now affine dynamic text-parser fallback (`bus[idx-1]`, `bus[idx+1+:w]`, `bus[idx-1-:w]`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + affine indexed selects and hardened affine text-parser fallback including parenthesized forms (`bus[(idx-1)]`, `bus[(idx+1)+:w]`, `bus[(idx-1)-:w]`); next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,60 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 513
+
+1. **Parenthesized affine index forms now work in expression-text fallback**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended fallback parsing to accept canonical parenthesized index text:
+     - `bus[(idx - 1)]`
+     - `bus[(jdx + 1) +: 2]`
+     - `bus[(idx - 1) -: 1]`
+   - This is important for long-term robustness because Slang syntax text often
+     preserves explicit parentheses in event expressions.
+
+2. **Fallback parser hardening details**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added bracket-index token support for `(` and `)` characters.
+   - Added balanced outer-parenthesis stripping for affine index components.
+   - Added top-level `+`/`-` detection that ignores nested parentheses.
+   - Net effect: fewer false drops from structured/affine decoding into
+     "unsupported expr text" behavior.
+
+3. **Regression coverage**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-text.mlir`
+   - New checks explicitly cover parenthesized affine fallback expressions for
+     bit-select and indexed part-select forms in both SMTLIB and runtime modes.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (8/8)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Fallback now handles parenthesized one-symbol affine forms, but not
+     multi-symbol index arithmetic.
+   - Long-term best path is still canonical Slang expression graph/ID metadata
+     so we stop reparsing syntax text.
+   - High-value missing semantics:
+     - casts (especially 4-state aware),
+     - concatenation/replication,
+     - broader builtin/system expression mapping.
 
 ### Session Summary - Iteration 512
 

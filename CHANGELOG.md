@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 513 - February 8, 2026
+
+### Summary
+
+Hardened the VerifToSMT expression-text fallback parser for parenthesized affine
+dynamic slice syntax, reducing avoidable fallback failures on common Slang text
+forms.
+
+### Fixes
+
+1. **Parenthesized affine index handling**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Fallback affine parsing now accepts:
+     - `bus[(idx - 1)]`
+     - `bus[(jdx + 1) +: 2]`
+     - `bus[(idx - 1) -: 1]`
+   - Added balanced outer-parenthesis stripping and top-level operator parsing
+     that ignores nested parens.
+
+2. **Tokenizer robustness for bracketed slice text**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Identifier tokenization now includes `(` and `)` so bracketed index tokens
+     are preserved as a unit.
+   - Keeps existing whitespace compaction and affine normalization behavior.
+
+3. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-text.mlir`
+   - Regression now checks parenthesized affine expressions in `signal_expr` and
+     `iff_expr` with both SMT-LIB and runtime lowering.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt`: PASS
+   - Targeted regressions:
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-text.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/ImportVerilog/sequence-event-control.sv test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (8/8)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Fallback affine parsing remains limited to one-symbol linear forms.
+- Canonical Slang expression graph/ID propagation is still missing, so syntax
+  reparsing remains required.
+- Cast/concat/replication semantics are still missing in both structured and
+  fallback witness lowering.
+
 ## Iteration 512 - February 8, 2026
 
 ### Summary

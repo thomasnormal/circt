@@ -255,7 +255,7 @@ private:
   static bool isIdentifierChar(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' ||
            c == '.' || c == '[' || c == ']' || c == ':' || c == '+' ||
-           c == '-';
+           c == '-' || c == '(' || c == ')';
   }
 
   static std::optional<bool> parseBoolLiteral(StringRef text) {
@@ -573,7 +573,29 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
   };
   auto resolveArgName = [&](StringRef name)
       -> std::optional<std::pair<unsigned, std::optional<ResolvedNamedBoolExpr::ArgSlice>>> {
+    auto stripOuterParens = [](StringRef text) -> StringRef {
+      auto balancedOuterParens = [](StringRef s) -> bool {
+        if (s.size() < 2 || s.front() != '(' || s.back() != ')')
+          return false;
+        int depth = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+          if (s[i] == '(')
+            ++depth;
+          else if (s[i] == ')')
+            --depth;
+          if (depth == 0 && i + 1 != s.size())
+            return false;
+          if (depth < 0)
+            return false;
+        }
+        return depth == 0;
+      };
+      while (balancedOuterParens(text))
+        text = text.slice(1, text.size() - 1);
+      return text;
+    };
     auto parseSignedInt = [&](StringRef text) -> std::optional<int64_t> {
+      text = stripOuterParens(text);
       int64_t value = 0;
       if (text.empty() || text.getAsInteger(10, value))
         return std::nullopt;
@@ -585,6 +607,7 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
     };
     auto parseSignedName = [&](StringRef text)
         -> std::optional<std::pair<StringRef, int64_t>> {
+      text = stripOuterParens(text);
       if (text.empty())
         return std::nullopt;
       int64_t scale = 1;
@@ -602,12 +625,18 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
       return std::pair<StringRef, int64_t>{text, scale};
     };
     auto parseAffineIndex = [&](StringRef text) -> std::optional<ParsedAffineIndex> {
+      text = stripOuterParens(text);
       if (auto sym = parseSignedName(text))
         return ParsedAffineIndex{sym->first, sym->second, 0};
 
       size_t opPos = StringRef::npos;
+      int depth = 0;
       for (size_t i = 1; i < text.size(); ++i) {
-        if (text[i] == '+' || text[i] == '-') {
+        if (text[i] == '(')
+          ++depth;
+        else if (text[i] == ')')
+          --depth;
+        if (depth == 0 && (text[i] == '+' || text[i] == '-')) {
           opPos = i;
           break;
         }
