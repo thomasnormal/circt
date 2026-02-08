@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/empty
+// RUN: printf 'ghost\tpass\tknown\tpass\n' > %t/expect.txt
+// RUN: printf 'ghost\tpass\tknown\tpass\nghost\tpass\tknown\txfail\n' >> %t/expect.txt
+// RUN: printf 'real\tpass\tknown\tauto\nreal\tpass\tknown\tomit\n' > %t/overrides.txt
+// RUN: not env EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   EXPECT_REGEN_OVERRIDE_FILE=%t/overrides.txt EXPECT_LINT=1 \
+// RUN:   EXPECT_LINT_FAIL_ON_ISSUES=1 EXPECT_LINT_FILE=%t/lint.log \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
+// RUN: cat %t/lint.log | FileCheck %s --check-prefix=LOG
+
+// OUT-DAG: EXPECT_LINT(conflict): {{.*expect.txt}} row redefines ghost|pass|known: pass -> xfail
+// OUT-DAG: EXPECT_LINT(conflict): {{.*overrides.txt}} row redefines real|pass|known: auto -> omit
+// OUT-DAG: EXPECT_LINT(redundant): {{.*expect.txt}} row duplicates ghost|pass|known = pass
+// OUT-DAG: EXPECT_LINT(unknown-test): EXPECT_FILE references missing test 'ghost' via key ghost|pass|known
+// OUT-DAG: EXPECT_LINT(unknown-test): EXPECT_REGEN_OVERRIDE_FILE references missing test 'real' via key real|pass|known
+// OUT: EXPECT_LINT_SUMMARY: issues=5
+// OUT: yosys SVA summary: 0 tests, failures=1, xfail=0, xpass=0, skipped=0
+
+// LOG-DAG: EXPECT_LINT(conflict): {{.*expect.txt}} row redefines ghost|pass|known: pass -> xfail
+// LOG-DAG: EXPECT_LINT(conflict): {{.*overrides.txt}} row redefines real|pass|known: auto -> omit
+// LOG-DAG: EXPECT_LINT(redundant): {{.*expect.txt}} row duplicates ghost|pass|known = pass
+// LOG-DAG: EXPECT_LINT(unknown-test): EXPECT_FILE references missing test 'ghost' via key ghost|pass|known
+// LOG-DAG: EXPECT_LINT(unknown-test): EXPECT_REGEN_OVERRIDE_FILE references missing test 'real' via key real|pass|known

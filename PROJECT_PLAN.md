@@ -10275,6 +10275,70 @@ ninja -C build circt-verilog
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
   - Continue first-class four-state value/unknown propagation work.
 
+### Iteration 526
+- Yosys SVA BMC expectation/override linting and stale-row detection:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_LINT` (default `0`)
+    - `EXPECT_LINT_FAIL_ON_ISSUES` (default `0`)
+    - `EXPECT_LINT_FILE` (optional lint log sink)
+  - Added lint checks for expectation and regeneration-override tables:
+    - duplicate exact-key rows with identical values (`redundant`)
+    - duplicate exact-key rows with differing values (`conflict`)
+    - non-wildcard rows referencing tests not present in the target suite
+      directory (`unknown-test`)
+  - Added `EXPECT_LINT_SUMMARY: issues=<n>` reporting.
+  - Added optional failure gating:
+    - if lint enabled and `EXPECT_LINT_FAIL_ON_ISSUES=1`, lint findings add to
+      run failures.
+  - Lint is opt-in by default, preserving existing harness behavior.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-lint.test`:
+    - validates redundant/conflict/unknown-test lint findings
+    - validates lint-file output mirror
+    - validates fail-on-issues behavior
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-lint.test`
+    - `test/Tools/run-yosys-sva-bmc-skip-expected.test`
+    - `test/Tools/run-yosys-sva-bmc-regen-override.test`
+    - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+    - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 11/11 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Lint currently detects exact-key duplicates/conflicts and unknown tests;
+    it does not yet flag wildcard shadowing or precedence ambiguities.
+  - Skip accounting still mixes test-level and mode-level semantics.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+  - Four-state witness unknown propagation remains approximation-based in
+    cast/slice paths.
+- Long-term features to prioritize:
+  - Add wildcard-shadow/preference ambiguity linting for expectations and
+    overrides.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+  - Continue first-class four-state value/unknown propagation work.
+
 ---
 
 ## Architecture Reference
