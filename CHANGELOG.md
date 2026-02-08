@@ -1,5 +1,74 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 494 - February 8, 2026
+
+### Summary
+
+Extended event-arm activity diagnostics to include sequence arms (not just
+signal arms) by plumbing additional sequence metadata and decoding sequence
+waveforms from SAT models.
+
+### Fixes
+
+1. **Sequence metadata enrichment in ImportVerilog**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Sequence event-list detail dictionaries now include `iff_name` when
+     available.
+   - Mixed sequence/signal event-lists now always carry sequence detail entries
+     for downstream attribution.
+
+2. **Sequence + signal activity reporting**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample output now computes estimated per-step activity for:
+     - `kind = "signal"` arms via edge transitions
+     - `kind = "sequence"` arms via sequence waveform truth values
+   - Output section label is now:
+     - `estimated event-arm activity:`
+
+3. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-event-activity.sh`
+   - Updated:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New checks cover sequence `iff` metadata and mixed sequence/signal activity
+     lines in SAT counterexamples.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+       (`FileCheck`): PASS
+   - Additional BMC lit checks:
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`: PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`: PASS
+     - `bmc-run-smtlib-sat-counterexample.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Event-arm activity remains heuristic/model-waveform-derived rather than exact
+  wake witness extraction from solver-side instrumentation.
+- Some sequence/event expressions do not expose stable symbolic names for
+  attribution.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 493 - February 8, 2026
 
 ### Summary

@@ -410,16 +410,34 @@ static void printMixedEventSources(
         if (!detail)
           continue;
         auto kindAttr = dyn_cast_or_null<StringAttr>(detail.get("kind"));
-        if (!kindAttr || kindAttr.getValue() != "signal")
+        if (!kindAttr)
           continue;
-        auto signalNameAttr =
-            dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
-        auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
-        if (!signalNameAttr || !edgeAttr)
+        StringRef kind = kindAttr.getValue();
+        const StepMap *armWave = nullptr;
+        StringRef signalEdge;
+        if (kind == "signal") {
+          auto signalNameAttr =
+              dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
+          auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
+          if (!signalNameAttr || !edgeAttr)
+            continue;
+          auto signalIt = waves.find(signalNameAttr.getValue().str());
+          if (signalIt == waves.end())
+            continue;
+          armWave = &signalIt->second;
+          signalEdge = edgeAttr.getValue();
+        } else if (kind == "sequence") {
+          auto sequenceNameAttr =
+              dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
+          if (!sequenceNameAttr)
+            continue;
+          auto sequenceIt = waves.find(sequenceNameAttr.getValue().str());
+          if (sequenceIt == waves.end())
+            continue;
+          armWave = &sequenceIt->second;
+        } else {
           continue;
-        auto signalIt = waves.find(signalNameAttr.getValue().str());
-        if (signalIt == waves.end())
-          continue;
+        }
         const StepMap *iffWave = nullptr;
         if (auto iffNameAttr =
                 dyn_cast_or_null<StringAttr>(detail.get("iff_name"))) {
@@ -429,22 +447,25 @@ static void printMixedEventSources(
         }
         SmallVector<unsigned, 8> activeSteps;
         for (unsigned step = 1; step <= maxStep; ++step) {
-          auto prevIt = signalIt->second.find(step - 1);
-          auto currIt = signalIt->second.find(step);
-          if (prevIt == signalIt->second.end() ||
-              currIt == signalIt->second.end())
-            continue;
-          bool prev = prevIt->second;
-          bool curr = currIt->second;
-          StringRef edge = edgeAttr.getValue();
-          bool edgeFired = false;
-          if (edge == "posedge")
-            edgeFired = !prev && curr;
-          else if (edge == "negedge")
-            edgeFired = prev && !curr;
-          else if (edge == "both")
-            edgeFired = prev != curr;
-          if (!edgeFired)
+          bool armFired = false;
+          if (kind == "signal") {
+            auto prevIt = armWave->find(step - 1);
+            auto currIt = armWave->find(step);
+            if (prevIt == armWave->end() || currIt == armWave->end())
+              continue;
+            bool prev = prevIt->second;
+            bool curr = currIt->second;
+            if (signalEdge == "posedge")
+              armFired = !prev && curr;
+            else if (signalEdge == "negedge")
+              armFired = prev && !curr;
+            else if (signalEdge == "both")
+              armFired = prev != curr;
+          } else if (kind == "sequence") {
+            auto currIt = armWave->find(step);
+            armFired = currIt != armWave->end() && currIt->second;
+          }
+          if (!armFired)
             continue;
           if (iffWave) {
             auto iffIt = iffWave->find(step);
@@ -454,10 +475,10 @@ static void printMixedEventSources(
           activeSteps.push_back(step);
         }
         if (!printedActivityHeader) {
-          llvm::errs() << "\nestimated signal-arm activity:\n";
+          llvm::errs() << "\nestimated event-arm activity:\n";
           printedActivityHeader = true;
         }
-        StringRef label = signalNameAttr.getValue();
+        StringRef label = kind;
         if (auto detailLabel = dyn_cast_or_null<StringAttr>(detail.get("label")))
           label = detailLabel.getValue();
         llvm::errs() << "  [" << i << "][" << j << "] " << label << " ->";
