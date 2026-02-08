@@ -3760,6 +3760,11 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_le",
             "int_gt",
             "int_ge",
+            "int_lt_const",
+            "int_le_const",
+            "int_gt_const",
+            "int_ge_const",
+            "int_between",
         }
     )
     if unknown_keys:
@@ -4010,6 +4015,176 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_ge_seen.add(pair_key)
             int_ge_pairs.append((lhs, rhs))
+    int_lt_const_pairs = None
+    if "int_lt_const" in payload:
+        int_lt_const_raw = payload["int_lt_const"]
+        if not isinstance(int_lt_const_raw, list) or not int_lt_const_raw:
+            fail(
+                f"error: invalid {field_name}.int_lt_const: expected non-empty array"
+            )
+        int_lt_const_pairs = []
+        int_lt_const_seen = set()
+        for pair_index, pair in enumerate(int_lt_const_raw):
+            pair_field = f"{field_name}.int_lt_const[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key/integer pair"
+                )
+            lhs = pair[0]
+            rhs = parse_context_integer(pair[1])
+            validate_context_key_name(lhs, pair_field)
+            if rhs is None:
+                fail(
+                    f"error: invalid {pair_field}: expected integer rhs literal"
+                )
+            pair_key = (lhs, rhs)
+            if pair_key in int_lt_const_seen:
+                fail(
+                    f"error: invalid {field_name}.int_lt_const: duplicate pair '{lhs},{rhs}'"
+                )
+            int_lt_const_seen.add(pair_key)
+            int_lt_const_pairs.append((lhs, rhs))
+    int_le_const_pairs = None
+    if "int_le_const" in payload:
+        int_le_const_raw = payload["int_le_const"]
+        if not isinstance(int_le_const_raw, list) or not int_le_const_raw:
+            fail(
+                f"error: invalid {field_name}.int_le_const: expected non-empty array"
+            )
+        int_le_const_pairs = []
+        int_le_const_seen = set()
+        for pair_index, pair in enumerate(int_le_const_raw):
+            pair_field = f"{field_name}.int_le_const[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key/integer pair"
+                )
+            lhs = pair[0]
+            rhs = parse_context_integer(pair[1])
+            validate_context_key_name(lhs, pair_field)
+            if rhs is None:
+                fail(
+                    f"error: invalid {pair_field}: expected integer rhs literal"
+                )
+            pair_key = (lhs, rhs)
+            if pair_key in int_le_const_seen:
+                fail(
+                    f"error: invalid {field_name}.int_le_const: duplicate pair '{lhs},{rhs}'"
+                )
+            int_le_const_seen.add(pair_key)
+            int_le_const_pairs.append((lhs, rhs))
+    int_gt_const_pairs = None
+    if "int_gt_const" in payload:
+        int_gt_const_raw = payload["int_gt_const"]
+        if not isinstance(int_gt_const_raw, list) or not int_gt_const_raw:
+            fail(
+                f"error: invalid {field_name}.int_gt_const: expected non-empty array"
+            )
+        int_gt_const_pairs = []
+        int_gt_const_seen = set()
+        for pair_index, pair in enumerate(int_gt_const_raw):
+            pair_field = f"{field_name}.int_gt_const[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key/integer pair"
+                )
+            lhs = pair[0]
+            rhs = parse_context_integer(pair[1])
+            validate_context_key_name(lhs, pair_field)
+            if rhs is None:
+                fail(
+                    f"error: invalid {pair_field}: expected integer rhs literal"
+                )
+            pair_key = (lhs, rhs)
+            if pair_key in int_gt_const_seen:
+                fail(
+                    f"error: invalid {field_name}.int_gt_const: duplicate pair '{lhs},{rhs}'"
+                )
+            int_gt_const_seen.add(pair_key)
+            int_gt_const_pairs.append((lhs, rhs))
+    int_ge_const_pairs = None
+    if "int_ge_const" in payload:
+        int_ge_const_raw = payload["int_ge_const"]
+        if not isinstance(int_ge_const_raw, list) or not int_ge_const_raw:
+            fail(
+                f"error: invalid {field_name}.int_ge_const: expected non-empty array"
+            )
+        int_ge_const_pairs = []
+        int_ge_const_seen = set()
+        for pair_index, pair in enumerate(int_ge_const_raw):
+            pair_field = f"{field_name}.int_ge_const[{pair_index}]"
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not isinstance(pair[0], str)
+            ):
+                fail(
+                    f"error: invalid {pair_field}: expected [lhs, rhs] key/integer pair"
+                )
+            lhs = pair[0]
+            rhs = parse_context_integer(pair[1])
+            validate_context_key_name(lhs, pair_field)
+            if rhs is None:
+                fail(
+                    f"error: invalid {pair_field}: expected integer rhs literal"
+                )
+            pair_key = (lhs, rhs)
+            if pair_key in int_ge_const_seen:
+                fail(
+                    f"error: invalid {field_name}.int_ge_const: duplicate pair '{lhs},{rhs}'"
+                )
+            int_ge_const_seen.add(pair_key)
+            int_ge_const_pairs.append((lhs, rhs))
+    int_between_ranges = None
+    if "int_between" in payload:
+        int_between_raw = payload["int_between"]
+        if not isinstance(int_between_raw, list) or not int_between_raw:
+            fail(
+                f"error: invalid {field_name}.int_between: expected non-empty array"
+            )
+        int_between_ranges = []
+        int_between_seen = set()
+        for range_index, range_item in enumerate(int_between_raw):
+            range_field = f"{field_name}.int_between[{range_index}]"
+            if (
+                not isinstance(range_item, list)
+                or len(range_item) != 3
+                or not isinstance(range_item[0], str)
+            ):
+                fail(
+                    f"error: invalid {range_field}: expected [key, min, max] key/range triple"
+                )
+            key = range_item[0]
+            min_value = parse_context_integer(range_item[1])
+            max_value = parse_context_integer(range_item[2])
+            validate_context_key_name(key, range_field)
+            if min_value is None or max_value is None:
+                fail(
+                    f"error: invalid {range_field}: expected integer min/max literals"
+                )
+            if min_value > max_value:
+                fail(
+                    f"error: invalid {range_field}: expected min <= max"
+                )
+            range_key = (key, min_value, max_value)
+            if range_key in int_between_seen:
+                fail(
+                    f"error: invalid {field_name}.int_between: duplicate range '{key},{min_value},{max_value}'"
+                )
+            int_between_seen.add(range_key)
+            int_between_ranges.append((key, min_value, max_value))
     if (
         keys_all is None
         and keys_any is None
@@ -4019,10 +4194,15 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_le_pairs is None
         and int_gt_pairs is None
         and int_ge_pairs is None
+        and int_lt_const_pairs is None
+        and int_le_const_pairs is None
+        and int_gt_const_pairs is None
+        and int_ge_const_pairs is None
+        and int_between_ranges is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, or int_ge"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, or int_between"
         )
     return {
         "keys_all": keys_all,
@@ -4033,6 +4213,11 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_le_pairs": int_le_pairs,
         "int_gt_pairs": int_gt_pairs,
         "int_ge_pairs": int_ge_pairs,
+        "int_lt_const_pairs": int_lt_const_pairs,
+        "int_le_const_pairs": int_le_const_pairs,
+        "int_gt_const_pairs": int_gt_const_pairs,
+        "int_ge_const_pairs": int_ge_const_pairs,
+        "int_between_ranges": int_between_ranges,
     }
 
 
@@ -4115,6 +4300,46 @@ def is_context_presence_clause_satisfied(context, clause):
             rhs_value = parse_context_integer(context[rhs])
             if lhs_value is None or rhs_value is None or lhs_value < rhs_value:
                 return False
+    int_lt_const_pairs = clause["int_lt_const_pairs"]
+    if int_lt_const_pairs is not None:
+        for lhs, rhs in int_lt_const_pairs:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None or lhs_value >= rhs:
+                return False
+    int_le_const_pairs = clause["int_le_const_pairs"]
+    if int_le_const_pairs is not None:
+        for lhs, rhs in int_le_const_pairs:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None or lhs_value > rhs:
+                return False
+    int_gt_const_pairs = clause["int_gt_const_pairs"]
+    if int_gt_const_pairs is not None:
+        for lhs, rhs in int_gt_const_pairs:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None or lhs_value <= rhs:
+                return False
+    int_ge_const_pairs = clause["int_ge_const_pairs"]
+    if int_ge_const_pairs is not None:
+        for lhs, rhs in int_ge_const_pairs:
+            if lhs not in context:
+                return False
+            lhs_value = parse_context_integer(context[lhs])
+            if lhs_value is None or lhs_value < rhs:
+                return False
+    int_between_ranges = clause["int_between_ranges"]
+    if int_between_ranges is not None:
+        for key, min_value, max_value in int_between_ranges:
+            if key not in context:
+                return False
+            key_value = parse_context_integer(context[key])
+            if key_value is None or key_value < min_value or key_value > max_value:
+                return False
     return True
 
 
@@ -4166,6 +4391,44 @@ def format_context_presence_clause(clause):
         parts.append(
             "int_ge=["
             + ", ".join(f"{lhs}>={rhs}" for lhs, rhs in int_ge_pairs)
+            + "]"
+        )
+    int_lt_const_pairs = clause["int_lt_const_pairs"]
+    if int_lt_const_pairs is not None:
+        parts.append(
+            "int_lt_const=["
+            + ", ".join(f"{lhs}<{rhs}" for lhs, rhs in int_lt_const_pairs)
+            + "]"
+        )
+    int_le_const_pairs = clause["int_le_const_pairs"]
+    if int_le_const_pairs is not None:
+        parts.append(
+            "int_le_const=["
+            + ", ".join(f"{lhs}<={rhs}" for lhs, rhs in int_le_const_pairs)
+            + "]"
+        )
+    int_gt_const_pairs = clause["int_gt_const_pairs"]
+    if int_gt_const_pairs is not None:
+        parts.append(
+            "int_gt_const=["
+            + ", ".join(f"{lhs}>{rhs}" for lhs, rhs in int_gt_const_pairs)
+            + "]"
+        )
+    int_ge_const_pairs = clause["int_ge_const_pairs"]
+    if int_ge_const_pairs is not None:
+        parts.append(
+            "int_ge_const=["
+            + ", ".join(f"{lhs}>={rhs}" for lhs, rhs in int_ge_const_pairs)
+            + "]"
+        )
+    int_between_ranges = clause["int_between_ranges"]
+    if int_between_ranges is not None:
+        parts.append(
+            "int_between=["
+            + ", ".join(
+                f"{key} in [{min_value}, {max_value}]"
+                for key, min_value, max_value in int_between_ranges
+            )
             + "]"
         )
     return ", ".join(parts)
