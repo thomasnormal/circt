@@ -30,6 +30,8 @@ Options:
                          TSV with suite/mode expected fail+error budgets
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
+  --fail-on-unused-expected-failures
+                         Fail when expected-failures rows are unused
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
   --fail-on-unexpected-failure-cases
@@ -80,6 +82,7 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURES=0
+FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 EXPECTED_FAILURE_CASES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURE_CASES=0
 FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
@@ -148,6 +151,8 @@ while [[ $# -gt 0 ]]; do
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
+    --fail-on-unused-expected-failures)
+      FAIL_ON_UNUSED_EXPECTED_FAILURES=1; shift ;;
     --expected-failure-cases-file)
       EXPECTED_FAILURE_CASES_FILE="$2"; shift 2 ;;
     --fail-on-unexpected-failure-cases)
@@ -181,6 +186,10 @@ if ! [[ "$BASELINE_WINDOW_DAYS" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
   echo "--fail-on-unexpected-failures requires --expected-failures-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_UNUSED_EXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
+  echo "--fail-on-unused-expected-failures requires --expected-failures-file" >&2
   exit 1
 fi
 if [[ -n "$EXPECTED_FAILURES_FILE" && ! -r "$EXPECTED_FAILURES_FILE" ]]; then
@@ -562,11 +571,14 @@ json_summary_path.parent.mkdir(parents=True, exist_ok=True)
 json_summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 PY
 
-if [[ -n "$EXPECTED_FAILURES_FILE" || "$FAIL_ON_UNEXPECTED_FAILURES" == "1" ]]; then
+if [[ -n "$EXPECTED_FAILURES_FILE" || \
+      "$FAIL_ON_UNEXPECTED_FAILURES" == "1" || \
+      "$FAIL_ON_UNUSED_EXPECTED_FAILURES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" \
   JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
   EXPECTED_FAILURES_FILE="$EXPECTED_FAILURES_FILE" \
   FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
+  FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
   python3 - <<'PY'
 import csv
 import json
@@ -578,6 +590,7 @@ summary_path = out_dir / "summary.tsv"
 json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
 expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
+fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
 expected_path = Path(expected_file_raw) if expected_file_raw else None
 expected_summary_path = out_dir / "expected-failures-summary.tsv"
 
@@ -728,6 +741,12 @@ if fail_on_unexpected and (
           f"fail {row['fail']} (expected {row['expected_fail']}), "
           f"error {row['error']} (expected {row['expected_error']})"
       )
+  raise SystemExit(1)
+
+if fail_on_unused and unused_expectations:
+  print("unused expected-failures entries:")
+  for item in unused_expectations:
+    print(f"  {item['suite']} {item['mode']}")
   raise SystemExit(1)
 PY
 fi

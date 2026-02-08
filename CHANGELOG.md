@@ -32096,3 +32096,48 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Unmatched-gate policy is currently binary (no severity tiers or grace windows).
 - No automatic stale-row remediation workflow is implemented yet.
+
+## Iteration 648 - February 8, 2026
+
+### Unused Expected-Failure Budget Gate
+
+- Added `--fail-on-unused-expected-failures` to `utils/run_formal_all.sh`.
+- Gate fails when `--expected-failures-file` contains stale suite/mode rows not
+  present in current run results.
+- This closes drift on aggregate budget files similarly to unmatched-case gating
+  for per-test expected cases.
+
+### Diagnostics
+
+- Added explicit diagnostics:
+  - `unused expected-failures entries:`
+  - emits stale `suite mode` rows.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added stale expected-failures row scenario for unused-budget gate
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - documented `--fail-on-unused-expected-failures`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`: 3/3 PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-unused-expected-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-unused-gate-smoke.tsv --fail-on-unexpected-failures --fail-on-unused-expected-failures`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (covered by expected budget row)
+
+### Remaining Limitations
+
+- Unused-budget gate currently has no warning-only mode.
+- No automatic stale-row rewrite workflow is provided yet.

@@ -17110,6 +17110,37 @@ ninja -C build circt-verilog
     grace-window semantics yet.
   - No built-in assistant for auto-pruning stale expected-case rows.
 
+### Iteration 648
+- Stale-row gate for aggregate expected-failure budgets:
+  - Added `--fail-on-unused-expected-failures` to `utils/run_formal_all.sh`.
+  - Gate fails when `--expected-failures-file` contains suite/mode rows that do
+    not appear in current run results.
+  - Complements existing budget gate:
+    - `--fail-on-unexpected-failures`
+- Validation/diagnostics:
+  - Added explicit diagnostics:
+    - `unused expected-failures entries:`
+    - emits stale `suite mode` rows.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - negative stale expected-failures row scenario for unused gate.
+- Documentation:
+  - Updated `docs/FormalRegression.md` expected-failures section with
+    `--fail-on-unused-expected-failures`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-unused-expected-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-unused-gate-smoke.tsv --fail-on-unexpected-failures --fail-on-unused-expected-failures`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (covered by expected budget row)
+- Current limitations / debt:
+  - Unused-budget gate is currently binary (no warning-only mode).
+  - No automatic baseline/budget file rewrite for stale-row cleanup.
+
 ---
 
 ## Architecture Reference
