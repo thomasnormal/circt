@@ -45,6 +45,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_F
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
@@ -1909,6 +1910,11 @@ emit_mode_summary_outputs() {
   local tsv_row
   local history_drop_future_tsv=0
   local history_drop_future_jsonl=0
+  local drop_events_lock_file="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE"
+  local drop_events_lock_warned=0
+  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]] && [[ -z "$drop_events_lock_file" ]]; then
+    drop_events_lock_file="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE}.lock"
+  fi
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
     "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
@@ -2082,6 +2088,36 @@ PY
     printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
   }
 
+  with_drop_events_lock() {
+    local lock_file="$1"
+    shift
+    if [[ -z "$lock_file" ]]; then
+      "$@"
+      return $?
+    fi
+    : >> "$lock_file"
+    if command -v flock >/dev/null 2>&1; then
+      local lock_fd status
+      exec {lock_fd}>>"$lock_file"
+      flock -x "$lock_fd"
+      "$@"
+      status=$?
+      flock -u "$lock_fd" || true
+      exec {lock_fd}>&-
+      return $status
+    fi
+    if ((drop_events_lock_warned == 0)); then
+      echo "warning: flock not found; proceeding without drop-event file locking for $lock_file" >&2
+      drop_events_lock_warned=1
+    fi
+    "$@"
+  }
+
+  append_drop_event_line() {
+    local line="$1"
+    printf '%s\n' "$line" >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE"
+  }
+
   emit_history_drop_event() {
     local history_file="$1"
     local history_format="$2"
@@ -2096,15 +2132,16 @@ PY
     local escaped_generated
     local escaped_run_id
     local escaped_reason
+    local event_line
     now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     escaped_file="$(json_escape "$history_file")"
     escaped_format="$(json_escape "$history_format")"
     escaped_generated="$(json_escape "$row_generated_at")"
     escaped_run_id="$(json_escape "$run_id")"
     escaped_reason="$(json_escape "$reason")"
-    printf '{"generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}\n' \
-      "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id" \
-      >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE"
+    printf -v event_line '{"generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
+      "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
+    with_drop_events_lock "$drop_events_lock_file" append_drop_event_line "$event_line"
   }
 
   trim_history_tsv() {
@@ -2303,7 +2340,7 @@ PY
     done
   }
 
-  trim_drop_events_jsonl() {
+  trim_drop_events_jsonl_unlocked() {
     local file="$1"
     local max_entries="$2"
     local max_age_days="$3"
@@ -2350,6 +2387,18 @@ PY
     for ((i = start; i < ${#lines[@]}; ++i)); do
       printf '%s\n' "${lines[$i]}" >> "$file"
     done
+  }
+
+  trim_drop_events_jsonl() {
+    local file="$1"
+    local max_entries="$2"
+    local max_age_days="$3"
+    with_drop_events_lock \
+      "$drop_events_lock_file" \
+      trim_drop_events_jsonl_unlocked \
+      "$file" \
+      "$max_entries" \
+      "$max_age_days"
   }
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" ]]; then
