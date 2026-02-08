@@ -91,6 +91,13 @@ Post failure events directly to an HTTP webhook:
 utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-webhook https://hooks.example/formal -- --with-opentitan --opentitan ~/opentitan
 ```
 
+Webhook options:
+
+- `--on-fail-webhook <url>` can be specified multiple times.
+- `--webhook-retries <n>` controls retries per endpoint.
+- `--webhook-backoff-secs <n>` controls retry backoff delay.
+- `--webhook-timeout-secs <n>` controls per-request timeout.
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:
@@ -115,6 +122,7 @@ OpenTitan and AVIP runs are optional:
 ```bash
 utils/run_formal_all.sh --with-opentitan --opentitan ~/opentitan
 utils/run_formal_all.sh --with-avip --avip-glob "~/mbit/*avip*"
+utils/run_formal_all.sh --with-avip --avip-glob "~/mbit/*avip*" --circt-verilog /abs/path/to/circt-verilog
 ```
 
 These are not formal checks but are tracked here to keep external testing

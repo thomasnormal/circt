@@ -16590,6 +16590,66 @@ ninja -C build circt-verilog
   - No built-in SMTP/email notifier backend yet (can still be provided via
     `--on-fail-hook`).
 
+### Iteration 633
+- Formal cadence webhook reliability and multi-sink support:
+  - Updated `utils/run_formal_cadence.sh` webhook handling:
+    - `--on-fail-webhook <url>` is now repeatable (multiple endpoints).
+    - Added `--webhook-retries N` (per-endpoint retry count).
+    - Added `--webhook-backoff-secs N` (retry delay).
+    - Added `--webhook-timeout-secs N` (per-request timeout).
+  - Added webhook endpoint + policy state metadata:
+    - `on_fail_webhooks`, `webhook_retries`, `webhook_backoff_secs`,
+      `webhook_timeout_secs`.
+  - Added explicit retry-attempt logging and endpoint-level failure summary.
+  - Extended webhook JSON payload with `webhook_count`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - fake curl now simulates first-attempt failure
+    - verifies retry behavior (`3` calls for `2` endpoints + one retry path)
+    - verifies payload marker + both endpoint URLs.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with repeatable webhook and
+    retry/backoff/timeout options.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+- Current limitations / debt:
+  - Delivery policy is still fixed-interval retry; no exponential backoff/jitter
+    policy yet.
+  - Notification system still lacks native SMTP/email backend.
+
+### Iteration 634
+- `run_formal_all.sh` CIRCT_VERILOG plumbing hardening:
+  - Added `--circt-verilog <path>` option (default `<repo>/build/bin/circt-verilog`).
+  - Added executable validation for `--with-avip` / `--with-opentitan` lanes.
+  - Wired `CIRCT_VERILOG` env propagation to:
+    - OpenTitan LEC invocation
+    - AVIP compile lanes.
+  - This removes cwd-relative `build/bin/circt-verilog` ambiguity that caused
+    AVIP path failures in integrated harness runs.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - adds fake AVIP lane
+    - asserts `CIRCT_VERILOG` env injection via `--circt-verilog`
+    - checks AVIP summary row reports PASS.
+- Documentation:
+  - Updated `docs/FormalRegression.md` optional-run examples with
+    `--circt-verilog`.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - External integrated smoke:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-webhook-smoke2 --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation).
+- Current limitations / debt:
+  - AVIP integration still depends on external VIP quality/compatibility (e.g.,
+    `axi4Lite_avip` known fail in this smoke).
+  - No per-suite binary override map yet (single `--circt-verilog` path for all
+    optional lanes).
+
 ---
 
 ## Architecture Reference

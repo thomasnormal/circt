@@ -18,13 +18,14 @@
 //
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE_FILE=\"%t/fail-counter.txt\"\ncount=0\nif [[ -f \"$STATE_FILE\" ]]; then count=$(cat \"$STATE_FILE\"); fi\ncount=$((count + 1))\necho \"$count\" > \"$STATE_FILE\"\nif [[ \"$count\" -ge 2 ]]; then\n  echo \"forced failure\"\n  exit 3\nfi\nexit 0\n' > %t/utils/fake-formal-all-fail.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"hook_invoked=1\" > %t/hook-call.txt\n' > %t/utils/fail-hook.sh
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nprintf \"%%%%s\\n\" \"$@\" > %t/curl-call.txt\n' > %t/utils/curl
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE=%t/curl-state.txt\ncount=0\nif [[ -f \"$STATE\" ]]; then count=$(cat \"$STATE\"); fi\ncount=$((count + 1))\necho \"$count\" > \"$STATE\"\nprintf \"call=%%%%s\\n\" \"$count\" >> %t/curl-call.txt\nprintf \"%%%%s\\n\" \"$@\" >> %t/curl-call.txt\nif [[ \"$count\" -eq 1 ]]; then\n  exit 7\nfi\n' > %t/utils/curl
 // RUN: chmod +x %t/utils/fake-formal-all-fail.sh
 // RUN: chmod +x %t/utils/fail-hook.sh
 // RUN: chmod +x %t/utils/curl
-// RUN: not sh -c 'cd %t && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 3 --run-formal-all %t/utils/fake-formal-all-fail.sh --on-fail-hook %t/utils/fail-hook.sh --on-fail-webhook https://example.invalid/formal --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=FAILFAST
+// RUN: not sh -c 'cd %t && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --interval-secs 0 --iterations 3 --run-formal-all %t/utils/fake-formal-all-fail.sh --on-fail-hook %t/utils/fail-hook.sh --on-fail-webhook https://example.invalid/formal-a --on-fail-webhook https://example.invalid/formal-b --webhook-retries 1 --webhook-backoff-secs 0 --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=FAILFAST
 // RUN: cat %t/hook-call.txt | FileCheck %s --check-prefix=HOOK
 // RUN: cat %t/curl-call.txt | FileCheck %s --check-prefix=WEBHOOK
+// RUN: sh -c 'count=$(grep -c "^call=" %t/curl-call.txt); test "$count" -eq 3'
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
@@ -32,4 +33,5 @@
 // FAILFAST: failing fast: iteration 2 failed
 // HOOK: hook_invoked=1
 // WEBHOOK: formal_cadence_failure
-// WEBHOOK: https://example.invalid/formal
+// WEBHOOK: https://example.invalid/formal-a
+// WEBHOOK: https://example.invalid/formal-b
