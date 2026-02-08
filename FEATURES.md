@@ -57,8 +57,8 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (152 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 176 | 176 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find |
-| ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past |
+| circt-sim | 178 | 178 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find, wand/wor nets |
+| ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
 ## UVM Simulation Feature Status
 
@@ -108,6 +108,7 @@ to commercial simulators like Cadence Xcelium.
 | `config_db` | WORKS | `config_db_implementation_t::set/get/exists` intercepted with in-memory key-value store |
 | `process::suspend/resume` | WORKS | Lowered in ImportVerilog; interpreter suspends process execution and resumes on `resume()` call |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
+| Wand/wor nets | WORKS | IEEE 1800-2017 §6.7 wired-AND/wired-OR resolution for multi-driver nets; `circt.resolution` attribute on signals |
 | Named events | PARTIAL | Basic `wait` / `trigger` / `.triggered` works; `->>` integer-type NBA works via NonBlockingAssign; gap: native EventType NBA, event clearing between time slots |
 | String methods | WORKS | All 18 IEEE 1800-2017 string methods intercepted |
 | Simulation performance | GOOD | ~171 ns/s APB (30% from dialect dispatch + interceptor cache, 33x from O(log n) address index); 10us sim in 59s wall-clock |
@@ -178,3 +179,8 @@ to commercial simulators like Cadence Xcelium.
 | Fixed-array sort/stream ops | Add `UnpackedArrayType` to 7 more MooreToCore patterns (SortWith, RSortWith, ArraySize, StreamConcat/Unpack, StreamConcatMixed/UnpackMixed) with probe/drive |
 | Short-circuit evaluation | `&&`/`\|\|`/`->` use `moore.conditional` for lazy RHS evaluation in procedural contexts (IEEE 1800-2017 §11.4.7) |
 | Virtual iface bind override | Wire `allowVirtualIfaceWithOverride` to slang `CompilationFlags`; enables virtual iface assignment with defparam/bind targets |
+| Wand/wor net support | `NetOpConversion` handles WAnd/WOr/TriAnd/TriOr with `circt.resolution` attribute; ProcessScheduler AND/OR multi-driver resolution |
+| MooreToCore compilation perf | Skip pre-patterns when no target ops; direct walk cleanup replaces greedy rewriter; disable region simplification |
+| Vtable internal failure absorption | `call_indirect` absorbs internal failures from virtual methods; prevents cascading failures in UVM phase traversal |
+| Slang covergroup iff-no-parens | Parser extension allows `iff valid` without parentheses (Xcelium/VCS compat) |
+| Slang sequence decl semicolon | Parser extension allows missing semicolon before `endsequence` |
