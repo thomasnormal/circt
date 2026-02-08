@@ -27069,3 +27069,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
 - In this area, remaining gaps are primarily in CIRCT harness policy and
   portability, not missing core Slang frontend functionality.
+
+---
+
+## Iteration 567 - February 8, 2026
+
+### Yosys SVA BMC Drop-Events Legacy Migration
+
+- Added in-place normalization/migration for
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE`.
+- Legacy rows missing `schema_version` are upgraded using configured schema
+  version.
+- Legacy rows missing `event_id` now receive stable generated IDs.
+- Added strict required-key checks for migrated drop-event rows.
+- Enabled mode-summary maintenance path when only drop-events JSONL is set, so
+  drop-events-only retention/migration workflows are handled.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+- New coverage verifies:
+  - legacy drop-event rows are rewritten to canonical schema + event ID form.
+  - malformed legacy rows fail with explicit required-key diagnostics.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 49/49 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Drop-event reason taxonomy is still limited to `future_skew`.
+- Migration currently rewrites to canonical keys and does not preserve unknown
+  extension keys.
+- Parser-backed validation still depends on `python3`.
+- `cksum` remains required for generated drop-event IDs.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
