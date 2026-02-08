@@ -59,6 +59,7 @@ EXPECT_LINT_HINTS_FILE="${EXPECT_LINT_HINTS_FILE:-}"
 EXPECT_LINT_FIXES_FILE="${EXPECT_LINT_FIXES_FILE:-}"
 EXPECT_LINT_APPLY_MODE="${EXPECT_LINT_APPLY_MODE:-off}"
 EXPECT_LINT_APPLY_DIFF_FILE="${EXPECT_LINT_APPLY_DIFF_FILE:-}"
+EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS:-drop-row,set-row}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -98,6 +99,26 @@ case "$EXPECT_LINT_APPLY_MODE" in
     exit 1
     ;;
 esac
+EXPECT_LINT_APPLY_ACTIONS="${EXPECT_LINT_APPLY_ACTIONS// /}"
+if [[ -n "$EXPECT_LINT_APPLY_ACTIONS" ]]; then
+  local_actions_csv=",$EXPECT_LINT_APPLY_ACTIONS,"
+  if [[ "$local_actions_csv" == *",all,"* ]]; then
+    EXPECT_LINT_APPLY_ACTIONS="drop-row,set-row,add-row"
+  fi
+  while IFS= read -r action; do
+    case "$action" in
+      drop-row|set-row|add-row) ;;
+      "")
+        echo "invalid EXPECT_LINT_APPLY_ACTIONS: empty action segment" >&2
+        exit 1
+        ;;
+      *)
+        echo "invalid EXPECT_LINT_APPLY_ACTIONS action: $action (expected drop-row,set-row,add-row)" >&2
+        exit 1
+        ;;
+    esac
+  done < <(printf '%s\n' "$EXPECT_LINT_APPLY_ACTIONS" | tr ',' '\n')
+fi
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_APPLY_MODE" != "off" ]] && [[ -z "$EXPECT_LINT_FIXES_FILE" ]]; then
   EXPECT_LINT_FIXES_FILE="$tmpdir/expect-lint-fixes.tsv"
 fi
@@ -199,14 +220,26 @@ append_apply_diff() {
   return 0
 }
 
+lint_apply_action_enabled() {
+  local action="$1"
+  if [[ -z "$EXPECT_LINT_APPLY_ACTIONS" ]]; then
+    return 1
+  fi
+  case ",$EXPECT_LINT_APPLY_ACTIONS," in
+    *",$action,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 apply_expect_lint_fixes() {
   local fixes_file="$1"
   local mode="$2"
   local -A drop_keys=()
   local -A set_rows=()
+  local -A add_rows=()
   local -A touched_files=()
   local kind source action key row note
-  local source_file map_key
+  local source_file map_key add_map_key
 
   [[ -f "$fixes_file" ]] || return 0
   if [[ -n "$EXPECT_LINT_APPLY_DIFF_FILE" ]]; then
@@ -223,16 +256,34 @@ apply_expect_lint_fixes() {
       continue
     fi
     map_key="$source_file|$key"
-    touched_files["$source_file"]=1
     case "$action" in
       drop-row)
+        if ! lint_apply_action_enabled "drop-row"; then
+          continue
+        fi
+        touched_files["$source_file"]=1
         drop_keys["$map_key"]=1
         unset 'set_rows[$map_key]'
         ;;
       set-row)
+        if ! lint_apply_action_enabled "set-row"; then
+          continue
+        fi
+        touched_files["$source_file"]=1
         if [[ -z "${drop_keys["$map_key"]+x}" ]]; then
           set_rows["$map_key"]="$row"
         fi
+        ;;
+      add-row)
+        if ! lint_apply_action_enabled "add-row"; then
+          continue
+        fi
+        touched_files["$source_file"]=1
+        if [[ -z "$row" ]]; then
+          continue
+        fi
+        add_map_key="$source_file|$row"
+        add_rows["$add_map_key"]=1
         ;;
       *)
         ;;
@@ -245,16 +296,18 @@ apply_expect_lint_fixes() {
     file_list+=("$file")
   done
   if ((${#file_list[@]} == 0)); then
-    echo "EXPECT_LINT_APPLY: mode=$mode files=0 changed=0"
+    echo "EXPECT_LINT_APPLY: mode=$mode files=0 changed=0 actions=$EXPECT_LINT_APPLY_ACTIONS"
     return 0
   fi
 
   local changed_files=0
   local processed=0
-  local line test mode_field profile expected extra row_spec row_key row_expected
-  local drop_count set_count changed
+  local line test mode_field profile expected extra row_spec row_key row_expected tuple_key
+  local drop_count set_count add_count changed
   local old_file new_file diff_file
   local -a append_rows=()
+  local -A present_tuples=()
+  local -A present_rows=()
   local mk
   while IFS= read -r file; do
     processed=$((processed + 1))
@@ -265,6 +318,7 @@ apply_expect_lint_fixes() {
 
     drop_count=0
     set_count=0
+    add_count=0
     while IFS= read -r mk; do
       if [[ "$mk" == "$file|"* ]]; then
         if [[ -n "${drop_keys["$mk"]+x}" ]]; then
@@ -273,10 +327,15 @@ apply_expect_lint_fixes() {
         if [[ -n "${set_rows["$mk"]+x}" ]]; then
           set_count=$((set_count + 1))
         fi
+        if [[ -n "${add_rows["$mk"]+x}" ]]; then
+          add_count=$((add_count + 1))
+        fi
       fi
-    done < <(printf '%s\n' "${!drop_keys[@]}" "${!set_rows[@]}" | sort -u)
+    done < <(printf '%s\n' "${!drop_keys[@]}" "${!set_rows[@]}" "${!add_rows[@]}" | sort -u)
 
     : > "$new_file"
+    present_tuples=()
+    present_rows=()
     while IFS= read -r line || [[ -n "$line" ]]; do
       if [[ -z "$line" || "$line" =~ ^# ]]; then
         echo "$line" >> "$new_file"
@@ -296,6 +355,9 @@ apply_expect_lint_fixes() {
         continue
       fi
       echo "$line" >> "$new_file"
+      tuple_key="$test|$mode_field|$profile"
+      present_tuples["$tuple_key"]=1
+      present_rows["$tuple_key|$expected"]=1
     done < "$file"
 
     append_rows=()
@@ -304,11 +366,56 @@ apply_expect_lint_fixes() {
         continue
       fi
       row_spec="${set_rows["$mk"]}"
+      if [[ -z "$row_spec" ]]; then
+        continue
+      fi
       row_expected="${row_spec##*|}"
       row_key="${row_spec%|*}"
       IFS='|' read -r test mode_field profile <<<"$row_key"
+      if [[ -z "$test" || -z "$mode_field" || -z "$profile" || -z "$row_expected" ]]; then
+        continue
+      fi
+      tuple_key="$test|$mode_field|$profile"
+      if [[ -n "${present_rows["$tuple_key|$row_expected"]+x}" ]]; then
+        continue
+      fi
       append_rows+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$row_expected")
+      present_tuples["$tuple_key"]=1
+      present_rows["$tuple_key|$row_expected"]=1
     done < <(printf '%s\n' "${!set_rows[@]}" | sort)
+    if ((${#append_rows[@]} > 0)); then
+      while IFS= read -r line; do
+        echo "$line" >> "$new_file"
+      done < <(printf '%s\n' "${append_rows[@]}" | sort -u)
+    fi
+
+    append_rows=()
+    while IFS= read -r mk; do
+      if [[ "$mk" != "$file|"* ]]; then
+        continue
+      fi
+      row_spec="${mk#"$file|"}"
+      if [[ -z "$row_spec" ]]; then
+        continue
+      fi
+      row_expected="${row_spec##*|}"
+      row_key="${row_spec%|*}"
+      IFS='|' read -r test mode_field profile <<<"$row_key"
+      if [[ -z "$test" || -z "$mode_field" || -z "$profile" || -z "$row_expected" ]]; then
+        continue
+      fi
+      tuple_key="$test|$mode_field|$profile"
+      map_key="$file|$tuple_key"
+      if [[ -n "${drop_keys["$map_key"]+x}" || -n "${set_rows["$map_key"]+x}" ]]; then
+        continue
+      fi
+      if [[ -n "${present_tuples["$tuple_key"]+x}" ]]; then
+        continue
+      fi
+      append_rows+=("$test"$'\t'"$mode_field"$'\t'"$profile"$'\t'"$row_expected")
+      present_tuples["$tuple_key"]=1
+      present_rows["$tuple_key|$row_expected"]=1
+    done < <(printf '%s\n' "${!add_rows[@]}" | sort)
     if ((${#append_rows[@]} > 0)); then
       while IFS= read -r line; do
         echo "$line" >> "$new_file"
@@ -327,9 +434,9 @@ apply_expect_lint_fixes() {
     else
       append_apply_diff "$diff_file" "$file" "0"
     fi
-    echo "EXPECT_LINT_APPLY: mode=$mode file=$file drop=$drop_count set=$set_count changed=$changed"
+    echo "EXPECT_LINT_APPLY: mode=$mode file=$file drop=$drop_count set=$set_count add=$add_count changed=$changed"
   done < <(printf '%s\n' "${file_list[@]}" | sort)
-  echo "EXPECT_LINT_APPLY: mode=$mode files=${#file_list[@]} changed=$changed_files"
+  echo "EXPECT_LINT_APPLY: mode=$mode files=${#file_list[@]} changed=$changed_files actions=$EXPECT_LINT_APPLY_ACTIONS"
   return 0
 }
 

@@ -24791,3 +24791,71 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Auto-apply currently excludes non-safe `add-row` ambiguity proposals.
 - Skip accounting remains mixed test-level/mode-level in summaries.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 532 - February 8, 2026
+
+### Yosys SVA BMC Reviewed `add-row` Apply Controls
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_LINT_APPLY_ACTIONS`
+- Added explicit action allowlisting for lint apply:
+  - default:
+    - `drop-row,set-row`
+  - reviewed opt-in:
+    - `drop-row,set-row,add-row`
+- Added action validation:
+  - accepted actions:
+    - `drop-row`
+    - `set-row`
+    - `add-row`
+    - `all` (expands to all supported actions)
+- Added apply summary with action context:
+  - `EXPECT_LINT_APPLY: mode=<...> files=<n> changed=<n> actions=<csv>`
+- Added guarded `add-row` insertion behavior:
+  - inserts explicit tuple rows only when `add-row` is enabled
+  - avoids tuple collisions when tuple already exists after prior edits
+  - preserves safety precedence (`drop-row`/`set-row` dominate overlapping
+    `add-row` tuple keys).
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-lint-apply.test`
+- Added coverage for:
+  - default safe mode (`add-row` disabled)
+  - explicit reviewed mode (`add-row` enabled)
+  - action-aware summary output
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 16/16 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Reviewed `add-row` apply is opt-in but still lacks per-row approval filters.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
