@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 503)
+## Current Status - February 8, 2026 (Iteration 504)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed non-SMTLIB witness activity recovery via runtime model capture + metadata carry-forward; next: expression-level witnesses, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed expression-backed mixed-arm witness synthesis (`signal_expr`/`iff_expr`) and counterexample coverage; next: richer Slang expr graphs, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,73 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 504
+
+1. **ImportVerilog now preserves expression metadata for event-source details**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - Event-source detail emission now records expression text when symbolic
+     names are unavailable:
+     - `signal_expr`
+     - `iff_expr`
+     - `sequence_expr`
+   - This uses Slang syntax text (`expr->syntax->toString()`) and keeps
+     existing `*_name` fields when a symbol reference exists.
+
+2. **VerifToSMT witness synthesis now supports simple expression-backed arms**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+   - Added a lightweight parser/resolver for named i1 boolean expressions
+     (`!/~`, `&/&&`, `|/||`, `^`, `==`, `!=`, parentheses, constants).
+   - `bmc_event_source_details` arm lowering now resolves source/iff from:
+     - `signal_name` / `sequence_name` / `iff_name` first,
+     - fallback to `signal_expr` / `sequence_expr` / `iff_expr` when names are
+       absent.
+   - Witnesses are still emitted with deterministic names:
+     - `event_arm_witness_<set>_<arm>`
+
+3. **Tool-level witness activity coverage for expression-backed arms**
+   - Added:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`
+   - Updated:
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+   - New coverage validates mixed-arm witness reporting when an arm is derived
+     from `signal_expr` + `iff_expr` metadata.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-expr-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Expression-backed witness synthesis currently handles simple boolean
+     expression trees over named BMC inputs; richer SV forms still fall back.
+   - Expression text is syntax-derived and currently interpreted by a local
+     parser in VerifToSMT (no shared canonical expression IR yet).
+   - Highest-value next work:
+     - carry canonical Slang expression graphs/IDs (instead of text) into
+       event-source metadata,
+     - support wider expression classes (casts, bit-select/slice, reductions),
+     - stage legacy alias attr deprecation and keep diagnostics clear.
 
 ### Session Summary - Iteration 503
 

@@ -13,6 +13,7 @@
 #include "circt/Support/LTLSequenceNFA.h"
 #include "slang/ast/TimingControl.h"
 #include "slang/ast/expressions/AssertionExpr.h"
+#include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -257,6 +258,19 @@ static StringRef formatClockEdge(ltl::ClockEdge edge) {
   return "both";
 }
 
+static void maybeAddEventExprAttr(OpBuilder &builder,
+                                  SmallVectorImpl<NamedAttribute> &detailAttrs,
+                                  StringRef key,
+                                  const slang::ast::Expression *expr) {
+  if (!expr || !expr->syntax)
+    return;
+  auto text = expr->syntax->toString();
+  if (text.empty())
+    return;
+  detailAttrs.push_back(
+      builder.getNamedAttr(key, builder.getStringAttr(text)));
+}
+
 static void recordMixedEventSourcesOnModule(Context &context,
                                             ArrayAttr sources,
                                             ArrayAttr details = {}) {
@@ -444,10 +458,16 @@ static LogicalResult lowerClockedSequenceEventControl(
         if (auto *symRef = signalCtrl->expr.getSymbolReference())
           detailAttrs.push_back(builder.getNamedAttr(
               "signal_name", builder.getStringAttr(symRef->name)));
+        else
+          maybeAddEventExprAttr(builder, detailAttrs, "signal_expr",
+                               &signalCtrl->expr);
         if (signalCtrl->iffCondition) {
           if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
             detailAttrs.push_back(builder.getNamedAttr(
                 "iff_name", builder.getStringAttr(iffRef->name)));
+          else
+            maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
+                                 signalCtrl->iffCondition);
         }
       }
       details.push_back(builder.getDictionaryAttr(detailAttrs));
@@ -768,11 +788,17 @@ static LogicalResult lowerMultiClockSequenceEventControl(Context &context,
         if (auto *symRef = signalEvent.expr->getSymbolReference())
           detailAttrs.push_back(builder.getNamedAttr(
               "signal_name", builder.getStringAttr(symRef->name)));
+        else
+          maybeAddEventExprAttr(builder, detailAttrs, "signal_expr",
+                               signalEvent.expr);
       }
       if (signalEvent.iffCondition) {
         if (auto *iffRef = signalEvent.iffCondition->getSymbolReference())
           detailAttrs.push_back(builder.getNamedAttr(
               "iff_name", builder.getStringAttr(iffRef->name)));
+        else
+          maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
+                               signalEvent.iffCondition);
       }
       details.push_back(builder.getDictionaryAttr(detailAttrs));
     }
@@ -962,10 +988,16 @@ lowerSequenceEventListControl(Context &context, Location loc,
     if (auto *symRef = signalCtrl->expr.getSymbolReference())
       detailAttrs.push_back(builder.getNamedAttr(
           "sequence_name", builder.getStringAttr(symRef->name)));
+    else
+      maybeAddEventExprAttr(builder, detailAttrs, "sequence_expr",
+                           &signalCtrl->expr);
     if (signalCtrl->iffCondition) {
       if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
         detailAttrs.push_back(
             builder.getNamedAttr("iff_name", builder.getStringAttr(iffRef->name)));
+      else
+        maybeAddEventExprAttr(builder, detailAttrs, "iff_expr",
+                             signalCtrl->iffCondition);
     }
     sequenceSourceDetailAttrs.push_back(builder.getDictionaryAttr(detailAttrs));
 
