@@ -11812,19 +11812,20 @@ extern "C" int32_t uvm_hdl_read(MooreString *path, uvm_hdl_data_t *value) {
 //===----------------------------------------------------------------------===//
 
 namespace {
-// Simple regex stub: stores the pattern string for minimal matching.
-struct UVMRegexStub {
+// Regex handle: wraps std::regex for full regex support.
+struct UVMRegexHandle {
+  std::regex compiled;
   std::string pattern;
-  bool deglob;
   bool valid = false;
 };
 
-// Buffer for last match result (used by uvm_re_buffer)
+// Buffer for last error/match result (used by uvm_re_buffer)
 std::string lastMatchBuffer;
 } // namespace
 
 extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
   if (!pattern || !pattern->data) {
+    lastMatchBuffer = "null pattern";
     return nullptr;
   }
 
@@ -11834,115 +11835,47 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
     regexPattern = convertGlobToRegex(regexPattern, true);
   }
 
-  auto isSupportedPattern = [](const std::string &pat) -> bool {
-    for (size_t i = 0; i < pat.size(); ++i) {
-      char c = pat[i];
-      if (c == '\\') {
-        if (i + 1 < pat.size())
-          ++i;
-        continue;
-      }
-      if (c == '[' || c == ']')
-        return false;
-    }
-    return true;
-  };
-
-  if (!isSupportedPattern(regexPattern))
+  auto *handle = new UVMRegexHandle();
+  handle->pattern = regexPattern;
+  try {
+    handle->compiled =
+        std::regex(regexPattern, std::regex::extended | std::regex::nosubs);
+    handle->valid = true;
+  } catch (const std::regex_error &e) {
+    lastMatchBuffer = std::string("regex compile error: ") + e.what() +
+                      " (pattern: " + regexPattern + ")";
+    delete handle;
     return nullptr;
+  }
 
-  auto *stub = new UVMRegexStub();
-  stub->pattern = regexPattern;
-  stub->deglob = useGlob;
-  stub->valid = true;
-
-  // Optional: Print debug info
-  // std::printf("[DPI] uvm_re_comp: %s (deglob=%d)\n",
-  //             stub->pattern.c_str(), deglob);
-
-  return static_cast<void *>(stub);
+  return static_cast<void *>(handle);
 }
 
 extern "C" int32_t uvm_re_exec(void *rexp, MooreString *str) {
   if (!rexp || !str || !str->data) {
-    return -1; // No match
+    return 1; // No match (POSIX: REG_NOMATCH = non-zero)
   }
 
-  auto *stub = static_cast<UVMRegexStub *>(rexp);
-  if (!stub->valid)
-    return -1;
+  auto *handle = static_cast<UVMRegexHandle *>(rexp);
+  if (!handle->valid)
+    return 1;
+
   std::string target(str->data, str->len);
-
-  auto readToken = [](const std::string &pat, size_t idx, char &tok, bool &any,
-                      size_t &nextIdx) -> bool {
-    if (idx >= pat.size())
-      return false;
-    if (pat[idx] == '\\' && idx + 1 < pat.size()) {
-      tok = pat[idx + 1];
-      any = false;
-      nextIdx = idx + 2;
-      return true;
+  try {
+    if (std::regex_search(target, handle->compiled)) {
+      return 0; // Match (POSIX: 0 = success)
     }
-    if (pat[idx] == '.') {
-      tok = 0;
-      any = true;
-      nextIdx = idx + 1;
-      return true;
-    }
-    tok = pat[idx];
-    any = false;
-    nextIdx = idx + 1;
-    return true;
-  };
-
-  std::function<bool(size_t, size_t, size_t &)> matchFrom =
-      [&](size_t patIdx, size_t strIdx, size_t &endIdx) -> bool {
-    if (patIdx >= stub->pattern.size()) {
-      endIdx = strIdx;
-      return true;
-    }
-    char tok = 0;
-    bool any = false;
-    size_t nextIdx = 0;
-    if (!readToken(stub->pattern, patIdx, tok, any, nextIdx))
-      return false;
-    bool hasStar =
-        (nextIdx < stub->pattern.size() && stub->pattern[nextIdx] == '*');
-    if (hasStar) {
-      size_t nextPat = nextIdx + 1;
-      if (matchFrom(nextPat, strIdx, endIdx))
-        return true;
-      size_t i = strIdx;
-      while (i < target.size() && (any || target[i] == tok)) {
-        ++i;
-        if (matchFrom(nextPat, i, endIdx))
-          return true;
-      }
-      return false;
-    }
-    if (strIdx >= target.size())
-      return false;
-    if (any || target[strIdx] == tok)
-      return matchFrom(nextIdx, strIdx + 1, endIdx);
-    return false;
-  };
-
-  for (size_t start = 0; start <= target.size(); ++start) {
-    size_t endIdx = 0;
-    if (matchFrom(0, start, endIdx)) {
-      lastMatchBuffer = target.substr(start, endIdx - start);
-      return static_cast<int32_t>(start);
-    }
+  } catch (const std::regex_error &) {
+    // Fall through to no match
   }
 
-  lastMatchBuffer.clear();
-  return -1; // No match
+  return 1; // No match
 }
 
 extern "C" void uvm_re_free(void *rexp) {
   if (rexp) {
-    auto *stub = static_cast<UVMRegexStub *>(rexp);
-    delete stub;
+    auto *handle = static_cast<UVMRegexHandle *>(rexp);
+    delete handle;
   }
 }
 
