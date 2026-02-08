@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 485)
+## Current Status - February 8, 2026 (Iteration 486)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed no-edge mixed sequence/signal event lists; next: procedural `@property`, stronger multiclock UNSAT harnesses |
+| **BMC/LEC** | Codex | Active | Landed derived-clock mixed event-list UNSAT harness; next: non-vacuous multiclock forcing + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,48 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 486
+
+1. **Derived-clock multiclock UNSAT coverage for mixed sequence/signal lists**
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`
+   - New regression models:
+     - a derived clock (`dclk`) generated from a base clock,
+     - a mixed procedural event-list (`@(seq or posedge dclk iff b)`), and
+     - a same-clock sampled-value reference model.
+   - Locks in end-to-end UNSAT equivalence on derived-clock mixed event-list
+     lowering under `--allow-multi-clock`.
+
+2. **Validation**
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - Import sanity:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`: compiles
+       with `--ir-moore`
+   - External smoke (representative samples):
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+3. **Current limitations and best long-term next features**
+   - Slang still rejects direct procedural property event forms:
+     - `always @(p)` => `invalid type 'property' for event expression`
+   - Sequence methods exposed in procedural contexts remain limited by
+     frontend legality:
+     - `s.matched` is rejected outside sequence expressions.
+   - High-value next work:
+     - add non-vacuous multiclock harness forcing for derived clocks
+       (so UNSAT proofs are not edge-vacuous),
+     - improve mixed-event multiclock traceability diagnostics,
+     - upstream/design strategy for property-like procedural event controls.
 
 ### Session Summary - Iteration 485
 
