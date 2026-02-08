@@ -40,3 +40,5 @@
 // JSONSUMMARY: "tsv": 1
 // JSONSUMMARY: "jsonl": 1
 // JSONSUMMARY: "id_hash_mode": "{{(cksum|crc32|unavailable)}}"
+// JSONSUMMARY: "id_hash_algorithm": "{{(cksum|crc32|unavailable)}}"
+// JSONSUMMARY: "id_hash_version": {{[0-9]+}}

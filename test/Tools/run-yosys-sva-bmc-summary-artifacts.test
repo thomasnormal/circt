@@ -37,3 +37,5 @@
 // JSON: "drop_events_summary": {
 // JSON: "future_skew": 0
 // JSON: "id_hash_mode": "{{(cksum|crc32|unavailable)}}"
+// JSON: "id_hash_algorithm": "{{(cksum|crc32|unavailable)}}"
+// JSON: "id_hash_version": {{[0-9]+}}

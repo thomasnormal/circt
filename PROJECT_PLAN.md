@@ -13318,6 +13318,74 @@ ninja -C build circt-verilog
   - Add optional compression/rotation for drop-events logs.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 576
+- Yosys SVA BMC drop-events hash provenance metadata:
+  - Extended summary outputs to include:
+    - `drop_events_summary.id_hash_algorithm`
+    - `drop_events_summary.id_hash_version`
+  - Added effective mapping:
+    - `cksum` mode -> algorithm=`cksum`, version=`1`
+    - `crc32` mode -> algorithm=`crc32`, version=`1`
+    - unavailable fallback -> algorithm=`unavailable`, version=`0`
+  - Emitted these fields in both:
+    - summary JSON (`YOSYS_SVA_MODE_SUMMARY_JSON_FILE`)
+    - history JSONL row (`YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE`)
+- Validation hardening:
+  - Extended JSONL validator to accept and type-check optional:
+    - `drop_events_summary.id_hash_algorithm`
+    - `drop_events_summary.id_hash_version`
+  - Added invalid-field rejection coverage for
+    `drop_events_summary.id_hash_algorithm`.
+- Regression tests:
+  - Updated:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`
+    - `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`
+  - Focused lit revalidation:
+    - 5/5 PASS for the updated summary/validator tests.
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - `ninja -C build check-circt`:
+    - currently not clean in this working tree due unrelated pre-existing
+      failures (`Runtime/uvm/*`, `Dialect/SV/EliminateInOutPorts`, and some
+      runtime unit shards).
+  - External matrix (smoke profile for this iteration):
+    - `BMC_SMOKE_ONLY=1 ALLOW_XPASS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 failures=0 xpass=1 skipped=2
+    - `LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=14 pass=14 fail=0 error=0 skip=2
+    - `BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=26 pass=23 fail=0 xfail=3 xpass=0 error=0 skip=1002
+    - `LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=23 pass=23 fail=0 error=0 skip=1005
+    - `BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=17 pass=17 fail=0 error=0
+    - `LEC_SMOKE_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+      - FAIL (existing parse failure: unknown `comb.icmp` in produced MLIR)
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --timeout=120`:
+      - FAIL (same existing parse failure mode)
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`:
+      - PASS
+- Current limitations / debt:
+  - Drop-events summary now includes mode+algorithm+version, but per-event rows
+    still do not carry explicit canonicalization metadata.
+  - Shell-mode migration remains intentionally conservative and still delegates
+    malformed JSON / duplicate-key diagnostics to Python validation for parity.
+  - Parser-backed validation still depends on `python3`.
+  - xprop-profile expected failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add optional per-event hash metadata in drop-event JSONL rows for
+    correlation without summary context.
+  - Build a strict non-Python JSON validator path with duplicate-key detection.
+  - Add drop-events log rotation/compression policy hooks.
+  - Continue semantic retirement of xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

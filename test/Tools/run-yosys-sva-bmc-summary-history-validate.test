@@ -101,6 +101,15 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/bad-history-idhash.jsonl \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADJSONIDHASH
 
+// RUN: printf '{"schema_version":"1","run_id":"old-run","generated_at_utc":"2026-01-01T00:00:00Z","test_summary":{"total":1,"failures":0,"xfail":0,"xpass":0,"skipped":0},"mode_summary":{"total":2,"pass":2,"fail":0,"xfail":0,"xpass":0,"epass":0,"efail":0,"unskip":0,"skipped":0,"skip_pass":0,"skip_fail":0,"skip_expected":0,"skip_unexpected":0},"skip_reasons":{"vhdl":0,"fail_no_macro":0,"no_property":0,"other":0},"drop_events_summary":{"total":0,"reasons":{"future_skew":0,"age_retention":0,"max_entries":0},"history_format":{"tsv":0,"jsonl":0},"id_hash_mode":"crc32","id_hash_algorithm":"sha256","id_hash_version":1}}\n' > %t/bad-history-idalgo.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=python \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/bad-history-idalgo.jsonl \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADJSONIDALGO
+
 // BADTSV: error: invalid generated_at_utc
 // BADJSON: error: missing key 'mode_summary' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE
 // BADJSONTYPE: error: invalid numeric summary field 'test_summary.total'
@@ -112,3 +121,4 @@
 // BADVALIDATOR: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR: bogus (expected auto|python)
 // BADJSONDUPLICATE: error: duplicate key in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE
 // BADJSONIDHASH: error: invalid summary field 'drop_events_summary.id_hash_mode' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE
+// BADJSONIDALGO: error: invalid summary field 'drop_events_summary.id_hash_algorithm' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE
