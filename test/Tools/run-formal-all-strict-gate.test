@@ -50,6 +50,12 @@
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31
 // RUN: FileCheck %s --check-prefix=REFRESHBUDGET < %t/refresh-expected-failures.tsv
 // RUN: FileCheck %s --check-prefix=REFRESHCASE < %t/refresh-expected-failure-cases.tsv
+// RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t9\t9\tcarry_note\nverilator-verification\tBMC\t3\t2\tdrop_me\n' > %t/refresh-expected-failures-filtered.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected-filtered --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/refresh-expected-failures-filtered.tsv --refresh-expected-failures-include-suite-regex '^sv-tests$' --refresh-expected-failures-include-mode-regex '^LEC$'
+// RUN: FileCheck %s --check-prefix=REFRESHBUDGETFILTER < %t/refresh-expected-failures-filtered.tsv
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tBMC\t__aggregate__\taggregate\tXFAIL\t2099-07-07\tkeep_xfail\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-05-05\tkeep_reason\n' > %t/refresh-expected-failure-cases-filtered.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-case-filtered --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases-filtered.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --refresh-expected-failure-cases-include-suite-regex '^sv-tests$' --refresh-expected-failure-cases-include-mode-regex '^BMC$' --refresh-expected-failure-cases-include-status-regex '^XFAIL$' --refresh-expected-failure-cases-include-id-regex '^__aggregate__$'
+// RUN: FileCheck %s --check-prefix=REFRESHCASEFILTER < %t/refresh-expected-failure-cases-filtered.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tBMC\t__aggregate__\taggregate\tANY\t2099-06-06\tkeep_any\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-05-05\tkeep_reason\n' > %t/refresh-expected-failure-cases-any.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected-any --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases-any.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31 --refresh-expected-failure-cases-collapse-status-any
 // RUN: FileCheck %s --check-prefix=REFRESHANY < %t/refresh-expected-failure-cases-any.tsv
@@ -112,6 +118,10 @@
 // REFRESHBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}carry_note
 // REFRESHCASE: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-12-31
 // REFRESHCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-05-05{{[[:space:]]+}}keep_reason
+// REFRESHBUDGETFILTER: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}carry_note
+// REFRESHBUDGETFILTER-NOT: verilator-verification
+// REFRESHCASEFILTER: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-07-07{{[[:space:]]+}}keep_xfail
+// REFRESHCASEFILTER-NOT: sv-tests{{[[:space:]]+}}LEC
 // REFRESHANY: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}ANY{{[[:space:]]+}}2099-06-06{{[[:space:]]+}}keep_any
 // REFRESHANY: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}ANY{{[[:space:]]+}}2099-05-05{{[[:space:]]+}}keep_reason
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case

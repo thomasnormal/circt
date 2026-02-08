@@ -17219,6 +17219,45 @@ ninja -C build circt-verilog
     or specific suites/modes).
   - Refresh still rewrites complete files; no in-place prune/update mode.
 
+### Iteration 651
+- Scoped refresh filters for expectation files in `utils/run_formal_all.sh`:
+  - Expected-failure budget refresh filters:
+    - `--refresh-expected-failures-include-suite-regex REGEX`
+    - `--refresh-expected-failures-include-mode-regex REGEX`
+  - Expected-case refresh filters:
+    - `--refresh-expected-failure-cases-include-suite-regex REGEX`
+    - `--refresh-expected-failure-cases-include-mode-regex REGEX`
+    - `--refresh-expected-failure-cases-include-status-regex REGEX`
+    - `--refresh-expected-failure-cases-include-id-regex REGEX`
+- Parser/validation hardening:
+  - Added explicit regex compilation validation for all refresh filter flags
+    with flag-qualified diagnostics.
+  - Filters apply deterministically before refresh dedup/collapse stages.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - added filtered budget refresh scenario (`REFRESHBUDGETFILTER`)
+    - added filtered case refresh scenario (`REFRESHCASEFILTER`)
+    - checks filtering + metadata preservation behavior.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with scoped refresh examples and option
+    semantics for budget/case refresh filtering.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep with scoped refresh:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-refresh-filter-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --refresh-expected-failures-file /tmp/formal-expected-failures-refresh-filter-smoke.tsv --refresh-expected-failures-include-suite-regex '^sv-tests$' --refresh-expected-failures-include-mode-regex '^LEC$' --refresh-expected-failure-cases-file /tmp/formal-expected-cases-refresh-filter-smoke.tsv --refresh-expected-failure-cases-collapse-status-any --refresh-expected-failure-cases-default-expires-on 2099-12-31 --refresh-expected-failure-cases-include-suite-regex '^avip/' --refresh-expected-failure-cases-include-mode-regex '^compile$'`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known)
+      - filtered outputs:
+        - `/tmp/formal-expected-failures-refresh-filter-smoke.tsv` -> 1 row (`sv-tests LEC`)
+        - `/tmp/formal-expected-cases-refresh-filter-smoke.tsv` -> 1 row (`avip/axi4Lite_avip compile`)
+- Current limitations / debt:
+  - No negative/deny filters yet (include-only regex currently).
+  - No in-place prune/update workflow for stale expected rows yet.
+
 ---
 
 ## Architecture Reference
