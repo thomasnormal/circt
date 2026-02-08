@@ -11038,6 +11038,132 @@ ninja -C build circt-verilog
   - Normalize skip accounting to explicit mode-level metrics in summary.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 538
+- Yosys SVA BMC strict malformed reason-category selectors:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER`
+  - Added reason-category scoped strict evaluation:
+    - strict failure now supports file/profile/reason triage for unfixable
+      malformed rows.
+    - supports comma-separated wildcard patterns for reason matching.
+  - Extended strict diagnostics and summaries:
+    - strict status now includes:
+      - `reason_filter=<...>`
+    - unfixable artifact still emits:
+      - `reason`
+      - `strict_selected`
+      so scoped selection is auditable per line.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-format-strict-reason.test`:
+    - validates non-matching reason filter does not fail strict mode
+    - validates matching reason filter fails strict mode
+    - validates `strict_selected` toggles accordingly in artifact output.
+  - Updated strict tests for extended strict status line:
+    - `test/Tools/run-yosys-sva-bmc-format-strict.test`
+    - `test/Tools/run-yosys-sva-bmc-format-strict-scope.test`
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 21/21 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Strict selectors are now file/profile/reason scoped but still do not encode
+    policy bundles or severity tiers.
+  - Formatter still normalizes comments into a header block instead of
+    preserving row-local anchors.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add strict policy bundles/severity tiers for malformed categories.
+  - Preserve row-local comment anchors through canonical formatting.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
+### Iteration 539
+- Yosys SVA BMC strict malformed policy bundles + severity tiers:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+    - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY`
+      - `custom|all|syntax-only|semantic-only|error-only|warning-only`
+    - `EXPECT_FORMAT_FAIL_ON_UNFIXABLE_SEVERITY_FILTER`
+  - Added malformed unfixable reason categorization:
+    - `syntax-too-few-fields`
+    - `semantic-missing-default-expected`
+    - `semantic-invalid-expected-token`
+    - `policy-auto-omit-not-allowed`
+    - `no-canonical-rewrite` (fallback)
+  - Added severity tier mapping:
+    - `error` for syntax/non-canonical categories
+    - `warning` for semantic/policy categories
+  - Extended strict scope matching:
+    - strict matching now supports file/profile/reason/severity dimensions.
+    - policy bundle defaults feed effective reason/severity filters when
+      explicit filters are not provided.
+  - Extended strict diagnostics and summaries:
+    - strict line now includes:
+      - `policy=<...>`
+      - `severity_filter=<...>`
+    - `EXPECT_FORMAT_UNFIXABLE_FILE` columns now include:
+      - `severity`
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-format-strict-policy.test`:
+    - validates `error-only` policy selects only `error` malformed categories
+    - validates `semantic-only` policy selects only
+      `semantic-*`/`policy-*` categories.
+  - Updated strict tests for policy/severity output and new categorized
+    unfixable reason:
+    - `test/Tools/run-yosys-sva-bmc-format-strict.test`
+    - `test/Tools/run-yosys-sva-bmc-format-strict-scope.test`
+    - `test/Tools/run-yosys-sva-bmc-format-strict-reason.test`
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 22/22 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Severity tiers are currently coarse (`error`/`warning`) and not derived
+    from deeper parser provenance.
+  - Formatter still normalizes comments into a header block instead of
+    preserving row-local anchors.
+  - Skip accounting remains mixed-granularity in summary reporting.
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add finer-grained malformed reason families with richer severity policy.
+  - Preserve row-local comment anchors through canonical formatting.
+  - Normalize skip accounting to explicit mode-level metrics in summary.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
