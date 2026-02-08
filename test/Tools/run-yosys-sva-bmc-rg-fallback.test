@@ -7,4 +7,4 @@
 
 // CHECK: PASS(pass): simple
 // CHECK: SKIP(fail-no-macro): simple
-// CHECK: yosys SVA summary: 1 tests, failures=0, skipped=0
+// CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0

@@ -24001,3 +24001,75 @@ CIRCT/slang correctly enforces LRM restrictions.
   format is still pending.
 - Four-state witness semantics still have approximation-based paths (value-only
   projection in several cast/slice flows).
+
+---
+
+## Iteration 519 - February 8, 2026
+
+### Expanded xprop Baseline Coverage for Yosys SVA BMC
+
+- Extended `utils/yosys-sva-bmc-xfail.txt` with xprop-profile pass-mode rows
+  for:
+  - `basic00`
+  - `basic01`
+  - `basic02`
+  - `basic03`
+  - `counter`
+  - `extnets`
+  - `sva_not`
+  - `sva_value_change_sim`
+- Retained known-profile row:
+  - `counter` / `fail` / `known`
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+
+### Remaining Limitations
+
+- Baseline behavior is still represented as xfail-only rows.
+- xprop-profile pass-mode discrepancies are tracked but unresolved.
+
+---
+
+## Iteration 520 - February 8, 2026
+
+### Yosys SVA BMC Expected-Outcome Matrix
+
+- Upgraded `utils/run_yosys_sva_circt_bmc.sh` to support explicit expected
+  outcomes by `test|mode|profile` with wildcard matching.
+- Added `EXPECT_FILE` support (default:
+  `utils/yosys-sva-bmc-expected.txt`) with outcomes:
+  - `pass`
+  - `fail`
+  - `xfail`
+- Kept `XFAIL_FILE` as a legacy compatibility fallback.
+- Added default matrix file:
+  - `utils/yosys-sva-bmc-expected.txt`
+- Marked legacy baseline file as compatibility-only:
+  - `utils/yosys-sva-bmc-xfail.txt`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+- Updated harness summary checks to include `xfail/xpass` fields:
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+
+### Validation
+
+- `build/bin/llvm-lit -sv` on the 4 harness tests above: PASS (4/4)
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+
+### Remaining Limitations
+
+- Expected-outcome rows are static text baselines; no diff tooling yet.
+- xprop-profile pass-mode failures remain tracked as expected failures.

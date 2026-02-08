@@ -9891,6 +9891,87 @@ ninja -C build circt-verilog
   - Continue four-state witness semantic fidelity work (retain unknown markers
     through cast/slice/compare pipelines).
 
+### Iteration 519
+- Expanded profile-baselined XFAIL matrix for yosys SVA BMC:
+  - Updated `utils/yosys-sva-bmc-xfail.txt` to capture observed xprop-profile
+    pass-mode counterexamples for:
+    - `basic00`
+    - `basic01`
+    - `basic02`
+    - `basic03`
+    - `counter`
+    - `extnets`
+    - `sva_not`
+    - `sva_value_change_sim`
+  - Retained known-profile XFAIL:
+    - `counter` fail-mode (`known` profile)
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix (known profile default harness):
+    - `sv-tests` BMC: 26/26 PASS
+    - `sv-tests` LEC: 23/23 PASS
+    - `verilator-verification` BMC: 17/17 PASS
+    - `verilator-verification` LEC: 17/17 PASS
+    - `yosys/tests/sva` BMC: failures=0, xfail=1, xpass=0, skipped=2
+    - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY` accepted)
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - xprop profile still relies on XFAIL baselining for several pass-mode tests;
+    semantics are tracked but not yet fixed.
+  - Expected outcomes are currently represented as XFAIL rows rather than a
+    fully explicit per-case expected-result matrix.
+  - Four-state witness semantics still have approximation-based paths.
+- Long-term features to prioritize:
+  - Migrate from XFAIL-only baselines to explicit expected-outcome matrices
+    (pass/fail/xfail per mode+profile) with diff tooling.
+  - Root-cause xprop pass-mode counterexamples in yosys SVA subset and retire
+    baseline XFAILs incrementally.
+  - Continue first-class four-state witness value propagation work.
+
+### Iteration 520
+- Yosys SVA BMC harness expected-outcome matrix support:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` with explicit expected-outcome
+    lookup by `test|mode|profile` (with wildcard support including `*` test).
+  - Added `EXPECT_FILE` support (default:
+    `utils/yosys-sva-bmc-expected.txt`) with outcomes:
+    - `pass`
+    - `fail` (`EFAIL` on expected failure, `EPASS` if unexpectedly fixed)
+    - `xfail` (`XFAIL` / `XPASS`, with `ALLOW_XPASS` policy preserved)
+  - Retained backwards-compatible legacy `XFAIL_FILE` loading as fallback.
+- Baseline migration:
+  - Added `utils/yosys-sva-bmc-expected.txt` as the default baseline matrix.
+  - Kept `utils/yosys-sva-bmc-xfail.txt` as legacy compatibility input.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-expected-matrix.test` to verify
+    `EXPECT_FILE` parsing and `fail` outcome semantics.
+  - Updated summary checks in existing harness tests for `xfail`/`xpass` fields:
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+- Validation status:
+  - `llvm-lit` targeted harness tests: 4/4 PASS
+  - `yosys/tests/sva` BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - `yosys/tests/sva` BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- Current limitations / debt:
+  - Baselines still encode expected results as static text rows; there is no
+    auto-generated diff report against previous runs.
+  - xprop-profile pass-mode xfails remain tracked but unresolved semantically.
+  - Four-state witness lowering still has approximation-based unknown handling.
+- Long-term features to prioritize:
+  - Add expectation-diff tooling (new/removed outcome deltas) to make baseline
+    churn explicit in CI.
+  - Root-cause xprop pass-mode failures and retire corresponding expected rows.
+  - Continue four-state value/unknown propagation unification in witness
+    cast/slice lowering.
+
 ---
 
 ## Architecture Reference

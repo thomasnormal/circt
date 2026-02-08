@@ -35,6 +35,8 @@ SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/yosys-sva-bmc-expected.txt}"
+# Backward-compatible fallback for legacy xfail-only rows.
 XFAIL_FILE="${XFAIL_FILE:-$SCRIPT_DIR/yosys-sva-bmc-xfail.txt}"
 ALLOW_XPASS="${ALLOW_XPASS:-0}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
@@ -60,15 +62,37 @@ skipped=0
 xfails=0
 xpasses=0
 
-declare -A xfail_cases
-if [[ -f "$XFAIL_FILE" ]]; then
-  while IFS=$'\t' read -r test mode profile; do
+declare -A expected_cases
+load_expected_cases() {
+  local file="$1"
+  local default_expected="${2:-}"
+  [[ -f "$file" ]] || return
+  while IFS=$'\t' read -r test mode profile expected; do
     [[ -z "$test" || "$test" =~ ^# ]] && continue
     [[ -z "$mode" ]] && mode="*"
     [[ -z "$profile" ]] && profile="*"
-    xfail_cases["$test|$mode|$profile"]=1
-  done < "$XFAIL_FILE"
+    [[ -z "$expected" ]] && expected="$default_expected"
+    if [[ -z "$expected" ]]; then
+      echo "warning: missing expected outcome in $file for $test|$mode|$profile" >&2
+      continue
+    fi
+    expected="${expected,,}"
+    case "$expected" in
+      pass|fail|xfail) ;;
+      *)
+        echo "warning: invalid expected outcome '$expected' in $file for $test|$mode|$profile" >&2
+        continue
+        ;;
+    esac
+    expected_cases["$test|$mode|$profile"]="$expected"
+  done < "$file"
+}
+
+# Load legacy xfail rows first, then let EXPECT_FILE override where needed.
+if [[ -n "$XFAIL_FILE" ]]; then
+  load_expected_cases "$XFAIL_FILE" "xfail"
 fi
+load_expected_cases "$EXPECT_FILE"
 
 case_profile() {
   if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
@@ -78,15 +102,26 @@ case_profile() {
   fi
 }
 
-is_xfail_case() {
+lookup_expected_case() {
   local test="$1"
   local mode="$2"
   local profile="$3"
-  [[ -n "${xfail_cases["$test|$mode|$profile"]+x}" ]] && return 0
-  [[ -n "${xfail_cases["$test|$mode|*"]+x}" ]] && return 0
-  [[ -n "${xfail_cases["$test|*|$profile"]+x}" ]] && return 0
-  [[ -n "${xfail_cases["$test|*|*"]+x}" ]] && return 0
-  return 1
+  local key
+  for key in \
+    "$test|$mode|$profile" \
+    "$test|$mode|*" \
+    "$test|*|$profile" \
+    "$test|*|*" \
+    "*|$mode|$profile" \
+    "*|$mode|*" \
+    "*|*|$profile" \
+    "*|*|*"; do
+    if [[ -n "${expected_cases["$key"]+x}" ]]; then
+      echo "${expected_cases["$key"]}"
+      return
+    fi
+  done
+  echo "pass"
 }
 
 report_case_outcome() {
@@ -94,25 +129,38 @@ report_case_outcome() {
   local mode="$2"
   local passed="$3"
   local profile="$4"
-  if is_xfail_case "$base" "$mode" "$profile"; then
-    if [[ "$passed" == "1" ]]; then
-      echo "XPASS($mode): $base [$profile]"
-      xpasses=$((xpasses + 1))
-      if [[ "$ALLOW_XPASS" != "1" ]]; then
+  local expected
+  expected="$(lookup_expected_case "$base" "$mode" "$profile")"
+  case "$expected" in
+    xfail)
+      if [[ "$passed" == "1" ]]; then
+        echo "XPASS($mode): $base [$profile]"
+        xpasses=$((xpasses + 1))
+        if [[ "$ALLOW_XPASS" != "1" ]]; then
+          failures=$((failures + 1))
+        fi
+      else
+        echo "XFAIL($mode): $base [$profile]"
+        xfails=$((xfails + 1))
+      fi
+      ;;
+    fail)
+      if [[ "$passed" == "1" ]]; then
+        echo "EPASS($mode): $base [$profile]"
+        failures=$((failures + 1))
+      else
+        echo "EFAIL($mode): $base [$profile]"
+      fi
+      ;;
+    pass)
+      if [[ "$passed" == "1" ]]; then
+        echo "PASS($mode): $base"
+      else
+        echo "FAIL($mode): $base"
         failures=$((failures + 1))
       fi
-    else
-      echo "XFAIL($mode): $base [$profile]"
-      xfails=$((xfails + 1))
-    fi
-    return
-  fi
-  if [[ "$passed" == "1" ]]; then
-    echo "PASS($mode): $base"
-  else
-    echo "FAIL($mode): $base"
-    failures=$((failures + 1))
-  fi
+      ;;
+  esac
 }
 
 run_case() {

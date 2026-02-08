@@ -1,0 +1,23 @@
+# test_name<TAB>mode<TAB>profile<TAB>expected
+# expected:
+#   pass   -> case must satisfy mode expectation
+#   fail   -> case is expected to fail mode expectation (EFAIL on match)
+#   xfail  -> known expected failure (XPASS is treated as failure unless ALLOW_XPASS=1)
+#
+# profile:
+#   known  -> BMC_ASSUME_KNOWN_INPUTS=1
+#   xprop  -> BMC_ASSUME_KNOWN_INPUTS=0
+
+# counter fail-mode is assumption-profile sensitive under known assumptions.
+counter	fail	known	xfail
+
+# Under xprop profile (BMC_ASSUME_KNOWN_INPUTS=0), unconstrained 4-state
+# inputs currently drive pass-mode counterexamples in the following tests.
+basic00	pass	xprop	xfail
+basic01	pass	xprop	xfail
+basic02	pass	xprop	xfail
+basic03	pass	xprop	xfail
+counter	pass	xprop	xfail
+extnets	pass	xprop	xfail
+sva_not	pass	xprop	xfail
+sva_value_change_sim	pass	xprop	xfail
