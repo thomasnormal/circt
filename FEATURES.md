@@ -58,6 +58,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (152 entries):
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
 | circt-sim | 178 | 178 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find, wand/wor nets |
+| MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
 ## UVM Simulation Feature Status
@@ -123,8 +124,9 @@ to commercial simulators like Cadence Xcelium.
 | I2S | Runs | Runs* | Runs* | `I2sBaseTest` at ~200 ns; *bind assertions need slang fix |
 | I3C | Runs | Runs | Runs | `i3c_base_test` at ~200 ns; pullup/wire/generate all work |
 | SPI | Runs | Runs* | Runs* | `SpiBaseTest` at ~800 ns; *bind assertions need slang fix |
+| AXI4 | Runs | N/A | N/A | `axi4_base_test`; UVM_FATAL cannot get BFM (HvlTop-only, needs combined mode) |
 | AXI4Lite | Runs* | N/A | N/A | `Axi4LiteBaseTest`; *exits early due to vtable dispatch gap in `uvm_task_phase::m_traverse` |
-| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; DPI/REGEX errors eliminated by `std::regex` |
+| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; DriveToBfm has internal failure (llhd.drv type mismatch) |
 
 ## Key Fixes History
 
@@ -184,3 +186,4 @@ to commercial simulators like Cadence Xcelium.
 | Vtable internal failure absorption | `call_indirect` absorbs internal failures from virtual methods; prevents cascading failures in UVM phase traversal |
 | Slang covergroup iff-no-parens | Parser extension allows `iff valid` without parentheses (Xcelium/VCS compat) |
 | Slang sequence decl semicolon | Parser extension allows missing semicolon before `endsequence` |
+| MooreToCore early-exit | Skip entire pass when no Moore ops remain; avoids expensive full-module scans in second pipeline invocation |

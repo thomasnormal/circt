@@ -4219,6 +4219,34 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
     return success();
   }
 
+  // Handle llhd.sig.struct_extract - extracts a struct field from a signal/ref.
+  // For signal-backed refs, propagate the signal mapping.
+  // For alloca-backed refs (including function arguments), the drv/prb handlers
+  // trace back through this op to find the memory block and compute offsets.
+  if (auto sigStructExtractOp = dyn_cast<llhd::SigStructExtractOp>(op)) {
+    SignalId inputSigId = getSignalId(sigStructExtractOp.getInput());
+    if (inputSigId != 0) {
+      valueToSignal[sigStructExtractOp.getResult()] = inputSigId;
+    }
+    // For memory-backed refs, also propagate the address so that
+    // getValue() on this result returns the parent address. This helps
+    // the drv/prb memory-backed fallback paths.
+    InterpretedValue inputVal = getValue(procId, sigStructExtractOp.getInput());
+    if (!inputVal.isX() && inputVal.getUInt64() != 0) {
+      setValue(procId, sigStructExtractOp.getResult(), inputVal);
+    }
+    return success();
+  }
+
+  // Handle llhd.sig.array_get - extracts an array element from a signal/ref.
+  if (auto sigArrayGetOp = dyn_cast<llhd::SigArrayGetOp>(op)) {
+    SignalId inputSigId = getSignalId(sigArrayGetOp.getInput());
+    if (inputSigId != 0) {
+      valueToSignal[sigArrayGetOp.getResult()] = inputSigId;
+    }
+    return success();
+  }
+
   // Handle llhd.sig (runtime signal creation for local variables in initial blocks)
   // When global constructors or initial blocks execute, local variable declarations
   // produce llhd.sig operations at runtime. We need to dynamically register these
