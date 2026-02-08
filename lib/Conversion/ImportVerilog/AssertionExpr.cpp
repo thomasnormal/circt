@@ -1305,7 +1305,13 @@ Value Context::convertAssertionCallExpression(
 
     if (!clockingCtrl)
       disableExprs.clear();
-    if (clockingCtrl && inAssertionExpr) {
+    // The helper-procedure lowering introduces explicit sampled state. For
+    // implicit assertion clocks without disable/enable controls, prefer
+    // direct past-based lowering to avoid extra-cycle skew in temporal
+    // combinations such as non-overlap implication with $rose/$fell.
+    bool needsClockedHelper =
+        hasClockingArg || enableExpr || !disableExprs.empty();
+    if (clockingCtrl && inAssertionExpr && needsClockedHelper) {
       return lowerSampledValueFunctionWithClocking(
           *this, *args[0], *clockingCtrl, subroutine.name, enableExpr,
           disableExprs, loc);

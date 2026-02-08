@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 7, 2026 (Iteration 471)
+## Current Status - February 8, 2026 (Iteration 472)
 
 ### Test Results
 
@@ -46,6 +46,55 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 472
+
+1. **Fixed sampled-value timing skew for implicit-clock assertions**
+   - Updated sampled-value lowering in
+     `lib/Conversion/ImportVerilog/AssertionExpr.cpp` so
+     `$rose/$fell/$stable/$changed` in assertion context use direct
+     `moore.past`-based lowering when there is no explicit clocking argument
+     and no disable/enable controls.
+   - Kept helper-procedure lowering for explicit clocking and
+     disable/enable-controlled cases.
+   - This removes an extra-cycle skew in temporal combinations such as
+     non-overlap implication with `$rose`.
+
+2. **Regression coverage and expectation updates**
+   - Added `test/Tools/circt-bmc/sva-rose-nonoverlap-unsat-e2e.sv`.
+   - Updated sampled-value import expectations to match the refined lowering:
+     - `test/Conversion/ImportVerilog/sva-value-change.sv`
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+
+3. **Validation**
+   - Targeted checks:
+     - `sva-rose-nonoverlap-unsat-e2e.sv` via direct
+       `circt-verilog | circt-bmc`: `BMC_RESULT=UNSAT`
+     - reduced repro (`/tmp/rose_tmp.sv`): `BMC_RESULT=UNSAT`
+   - Lit:
+     - `test/Conversion/ImportVerilog/sva-value-change.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+     - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`: PASS
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`) without
+       `BMC_ASSUME_KNOWN_INPUTS=1`: PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`LEC_ACCEPT_XPROP_ONLY=1`):
+       `XPROP_ONLY (accepted)`
+     - AVIP APB compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Explicit-clock/disable-controlled sampled-value lowering still uses the
+     helper-procedure path; we should add broader temporal equivalence tests
+     around mixed clocking, disable-iff, and implication operators.
+   - OpenTitan LEC still requires `XPROP_ONLY` acceptance; stronger
+     initialization/X correlation remains the top LEC correctness item.
+   - Upstream divergence remains large; we still need a planned sync window.
 
 ### Session Summary - Iteration 471
 
@@ -95,8 +144,9 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
      (not just top-level clock knownness).
    - OpenTitan LEC still requires `XPROP_ONLY` acceptance; stronger
      initialization/X correlation remains the top LEC correctness item.
-   - Upstream divergence is still large and we need a planned integration window
-     to reduce merge risk while concurrent agents continue landing changes.
+   - Upstream divergence is still large and we need a planned integration
+     window to reduce merge risk while concurrent agents continue landing
+     changes.
 
 ### Session Summary - Iteration 470
 
