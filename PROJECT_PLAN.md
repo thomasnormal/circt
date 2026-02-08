@@ -16995,6 +16995,49 @@ ninja -C build circt-verilog
   - OpenTitan/AVIP case granularity is still aggregate-only unless their
     harnesses emit structured per-test result files.
 
+### Iteration 645
+- Structured detailed-case ingestion for OpenTitan and AVIP in
+  `utils/run_formal_all.sh`:
+  - Added OpenTitan per-implementation case extraction from
+    `opentitan-lec.log` into:
+    - `<out-dir>/opentitan-lec-results.txt`
+  - Added AVIP per-directory compile case stream:
+    - `<out-dir>/avip-results.txt`
+  - `expected_failure_cases` matching now accepts optional suite/mode override
+    columns in detailed rows, enabling dynamic suite names (AVIP).
+- Detailed-case matching behavior updates:
+  - Detailed rows now suppress aggregate fallback for observed suite/mode pairs.
+  - `opentitan` case rows support `XFAIL` matching (for accepted XPROP-only
+    diagnostics) and `FAIL` matching.
+  - AVIP rows support exact per-suite case IDs (`suite=avip/<name>`,
+    `mode=compile`, `id_kind=base`, `id=<name>`).
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive OpenTitan detailed-case match (`XFAIL`, `aes_sbox_canright`)
+    - positive AVIP detailed-case match (`FAIL`, `foo_avip`)
+    - verifies generated detail files:
+      - `opentitan-lec-results.txt`
+      - `avip-results.txt`
+- Documentation:
+  - Updated `docs/FormalRegression.md` outputs section with:
+    - `opentitan-lec-results.txt`
+    - `avip-results.txt`
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - Integrated smoke sweep:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-expected-cases-detailed-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failure-cases-file /tmp/formal-expected-cases-detailed-smoke.tsv --fail-on-unexpected-failure-cases`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS (smoke mode has no fail-like detailed cases)
+      - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (matched by
+        detailed AVIP expected-case row)
+- Current limitations / debt:
+  - OpenTitan detailed-case extraction is log-format based (not yet a dedicated
+    machine-readable contract).
+  - In smoke mode OpenTitan produces only pass-like rows, so expected case rows
+    for XPROP diagnostics remain unmatched in that mode.
+
 ---
 
 ## Architecture Reference

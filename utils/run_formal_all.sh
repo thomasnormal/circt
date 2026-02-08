@@ -392,6 +392,8 @@ fi
 
 # OpenTitan LEC (optional)
 if [[ "$WITH_OPENTITAN" == "1" ]]; then
+  opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
+  : > "$opentitan_case_results"
   opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
   if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
@@ -400,6 +402,38 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
   run_suite opentitan-lec \
     env "${opentitan_env[@]}" \
     utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
+  OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
+  OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+log_path = Path(os.environ["OPENTITAN_LOG_FILE"])
+out_path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+
+rows = []
+if log_path.exists():
+  for line in log_path.read_text().splitlines():
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+OK\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("PASS", impl, impl, "opentitan", "LEC"))
+      continue
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("XFAIL", impl, impl, "opentitan", "LEC"))
+      continue
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\([^)]+\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("FAIL", impl, m.group(2) or impl, "opentitan", "LEC"))
+
+rows.sort(key=lambda r: (r[1], r[0], r[2]))
+with out_path.open("w") as f:
+  for row in rows:
+    f.write("\t".join(row) + "\n")
+PY
   line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
   total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
   failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
@@ -414,6 +448,8 @@ fi
 
 # AVIP compile smoke (optional)
 if [[ "$WITH_AVIP" == "1" ]]; then
+  avip_case_results="$OUT_DIR/avip-results.txt"
+  : > "$avip_case_results"
   for avip in $AVIP_GLOB; do
     if [[ -d "$avip" ]]; then
       avip_name="$(basename "$avip")"
@@ -424,9 +460,16 @@ if [[ "$WITH_AVIP" == "1" ]]; then
       if [[ -f "$OUT_DIR/avip-${avip_name}.exit" ]]; then
         avip_ec=$(cat "$OUT_DIR/avip-${avip_name}.exit")
         record_simple_result "avip/${avip_name}" "compile" "$avip_ec"
+        avip_status="FAIL"
+        if [[ "$avip_ec" == "0" ]]; then
+          avip_status="PASS"
+        fi
+        printf "%s\t%s\t%s\t%s\t%s\n" \
+          "$avip_status" "$avip_name" "$avip" "avip/${avip_name}" "compile" >> "$avip_case_results"
       fi
     fi
   done
+  sort -o "$avip_case_results" "$avip_case_results"
 fi
 
 summary_txt="$OUT_DIR/summary.txt"
@@ -710,11 +753,16 @@ result_sources = [
     ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+    ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("", "", out_dir / "avip-results.txt"),
 ]
-known_detailed_pairs = {(suite, mode) for suite, mode, _ in result_sources}
+known_detailed_pairs = {
+    (suite, mode) for suite, mode, _ in result_sources if suite and mode
+}
+detailed_pairs_observed = set()
 
 observed = []
-for suite, mode, path in result_sources:
+for default_suite, default_mode, path in result_sources:
   if not path.exists():
     continue
   with path.open() as f:
@@ -726,8 +774,17 @@ for suite, mode, path in result_sources:
       status = parts[0].strip().upper() if parts else ""
       if status not in fail_like_statuses:
         continue
+      suite = (
+          parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+      )
+      mode = (
+          parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+      )
+      if not suite or not mode:
+        continue
       base = parts[1].strip() if len(parts) > 1 else ""
       file_path = parts[2].strip() if len(parts) > 2 else ""
+      detailed_pairs_observed.add((suite, mode))
       observed.append(
           {
               "suite": suite,
@@ -747,7 +804,7 @@ if summary_path.exists():
       mode = row.get("mode", "")
       if not suite or not mode:
         continue
-      if (suite, mode) in known_detailed_pairs:
+      if (suite, mode) in known_detailed_pairs or (suite, mode) in detailed_pairs_observed:
         continue
       summary = row.get("summary", "")
       try:

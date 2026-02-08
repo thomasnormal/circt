@@ -187,6 +187,10 @@ Each run writes:
   matching summary (when `--expected-failure-cases-file` is used)
 - `<out-dir>/unexpected-failure-cases.tsv` observed fail-like cases not covered
   by expected failure cases (when `--expected-failure-cases-file` is used)
+- `<out-dir>/opentitan-lec-results.txt` per-implementation OpenTitan LEC case
+  rows (when `--with-opentitan` is used)
+- `<out-dir>/avip-results.txt` per-AVIP compile case rows (when `--with-avip`
+  is used)
 - Harnesses treat `BMC_RESULT=SAT|UNSAT|UNKNOWN` and
   `LEC_RESULT=EQ|NEQ|UNKNOWN` tokens as the source of truth for pass/fail
   classification when not in smoke mode.
