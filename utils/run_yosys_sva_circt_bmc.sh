@@ -43,6 +43,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MA
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-86400}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY:-error}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR="${YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR:-auto}"
 YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_RUN_ID="${YOSYS_SVA_MODE_SUMMARY_RUN_ID:-}"
@@ -184,6 +186,14 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS (expected non-negative integer)" >&2
+  exit 1
+fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES (expected non-negative integer)" >&2
+  exit 1
+fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS (expected non-negative integer)" >&2
   exit 1
 fi
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY,,}"
@@ -2293,6 +2303,55 @@ PY
     done
   }
 
+  trim_drop_events_jsonl() {
+    local file="$1"
+    local max_entries="$2"
+    local max_age_days="$3"
+    local -a lines=()
+    local line
+    local generated_at
+    local row_epoch
+    local now_epoch
+    local cutoff_epoch
+    local start i
+    [[ -f "$file" ]] || return 0
+    if ((max_age_days > 0)); then
+      mapfile -t lines < "$file"
+      if ! now_epoch="$(date -u +%s 2>/dev/null)"; then
+        echo "error: failed to compute current UTC epoch for drop-event age retention" >&2
+        exit 1
+      fi
+      cutoff_epoch=$((now_epoch - max_age_days * 86400))
+      : > "$file"
+      for ((i = 0; i < ${#lines[@]}; ++i)); do
+        line="${lines[$i]}"
+        [[ -z "$line" ]] && continue
+        generated_at="$(printf '%s\n' "$line" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+        if [[ -z "$generated_at" ]]; then
+          echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if ! row_epoch="$(utc_to_epoch "$generated_at")"; then
+          echo "error: invalid generated_at_utc in YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE $file at line $((i + 1))" >&2
+          exit 1
+        fi
+        if ((row_epoch >= cutoff_epoch)); then
+          printf '%s\n' "$line" >> "$file"
+        fi
+      done
+    fi
+    ((max_entries > 0)) || return 0
+    mapfile -t lines < "$file"
+    if ((${#lines[@]} <= max_entries)); then
+      return 0
+    fi
+    : > "$file"
+    start=$(( ${#lines[@]} - max_entries ))
+    for ((i = start; i < ${#lines[@]}; ++i)); do
+      printf '%s\n' "${lines[$i]}" >> "$file"
+    done
+  }
+
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE" ]]; then
     : > "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
     printf '%s\n' "$tsv_header" >> "$YOSYS_SVA_MODE_SUMMARY_TSV_FILE"
@@ -2373,6 +2432,13 @@ PY
 
   if ((history_drop_future_tsv > 0 || history_drop_future_jsonl > 0)); then
     echo "warning: dropped future-skew history rows (tsv=${history_drop_future_tsv}, jsonl=${history_drop_future_jsonl}) due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
+  fi
+
+  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]]; then
+    trim_drop_events_jsonl \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS"
   fi
 }
 
