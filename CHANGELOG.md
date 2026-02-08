@@ -25647,3 +25647,71 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 545 - February 8, 2026
+
+### Yosys SVA BMC TSV History Schema Migration
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with TSV history migration
+  helpers for schema compatibility.
+- Added compatibility behavior for
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE`:
+  - current versioned header:
+    - append as usual
+  - legacy unversioned header:
+    - auto-migrate file to current header
+    - rewrite legacy rows with synthetic metadata:
+      - `schema_version=0`
+      - `run_id=legacy-<row-index>`
+      - `generated_at_utc=1970-01-01T00:00:00Z`
+    - append current run row after migration
+  - unknown headers:
+    - fail fast with explicit error to avoid mixed/corrupt schemas.
+- Retention controls remain applied after migration.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-migrate.test`
+- Revalidated summary lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+- Summary lit result: 5/5 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 28/28 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Schema migration helper currently targets TSV history only; JSONL migration is
+  still missing.
+- Legacy migrated rows carry synthetic timestamp metadata.
+- Retention is still count-based only (no age/time policy).
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.

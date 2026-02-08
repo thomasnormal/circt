@@ -1846,6 +1846,8 @@ emit_mode_summary_outputs() {
   fi
   local tsv_header
   tsv_header='schema_version	run_id	generated_at_utc	test_total	test_failures	test_xfail	test_xpass	test_skipped	mode_total	mode_pass	mode_fail	mode_xfail	mode_xpass	mode_epass	mode_efail	mode_unskip	mode_skipped	mode_skip_pass	mode_skip_fail	mode_skip_expected	mode_skip_unexpected	skip_reason_vhdl	skip_reason_fail-no-macro	skip_reason_no-property	skip_reason_other'
+  local legacy_tsv_header
+  legacy_tsv_header='test_total	test_failures	test_xfail	test_xpass	test_skipped	mode_total	mode_pass	mode_fail	mode_xfail	mode_xpass	mode_epass	mode_efail	mode_unskip	mode_skipped	mode_skip_pass	mode_skip_fail	mode_skip_expected	mode_skip_unexpected	skip_reason_vhdl	skip_reason_fail-no-macro	skip_reason_no-property	skip_reason_other'
   local tsv_row
   printf -v tsv_row '%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d' \
     "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
@@ -1880,6 +1882,30 @@ emit_mode_summary_outputs() {
     done
   }
 
+  prepare_history_tsv_file() {
+    local file="$1"
+    local -a lines=()
+    local i
+    [[ -f "$file" ]] || return 0
+    [[ -s "$file" ]] || return 0
+    mapfile -t lines < "$file"
+    ((${#lines[@]} > 0)) || return 0
+    if [[ "${lines[0]}" == "$tsv_header" ]]; then
+      return 0
+    fi
+    if [[ "${lines[0]}" == "$legacy_tsv_header" ]]; then
+      : > "$file"
+      printf '%s\n' "$tsv_header" >> "$file"
+      for ((i = 1; i < ${#lines[@]}; ++i)); do
+        [[ -z "${lines[$i]}" ]] && continue
+        printf '0\tlegacy-%d\t1970-01-01T00:00:00Z\t%s\n' "$i" "${lines[$i]}" >> "$file"
+      done
+      return 0
+    fi
+    echo "error: unsupported YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE header in $file" >&2
+    exit 1
+  }
+
   trim_history_jsonl() {
     local file="$1"
     local max_entries="$2"
@@ -1905,6 +1931,7 @@ emit_mode_summary_outputs() {
   fi
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" ]]; then
+    prepare_history_tsv_file "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE"
     if [[ ! -s "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE" ]]; then
       printf '%s\n' "$tsv_header" >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE"
     fi
