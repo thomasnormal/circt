@@ -16770,6 +16770,32 @@ ninja -C build circt-verilog
   - Parallel fan-out currently has no explicit max-concurrency throttle.
   - Endpoint delivery ordering is non-deterministic in parallel mode.
 
+### Iteration 639
+- Webhook parallel fan-out throttling in `utils/run_formal_cadence.sh`:
+  - Added `--webhook-max-parallel N` (default `8`) to bound concurrent webhook
+    delivery workers when `--webhook-fanout-mode=parallel`.
+  - Added validation for positive integer throttle values.
+  - Added `webhook_max_parallel` to `cadence.state`.
+  - Extended parallel-mode log banner to include effective max parallel value.
+  - Throttle behavior: enqueue endpoint workers up to limit, then wait/reap
+    before launching additional workers.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - parallel fan-out case now uses `--webhook-max-parallel 1`
+    - verifies parallel log banner includes `(max_parallel=1)`.
+- Documentation:
+  - Updated `docs/FormalRegression.md` webhook options with
+    `--webhook-max-parallel`.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+- Current limitations / debt:
+  - Parallel mode still uses simple FIFO wait throttling; no adaptive scheduling
+    policy by endpoint latency/failure profile.
+  - Endpoint execution order remains intentionally non-deterministic in
+    parallel mode.
+
 ---
 
 ## Architecture Reference

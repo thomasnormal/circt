@@ -101,6 +101,7 @@ Webhook options:
 
 - `--on-fail-webhook <url>` can be specified multiple times.
 - `--webhook-fanout-mode <sequential|parallel>` controls endpoint dispatch.
+- `--webhook-max-parallel <n>` bounds concurrent webhook posts in parallel mode.
 - `--webhook-retries <n>` controls retries per endpoint.
 - `--webhook-backoff-mode <fixed|exponential>` controls retry timing policy.
 - `--webhook-backoff-secs <n>` controls retry backoff delay.
