@@ -9301,6 +9301,50 @@ ninja -C build circt-verilog
   - Diagnose and fix `circt-sim` `llhd.drv` struct-ref diagnostics (then lock
     with targeted simulator regressions).
 
+### Iteration 465
+- Structured comparison semantics hardening for event-arm witnesses:
+  - Enhanced `VerifToSMT` eq/ne evaluation to compare raw structured argument
+    values when available (instead of always collapsing both operands to bool).
+  - For arg/constant leaves:
+    - same-type `!smt.bv<N>` / `!smt.bool` values now compare directly.
+    - mixed scalar types still fall back to bool conversion where legal.
+  - This avoids false semantics where multi-bit equality was previously reduced
+    to non-zero/zero truthiness comparison.
+- Structured metadata expansion:
+  - ImportVerilog structured binary extraction now includes:
+    - `implies`, `iff`
+    - case/wildcard equality families mapped to `eq`/`ne`.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-eq-ne-width-structured.mlir`.
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-implies-iff-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with:
+    - `SequenceSignalEventListStructuredImplication`
+    - `SequenceSignalEventListStructuredCaseEquality`
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (15 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Full width/sign-aware compare semantics are still not generalized to all
+    non-leaf expression combinations and operator families.
+  - Structured metadata still lacks explicit grouping/parenthesis nodes.
+  - OpenTitan `prim_fifo_sync` continues to report `llhd.drv`
+    `interpretOperation` diagnostics.
+- Long-term features to prioritize:
+  - Generalize value-aware comparison evaluation across richer expression trees.
+  - Add structured grouping nodes and precedence-preserving fallback behavior.
+  - Root-cause and fix `circt-sim` `llhd.drv` diagnostics with targeted regressions.
+
 ---
 
 ## Architecture Reference

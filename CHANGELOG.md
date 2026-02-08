@@ -23305,3 +23305,61 @@ CIRCT/slang correctly enforces LRM restrictions.
   does not yet cover full SystemVerilog width/sign comparison semantics.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 465 - February 8, 2026
+
+### Width-Aware `eq` / `ne` for Structured Witness Expressions
+
+- Hardened `VerifToSMT` structured expression evaluation so `eq` / `ne` can
+  compare raw structured leaf values (bit-vectors / bools) directly instead of
+  always comparing booleanized truthiness.
+- This fixes multi-bit equality semantics for structured event-arm terms such as
+  `bus == mask` and `bus != mask` in witness source / iff expressions.
+- Fallback behavior remains for non-leaf combinations where only booleanized
+  evaluation is currently available.
+
+### Structured Operator Coverage Expansion
+
+- Extended ImportVerilog structured binary extraction to include:
+  - implication: `->` -> `bin_op = "implies"`
+  - equivalence: `<->` -> `bin_op = "iff"`
+  - case / wildcard equality families mapped to `eq` / `ne`.
+- Extended VerifToSMT structured resolver/evaluator to support:
+  - `implies` (lowered as `or(not(lhs), rhs)`)
+  - `iff` (lowered as boolean equality)
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-eq-ne-width-structured.mlir`
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-implies-iff-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added implication/equivalence coverage.
+    - Added case-equality family coverage.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (15 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Width/sign-aware value semantics are still not generalized to all non-leaf
+  structured compare expression combinations.
+- Structured metadata still lacks explicit grouping/parenthesis nodes.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.

@@ -5940,6 +5940,15 @@ struct VerifBoundedModelCheckingOpConversion
         }
         return failure();
       };
+      auto evalSubExprAsValue = [&](const ResolvedNamedBoolExpr &subexpr)
+          -> FailureOr<Value> {
+        if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Arg)
+          return evalArgValue(subexpr.argIndex, subexpr.argSlice);
+        if (subexpr.kind == ResolvedNamedBoolExpr::Kind::Const)
+          return Value(
+              smt::BoolConstantOp::create(builder, loc, subexpr.constValue));
+        return failure();
+      };
       switch (expr.kind) {
       case ResolvedNamedBoolExpr::Kind::Arg:
         if (expr.argIndex >= values.size())
@@ -6010,8 +6019,7 @@ struct VerifBoundedModelCheckingOpConversion
       case ResolvedNamedBoolExpr::Kind::Xor:
       case ResolvedNamedBoolExpr::Kind::Implies:
       case ResolvedNamedBoolExpr::Kind::Iff:
-      case ResolvedNamedBoolExpr::Kind::Eq:
-      case ResolvedNamedBoolExpr::Kind::Ne: {
+      {
         auto lhsOr = self(self, builder, values, *expr.lhs);
         auto rhsOr = self(self, builder, values, *expr.rhs);
         if (failed(lhsOr) || failed(rhsOr))
@@ -6029,13 +6037,45 @@ struct VerifBoundedModelCheckingOpConversion
         }
         case ResolvedNamedBoolExpr::Kind::Iff:
           return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
-        case ResolvedNamedBoolExpr::Kind::Eq:
-          return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
-        case ResolvedNamedBoolExpr::Kind::Ne:
-          return Value(smt::DistinctOp::create(builder, loc, *lhsOr, *rhsOr));
         default:
-          break;
+          return failure();
         }
+      }
+      case ResolvedNamedBoolExpr::Kind::Eq:
+      case ResolvedNamedBoolExpr::Kind::Ne: {
+        auto lhsValueOr = evalSubExprAsValue(*expr.lhs);
+        auto rhsValueOr = evalSubExprAsValue(*expr.rhs);
+        if (succeeded(lhsValueOr) && succeeded(rhsValueOr)) {
+          Value lhsValue = *lhsValueOr;
+          Value rhsValue = *rhsValueOr;
+          if (lhsValue.getType() == rhsValue.getType()) {
+            if (isa<smt::BoolType>(lhsValue.getType()) ||
+                isa<smt::BitVectorType>(lhsValue.getType())) {
+              if (expr.kind == ResolvedNamedBoolExpr::Kind::Eq)
+                return Value(
+                    smt::EqOp::create(builder, loc, lhsValue, rhsValue));
+              return Value(
+                  smt::DistinctOp::create(builder, loc, lhsValue, rhsValue));
+            }
+          } else {
+            auto lhsBoolOr = toSMTBool(builder, lhsValue);
+            auto rhsBoolOr = toSMTBool(builder, rhsValue);
+            if (succeeded(lhsBoolOr) && succeeded(rhsBoolOr)) {
+              if (expr.kind == ResolvedNamedBoolExpr::Kind::Eq)
+                return Value(
+                    smt::EqOp::create(builder, loc, *lhsBoolOr, *rhsBoolOr));
+              return Value(smt::DistinctOp::create(builder, loc, *lhsBoolOr,
+                                                   *rhsBoolOr));
+            }
+          }
+        }
+        auto lhsOr = self(self, builder, values, *expr.lhs);
+        auto rhsOr = self(self, builder, values, *expr.rhs);
+        if (failed(lhsOr) || failed(rhsOr))
+          return failure();
+        if (expr.kind == ResolvedNamedBoolExpr::Kind::Eq)
+          return Value(smt::EqOp::create(builder, loc, *lhsOr, *rhsOr));
+        return Value(smt::DistinctOp::create(builder, loc, *lhsOr, *rhsOr));
       }
       }
       return failure();
