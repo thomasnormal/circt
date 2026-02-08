@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 776 | 715 | 0 | **99.2%** | 884 total, 108 compile fail, 43 class-only (no top), 55 xfail, 6 xpass; `--max-time` resolves all former timeouts |
+| Simulation (full) | 776 | 714 | 0 | **99.1%** | 876 total, 100 compile fail, 55 xfail, 6 xpass, 1 timeout, 1 error; `--max-time` resolves all former timeouts |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
