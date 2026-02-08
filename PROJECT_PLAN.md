@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 509)
+## Current Status - February 8, 2026 (Iteration 510)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions (`nand`/`nor`/`xnor`) and matching VerifToSMT semantics; next: canonical Slang expression IDs/graphs, casts/concats/indexed part-selects, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed structured Slang event-expression metadata + inverted reductions + indexed dynamic selects (`[i]`, `[i +: w]`, `[i -: w]`) with matching VerifToSMT semantics; next: canonical Slang expression IDs/graphs, casts/concats/replication, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,72 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 510
+
+1. **Structured metadata now carries indexed dynamic select semantics**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Event-source structured extraction now supports dynamic selectors:
+     - bit-select: `a[i]`
+     - indexed part-select: `a[i +: w]`, `a[i -: w]`
+   - Newly emitted attrs:
+     - `<prefix>_dyn_index_name`
+     - `<prefix>_dyn_sign`
+     - `<prefix>_dyn_offset`
+     - `<prefix>_dyn_width`
+   - This closes a concrete metadata gap for dynamic indexed event terms that
+     previously fell back to less robust expression text handling.
+
+2. **VerifToSMT now resolves/evaluates dynamic slices from structured attrs**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Structured resolver now consumes `*_dyn_*` attrs and resolves dynamic
+     index names to BMC input args.
+   - Witness expression evaluation now supports dynamic extraction via:
+     - index normalization (sign/offset transform),
+     - `smt.bv.lshr`,
+     - `smt.bv.extract`.
+   - Handles narrow index arguments by zero-extending to the source bitvector
+     width using `smt.bv.concat` before shift arithmetic.
+
+3. **Regression coverage**
+   - Added:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witness-dynamic-slice-structured.mlir`
+   - Updated:
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New checks cover:
+     - frontend structured `*_dyn_*` attr emission,
+     - backend dynamic witness synthesis in both SMT-LIB and runtime lowering.
+
+4. **Validation**
+   - Build:
+     - `ninja -C build circt-opt circt-verilog`: PASS
+   - Targeted regressions:
+     - `sequence-event-control.sv`: PASS
+     - `bmc-event-arm-witness-dynamic-slice-structured.mlir` (SMTLIB): PASS
+     - `bmc-event-arm-witness-dynamic-slice-structured.mlir` (RUNTIME): PASS
+     - `llvm-lit test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS (7/7)
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Structured attrs now cover dynamic indexed selects, but richer expression
+     forms still need first-class semantics:
+     - casts (including 4-state aware semantics),
+     - concatenation/replication,
+     - non-trivial index arithmetic expression graphs.
+   - The long-term direction remains canonical Slang expression IDs/graphs in
+     metadata, with VerifToSMT lowering directly from that representation.
+   - Parser fallback is still present for compatibility and should be phased
+     down as canonical metadata coverage expands.
 
 ### Session Summary - Iteration 509
 
