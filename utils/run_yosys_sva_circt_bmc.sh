@@ -34,6 +34,9 @@ CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+XFAIL_FILE="${XFAIL_FILE:-$SCRIPT_DIR/yosys-sva-bmc-xfail.txt}"
+ALLOW_XPASS="${ALLOW_XPASS:-0}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -54,6 +57,63 @@ trap cleanup EXIT
 failures=0
 total=0
 skipped=0
+xfails=0
+xpasses=0
+
+declare -A xfail_cases
+if [[ -f "$XFAIL_FILE" ]]; then
+  while IFS=$'\t' read -r test mode profile; do
+    [[ -z "$test" || "$test" =~ ^# ]] && continue
+    [[ -z "$mode" ]] && mode="*"
+    [[ -z "$profile" ]] && profile="*"
+    xfail_cases["$test|$mode|$profile"]=1
+  done < "$XFAIL_FILE"
+fi
+
+case_profile() {
+  if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+    echo "known"
+  else
+    echo "xprop"
+  fi
+}
+
+is_xfail_case() {
+  local test="$1"
+  local mode="$2"
+  local profile="$3"
+  [[ -n "${xfail_cases["$test|$mode|$profile"]+x}" ]] && return 0
+  [[ -n "${xfail_cases["$test|$mode|*"]+x}" ]] && return 0
+  [[ -n "${xfail_cases["$test|*|$profile"]+x}" ]] && return 0
+  [[ -n "${xfail_cases["$test|*|*"]+x}" ]] && return 0
+  return 1
+}
+
+report_case_outcome() {
+  local base="$1"
+  local mode="$2"
+  local passed="$3"
+  local profile="$4"
+  if is_xfail_case "$base" "$mode" "$profile"; then
+    if [[ "$passed" == "1" ]]; then
+      echo "XPASS($mode): $base [$profile]"
+      xpasses=$((xpasses + 1))
+      if [[ "$ALLOW_XPASS" != "1" ]]; then
+        failures=$((failures + 1))
+      fi
+    else
+      echo "XFAIL($mode): $base [$profile]"
+      xfails=$((xfails + 1))
+    fi
+    return
+  fi
+  if [[ "$passed" == "1" ]]; then
+    echo "PASS($mode): $base"
+  else
+    echo "FAIL($mode): $base"
+    failures=$((failures + 1))
+  fi
+}
 
 run_case() {
   local sv="$1"
@@ -89,8 +149,7 @@ run_case() {
   fi
   if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" \
       "${extra_def[@]}" "$sv" > "$mlir"; then
-    echo "FAIL($mode): $base"
-    failures=$((failures + 1))
+    report_case_outcome "$base" "$mode" 0 "$(case_profile)"
     return
   fi
   local out
@@ -125,25 +184,22 @@ run_case() {
 
   if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
     if [[ "$bmc_status" -eq 0 ]]; then
-      echo "PASS($mode): $base"
+      report_case_outcome "$base" "$mode" 1 "$(case_profile)"
     else
-      echo "FAIL($mode): $base"
-      failures=$((failures + 1))
+      report_case_outcome "$base" "$mode" 0 "$(case_profile)"
     fi
   else
     if [[ "$mode" == "pass" ]]; then
       if ! grep -q "Bound reached with no violations!" <<<"$out"; then
-        echo "FAIL(pass): $base"
-        failures=$((failures + 1))
+        report_case_outcome "$base" "$mode" 0 "$(case_profile)"
       else
-        echo "PASS(pass): $base"
+        report_case_outcome "$base" "$mode" 1 "$(case_profile)"
       fi
     else
       if ! grep -q "Assertion can be violated!" <<<"$out"; then
-        echo "FAIL(fail): $base"
-        failures=$((failures + 1))
+        report_case_outcome "$base" "$mode" 0 "$(case_profile)"
       else
-        echo "PASS(fail): $base"
+        report_case_outcome "$base" "$mode" 1 "$(case_profile)"
       fi
     fi
   fi
@@ -175,5 +231,5 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   run_case "$sv" fail
 done
 
-echo "yosys SVA summary: $total tests, failures=$failures, skipped=$skipped"
+echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
 exit "$failures"
