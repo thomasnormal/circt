@@ -523,6 +523,31 @@ getStructuredBinaryEventOp(const slang::ast::BinaryExpression &expr) {
   }
 }
 
+static std::optional<StringRef>
+getStructuredUnaryEventOp(const slang::ast::UnaryExpression &expr) {
+  using slang::ast::UnaryOperator;
+  switch (expr.op) {
+  case UnaryOperator::LogicalNot:
+    return StringRef("not");
+  case UnaryOperator::BitwiseNot:
+    return StringRef("bitwise_not");
+  case UnaryOperator::BitwiseAnd:
+    return StringRef("reduce_and");
+  case UnaryOperator::BitwiseNand:
+    return StringRef("reduce_nand");
+  case UnaryOperator::BitwiseOr:
+    return StringRef("reduce_or");
+  case UnaryOperator::BitwiseNor:
+    return StringRef("reduce_nor");
+  case UnaryOperator::BitwiseXor:
+    return StringRef("reduce_xor");
+  case UnaryOperator::BitwiseXnor:
+    return StringRef("reduce_xnor");
+  default:
+    return std::nullopt;
+  }
+}
+
 static bool maybeAddStructuredEventExprAttrs(
     OpBuilder &builder, SmallVectorImpl<NamedAttribute> &detailAttrs,
     StringRef prefix, const slang::ast::Expression *expr) {
@@ -542,8 +567,10 @@ static bool maybeAddStructuredEventExprAttrs(
     return key;
   };
 
+  bool emittedAny = false;
   StructuredEventExprInfo info;
   if (extractStructuredEventExprInfo(*expr, info) && !info.baseName.empty()) {
+    emittedAny = true;
     addAttrIfMissing(keyFor("name"), builder.getStringAttr(info.baseName));
     if (info.lsb && info.msb) {
       addAttrIfMissing(keyFor("lsb"), builder.getI32IntegerAttr(*info.lsb));
@@ -566,26 +593,36 @@ static bool maybeAddStructuredEventExprAttrs(
     if (info.reduction)
       addAttrIfMissing(keyFor("reduction"),
                        builder.getStringAttr(*info.reduction));
-    return true;
   }
 
-  auto *binary = expr->as_if<slang::ast::BinaryExpression>();
-  if (!binary)
-    return false;
-  auto binaryOp = getStructuredBinaryEventOp(*binary);
-  if (!binaryOp)
-    return false;
+  if (auto *unary = expr->as_if<slang::ast::UnaryExpression>()) {
+    if (auto unaryOp = getStructuredUnaryEventOp(*unary)) {
+      addAttrIfMissing(keyFor("unary_op"), builder.getStringAttr(*unaryOp));
+      std::string argPrefix = (prefix + "_arg").str();
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
+                                            &unary->operand()))
+        return false;
+      emittedAny = true;
+    }
+  }
 
-  addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
-  std::string lhsPrefix = (prefix + "_lhs").str();
-  std::string rhsPrefix = (prefix + "_rhs").str();
-  if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
-                                        &binary->left()))
-    return false;
-  if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, rhsPrefix,
-                                        &binary->right()))
-    return false;
-  return true;
+  if (auto *binary = expr->as_if<slang::ast::BinaryExpression>()) {
+    auto binaryOp = getStructuredBinaryEventOp(*binary);
+    if (binaryOp) {
+      addAttrIfMissing(keyFor("bin_op"), builder.getStringAttr(*binaryOp));
+      std::string lhsPrefix = (prefix + "_lhs").str();
+      std::string rhsPrefix = (prefix + "_rhs").str();
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, lhsPrefix,
+                                            &binary->left()))
+        return false;
+      if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, rhsPrefix,
+                                            &binary->right()))
+        return false;
+      emittedAny = true;
+    }
+  }
+
+  return emittedAny;
 }
 
 static void recordMixedEventSourcesOnModule(Context &context,

@@ -9209,6 +9209,52 @@ ninja -C build circt-verilog
   - Add dedicated `circt-sim` regression for the `llhd.drv` struct-ref
     diagnostic path observed in OpenTitan `prim_fifo_sync`.
 
+### Iteration 463
+- Structured unary-tree metadata for operator ordering:
+  - ImportVerilog now emits explicit recursive unary metadata:
+    - `<prefix>_unary_op`
+    - `<prefix>_arg_*`
+  - Supported unary ops in structured trees:
+    - `not`, `bitwise_not`, `reduce_and`, `reduce_or`, `reduce_xor`,
+      `reduce_nand`, `reduce_nor`, `reduce_xnor`.
+  - Flat metadata (`*_logical_not`, `*_bitwise_not`, `*_reduction`) remains
+    emitted for backward compatibility when representable.
+- VerifToSMT structured resolver enhancements:
+  - Added recursive `*_unary_op` parsing ahead of binary/leaf parsing.
+  - Added `iff_unary_op` to iff-constraint detection for witness emission.
+  - Preserves compatibility with prior flat attrs and text fallback.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-unary-tree-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+    - Extended logical-not module to check unary-tree attrs.
+    - Added `SequenceSignalEventListStructuredUnaryTree` for mixed unary/binary nesting.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (13 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Structured metadata still lacks explicit grouping/parenthesis nodes.
+  - Some expression families remain uncovered by structured encoding and still
+    rely on text fallback.
+  - OpenTitan `prim_fifo_sync` still reports repeated `llhd.drv`
+    `interpretOperation` diagnostics.
+- Long-term features to prioritize:
+  - Add structured grouping nodes so nested parenthesized expressions preserve
+    precedence without parser fallback.
+  - Extend structured coverage to additional comparison/case-equality families.
+  - Investigate and regression-test the `llhd.drv` struct-ref diagnostic path
+    in `circt-sim`.
+
 ---
 
 ## Architecture Reference
