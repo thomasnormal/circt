@@ -1,7 +1,7 @@
 // RUN: circt-opt %s --convert-moore-to-core --verify-diagnostics | FileCheck %s
 
-// CHECK-DAG: llvm.func @__moore_array_max(!llvm.ptr, i64, i1) -> !llvm.struct<(ptr, i64)>
-// CHECK-DAG: llvm.func @__moore_array_min(!llvm.ptr, i64, i1) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_array_max(!llvm.ptr, i64, i32) -> !llvm.struct<(ptr, i64)>
+// CHECK-DAG: llvm.func @__moore_array_min(!llvm.ptr, i64, i32) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_unique(!llvm.ptr) -> !llvm.struct<(ptr, i64)>
 // CHECK-DAG: llvm.func @__moore_queue_sort(!llvm.ptr, i64)
 // CHECK-DAG: llvm.func @__moore_queue_push_back(!llvm.ptr, !llvm.ptr, i64)
@@ -31,7 +31,7 @@ moore.global_variable @testAssoc : !moore.assoc_array<!moore.i32, !moore.i8>
 // CHECK: llvm.load {{.*}} : !llvm.ptr -> !llvm.struct<(ptr, i64)>
 // CHECK: llvm.alloca {{.*}} x !llvm.struct<(ptr, i64)>
 // CHECK: llvm.store {{.*}} : !llvm.struct<(ptr, i64)>, !llvm.ptr
-// CHECK: llvm.call @__moore_array_max({{.*}}) : (!llvm.ptr, i64, i1) -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.call @__moore_array_max({{.*}}) : (!llvm.ptr, i64, i32) -> !llvm.struct<(ptr, i64)>
 func.func @test_queue_max() {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
   %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>
@@ -40,7 +40,7 @@ func.func @test_queue_max() {
 }
 
 // CHECK-LABEL: func @test_queue_min
-// CHECK: llvm.call @__moore_array_min({{.*}}) : (!llvm.ptr, i64, i1) -> !llvm.struct<(ptr, i64)>
+// CHECK: llvm.call @__moore_array_min({{.*}}) : (!llvm.ptr, i64, i32) -> !llvm.struct<(ptr, i64)>
 func.func @test_queue_min() {
   %queue_ref = moore.get_global_variable @testQueue : !moore.ref<queue<!moore.i32, 0>>
   %queue = moore.read %queue_ref : <queue<!moore.i32, 0>>

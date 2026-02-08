@@ -24631,6 +24631,29 @@ std::unique_ptr<OperationPass<ModuleOp>> circt::createConvertMooreToCorePass() {
 void MooreToCorePass::runOnOperation() {
   MLIRContext &context = getContext();
   ModuleOp module = getOperation();
+
+  // Early exit: if there are no Moore dialect operations remaining, skip the
+  // entire pass. This is important for the second MooreToCore invocation in
+  // the pipeline (after InlineCalls), which only needs to handle
+  // WaitEventOp/DetectEventOp that were inlined from functions into processes.
+  // For designs without such ops, this avoids expensive full-module conversion
+  // scans over hundreds of thousands of operations.
+  {
+    auto *mooreDialect = context.getLoadedDialect<MooreDialect>();
+    bool hasMooreOps = false;
+    if (mooreDialect) {
+      module.walk([&](Operation *op) {
+        if (op->getDialect() == mooreDialect) {
+          hasMooreOps = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+    }
+    if (!hasMooreOps)
+      return;
+  }
+
   ClassTypeCache classCache;
   InterfaceTypeCache interfaceCache;
 
