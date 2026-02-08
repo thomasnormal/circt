@@ -17732,6 +17732,40 @@ ninja -C build circt-verilog
   - Current workspace has an unrelated AVIP compile regression in
     `circt-verilog` (MLIR verifier failure).
 
+### Iteration 665
+- Dry-run verifier keyring support:
+  - Added `--hmac-keyring-tsv FILE` to
+    `utils/verify_formal_dryrun_report.py`.
+  - Keyring format: one tab-separated row per key:
+    - `<hmac_key_id>\t<key_file_path>`
+    - blank lines and `#` comments are ignored.
+  - Added strict keyring validation:
+    - file must exist and contain at least one usable row
+    - each row must have exactly two columns
+    - `hmac_key_id` must be non-empty and unique
+    - referenced key files must exist
+  - Added per-run key resolution:
+    - when keyring mode is active, verifier resolves HMAC key by
+      `run_meta.hmac_key_id`
+    - unknown/missing key IDs now fail with field-qualified diagnostics.
+  - Added CLI exclusivity:
+    - `--hmac-key-file` and `--hmac-keyring-tsv` cannot be used together.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive keyring verification path
+    - negative unknown key-id path
+- Documentation:
+  - Updated `docs/FormalRegression.md` with keyring usage and format.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+- Current limitations / debt:
+  - Keyring format is TSV/file-path based only (no signed registry or remote
+    key-provider integration).
+  - Rotation/revocation policy remains external to the verifier.
+
 ---
 
 ## Architecture Reference
