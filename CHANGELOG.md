@@ -28344,3 +28344,76 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Selector composition supports `all|any`, but no grouped expression grammar.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 587 - February 8, 2026
+
+### Yosys SVA BMC Clause-Based Rewrite Selectors
+
+- Added grouped selector control:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_CLAUSES_JSON`
+  - expected to be a non-empty JSON array of clause objects.
+- Clause semantics are OR-of-AND:
+  - each clause is a conjunction of predicates
+  - rewrite is selected when any clause matches.
+- Supported clause fields:
+  - regex fields:
+    - `run_id_regex`, `reason_regex`, `schema_version_regex`,
+      `history_file_regex`
+  - exact-list fields:
+    - `schema_version_list`, `history_file_list`
+  - timestamp-window fields:
+    - `row_generated_at_utc_min`, `row_generated_at_utc_max`
+- Clause mode supersedes legacy global selector composition to avoid ambiguous
+  mixed semantics.
+
+### Migration Semantics
+
+- Added strict validation for clause JSON payloads:
+  - non-empty array, non-empty objects, known keys only
+  - clause-local regex/list/timestamp validation
+  - clause-local timestamp window ordering checks
+- Added row timestamp parsing activation when any clause uses time-window keys.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - clause selection behavior (including global-selector supersession)
+    - malformed clause JSON rejection
+    - unknown clause key rejection
+    - invalid clause regex rejection
+    - invalid clause list rejection
+- Focused lit run:
+  - 5/5 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.12--property$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_named$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Clause grammar has fixed field set and no nested boolean grammar per clause.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
