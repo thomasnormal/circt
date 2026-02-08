@@ -30924,3 +30924,60 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Repeated shared imports are still loaded per reference (no cache/dedup).
 - Arithmetic mode selection remains schema/clause scoped (no per-expression
   override).
+
+## Iteration 623 - February 8, 2026
+
+### Formal Harness Strict Gates and JSON Summary
+
+- Extended `utils/run_formal_all.sh` with new quality-gate options:
+  - `--strict-gate`
+  - `--fail-on-new-xpass`
+  - `--fail-on-passrate-regression`
+  - `--json-summary <file>`
+- Added baseline-aware gate checks:
+  - reject fail/error count increases vs latest baseline
+  - reject XPASS count increases when enabled
+  - reject pass-rate regression when enabled
+  - strict mode also rejects missing baseline rows for observed suite/mode keys.
+- Added machine-readable JSON summary output (default:
+  `<out-dir>/summary.json`) alongside TSV/text summaries.
+
+### Formal Interface Documentation
+
+- Added JSON summary schema:
+  - `utils/formal-summary-schema.json`
+- Updated usage docs:
+  - `docs/FormalRegression.md` now documents strict-gate options and JSON
+    summary output.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - validates JSON summary emission
+    - validates strict-gate failure for XPASS increase
+    - validates pass-rate regression failure path
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- Integrated formal harness smoke:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-gate-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --lec-accept-xprop-only`:
+    - targeted `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Baseline data remains summary-string based; structured baseline columns are
+  not yet implemented.
+- Strict-gate compares only against latest baseline snapshot.
+- CI integration for strict-gate policy enforcement is pending.

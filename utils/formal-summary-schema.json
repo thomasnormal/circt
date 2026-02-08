@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://circt.llvm.org/schemas/formal-results-schema.json",
+  "title": "CIRCT Formal Run Summary",
+  "type": "object",
+  "required": [
+    "date",
+    "git_sha",
+    "rows"
+  ],
+  "properties": {
+    "date": {
+      "type": "string",
+      "description": "Run date in YYYY-MM-DD."
+    },
+    "git_sha": {
+      "type": "string",
+      "description": "Git SHA at run time (empty if unavailable)."
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "suite",
+          "mode",
+          "total",
+          "pass",
+          "fail",
+          "xfail",
+          "xpass",
+          "error",
+          "skip",
+          "pass_rate",
+          "summary"
+        ],
+        "properties": {
+          "suite": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pass": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fail": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xfail": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "xpass": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skip": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pass_rate": {
+            "type": "number",
+            "minimum": 0.0
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
