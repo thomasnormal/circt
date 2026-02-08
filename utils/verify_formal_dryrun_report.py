@@ -16,9 +16,13 @@ def fail(message: str) -> None:
   raise SystemExit(f"error: {message}")
 
 
+def canonical_json_bytes(payload: dict) -> bytes:
+  return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def canonical_row(row: dict) -> bytes:
   payload = {k: v for k, v in row.items() if not k.startswith("_")}
-  return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  return canonical_json_bytes(payload)
 
 
 def hash_rows(rows: list[dict]) -> str:
@@ -50,6 +54,73 @@ def parse_sha256_hex(value: object, field_name: str) -> str:
   if len(raw) != 64 or any(ch not in hexdigits for ch in raw):
     fail(f"{field_name} must be 64-character hex SHA-256")
   return raw
+
+
+def parse_non_empty_string(value: object, field_name: str) -> str:
+  if not isinstance(value, str):
+    fail(f"{field_name} must be non-empty string")
+  raw = value.strip()
+  if not raw:
+    fail(f"{field_name} must be non-empty string")
+  return raw
+
+
+def parse_schema_version_one(value: object, field_name: str) -> None:
+  if value is None:
+    return
+  if value != 1:
+    fail(f"{field_name} must be 1")
+
+
+def read_keyring_manifest(
+    manifest_path: Path,
+    manifest_hmac_key_bytes: bytes,
+    expected_signer_id: Optional[str],
+) -> str:
+  if not manifest_path.is_file():
+    fail(f"keyring manifest file not found: {manifest_path}")
+  try:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+  except Exception as ex:
+    fail(f"{manifest_path}: invalid JSON ({ex})")
+  if not isinstance(manifest, dict):
+    fail(f"{manifest_path}: expected JSON object")
+
+  parse_schema_version_one(
+      manifest.get("schema_version"), f"{manifest_path}: manifest.schema_version"
+  )
+  signer_id = parse_non_empty_string(
+      manifest.get("signer_id"), f"{manifest_path}: manifest.signer_id"
+  )
+  if expected_signer_id is not None and signer_id != expected_signer_id:
+    fail(
+        f"{manifest_path}: manifest.signer_id mismatch; expected "
+        f"'{expected_signer_id}', got '{signer_id}'"
+    )
+  keyring_sha256 = parse_sha256_hex(
+      manifest.get("keyring_sha256"), f"{manifest_path}: manifest.keyring_sha256"
+  )
+  expires_on = parse_iso_date(
+      manifest.get("expires_on"), f"{manifest_path}: manifest.expires_on"
+  )
+  if expires_on is not None and date.today() > expires_on:
+    fail(
+        f"{manifest_path}: manifest.expires_on '{expires_on.isoformat()}' is expired"
+    )
+  signature = parse_sha256_hex(
+      manifest.get("signature_hmac_sha256"),
+      f"{manifest_path}: manifest.signature_hmac_sha256",
+  )
+  payload = {k: v for k, v in manifest.items() if k != "signature_hmac_sha256"}
+  expected_signature = hmac.new(
+      manifest_hmac_key_bytes, canonical_json_bytes(payload), hashlib.sha256
+  ).hexdigest()
+  if not hmac.compare_digest(signature, expected_signature):
+    fail(
+        f"{manifest_path}: manifest.signature_hmac_sha256 mismatch; expected "
+        f"{expected_signature}, got {signature}"
+    )
+  return keyring_sha256
 
 
 def read_hmac_keyring(
@@ -309,6 +380,18 @@ def main() -> int:
       help="Optional expected SHA-256 for keyring file content (requires --hmac-keyring-tsv)",
   )
   parser.add_argument(
+      "--hmac-keyring-manifest-json",
+      help="Optional keyring manifest JSON file with signed keyring_sha256 metadata",
+  )
+  parser.add_argument(
+      "--hmac-keyring-manifest-hmac-key-file",
+      help="HMAC key file used to validate --hmac-keyring-manifest-json signature",
+  )
+  parser.add_argument(
+      "--expected-keyring-signer-id",
+      help="Optional expected signer_id value in keyring manifest",
+  )
+  parser.add_argument(
       "--expected-hmac-key-id",
       help="Optional expected hmac_key_id for run_meta/run_end rows",
   )
@@ -327,10 +410,39 @@ def main() -> int:
   hmac_keyring = None
   if args.hmac_keyring_tsv:
     keyring_path = Path(args.hmac_keyring_tsv)
+    expected_keyring_hash = None
+    if args.hmac_keyring_manifest_json:
+      if not args.hmac_keyring_manifest_hmac_key_file:
+        fail(
+            "--hmac-keyring-manifest-json requires "
+            "--hmac-keyring-manifest-hmac-key-file"
+        )
+      manifest_key_path = Path(args.hmac_keyring_manifest_hmac_key_file)
+      if not manifest_key_path.is_file():
+        fail(f"keyring manifest HMAC key file not found: {manifest_key_path}")
+      expected_keyring_hash = read_keyring_manifest(
+          Path(args.hmac_keyring_manifest_json),
+          manifest_key_path.read_bytes(),
+          expected_signer_id=args.expected_keyring_signer_id,
+      )
+    elif args.hmac_keyring_manifest_hmac_key_file:
+      fail(
+          "--hmac-keyring-manifest-hmac-key-file requires "
+          "--hmac-keyring-manifest-json"
+      )
+    elif args.expected_keyring_signer_id:
+      fail("--expected-keyring-signer-id requires --hmac-keyring-manifest-json")
     if args.hmac_keyring_sha256:
-      expected_keyring_hash = parse_sha256_hex(
+      expected_hash_arg = parse_sha256_hex(
           args.hmac_keyring_sha256, "--hmac-keyring-sha256"
       )
+      if expected_keyring_hash is not None and expected_hash_arg != expected_keyring_hash:
+        fail(
+            f"--hmac-keyring-sha256 mismatch with manifest keyring_sha256; expected "
+            f"{expected_keyring_hash}, got {expected_hash_arg}"
+        )
+      expected_keyring_hash = expected_hash_arg
+    if expected_keyring_hash is not None:
       if not keyring_path.is_file():
         fail(f"HMAC keyring file not found: {keyring_path}")
       actual_keyring_hash = hashlib.sha256(keyring_path.read_bytes()).hexdigest()
@@ -342,6 +454,12 @@ def main() -> int:
     hmac_keyring = read_hmac_keyring(keyring_path)
   elif args.hmac_keyring_sha256:
     fail("--hmac-keyring-sha256 requires --hmac-keyring-tsv")
+  elif args.hmac_keyring_manifest_json:
+    fail("--hmac-keyring-manifest-json requires --hmac-keyring-tsv")
+  elif args.hmac_keyring_manifest_hmac_key_file:
+    fail("--hmac-keyring-manifest-hmac-key-file requires --hmac-keyring-manifest-json")
+  elif args.expected_keyring_signer_id:
+    fail("--expected-keyring-signer-id requires --hmac-keyring-manifest-json")
   if hmac_key_bytes is not None and hmac_keyring is not None:
     fail("cannot use both --hmac-key-file and --hmac-keyring-tsv")
 

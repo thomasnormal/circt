@@ -33210,6 +33210,73 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Keyring/key-file digest pins still rely on external trusted inputs.
 - No built-in signature/certificate trust chain for keyring distribution yet.
 
+## Iteration 670 - February 8, 2026
+
+### Signed Keyring Manifest Verification
+
+- Added keyring-manifest verification options to
+  `utils/verify_formal_dryrun_report.py`:
+  - `--hmac-keyring-manifest-json <file>`
+  - `--hmac-keyring-manifest-hmac-key-file <file>`
+  - `--expected-keyring-signer-id <id>`
+- Manifest verification behavior:
+  - validates manifest JSON object fields:
+    - required: `keyring_sha256`, `signer_id`, `signature_hmac_sha256`
+    - optional: `schema_version` (`1` when present), `expires_on` (`YYYY-MM-DD`)
+  - verifies `signature_hmac_sha256` as HMAC-SHA256 over canonical JSON
+    payload excluding `signature_hmac_sha256`
+  - enforces manifest `keyring_sha256` against actual keyring file content
+  - enforces expected signer id when provided
+  - rejects expired manifests
+- Added strict CLI dependency checks for manifest-related flags.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive manifest-signed keyring verification
+    - negative signer-id mismatch rejection
+  - `docs/FormalRegression.md`
+    - documented manifest verification options
+
+### Validation
+
+- `python3 -m py_compile utils/verify_formal_dryrun_report.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 4/4 PASS
+- OpenTitan focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Manifest trust still depends on symmetric key distribution discipline.
+- No asymmetric signature/certificate verification path yet.
+
 ## Iteration 660 - February 8, 2026
 
 ### Dry-Run JSONL Integrity Verifier Utility
