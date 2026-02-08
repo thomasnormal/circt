@@ -14119,6 +14119,71 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 589
+- Yosys SVA BMC selector profile composition/inheritance:
+  - Extended
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON`
+    profile payload grammar:
+    - legacy form: `profile-name -> clause-array` (still supported)
+    - composed form: `profile-name -> { "extends": ..., "clauses": ... }`
+  - `extends` supports string or array of profile names.
+  - Resolution order is deterministic:
+    - parent profile clauses first (in listed order), then child clauses.
+- Migration engine updates:
+  - Added cycle-safe profile resolution with explicit cycle diagnostics.
+  - Added explicit diagnostics for:
+    - unknown `extends` profile targets
+    - unknown keys in profile objects
+    - malformed `extends` payloads and duplicate names
+  - Preserved existing direct-clause + selected-profile merge semantics.
+- Regression tests:
+  - Expanded:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+      with:
+      - `extends` composition rewrite case (parent + child predicates)
+      - profile cycle rejection
+      - missing `extends` target rejection
+      - invalid profile object-key rejection
+  - Focused lit run:
+    - 6/6 PASS (`rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.17--expect$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.17--expect$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_past$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_past$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Profile composition is inheritance-only and currently lacks negation and
+    conditional activation.
+  - Clause grammar still has fixed selector fields and no nested boolean
+    subexpressions inside a single clause.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+- Long-term features to prioritize:
+  - Add policy-level defaults and environment-specific profile overlays.
+  - Add selector clause negation and bounded combinator support where needed.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference

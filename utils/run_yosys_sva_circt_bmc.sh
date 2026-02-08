@@ -3358,7 +3358,7 @@ def parse_selector_profiles(raw: str):
     if not isinstance(payload, dict) or not payload:
         fail(f"error: invalid {field_name}: expected non-empty JSON object")
 
-    parsed = {}
+    profile_specs = {}
     for profile_name, profile_value in payload.items():
         if not isinstance(profile_name, str) or not profile_name:
             fail(
@@ -3368,10 +3368,106 @@ def parse_selector_profiles(raw: str):
             fail(
                 f"error: invalid {field_name}: invalid profile name '{profile_name}'"
             )
-        parsed[profile_name] = parse_selector_clause_array(
-            profile_value, f"{field_name}.{profile_name}"
-        )
-    return parsed
+        profile_field = f"{field_name}.{profile_name}"
+        if isinstance(profile_value, list):
+            profile_specs[profile_name] = {
+                "extends": [],
+                "clauses": parse_selector_clause_array(profile_value, profile_field),
+            }
+            continue
+        if not isinstance(profile_value, dict) or not profile_value:
+            fail(
+                f"error: invalid {profile_field}: expected non-empty array or object"
+            )
+        unknown_keys = sorted(set(profile_value.keys()) - {"extends", "clauses"})
+        if unknown_keys:
+            fail(
+                f"error: invalid {profile_field}: unknown key '{unknown_keys[0]}'"
+            )
+
+        extends = []
+        if "extends" in profile_value:
+            extends_value = profile_value["extends"]
+            if isinstance(extends_value, str):
+                extends_tokens = [extends_value]
+            elif isinstance(extends_value, list):
+                extends_tokens = extends_value
+            else:
+                fail(
+                    f"error: invalid {profile_field}.extends: expected string or array of strings"
+                )
+            if not extends_tokens:
+                fail(
+                    f"error: invalid {profile_field}.extends: expected at least one profile name"
+                )
+            seen_extends = set()
+            for token in extends_tokens:
+                if not isinstance(token, str) or not token.strip():
+                    fail(
+                        f"error: invalid {profile_field}.extends: expected non-empty string entries"
+                    )
+                name = token.strip()
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+                    fail(
+                        f"error: invalid {profile_field}.extends: invalid profile name '{name}'"
+                    )
+                if name in seen_extends:
+                    fail(
+                        f"error: invalid {profile_field}.extends: duplicate profile name '{name}'"
+                    )
+                seen_extends.add(name)
+                extends.append(name)
+
+        clauses = []
+        if "clauses" in profile_value:
+            clauses = parse_selector_clause_array(
+                profile_value["clauses"], f"{profile_field}.clauses"
+            )
+        if not extends and not clauses:
+            fail(
+                f"error: invalid {profile_field}: expected 'clauses' and/or 'extends'"
+            )
+        profile_specs[profile_name] = {"extends": extends, "clauses": clauses}
+
+    resolved = {}
+    resolve_stack = []
+    resolve_state = {}
+
+    def resolve_profile(profile_name: str):
+        state = resolve_state.get(profile_name, 0)
+        if state == 2:
+            return resolved[profile_name]
+        if state == 1:
+            cycle_start = 0
+            for i, name in enumerate(resolve_stack):
+                if name == profile_name:
+                    cycle_start = i
+                    break
+            cycle_path = resolve_stack[cycle_start:] + [profile_name]
+            fail(
+                f"error: invalid {field_name}: profile cycle detected ({' -> '.join(cycle_path)})"
+            )
+        spec = profile_specs.get(profile_name)
+        if spec is None:
+            parent = resolve_stack[-1] if resolve_stack else profile_name
+            fail(
+                f"error: invalid {field_name}.{parent}.extends: unknown profile '{profile_name}'"
+            )
+        resolve_state[profile_name] = 1
+        resolve_stack.append(profile_name)
+        clauses = []
+        for base_profile_name in spec["extends"]:
+            clauses.extend(resolve_profile(base_profile_name))
+        clauses.extend(spec["clauses"])
+        resolve_stack.pop()
+        resolve_state[profile_name] = 2
+        resolved[profile_name] = clauses
+        return clauses
+
+    for profile_name in profile_specs:
+        resolve_profile(profile_name)
+
+    return resolved
 
 
 rewrite_selector_clauses = parse_selector_clauses(rewrite_selector_clauses_json_raw)

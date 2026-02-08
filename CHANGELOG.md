@@ -28491,3 +28491,76 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Clause grammar still has fixed field set and no nested boolean grammar.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 589 - February 8, 2026
+
+### Yosys SVA BMC Selector Profile Composition
+
+- Extended
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON`
+  grammar to support composition while keeping backward compatibility:
+  - legacy: `profile-name -> clause-array`
+  - composed: `profile-name -> { "extends": ..., "clauses": ... }`
+- `extends` supports string or array values, enabling profile inheritance.
+- Resolved clause order is deterministic:
+  - parent profile clauses first (declared order), then child clauses.
+
+### Migration Semantics
+
+- Added cycle-safe profile resolver with explicit cycle diagnostics.
+- Added strict diagnostics for:
+  - unknown `extends` profile names
+  - unknown keys in profile objects
+  - malformed `extends` payloads and duplicate names
+- Preserved direct-clause + selected-profile merged rewrite behavior.
+
+### Test Coverage
+
+- Expanded:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `extends` composition rewrite case
+    - profile cycle rejection
+    - missing `extends` target rejection
+    - invalid profile object-key rejection
+- Focused lit run:
+  - 6/6 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.17--expect$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.17--expect$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_past$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_past$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Profile composition is inheritance-only; no negation or conditional
+  activation yet.
+- Clause grammar still has fixed selector fields and no nested boolean
+  subexpressions.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
