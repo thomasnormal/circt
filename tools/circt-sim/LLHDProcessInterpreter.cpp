@@ -14502,6 +14502,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               keyOutBlock->data[keyOutOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
             }
             keyOutBlock->initialized = true;
+            // Register the malloc'd string in dynamicStrings so
+            // tryReadStringKey can find it in subsequent operations.
+            if (keyOut.data && keyOut.len > 0)
+              dynamicStrings[ptrVal] = {keyOut.data, keyOut.len};
           }
         } else {
           // Integer key - pass pointer to memory block directly
@@ -14577,6 +14581,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               keyRefBlock->data[keyRefOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
               keyRefBlock->data[keyRefOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
             }
+            // Register the malloc'd string in dynamicStrings so
+            // tryReadStringKey can find it in subsequent operations.
+            if (keyRef.data && keyRef.len > 0)
+              dynamicStrings[ptrVal] = {keyRef.data, keyRef.len};
           }
         } else {
           // Integer key - the key size can be 1, 2, 4, or 8 bytes.
@@ -17276,6 +17284,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
             }
             keyOutBlock->initialized = true;
+            // Register the malloc'd string in dynamicStrings so
+            // tryReadStringKey can find it in subsequent operations.
+            if (keyOut.data && keyOut.len > 0)
+              dynamicStrings[pv] = {keyOut.data, keyOut.len};
           }
         } else {
           uint8_t keyBuffer[8] = {0};
@@ -17358,6 +17370,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               keyRefBlock->data[keyRefOffset + 8 + i] =
                   static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
             }
+            // Register the malloc'd string in dynamicStrings so
+            // tryReadStringKey can find it in subsequent operations.
+            if (keyRef.data && keyRef.len > 0)
+              dynamicStrings[pv] = {keyRef.data, keyRef.len};
           }
         } else {
           uint8_t keyBuffer[8] = {0};
