@@ -437,6 +437,9 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   applyCompilationFlagOverride(
       slang::ast::CompilationFlags::AllowTopLevelIfacePorts,
       options.allowTopLevelIfacePorts);
+  applyCompilationFlagOverride(
+      slang::ast::CompilationFlags::AllowVirtualIfaceWithOverride,
+      options.allowVirtualIfaceWithOverride);
 
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::LintMode,
