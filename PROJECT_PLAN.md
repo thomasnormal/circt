@@ -12060,6 +12060,62 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 555
+- Yosys SVA BMC regex validator deprecation policy controls:
+  - Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_REGEX_POLICY` with values:
+    - `allow`, `warn`, `error`.
+  - Default policy is `warn`.
+  - Behavior when
+    `YOSYS_SVA_MODE_SUMMARY_HISTORY_JSON_VALIDATOR=regex`:
+    - `warn`: emit deprecation warning and continue.
+    - `error`: fail fast and block regex mode.
+    - `allow`: continue silently.
+  - Added validation for policy values and clear diagnostics.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-history-regex-policy.test`:
+    - verifies `warn` path (deprecation warning + successful run).
+    - verifies `error` path (hard failure).
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 9/9 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 32/32 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - `yosys/tests/sva` LEC: total=14 pass=14 fail=0 error=0 skip=2
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Regex validator mode still exists and can be re-enabled via policy.
+  - Parser-backed default still depends on `python3` availability.
+  - Legacy-migrated JSONL rows still use synthetic timestamp metadata.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Move regex mode to `error` default, then remove it.
+  - Add timestamp-policy modes (warn vs error) for migration ergonomics.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference
