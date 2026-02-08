@@ -12512,6 +12512,64 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 563
+- Yosys SVA BMC stale-lock recovery for mkdir lock backend:
+  - Added stale lock policy:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS`
+    - non-negative integer, default `300`
+  - mkdir lock backend now writes lock metadata file:
+    - `${LOCK_FILE}.d/owner` with `pid` + acquisition timestamp.
+  - Added stale-lock reclaim flow:
+    - checks lockdir age via filesystem mtime
+    - if age exceeds stale threshold and owner pid is not alive, stale lockdir
+      is reclaimed
+    - emits one-time reclaim warning
+  - Added explicit timeout failure path when lock cannot be acquired in
+    `...LOCK_TIMEOUT_SECS`.
+  - Added validation for invalid `...LOCK_STALE_SECS`.
+- Regression tests:
+  - Added
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-lock-stale.test`:
+    - verifies stale lockdir recovery enables successful run.
+    - verifies timeout failure when stale recovery is disabled.
+    - verifies invalid stale-secs value is rejected.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 47/47 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Stale detection is mtime + pid based and may be conservative on filesystems
+    with coarse timestamp granularity.
+  - PID liveness checks are host-local and do not cover distributed lock owners.
+  - Drop-event schema still lacks stable event IDs for dedup/merge.
+  - Parser-backed validation still depends on `python3`.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add ownership nonce/session-id metadata to strengthen stale-lock identity.
+  - Add per-reason/per-source aggregate counters in summary JSON output.
+  - Add stable event IDs and optional compression/rotation policy.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

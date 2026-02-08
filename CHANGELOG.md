@@ -26799,3 +26799,68 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Drop-event schema still lacks stable event IDs for dedup / merge.
 - Parser-backed validation still depends on `python3`.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 563 - February 8, 2026
+
+### Yosys SVA BMC Stale-Lock Recovery
+
+- Added stale lock recovery policy for mkdir backend:
+  - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS`
+  - non-negative integer, default `300`
+- mkdir lock backend now writes metadata:
+  - `${LOCK_FILE}.d/owner` with lock owner PID and acquisition timestamp
+- Added stale reclaim behavior:
+  - when lockdir age exceeds stale threshold
+  - and recorded owner PID is not alive
+  - reclaim stale lockdir and continue
+- Added explicit timeout failure when lock acquisition exceeds
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS`.
+- Added strict validation for invalid
+  `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_STALE_SECS`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-lock-stale.test`
+- New coverage verifies:
+  - stale lockdir recovery path succeeds.
+  - timeout failure occurs when stale recovery is disabled.
+  - invalid stale-secs value is rejected.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 47/47 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Stale detection is mtime + PID based and can be conservative on filesystems
+  with coarse timestamp granularity.
+- PID liveness checks are host-local and do not identify distributed owners.
+- Drop-event schema still lacks stable event IDs for dedup / merge.
+- Parser-backed validation still depends on `python3`.
+- xprop-profile pass-mode expected failures remain baseline-tracked.
