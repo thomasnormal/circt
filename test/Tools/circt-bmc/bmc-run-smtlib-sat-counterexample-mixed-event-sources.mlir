@@ -9,7 +9,7 @@ hw.module @top(in %in: i1, out out: i1) attributes {initial_values = [], moore.e
 // CHECK-DAG: BMC_RESULT=SAT
 // CHECK-DAG: mixed event sources:
 // CHECK-DAG: [0] sequence, signal[0]:both
-// CHECK-DAG: estimated signal-arm activity:
+// CHECK-DAG: estimated event-arm activity:
 // CHECK-DAG: [0][1] signal[0]:both -> step 1
 // CHECK-DAG: counterexample inputs:
 // CHECK-DAG: in = 1'd1

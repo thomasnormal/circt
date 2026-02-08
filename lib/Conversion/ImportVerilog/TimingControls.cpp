@@ -944,9 +944,13 @@ lowerSequenceEventListControl(Context &context, Location loc,
   SmallVector<const slang::ast::SignalEventControl *, 4> equivalentSignals;
   SmallVector<const slang::ast::SignalEventControl *, 4> parsedSignalEvents;
   SmallVector<MultiClockSignalEventInfo, 4> multiClockSignals;
+  bool useGenericSequenceLabel =
+      !signalEvents.empty() && sequenceEvents.size() == 1;
 
   for (auto [seqIdx, signalCtrl] : llvm::enumerate(sequenceEvents)) {
-    std::string source = "sequence[" + std::to_string(seqIdx) + "]";
+    std::string source = useGenericSequenceLabel
+                             ? std::string("sequence")
+                             : "sequence[" + std::to_string(seqIdx) + "]";
     if (signalCtrl->iffCondition)
       source += ":iff";
     sequenceSourceAttrs.push_back(builder.getStringAttr(source));
@@ -958,6 +962,11 @@ lowerSequenceEventListControl(Context &context, Location loc,
     if (auto *symRef = signalCtrl->expr.getSymbolReference())
       detailAttrs.push_back(builder.getNamedAttr(
           "sequence_name", builder.getStringAttr(symRef->name)));
+    if (signalCtrl->iffCondition) {
+      if (auto *iffRef = signalCtrl->iffCondition->getSymbolReference())
+        detailAttrs.push_back(
+            builder.getNamedAttr("iff_name", builder.getStringAttr(iffRef->name)));
+    }
     sequenceSourceDetailAttrs.push_back(builder.getDictionaryAttr(detailAttrs));
 
     if (signalCtrl->edge != slang::ast::EdgeKind::None)
@@ -1045,14 +1054,8 @@ lowerSequenceEventListControl(Context &context, Location loc,
   }
   if (sameClockAndEdge)
     equivalentSignals = parsedSignalEvents;
-  ArrayRef<StringAttr> sequenceSources =
-      parsedSignalEvents.empty()
-          ? ArrayRef<StringAttr>(sequenceSourceAttrs)
-          : ArrayRef<StringAttr>();
-  ArrayRef<DictionaryAttr> sequenceSourceDetails =
-      parsedSignalEvents.empty()
-          ? ArrayRef<DictionaryAttr>(sequenceSourceDetailAttrs)
-          : ArrayRef<DictionaryAttr>();
+  ArrayRef<StringAttr> sequenceSources = sequenceSourceAttrs;
+  ArrayRef<DictionaryAttr> sequenceSourceDetails = sequenceSourceDetailAttrs;
 
   LogicalResult result = failure();
   if (sameClockAndEdge) {

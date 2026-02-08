@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 493)
+## Current Status - February 8, 2026 (Iteration 494)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed structured `event_source_details` + estimated per-step signal-arm activity; next: exact fired-arm witness attribution + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed sequence+signal per-step estimated event-arm activity; next: exact fired-arm witness attribution + alias deprecation + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,69 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 494
+
+1. **Sequence-arm attribution in event-source details**
+   - Updated:
+     - `lib/Conversion/ImportVerilog/TimingControls.cpp`
+   - Sequence event-list details now carry optional `iff_name` when resolvable.
+   - Mixed sequence/signal event-lists now always emit sequence detail entries,
+     enabling downstream per-arm diagnostics.
+
+2. **Counterexample activity for sequence arms**
+   - Updated:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - Counterexample diagnostics now estimate activity for:
+     - signal arms (`signal_name` + edge transitions)
+     - sequence arms (`sequence_name` truth at step)
+   - Header updated to:
+     - `estimated event-arm activity:`
+
+3. **Regression coverage**
+   - Added:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-event-activity.sh`
+   - Updated:
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+     - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+   - New checks cover:
+     - sequence `iff_name` metadata emission
+     - SAT counterexample activity lines for both sequence and signal arms.
+
+4. **Validation**
+   - Targeted regressions:
+     - `sequence-event-control.sv` (`FileCheck`): PASS
+     - `lower-to-bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-mixed-event-sources.mlir` (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`
+       (`FileCheck`): PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`
+       (`FileCheck`): PASS
+   - Additional BMC lit checks:
+     - `sva-sequence-event-list-provenance-emit-mlir.sv`: PASS
+     - `sva-sequence-signal-event-list-provenance-emit-mlir.sv`: PASS
+     - `bmc-run-smtlib-sat-counterexample.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail modes): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` compile smoke (`prim_count`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+5. **Current limitations and best long-term next features**
+   - Event-arm activity remains model-waveform derived (diagnostic estimate),
+     not explicit solver witness extraction of wake predicates.
+   - Ambiguous/non-symbol sequence expressions still lack stable names.
+   - Legacy alias attributes remain mirrored for compatibility.
+   - High-value next work:
+     - emit explicit wake-arm witness signals from lowering and report those
+       directly in counterexamples,
+     - stage and execute alias deprecation/removal milestones,
+     - pursue upstream-compatible procedural `always @(property)` handling.
 
 ### Session Summary - Iteration 493
 

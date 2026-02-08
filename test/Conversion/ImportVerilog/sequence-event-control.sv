@@ -121,6 +121,9 @@ module SequenceEventListControlWithIff;
   // CHECK: moore.read %en2
   // CHECK: comb.or
   // CHECK: cf.cond_br
+  // CHECK: moore.event_source_details =
+  // CHECK-SAME: iff_name = "en1"
+  // CHECK-SAME: iff_name = "en2"
   // CHECK: moore.event_sources =
   // CHECK-SAME: "sequence[0]:iff"
   // CHECK-SAME: "sequence[1]:iff"
