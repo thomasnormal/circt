@@ -4239,11 +4239,12 @@ LogicalResult LLHDProcessInterpreter::interpretOperation(ProcessId procId,
   }
 
   // Handle llhd.sig.array_get - extracts an array element from a signal/ref.
+  // NOTE: We do NOT map the result to the parent signal in valueToSignal.
+  // The probe/drive paths handle SigArrayGetOp by tracing back via
+  // getDefiningOp to find the parent signal and compute the element offset.
+  // Mapping to the parent signal would cause block-arg propagation to
+  // drive the ENTIRE parent array instead of the specific element.
   if (auto sigArrayGetOp = dyn_cast<llhd::SigArrayGetOp>(op)) {
-    SignalId inputSigId = getSignalId(sigArrayGetOp.getInput());
-    if (inputSigId != 0) {
-      valueToSignal[sigArrayGetOp.getResult()] = inputSigId;
-    }
     return success();
   }
 
