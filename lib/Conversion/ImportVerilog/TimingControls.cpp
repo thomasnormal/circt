@@ -631,6 +631,8 @@ static bool maybeAddStructuredEventExprAttrs(
                      builder.getI32IntegerAttr(static_cast<int64_t>(width)));
     addAttrIfMissing(keyFor("cast_signed"),
                      builder.getBoolAttr(conv->type->isSigned()));
+    addAttrIfMissing(keyFor("cast_four_state"),
+                     builder.getBoolAttr(conv->type->isFourState()));
     std::string argPrefix = (prefix + "_arg").str();
     if (!maybeAddStructuredEventExprAttrs(builder, detailAttrs, argPrefix,
                                           &conv->operand()))

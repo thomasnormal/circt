@@ -9688,6 +9688,60 @@ ninja -C build circt-verilog
     retire fallback text parsing.
   - Encode full grouping-tree fidelity beyond outer-wrapper depth.
 
+### Iteration 473
+- Structured cast domain provenance from Slang:
+  - ImportVerilog now emits `<prefix>_cast_four_state` for integral
+    `ConversionExpression` wrappers using Slang type-domain information.
+  - This complements existing cast metadata:
+    - `<prefix>_cast_width`
+    - `<prefix>_cast_signed`
+    - `<prefix>_arg`
+- VerifToSMT structured cast-domain parsing:
+  - Structured resolver now parses `*_cast_four_state` (bool or unit attr)
+    and stores it in structured cast nodes.
+  - IFF structured-presence detection now recognizes `iff_cast_four_state`.
+  - Current lowering behavior is unchanged; this iteration focuses on
+    preserving domain provenance for later semantic use.
+- Test additions and updates:
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv`:
+    - `SequenceSignalEventListStructuredCast` now checks cast-domain attrs.
+    - Uses a two-state `bit [2:0]` source in `iff` cast path and verifies
+      nested cast provenance (`iff_lhs_arg_cast_four_state = false`) while the
+      outer balancing cast remains four-state.
+  - Updated
+    `test/Conversion/VerifToSMT/bmc-event-arm-witness-cast-structured.mlir`
+    to include and verify `*_cast_four_state` metadata parsing.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (21 tests)
+  - External matrix:
+    - `sv-tests` BMC: 26/26 PASS
+    - `sv-tests` LEC: 23/23 PASS
+    - `verilator-verification` BMC: 17/17 PASS
+    - `verilator-verification` LEC: 17/17 PASS
+    - `yosys/tests/sva` BMC: 13/14 PASS, 1 fail (`counter` fail-mode)
+    - `yosys/tests/sva` LEC: 14/14 PASS (2 VHDL skips)
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY` accepted)
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS (no
+      `interpretOperation failed`)
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - `cast_four_state` provenance is parsed but not yet used to drive
+    domain-distinct cast semantics in witness lowering.
+  - Structured compare semantics still lack canonical Slang type graph metadata
+    for fully general mixed-width/mixed-domain operands.
+  - `yosys` `counter` pass/fail polarity is sensitive to
+    `--assume-known-inputs`, indicating harness expectation debt.
+- Long-term features to prioritize:
+  - Use `cast_four_state` in VerifToSMT lowering to model domain-intent
+    explicitly (two-state vs four-state cast behavior in event expressions).
+  - Carry canonical Slang expression/type graph metadata end-to-end for robust
+    mixed-domain compare/cast lowering.
+  - Split `yosys` `counter` expectations by assumption profile (or add dual-run
+    classification) so BMC harness results remain stable and actionable.
+
 ---
 
 ## Architecture Reference
