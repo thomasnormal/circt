@@ -31685,3 +31685,63 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Webhook config currently relies on file-based JSON only.
 - No explicit schema-version migration contract yet for webhook config payloads.
+
+## Iteration 641 - February 8, 2026
+
+### Native Failure Email Notifications in Cadence Runner
+
+- Added native failure email support to `utils/run_formal_cadence.sh`:
+  - repeatable `--on-fail-email <addr>`
+  - `--sendmail-path <path>` (default: `sendmail`)
+  - `--email-subject-prefix <text>` (default: `[formal-cadence]`)
+- Failure handling now dispatches in this order:
+  - local hook (`--on-fail-hook`)
+  - native email notifications
+  - webhook notifications
+- Added cadence state telemetry:
+  - `on_fail_emails`
+  - `sendmail_path`
+  - `email_subject_prefix`
+- Added email body context fields:
+  - timestamp, iteration, exit code, run directory, out root, cadence log/state
+
+### Validation and Robustness
+
+- Added strict validation for:
+  - non-empty `--on-fail-email` recipients
+  - sendmail availability (executable path or command in `PATH`)
+- Email send failures are logged and do not mask original iteration failure.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-cadence.test`
+    - added fake-sendmail failure scenario
+    - verifies `-t` invocation args
+    - verifies `To:` header
+    - verifies subject prefix + failure metadata
+    - verifies body includes `formal cadence failure`
+
+### Documentation
+
+- Updated:
+  - `docs/FormalRegression.md`
+    - added native email example
+    - documented email-related options
+
+### Validation
+
+- `bash -n utils/run_formal_cadence.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Integrated smoke sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-email-smoke --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+    - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+    - OpenTitan LEC lane: PASS
+    - AVIP compile lanes: PASS except `axi4Lite_avip` FAIL (known external VIP limitation)
+
+### Remaining Limitations
+
+- Email delivery uses sendmail-compatible transport only (no native SMTP auth/TLS
+  backend).
+- Email message format is fixed text/plain (no templating or provider abstraction).

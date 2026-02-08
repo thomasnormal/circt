@@ -91,6 +91,12 @@ utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-hook 
 Fail hook arguments:
 `<iteration> <exit_code> <run_dir> <out_root> <cadence_log> <cadence_state>`.
 
+Send native email notifications on failure:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-email formal-alerts@example.com --sendmail-path /usr/sbin/sendmail --email-subject-prefix "[formal-cadence]" -- --with-opentitan --opentitan ~/opentitan
+```
+
 Post failure events directly to an HTTP webhook:
 
 ```bash
@@ -116,6 +122,12 @@ Webhook options:
 - `--webhook-backoff-max-secs <n>` caps retry backoff delay.
 - `--webhook-jitter-secs <n>` adds random jitter to retry delay.
 - `--webhook-timeout-secs <n>` controls per-request timeout.
+
+Email options:
+
+- `--on-fail-email <addr>` can be specified multiple times.
+- `--sendmail-path <path>` selects the sendmail binary/command.
+- `--email-subject-prefix <text>` controls email subject prefix.
 
 ## Inputs and Suites
 

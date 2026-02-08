@@ -44,6 +44,11 @@
 // RUN: cat %t/curl-cfg-call.txt | FileCheck %s --check-prefix=CFGWEBHOOK
 // RUN: sh -c 'test "$(grep -c "cfg-a" %t/curl-cfg-call.txt)" -eq 3'
 // RUN: sh -c 'test "$(grep -c "cfg-b" %t/curl-cfg-call.txt)" -eq 1'
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat > %t/sendmail.out\nprintf \"%%%%s\\n\" \"$@\" > %t/sendmail.args\n' > %t/utils/sendmail
+// RUN: chmod +x %t/utils/sendmail
+// RUN: not sh -c 'cd %t && rm -f %t/sendmail.out %t/sendmail.args && PATH=%t/utils:$PATH utils/run_formal_cadence.sh --out-root %t/formal-cadence-email --interval-secs 0 --iterations 1 --run-formal-all %t/utils/fake-formal-all-fail-immediate.sh --on-fail-email formal@example.invalid --sendmail-path %t/utils/sendmail --email-subject-prefix "[cadence-test]" --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=EMAILFAILFAST
+// RUN: cat %t/sendmail.args | FileCheck %s --check-prefix=EMAILARGS
+// RUN: cat %t/sendmail.out | FileCheck %s --check-prefix=EMAILBODY
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
@@ -63,3 +68,8 @@
 // CFGFAILFAST: failing fast: iteration 1 failed
 // CFGWEBHOOK: https://example.invalid/cfg-a
 // CFGWEBHOOK: https://example.invalid/cfg-b
+// EMAILFAILFAST: failing fast: iteration 1 failed
+// EMAILARGS: -t
+// EMAILBODY: To: formal@example.invalid
+// EMAILBODY: Subject: [cadence-test] iteration 1 failed (exit 3)
+// EMAILBODY: formal cadence failure
