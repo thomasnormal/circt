@@ -85,6 +85,12 @@ Prune stale expected-failure budget rows:
 utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-drop-unused
 ```
 
+Preview refresh/prune changes without rewriting expectation files:
+
+```bash
+utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-file utils/formal-expected-failures.tsv --expectations-dry-run
+```
+
 Gate on per-test expected failure cases with expiry policy:
 
 ```bash
@@ -251,6 +257,8 @@ Expected-failure budget file:
 
 - `--expected-failures-file` expects TSV with header:
   - `suite	mode	expected_fail	expected_error	notes`
+- `--expectations-dry-run` previews expectation refresh/prune updates without
+  rewriting expectation files.
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.

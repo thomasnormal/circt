@@ -48,6 +48,9 @@
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t1\t0\tkeep_budget\nmissing-suite\tLEC\t0\t0\tdrop_unused\n' > %t/prune-expected-failures.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-prune-budget --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/prune-expected-failures.tsv --prune-expected-failures-file %t/prune-expected-failures.tsv --prune-expected-failures-drop-unused
 // RUN: FileCheck %s --check-prefix=PRUNEBUDGET < %t/prune-expected-failures.tsv
+// RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t9\t9\tdry_keep\n' > %t/dryrun-refresh-expected-failures.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-refresh-budget --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/dryrun-refresh-expected-failures.tsv --expectations-dry-run
+// RUN: FileCheck %s --check-prefix=DRYRUNBUDGET < %t/dryrun-refresh-expected-failures.tsv
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t9\t9\tcarry_note\n' > %t/refresh-expected-failures.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-05-05\tkeep_reason\n' > %t/refresh-expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31
@@ -65,6 +68,9 @@
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tkeep_matched\nsv-tests\tLEC\tstale_case\tbase\tFAIL\t2099-01-01\tdrop_unmatched\nsv-tests\tLEC\tbasic02\tbase\tANY\t2000-01-01\tdrop_expired\n' > %t/prune-expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-prune-expected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/prune-expected-failure-cases.tsv --prune-expected-failure-cases-file %t/prune-expected-failure-cases.tsv --prune-expected-failure-cases-drop-unmatched --prune-expected-failure-cases-drop-expired
 // RUN: FileCheck %s --check-prefix=PRUNECASE < %t/prune-expected-failure-cases.tsv
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tstale_case\tbase\tFAIL\t2099-01-01\tdry_keep_stale\n' > %t/dryrun-prune-expected-failure-cases.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-dryrun-prune-case --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --prune-expected-failure-cases-file %t/dryrun-prune-expected-failure-cases.tsv --prune-expected-failure-cases-drop-unmatched --expectations-dry-run
+// RUN: FileCheck %s --check-prefix=DRYRUNCASE < %t/dryrun-prune-expected-failure-cases.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-01-01\tknown_case\n' > %t/expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-ok --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases.tsv --fail-on-unexpected-failure-cases --fail-on-expired-expected-failure-cases --json-summary %t/out-expected-cases-ok/summary.json
 // RUN: FileCheck %s --check-prefix=CASEOK < %t/out-expected-cases-ok/expected-failure-cases-summary.tsv
@@ -123,6 +129,7 @@
 // EXPECTEDUNUSED: missing-suite LEC
 // PRUNEBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}keep_budget
 // PRUNEBUDGET-NOT: missing-suite
+// DRYRUNBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}9{{[[:space:]]+}}9{{[[:space:]]+}}dry_keep
 // REFRESHBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}carry_note
 // REFRESHCASE: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-12-31
 // REFRESHCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-05-05{{[[:space:]]+}}keep_reason
@@ -135,6 +142,7 @@
 // PRUNECASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}keep_matched
 // PRUNECASE-NOT: stale_case
 // PRUNECASE-NOT: drop_expired
+// DRYRUNCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}stale_case{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}dry_keep_stale
 // CASEOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}basic02{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_case
 // JSONCASE: "expected_failure_cases"
 // JSONCASE: "matched_count": 1

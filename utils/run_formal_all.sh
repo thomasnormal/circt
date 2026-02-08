@@ -28,6 +28,8 @@ Options:
                          Fail when pass-rate decreases vs baseline
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
+  --expectations-dry-run
+                         Preview expectation refresh/prune without rewriting files
   --fail-on-unexpected-failures
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
@@ -111,6 +113,7 @@ BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
+EXPECTATIONS_DRY_RUN=0
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
 PRUNE_EXPECTED_FAILURES_FILE=""
@@ -194,6 +197,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_PASSRATE_REGRESSION=1; shift ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
+    --expectations-dry-run)
+      EXPECTATIONS_DRY_RUN=1; shift ;;
     --fail-on-unexpected-failures)
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
@@ -684,6 +689,7 @@ if [[ -n "$EXPECTED_FAILURES_FILE" || \
   EXPECTED_FAILURES_FILE="$EXPECTED_FAILURES_FILE" \
   FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
   FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
+  EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   PRUNE_EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE" \
   PRUNE_EXPECTED_FAILURES_DROP_UNUSED="$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" \
   python3 - <<'PY'
@@ -698,6 +704,7 @@ json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
 expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
 fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
+expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURES_FILE", "")
 prune_drop_unused = (
     os.environ.get("PRUNE_EXPECTED_FAILURES_DROP_UNUSED", "0") == "1"
@@ -861,16 +868,19 @@ if prune_path is not None:
         }
     )
   prune_path.parent.mkdir(parents=True, exist_ok=True)
-  with prune_path.open("w", newline="") as f:
-    writer = csv.DictWriter(
-        f,
-        fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
-        delimiter="\t",
-    )
-    writer.writeheader()
-    for row in pruned_rows:
-      writer.writerow(row)
-  print(f"pruned expected-failures file: {prune_path}")
+  if expectations_dry_run:
+    print(f"dry-run: would prune expected-failures file: {prune_path}")
+  else:
+    with prune_path.open("w", newline="") as f:
+      writer = csv.DictWriter(
+          f,
+          fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
+          delimiter="\t",
+      )
+      writer.writeheader()
+      for row in pruned_rows:
+        writer.writerow(row)
+    print(f"pruned expected-failures file: {prune_path}")
   print(
       "pruned expected-failures rows: "
       f"kept={len(pruned_rows)} dropped_unused={dropped_unused}"
@@ -900,6 +910,7 @@ fi
 if [[ -n "$REFRESH_EXPECTED_FAILURES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   SUMMARY_FILE="$OUT_DIR/summary.tsv" \
+  EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   REFRESH_EXPECTED_FAILURES_FILE="$REFRESH_EXPECTED_FAILURES_FILE" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX" \
   REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX="$REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX" \
@@ -911,6 +922,7 @@ from pathlib import Path
 
 summary_path = Path(os.environ["SUMMARY_FILE"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURES_FILE"])
+expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 suite_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX", "")
 mode_filter_raw = os.environ.get("REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX", "")
 
@@ -962,17 +974,19 @@ with summary_path.open() as f:
 
 rows.sort(key=lambda r: (r["suite"], r["mode"]))
 out_path.parent.mkdir(parents=True, exist_ok=True)
-with out_path.open("w", newline="") as f:
-  writer = csv.DictWriter(
-      f,
-      fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
-      delimiter="\t",
-  )
-  writer.writeheader()
-  for row in rows:
-    writer.writerow(row)
-
-print(f"refreshed expected-failures file: {out_path}")
+if expectations_dry_run:
+  print(f"dry-run: would refresh expected-failures file: {out_path}")
+else:
+  with out_path.open("w", newline="") as f:
+    writer = csv.DictWriter(
+        f,
+        fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
+        delimiter="\t",
+    )
+    writer.writeheader()
+    for row in rows:
+      writer.writerow(row)
+  print(f"refreshed expected-failures file: {out_path}")
 print(f"refreshed expected-failures rows: {len(rows)}")
 PY
 fi
@@ -988,6 +1002,7 @@ if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
   FAIL_ON_UNEXPECTED_FAILURE_CASES="$FAIL_ON_UNEXPECTED_FAILURE_CASES" \
   FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
   FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
+  EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   PRUNE_EXPECTED_FAILURE_CASES_FILE="$PRUNE_EXPECTED_FAILURE_CASES_FILE" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_UNMATCHED" \
   PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED="$PRUNE_EXPECTED_FAILURE_CASES_DROP_EXPIRED" \
@@ -1005,6 +1020,7 @@ expected_path = Path(expected_file_raw) if expected_file_raw else None
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
+expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURE_CASES_FILE", "")
 prune_path = Path(prune_file_raw) if prune_file_raw else None
 prune_drop_unmatched = (
@@ -1343,17 +1359,19 @@ if prune_path is not None:
     )
 
   prune_path.parent.mkdir(parents=True, exist_ok=True)
-  with prune_path.open("w", newline="") as f:
-    writer = csv.DictWriter(
-        f,
-        fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
-        delimiter="\t",
-    )
-    writer.writeheader()
-    for row in pruned_rows:
-      writer.writerow(row)
-
-  print(f"pruned expected-failure-cases file: {prune_path}")
+  if expectations_dry_run:
+    print(f"dry-run: would prune expected-failure-cases file: {prune_path}")
+  else:
+    with prune_path.open("w", newline="") as f:
+      writer = csv.DictWriter(
+          f,
+          fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
+          delimiter="\t",
+      )
+      writer.writeheader()
+      for row in pruned_rows:
+        writer.writerow(row)
+    print(f"pruned expected-failure-cases file: {prune_path}")
   print(
       "pruned expected-failure-cases rows: "
       f"kept={len(pruned_rows)} dropped_unmatched={dropped_unmatched} "
@@ -1391,6 +1409,7 @@ fi
 
 if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
+  EXPECTATIONS_DRY_RUN="$EXPECTATIONS_DRY_RUN" \
   REFRESH_EXPECTED_FAILURE_CASES_FILE="$REFRESH_EXPECTED_FAILURE_CASES_FILE" \
   REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON="$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" \
   REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY="$REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY" \
@@ -1407,6 +1426,7 @@ from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
 out_path = Path(os.environ["REFRESH_EXPECTED_FAILURE_CASES_FILE"])
+expectations_dry_run = os.environ.get("EXPECTATIONS_DRY_RUN", "0") == "1"
 default_expires = os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON", "").strip()
 collapse_status_any = (
     os.environ.get("REFRESH_EXPECTED_FAILURE_CASES_COLLAPSE_STATUS_ANY", "0") == "1"
@@ -1627,17 +1647,19 @@ else:
 
 refreshed.sort(key=lambda r: (r["suite"], r["mode"], r["id_kind"], r["id"], r["status"]))
 out_path.parent.mkdir(parents=True, exist_ok=True)
-with out_path.open("w", newline="") as f:
-  writer = csv.DictWriter(
-      f,
-      fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
-      delimiter="\t",
-  )
-  writer.writeheader()
-  for row in refreshed:
-    writer.writerow(row)
-
-print(f"refreshed expected-failure-cases file: {out_path}")
+if expectations_dry_run:
+  print(f"dry-run: would refresh expected-failure-cases file: {out_path}")
+else:
+  with out_path.open("w", newline="") as f:
+    writer = csv.DictWriter(
+        f,
+        fieldnames=["suite", "mode", "id", "id_kind", "status", "expires_on", "reason"],
+        delimiter="\t",
+    )
+    writer.writeheader()
+    for row in refreshed:
+      writer.writerow(row)
+  print(f"refreshed expected-failure-cases file: {out_path}")
 print(f"refreshed expected-failure-cases rows: {len(refreshed)}")
 PY
 fi
