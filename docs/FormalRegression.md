@@ -61,6 +61,12 @@ utils/run_formal_all.sh --fail-on-new-xpass
 utils/run_formal_all.sh --fail-on-passrate-regression
 ```
 
+Gate on known expected-failure budgets per suite/mode:
+
+```bash
+utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --fail-on-unexpected-failures
+```
+
 Run formal suites on a fixed cadence (6-hour interval example):
 
 ```bash
@@ -169,6 +175,8 @@ Each run writes:
 - `<out-dir>/summary.txt` human-readable summary
 - `<out-dir>/summary.json` machine-readable JSON summary (override path via
   `--json-summary`)
+- `<out-dir>/expected-failures-summary.tsv` expected-failure budget comparison
+  (when `--expected-failures-file` is used)
 - Harnesses treat `BMC_RESULT=SAT|UNSAT|UNKNOWN` and
   `LEC_RESULT=EQ|NEQ|UNKNOWN` tokens as the source of truth for pass/fail
   classification when not in smoke mode.
@@ -182,6 +190,12 @@ Baselines:
 - `utils/formal-baselines.tsv` (latest baselines per suite/mode)
   - columns: `date suite mode total pass fail xfail xpass error skip pass_rate result`
 - `PROJECT_PLAN.md` baseline table (updated when `--update-baselines` is used)
+
+Expected-failure budget file:
+
+- `--expected-failures-file` expects TSV with header:
+  - `suite	mode	expected_fail	expected_error	notes`
+- Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 
 ## Notes
 
