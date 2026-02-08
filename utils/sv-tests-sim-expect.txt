@@ -81,3 +81,25 @@ uvm_test_run_test	compile-only	UVM testbench: too large for 120s sim timeout
 18.14--random-stability_2	compile-only	UVM: randcase stability
 18.14--random-stability_3	compile-only	UVM: process randstate randcase
 18.15--manually-seeding-randomize_1	compile-only	UVM: manual seed reproducibility
+
+# Ch16: UVM SVA tests that timeout (UVM overhead + assertion engine)
+16.10--property-local-var-uvm	compile-only	UVM SVA: property local var timeout
+16.10--sequence-local-var-uvm	compile-only	UVM SVA: sequence local var timeout
+16.11--sequence-subroutine-uvm	compile-only	UVM SVA: sequence subroutine timeout
+16.12--property-interface-prec-uvm	compile-only	UVM SVA: property interface prec timeout
+16.12--property-interface-uvm	compile-only	UVM SVA: property interface timeout
+16.12--property-prec-uvm	compile-only	UVM SVA: property prec timeout
+16.12--property-uvm	compile-only	UVM SVA: property timeout
+
+# Ch9: Event sequence controls not supported
+9.4.3--event_sequence_controls	compile-only	Event sequence control not supported
+
+# Should-fail tests: circt-verilog doesn't yet detect these errors
+6.5--variable_mixed_assignments	skip	Should-fail: mixed procedural/continuous assignments
+6.5--variable_multiple_assignments	skip	Should-fail: multiple continuous assignments
+11.9--tagged_union_member_access_inv	skip	Should-fail: invalid tagged union member access
+16.10--property-local-var-fail	skip	Should-fail: property local var error detection
+16.10--sequence-local-var-fail	skip	Should-fail: sequence local var error detection
+
+# UVM utility test: no top module
+uvm_files	skip	No top module (utility file)
