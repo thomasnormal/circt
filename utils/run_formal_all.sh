@@ -32,6 +32,10 @@ Options:
                          Fail when fail/error exceed expected-failure budgets
   --fail-on-unused-expected-failures
                          Fail when expected-failures rows are unused
+  --prune-expected-failures-file FILE
+                         Rewrite expected-failures file by pruning stale rows
+  --prune-expected-failures-drop-unused
+                         Drop expected-failures rows unused in current run
   --refresh-expected-failures-file FILE
                          Rewrite expected-failures TSV from current run
   --refresh-expected-failures-include-suite-regex REGEX
@@ -109,6 +113,8 @@ FAIL_ON_PASSRATE_REGRESSION=0
 EXPECTED_FAILURES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURES=0
 FAIL_ON_UNUSED_EXPECTED_FAILURES=0
+PRUNE_EXPECTED_FAILURES_FILE=""
+PRUNE_EXPECTED_FAILURES_DROP_UNUSED=0
 REFRESH_EXPECTED_FAILURES_FILE=""
 REFRESH_EXPECTED_FAILURES_INCLUDE_SUITE_REGEX=""
 REFRESH_EXPECTED_FAILURES_INCLUDE_MODE_REGEX=""
@@ -192,6 +198,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_UNEXPECTED_FAILURES=1; shift ;;
     --fail-on-unused-expected-failures)
       FAIL_ON_UNUSED_EXPECTED_FAILURES=1; shift ;;
+    --prune-expected-failures-file)
+      PRUNE_EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
+    --prune-expected-failures-drop-unused)
+      PRUNE_EXPECTED_FAILURES_DROP_UNUSED=1; shift ;;
     --refresh-expected-failures-file)
       REFRESH_EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --refresh-expected-failures-include-suite-regex)
@@ -255,6 +265,16 @@ if [[ "$FAIL_ON_UNEXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; 
 fi
 if [[ "$FAIL_ON_UNUSED_EXPECTED_FAILURES" == "1" && -z "$EXPECTED_FAILURES_FILE" ]]; then
   echo "--fail-on-unused-expected-failures requires --expected-failures-file" >&2
+  exit 1
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURES_FILE" && -z "$EXPECTED_FAILURES_FILE" ]]; then
+  EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE"
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURES_FILE" && "$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" != "1" ]]; then
+  PRUNE_EXPECTED_FAILURES_DROP_UNUSED=1
+fi
+if [[ -n "$PRUNE_EXPECTED_FAILURES_FILE" && ! -r "$PRUNE_EXPECTED_FAILURES_FILE" ]]; then
+  echo "prune expected-failures file not readable: $PRUNE_EXPECTED_FAILURES_FILE" >&2
   exit 1
 fi
 if [[ -n "$EXPECTED_FAILURES_FILE" && ! -r "$EXPECTED_FAILURES_FILE" ]]; then
@@ -657,12 +677,15 @@ PY
 
 if [[ -n "$EXPECTED_FAILURES_FILE" || \
       "$FAIL_ON_UNEXPECTED_FAILURES" == "1" || \
-      "$FAIL_ON_UNUSED_EXPECTED_FAILURES" == "1" ]]; then
+      "$FAIL_ON_UNUSED_EXPECTED_FAILURES" == "1" || \
+      -n "$PRUNE_EXPECTED_FAILURES_FILE" ]]; then
   OUT_DIR="$OUT_DIR" \
   JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
   EXPECTED_FAILURES_FILE="$EXPECTED_FAILURES_FILE" \
   FAIL_ON_UNEXPECTED_FAILURES="$FAIL_ON_UNEXPECTED_FAILURES" \
   FAIL_ON_UNUSED_EXPECTED_FAILURES="$FAIL_ON_UNUSED_EXPECTED_FAILURES" \
+  PRUNE_EXPECTED_FAILURES_FILE="$PRUNE_EXPECTED_FAILURES_FILE" \
+  PRUNE_EXPECTED_FAILURES_DROP_UNUSED="$PRUNE_EXPECTED_FAILURES_DROP_UNUSED" \
   python3 - <<'PY'
 import csv
 import json
@@ -675,7 +698,12 @@ json_summary_path = Path(os.environ["JSON_SUMMARY_FILE"])
 expected_file_raw = os.environ.get("EXPECTED_FAILURES_FILE", "")
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURES", "0") == "1"
 fail_on_unused = os.environ.get("FAIL_ON_UNUSED_EXPECTED_FAILURES", "0") == "1"
+prune_file_raw = os.environ.get("PRUNE_EXPECTED_FAILURES_FILE", "")
+prune_drop_unused = (
+    os.environ.get("PRUNE_EXPECTED_FAILURES_DROP_UNUSED", "0") == "1"
+)
 expected_path = Path(expected_file_raw) if expected_file_raw else None
+prune_path = Path(prune_file_raw) if prune_file_raw else None
 expected_summary_path = out_dir / "expected-failures-summary.tsv"
 
 required_cols = {"suite", "mode", "expected_fail", "expected_error"}
@@ -813,6 +841,40 @@ if unused_expectations:
   print("expected-failures unused entries:")
   for item in unused_expectations:
     print(f"  {item['suite']} {item['mode']}")
+
+if prune_path is not None:
+  if expected_path is None:
+    raise SystemExit("--prune-expected-failures-file requires expected failures to be loaded")
+  pruned_rows = []
+  dropped_unused = 0
+  for (suite, mode), exp in expected.items():
+    if prune_drop_unused and (suite, mode) not in seen:
+      dropped_unused += 1
+      continue
+    pruned_rows.append(
+        {
+            "suite": suite,
+            "mode": mode,
+            "expected_fail": exp["expected_fail"],
+            "expected_error": exp["expected_error"],
+            "notes": exp.get("notes", ""),
+        }
+    )
+  prune_path.parent.mkdir(parents=True, exist_ok=True)
+  with prune_path.open("w", newline="") as f:
+    writer = csv.DictWriter(
+        f,
+        fieldnames=["suite", "mode", "expected_fail", "expected_error", "notes"],
+        delimiter="\t",
+    )
+    writer.writeheader()
+    for row in pruned_rows:
+      writer.writerow(row)
+  print(f"pruned expected-failures file: {prune_path}")
+  print(
+      "pruned expected-failures rows: "
+      f"kept={len(pruned_rows)} dropped_unused={dropped_unused}"
+  )
 
 if fail_on_unexpected and (
     totals["unexpected_fail"] > 0 or totals["unexpected_error"] > 0
