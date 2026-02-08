@@ -25318,3 +25318,66 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Comment placement is still header-normalized rather than row-local.
 - Skip accounting remains mixed test-level/mode-level in summaries.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 540 - February 8, 2026
+
+### Yosys SVA BMC Row-Local Comment Anchor Preservation
+
+- Refactored expectation formatting in
+  `utils/run_yosys_sva_circt_bmc.sh` to preserve comment locality.
+- Added pending-comment anchor flow:
+  - comments now bind to the next row or malformed entry instead of being
+    globally emitted as header comments.
+- Added anchor-preserving canonical sorting:
+  - sorted canonical rows now carry their attached comments with them.
+- Extended malformed/trailing comment behavior:
+  - malformed rows preserve attached comment anchors in malformed output section.
+  - trailing comment-only blocks at EOF are preserved after formatted content.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-format-comments.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-format.test`
+- Revalidated targeted formatter + strict suites:
+  - `test/Tools/run-yosys-sva-bmc-format*.test`
+  - `test/Tools/run-yosys-sva-bmc-format-strict*.test`
+- Targeted lit result: 7/7 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 23/23 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Comment anchoring is row-local but does not yet expose configurable sticky
+  group semantics across blank-line-separated blocks.
+- Skip accounting remains mixed test-level/mode-level in summaries.
+- Severity tiers remain coarse (`error` vs `warning`) and not parser-provenance
+  driven.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

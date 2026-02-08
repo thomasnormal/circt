@@ -1,0 +1,30 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf '# comment for beta\nbeta pass known fail\n# comment for alpha\nalpha pass known fail\n\n# malformed anchor\nbadline\n# trailing comment\n' > %t/expect-apply.txt
+
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect-apply.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=apply \
+// RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN: FileCheck %s --check-prefix=OUT < %t/apply.out
+// RUN: sed 's/\t/|/g' %t/expect-apply.txt | FileCheck %s --check-prefix=FILE
+
+// OUT: EXPECT_FORMAT: mode=apply file={{.*expect-apply.txt}} rows=2 malformed=1 changed=1
+// OUT: EXPECT_FORMAT: mode=apply files=1 changed=1
+// OUT: PASS(pass): simple
+// OUT: SKIP(fail-no-macro): simple
+// OUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// FILE: # comment for alpha
+// FILE-NEXT: alpha|pass|known|fail
+// FILE-NEXT: # comment for beta
+// FILE-NEXT: beta|pass|known|fail
+// FILE-EMPTY:
+// FILE-NEXT: # malformed anchor
+// FILE-NEXT: badline
+// FILE-NEXT: # trailing comment

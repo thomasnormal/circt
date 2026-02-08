@@ -48,8 +48,8 @@
 // APPLYOUT: SKIP(fail-no-macro): simple
 // APPLYOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 
-// APPLYFILE: #   Header comment
 // APPLYFILE: simple|*|*|pass
+// APPLYFILE: #   Header comment
 // APPLYFILE: simple|pass|xprop|fail
 // APPLYFILE-NOT: simple pass xprop FAIL
 
