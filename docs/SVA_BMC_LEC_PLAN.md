@@ -347,6 +347,96 @@ Deliverables:
 - Updated result artifacts and changelog entries.
 - Reduced xfail set over time with justifications.
 
+## Route-Context Schema Reference
+
+This section documents the route-context schema used by drop-events auto
+profile routing in `utils/run_yosys_sva_circt_bmc.sh`.
+
+Primary environment variables:
+- `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON`
+- `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`
+
+Top-level schema keys:
+- `schema_version`: currently must be `"1"`.
+- `allow_unknown_keys`: allow unknown keys in the context payload.
+- `validate_merged_context`: validate merged context after built-in CI overlay.
+- `keys`: typed key declarations and per-key constraints.
+- `regex_defs`: named regex patterns for `bool_expr.regex_ref`.
+- `limits`: expression guardrails (depth/node limits).
+- `int_arithmetic`: inline arithmetic mode (`div_mode`, `mod_mode`).
+- `int_arithmetic_presets`: named arithmetic mode map.
+- `int_arithmetic_ref`: select a named arithmetic preset as default mode.
+- `imports`: optional JSON file list for reusable schema modules.
+- `all_of`, `any_of`: clause arrays with key/int/bool predicates.
+
+Import module JSON contract:
+- Allowed keys inside each imported JSON object:
+  - `regex_defs`
+  - `limits`
+  - `int_arithmetic_presets`
+- Unknown keys are rejected.
+- Import payload must be a non-empty JSON object.
+
+Merge and precedence rules:
+- `limits`: later imports override earlier imports; inline schema overrides all
+  imported limits.
+- `regex_defs`: duplicate names across imports or between imports and inline
+  schema are rejected.
+- `int_arithmetic_presets`: duplicate preset names across imports or between
+  imports and inline schema are rejected.
+- Arithmetic mode precedence during clause evaluation:
+  - clause `int_arithmetic` or clause `int_arithmetic_ref`
+  - schema `int_arithmetic` or schema `int_arithmetic_ref`
+  - built-in defaults (`floor` division/mod)
+
+Conflict rules:
+- A single scope cannot set both `int_arithmetic` and `int_arithmetic_ref`.
+- `int_arithmetic_ref` requires `int_arithmetic_presets` to be configured in
+  that schema after import+inline merge.
+- Unknown preset names fail with field-qualified diagnostics.
+
+Minimal import module example:
+
+```json
+{
+  "regex_defs": {
+    "night_casefold": { "pattern": "^night$", "flags": "i" }
+  },
+  "limits": {
+    "max_int_expr_nodes": 96
+  },
+  "int_arithmetic_presets": {
+    "tz": { "div_mode": "trunc_zero", "mod_mode": "trunc_zero" }
+  }
+}
+```
+
+Minimal schema example using imports + arithmetic refs:
+
+```json
+{
+  "schema_version": "1",
+  "allow_unknown_keys": true,
+  "imports": ["/abs/path/auto-route-schema-import.json"],
+  "int_arithmetic_ref": "tz",
+  "keys": {
+    "attempt": { "type": "integer", "required": true },
+    "flavor": { "type": "string", "required": true }
+  },
+  "all_of": [
+    {
+      "int_expr": [
+        [{ "div": ["attempt", 2] }, "eq", -1],
+        [{ "mod": ["attempt", 2] }, "eq", -1]
+      ],
+      "bool_expr": [
+        { "regex_ref": ["flavor", "night_casefold"] }
+      ]
+    }
+  ]
+}
+```
+
 ## Milestones
 
 1. M1: BMC correctness baseline
