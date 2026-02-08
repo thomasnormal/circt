@@ -16097,6 +16097,37 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 619
+- Yosys SVA BMC route-context arithmetic preset refs:
+  - Added top-level `int_arithmetic_presets` schema field for named arithmetic
+    mode objects.
+  - Added top-level `int_arithmetic_ref` to select a preset as the schema
+    default arithmetic mode.
+  - Added clause-level `int_arithmetic_ref` for `all_of[]` / `any_of[]`
+    overrides.
+  - Added validation to reject mixed inline/ref forms in the same scope.
+- Validation and errors:
+  - Unknown preset refs now fail with field-qualified diagnostics.
+  - Clause parsing now receives preset maps so clause refs resolve consistently
+    with top-level refs.
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    to cover:
+    - positive schema-default ref case (`int_arithmetic_ref`)
+    - positive clause override via ref
+    - negative unknown top-level ref
+    - negative unknown clause-level ref
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+- Current limitations / debt:
+  - Presets are local to one schema payload; no shared import mechanism.
+  - Arithmetic precedence is schema/clause scoped; still no per-expression mode
+    override.
+  - No schema-version migration policy for arithmetic defaults yet.
+
 ---
 
 ## Architecture Reference

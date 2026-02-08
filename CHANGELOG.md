@@ -30670,3 +30670,43 @@ CIRCT/slang correctly enforces LRM restrictions.
   mechanism.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 619 - February 8, 2026
+
+### Yosys SVA BMC Arithmetic Preset References
+
+- Added named arithmetic preset support in route-context schema:
+  - top-level `int_arithmetic_presets` map
+  - top-level `int_arithmetic_ref`
+  - clause-level `int_arithmetic_ref` in `all_of[]` / `any_of[]`
+- Added strict conflict checks:
+  - reject configuring both `int_arithmetic` and `int_arithmetic_ref` in the
+    same scope
+- Added unknown-reference checks with precise field-qualified diagnostics for
+  top-level and clause-level refs.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive schema default via `int_arithmetic_ref`
+    - positive clause override via `int_arithmetic_ref`
+    - negative unknown top-level ref
+    - negative unknown clause-level ref
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+
+### Remaining Limitations
+
+- Presets are still local to one schema payload (no imports/shared modules).
+- Arithmetic mode selection is still schema/clause scoped (no per-expression
+  override).
+- No schema-version migration policy exists for arithmetic-default changes.
