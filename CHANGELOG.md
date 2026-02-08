@@ -30334,3 +30334,53 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Expression normalization and complexity controls are still missing.
 - OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
   `aes_sbox_canright`.
+
+## Iteration 614 - February 8, 2026
+
+### Yosys SVA BMC Regex Flags in Bool Expressions
+
+- Extended `bool_expr.regex` payload syntax:
+  - `[key, pattern]`
+  - `[key, pattern, flags]`
+- Added regex flag support:
+  - `i` for case-insensitive matching
+  - `m` for multiline matching
+  - `s` for dotall matching
+- Parser behavior:
+  - validates flag strings (`i/m/s` only)
+  - rejects duplicate flags
+  - canonicalizes stored flags to `ims` order
+- Runtime behavior:
+  - compiles regex once during parse and reuses the compiled pattern at
+    evaluation time.
+- Formatter behavior:
+  - renders `regex(key, "pattern")`
+  - renders `regex(key, "pattern", "flags")` when flags are present.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive schema case now exercises `regex` with `"i"` flag
+    - added invalid-flag rejection case (`"z"`)
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+
+### Remaining Limitations
+
+- Regex flags are currently scoped to inline `bool_expr.regex`; shared
+  precompiled profile-level regex reuse is still missing.
+- Scalar comparisons still do not expose explicit collation/normalization
+  policy for non-integer comparisons.
+- Integer `div`/`mod` semantics remain implicit and not schema-versioned.
+- Expression normalization and complexity controls are still missing.
+- OpenTitan AES S-Box LEC still requires `LEC_ACCEPT_XPROP_ONLY=1` for
+  `aes_sbox_canright`.

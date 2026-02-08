@@ -15776,6 +15776,57 @@ ninja -C build circt-verilog
   - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
     modeling.
 
+### Iteration 614
+- Yosys SVA BMC `bool_expr.regex` flags/options support:
+  - Extended `regex` payload syntax from:
+    - `[key, pattern]`
+  - to:
+    - `[key, pattern]`
+    - `[key, pattern, flags]`
+  - Supported flags:
+    - `i` (ignore case)
+    - `m` (multiline)
+    - `s` (dotall)
+  - Parser behavior:
+    - validates flag strings (`i/m/s` only)
+    - rejects duplicate flags
+    - canonicalizes stored flag order to `ims`
+  - Runtime behavior:
+    - compiles regex once during parse and reuses compiled pattern at eval
+      time.
+- Diagnostics and formatting:
+  - `bool_expr` formatter now prints flag-aware predicates:
+    - `regex(key, "pattern")`
+    - `regex(key, "pattern", "flags")`
+- Regression tests:
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive schema case using `regex` with `"i"` flag
+    - negative schema case rejecting invalid regex flag `"z"`
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+- Current limitations / debt:
+  - Regex flags are currently scoped to inline `bool_expr.regex`; shared
+    precompiled profile-level regex reuse is still missing.
+  - Scalar comparators still do not expose explicit collation/normalization
+    policy for non-integer comparisons.
+  - Integer arithmetic semantics (`div`/`mod`) remain non-versioned.
+  - Expression normalization/complexity controls are still missing.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Add reusable named regex definitions in selector/profile schemas.
+  - Introduce typed scalar expression leaves and explicit scalar comparison
+    semantics profiles.
+  - Add schema-versioned integer arithmetic semantics and deterministic AST
+    normalization.
+  - Add complexity budgeting for expression trees.
+  - Reduce OpenTitan `XPROP_ONLY` dependence via stronger 4-state and unknown
+    modeling.
+
 ---
 
 ## Architecture Reference
