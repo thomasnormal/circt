@@ -930,6 +930,45 @@ static bool resolveStructuredExprFromDetail(
   if (!logicalNotAttr)
     return false;
   bool logicalNot = *logicalNotAttr;
+  auto unaryOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("unary_op")));
+  if (unaryOpAttr) {
+    std::optional<ResolvedNamedBoolExpr::Kind> unaryKind;
+    StringRef unaryOp = unaryOpAttr.getValue();
+    if (unaryOp == "not")
+      unaryKind = ResolvedNamedBoolExpr::Kind::Not;
+    else if (unaryOp == "bitwise_not")
+      unaryKind = ResolvedNamedBoolExpr::Kind::BitwiseNot;
+    else if (unaryOp == "reduce_and")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceAnd;
+    else if (unaryOp == "reduce_or")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceOr;
+    else if (unaryOp == "reduce_xor")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+    else if (unaryOp == "reduce_nand")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceNand;
+    else if (unaryOp == "reduce_nor")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceNor;
+    else if (unaryOp == "reduce_xnor")
+      unaryKind = ResolvedNamedBoolExpr::Kind::ReduceXnor;
+    else
+      return false;
+
+    std::string argPrefix = (prefix + "_arg").str();
+    std::optional<unsigned> argArgIndex;
+    std::unique_ptr<ResolvedNamedBoolExpr> argExpr;
+    if (!resolveStructuredExprFromDetail(detail, argPrefix, inputNameToArgIndex,
+                                         numNonStateArgs, argArgIndex, argExpr))
+      return false;
+    auto argNode = moveArgOrExprToNode(argArgIndex, argExpr);
+    if (!argNode)
+      return false;
+
+    auto node = std::make_unique<ResolvedNamedBoolExpr>();
+    node->kind = *unaryKind;
+    node->lhs = std::move(argNode);
+    resolvedExpr = std::move(node);
+    return true;
+  }
 
   auto binOpAttr = dyn_cast_or_null<StringAttr>(detail.get(key("bin_op")));
   if (binOpAttr) {
@@ -5470,7 +5509,7 @@ struct VerifBoundedModelCheckingOpConversion
               detail.get("iff_lsb") || detail.get("iff_msb") ||
               detail.get("iff_reduction") || detail.get("iff_bitwise_not") ||
               detail.get("iff_logical_not") ||
-              detail.get("iff_bin_op") ||
+              detail.get("iff_bin_op") || detail.get("iff_unary_op") ||
               detail.get("iff_dyn_index_name") || detail.get("iff_dyn_sign") ||
               detail.get("iff_dyn_offset") || detail.get("iff_dyn_width");
           (void)resolveStructuredExprFromDetail(

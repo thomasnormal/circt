@@ -413,9 +413,42 @@ module SequenceSignalEventListStructuredLogicalNot;
   // CHECK-DAG: signal_lsb = 0 : i32
   // CHECK-DAG: signal_msb = 0 : i32
   // CHECK-DAG: signal_logical_not
+  // CHECK-DAG: signal_unary_op = "not"
+  // CHECK-DAG: signal_arg_name = "bus"
+  // CHECK-DAG: signal_arg_lsb = 0 : i32
+  // CHECK-DAG: signal_arg_msb = 0 : i32
   // CHECK-DAG: iff_name = "en"
   // CHECK-DAG: iff_logical_not
+  // CHECK-DAG: iff_unary_op = "not"
+  // CHECK-DAG: iff_arg_name = "en"
   always @(seq or posedge (!bus[0]) iff (!en)) begin
+    q <= ~q;
+  end
+endmodule
+
+// Test explicit unary tree metadata for mixed unary/binary nesting.
+module SequenceSignalEventListStructuredUnaryTree;
+  logic clk, q, en;
+  logic [1:0] bus;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredUnaryTree
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_unary_op = "not"
+  // CHECK-DAG: signal_arg_unary_op = "bitwise_not"
+  // CHECK-DAG: signal_arg_arg_name = "bus"
+  // CHECK-DAG: signal_arg_arg_lsb = 0 : i32
+  // CHECK-DAG: signal_arg_arg_msb = 0 : i32
+  // CHECK-DAG: iff_unary_op = "not"
+  // CHECK-DAG: iff_arg_bin_op = "ne"
+  // CHECK-DAG: iff_arg_lhs_name = "bus"
+  // CHECK-DAG: iff_arg_lhs_lsb = 1 : i32
+  // CHECK-DAG: iff_arg_lhs_msb = 1 : i32
+  // CHECK-DAG: iff_arg_rhs_name = "en"
+  always @(seq or posedge (!(~bus[0])) iff (!(bus[1] != en))) begin
     q <= ~q;
   end
 endmodule

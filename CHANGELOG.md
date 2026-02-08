@@ -23194,3 +23194,62 @@ CIRCT/slang correctly enforces LRM restrictions.
   nodes for all precedence-sensitive expressions.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 463 - February 8, 2026
+
+### Structured Unary Trees for Event Expressions
+
+- Added explicit recursive unary metadata emission in ImportVerilog:
+  - `<prefix>_unary_op`
+  - `<prefix>_arg_*`
+- Supported structured unary operators:
+  - `not`
+  - `bitwise_not`
+  - `reduce_and`, `reduce_or`, `reduce_xor`
+  - `reduce_nand`, `reduce_nor`, `reduce_xnor`
+- Flat structured attrs (`*_logical_not`, `*_bitwise_not`, `*_reduction`) are
+  still emitted where representable for compatibility with existing consumers.
+
+### VerifToSMT Structured Resolver
+
+- Added recursive `*_unary_op` parsing in `resolveStructuredExprFromDetail`.
+- Unary-tree parsing now takes precedence over flat leaf attributes when both
+  are present, preserving explicit operator ordering.
+- Added `iff_unary_op` as a recognized iff-constraint key to avoid dropping
+  witness generation when only unary-tree iff metadata is present.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-unary-tree-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Extended logical-not checks to include unary-tree attrs.
+    - Added mixed unary/binary structured metadata case:
+      `SequenceSignalEventListStructuredUnaryTree`.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (13 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Structured metadata still lacks explicit grouping/parenthesis nodes.
+- Not all event-expression operator families are structured yet; some still
+  rely on text fallback.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.
