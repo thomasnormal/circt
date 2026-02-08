@@ -189,7 +189,14 @@ while IFS= read -r -d '' sv; do
   # Build circt-verilog command
   cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
     -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
-  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && ! [[ "$tags" =~ uvm ]]; then
+  # Detect if the test needs UVM (check tags, test name, and file content)
+  needs_uvm=0
+  if [[ "$tags" =~ uvm ]] || [[ "$base" =~ uvm ]]; then
+    needs_uvm=1
+  elif grep -q 'uvm_pkg\|`include.*uvm' "${files[0]}" 2>/dev/null; then
+    needs_uvm=1
+  fi
+  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && [[ "$needs_uvm" -eq 0 ]]; then
     cmd+=("--no-uvm-auto-include")
   fi
   if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
@@ -216,7 +223,7 @@ while IFS= read -r -d '' sv; do
     # Also handles cross-top-level hierarchical paths (e.g. $printtimescale(mod0.m))
     cmd_notop=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
       -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
-    if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && ! [[ "$tags" =~ uvm ]]; then
+    if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && [[ "$needs_uvm" -eq 0 ]]; then
       cmd_notop+=("--no-uvm-auto-include")
     fi
     if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
