@@ -1,0 +1,17 @@
+--- a/source/parsing/Parser_members.cpp
++++ b/source/parsing/Parser_members.cpp
+@@ -2544,7 +2544,13 @@ SequenceDeclarationSyntax& Parser::parseSequenceDeclaration(AttrList attributes)
+         declarations.push_back(&parseLocalVariableDeclaration());
+
+     auto& expr = parseSequenceExpr(0, /* isInProperty */ false);
+-    auto semi2 = expect(TokenKind::Semicolon);
++    Token semi2;
++    if (peek(TokenKind::Semicolon))
++        semi2 = consume();
++    else if (peek(TokenKind::EndSequenceKeyword))
++        semi2 = Token::createMissing(alloc, TokenKind::Semicolon, peek().location());
++    else
++        semi2 = expect(TokenKind::Semicolon);
+     auto end = expect(TokenKind::EndSequenceKeyword);
+
+     auto blockName = parseNamedBlockClause();
