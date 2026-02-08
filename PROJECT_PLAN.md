@@ -9345,6 +9345,48 @@ ninja -C build circt-verilog
   - Add structured grouping nodes and precedence-preserving fallback behavior.
   - Root-cause and fix `circt-sim` `llhd.drv` diagnostics with targeted regressions.
 
+### Iteration 466
+- Structured `eq/ne` semantics generalized to non-leaf operands:
+  - VerifToSMT now recursively evaluates structured subexpressions as values
+    where possible (not only direct arg/const leaves) before `eq/ne` fallback.
+  - Added value-aware handling for relevant non-leaf structured forms:
+    - unary `bitwise_not` over bit-vectors
+    - nested bitwise `and/or/xor` trees when operand types match
+    - bool-valued unary/reduction/implies/iff subexpressions via existing
+      boolean evaluator
+  - `eq/ne` now compares these resolved values directly when types permit,
+    preserving width semantics in more realistic nested expressions.
+- Test additions and updates:
+  - Added `test/Conversion/VerifToSMT/bmc-event-arm-witness-eq-ne-nonleaf-structured.mlir`.
+  - Updated `test/Conversion/ImportVerilog/sequence-event-control.sv` with
+    `SequenceSignalEventListStructuredEqNonLeaf`.
+- Validation status:
+  - `llvm-lit`:
+    - `test/Conversion/ImportVerilog/sequence-event-control.sv` PASS
+    - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir` PASS (16 tests)
+  - External smoke:
+    - `sv-tests` BMC (`16.12--property`) PASS
+    - `sv-tests` LEC (`16.10--property-local-var`) PASS
+    - `verilator-verification` BMC (`assert_rose`) PASS
+    - `verilator-verification` LEC (`assert_rose`) PASS
+    - `yosys/tests/sva` BMC (`basic00`, pass/fail modes) PASS
+    - `yosys/tests/sva` LEC (`basic00`) PASS
+    - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`) PASS (`XPROP_ONLY`)
+    - OpenTitan sim smoke (`prim_fifo_sync`) PASS with known `llhd.drv` diagnostics
+    - AVIP APB compile smoke PASS
+- Current limitations / debt:
+  - Value-aware compare evaluation is still partial for some non-leaf families
+    (e.g. richer mixed-type trees and additional operator kinds).
+  - Structured metadata still lacks explicit grouping/parenthesis nodes.
+  - OpenTitan `prim_fifo_sync` continues to report `llhd.drv`
+    `interpretOperation` diagnostics.
+- Long-term features to prioritize:
+  - Continue extending value-aware compare evaluation across remaining
+    structured operator families and mixed-width/mixed-type trees.
+  - Add structured grouping nodes to preserve precedence without syntax fallback.
+  - Investigate and fix `circt-sim` `llhd.drv` diagnostics; lock with dedicated
+    simulator regressions.
+
 ---
 
 ## Architecture Reference

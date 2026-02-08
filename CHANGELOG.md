@@ -23363,3 +23363,51 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Structured metadata still lacks explicit grouping/parenthesis nodes.
 - OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
   `interpretOperation` diagnostics.
+
+---
+
+## Iteration 466 - February 8, 2026
+
+### Non-Leaf Value-Aware `eq/ne` in Structured Witness Expressions
+
+- Extended `VerifToSMT` structured comparison evaluation beyond leaf-only
+  operands by introducing recursive value evaluation for structured subtrees.
+- `eq/ne` now attempts direct value comparison for additional non-leaf forms:
+  - unary `bitwise_not` trees over bit-vectors
+  - bitwise `and/or/xor` trees with matching operand types
+  - bool-valued unary/reduction/implies/iff subexpressions via existing bool
+    evaluator
+- This preserves bit-width semantics for more realistic nested structured
+  comparisons before falling back to bool-level comparison.
+
+### Regression Tests
+
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness-eq-ne-nonleaf-structured.mlir`
+- Updated:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - Added `SequenceSignalEventListStructuredEqNonLeaf`.
+
+### Validation
+
+- CIRCT targeted lit:
+  - `test/Conversion/ImportVerilog/sequence-event-control.sv`: PASS
+  - `test/Conversion/VerifToSMT/bmc-event-arm-witness*.mlir`: PASS (16 tests)
+- External smoke re-runs:
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `verilator-verification` BMC (`assert_rose`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `yosys/tests/sva` BMC (`basic00`, pass/fail): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan LEC (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS (`XPROP_ONLY`)
+  - OpenTitan sim smoke (`prim_fifo_sync`): PASS (with known diagnostics)
+  - AVIP APB compile smoke: PASS
+
+### Remaining Limitations
+
+- Value-aware compare semantics are still partial for some richer mixed-type /
+  mixed-width non-leaf trees.
+- Structured metadata still lacks explicit grouping/parenthesis nodes.
+- OpenTitan `prim_fifo_sync` simulation still emits repeated `llhd.drv`
+  `interpretOperation` diagnostics.

@@ -494,3 +494,27 @@ module SequenceSignalEventListStructuredCaseEquality;
     q <= ~q;
   end
 endmodule
+
+// Test structured metadata for eq/ne with non-leaf unary operands.
+module SequenceSignalEventListStructuredEqNonLeaf;
+  logic clk, q;
+  logic [1:0] bus, mask;
+
+  sequence seq;
+    @(posedge clk) q;
+  endsequence
+
+  // CHECK-LABEL: moore.module @SequenceSignalEventListStructuredEqNonLeaf
+  // CHECK: moore.event_source_details =
+  // CHECK-DAG: signal_bin_op = "eq"
+  // CHECK-DAG: signal_lhs_unary_op = "bitwise_not"
+  // CHECK-DAG: signal_lhs_arg_name = "bus"
+  // CHECK-DAG: signal_rhs_name = "mask"
+  // CHECK-DAG: iff_bin_op = "ne"
+  // CHECK-DAG: iff_lhs_unary_op = "bitwise_not"
+  // CHECK-DAG: iff_lhs_arg_name = "bus"
+  // CHECK-DAG: iff_rhs_name = "mask"
+  always @(seq or posedge ((~bus) == mask) iff ((~bus) != mask)) begin
+    q <= ~q;
+  end
+endmodule
