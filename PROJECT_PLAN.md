@@ -12632,6 +12632,79 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 565
+- Yosys SVA BMC drop-event identity + aggregate reporting:
+  - Added stable drop-event IDs:
+    - each drop event now carries `event_id`
+    - ID is deterministically derived from
+      `reason|history_format|run_id|row_generated_at_utc`
+    - hash backend preference:
+      - `sha256sum`
+      - `shasum -a 256`
+      - `cksum` fallback
+  - Added machine-readable drop-event aggregates to summary JSON output:
+    - top-level `drop_events_summary`
+    - fields:
+      - `total`
+      - `reasons.future_skew`
+      - `history_format.tsv`
+      - `history_format.jsonl`
+  - Added the same `drop_events_summary` object to emitted history JSONL rows.
+  - Updated history JSONL validator:
+    - `drop_events_summary` is optional for backward compatibility
+    - when present, strict numeric/object checks are enforced
+  - Reordered history JSONL retention flow to capture finalized drop counts in
+    emitted run rows:
+    - trim existing history first (age/future/max)
+    - append current run row (with aggregate counters)
+    - re-apply max-entry cap
+- Regression tests:
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-artifacts.test`:
+    - asserts `drop_events_summary` presence in summary JSON.
+  - Updated `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`:
+    - asserts summary JSON drop aggregates under warn-policy drops.
+    - asserts history JSONL row carries `drop_events_summary`.
+    - asserts drop-events JSONL rows include stable `event_id`.
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-retention.test`:
+    - updated expected drop-event object shape with `event_id`.
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 47/47 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Event-id hash backend fallback can vary across host tool availability
+    (`sha256sum`/`shasum`/`cksum`), reducing cross-host bit-for-bit identity.
+  - Aggregate counters currently include only `future_skew` reason family.
+  - Parser-backed validation still depends on `python3`.
+  - Drop-event schema still lacks explicit schema_version field.
+  - xprop pass-mode failures remain baseline-tracked.
+- Long-term features to prioritize:
+  - Add fixed in-script hashing path for cross-host-stable event IDs.
+  - Extend drop-event aggregate families beyond `future_skew`.
+  - Add explicit drop-event schema versioning and compat policy.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

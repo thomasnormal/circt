@@ -2081,6 +2081,29 @@ for section, fields in required_sections.items():
         value = payload[field]
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             fail(f"error: invalid numeric summary field '{field_name}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+
+drop_events_summary = obj.get("drop_events_summary")
+if drop_events_summary is not None:
+    if not isinstance(drop_events_summary, dict):
+        fail(f"error: invalid object 'drop_events_summary' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    if "total" not in drop_events_summary:
+        fail(f"error: missing summary field 'drop_events_summary.total' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    total = drop_events_summary["total"]
+    if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+        fail(f"error: invalid numeric summary field 'drop_events_summary.total' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    reasons = drop_events_summary.get("reasons")
+    if not isinstance(reasons, dict):
+        fail(f"error: invalid object 'drop_events_summary.reasons' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    future_skew = reasons.get("future_skew")
+    if isinstance(future_skew, bool) or not isinstance(future_skew, int) or future_skew < 0:
+        fail(f"error: invalid numeric summary field 'drop_events_summary.reasons.future_skew' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    history_format = drop_events_summary.get("history_format")
+    if not isinstance(history_format, dict):
+        fail(f"error: invalid object 'drop_events_summary.history_format' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    for field in ("tsv", "jsonl"):
+        value = history_format.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            fail(f"error: invalid numeric summary field 'drop_events_summary.history_format.{field}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
 PY
   }
 
@@ -2108,6 +2131,24 @@ PY
   json_escape() {
     local value="$1"
     printf '%s' "$value" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+  }
+
+  stable_event_id() {
+    local key="$1"
+    local digest
+    if command -v sha256sum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$key" | sha256sum | awk '{print $1}')"
+      printf 'drop-%s\n' "${digest:0:16}"
+      return 0
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+      digest="$(printf '%s' "$key" | shasum -a 256 | awk '{print $1}')"
+      printf 'drop-%s\n' "${digest:0:16}"
+      return 0
+    fi
+    digest="$(printf '%s' "$key" | cksum | awk '{print $1}')"
+    printf 'drop-%s\n' "$digest"
+    return 0
   }
 
   pid_start_jiffies() {
@@ -2286,6 +2327,8 @@ PY
     local escaped_generated
     local escaped_run_id
     local escaped_reason
+    local escaped_event_id
+    local event_id
     local event_line
     now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     escaped_file="$(json_escape "$history_file")"
@@ -2293,8 +2336,10 @@ PY
     escaped_generated="$(json_escape "$row_generated_at")"
     escaped_run_id="$(json_escape "$run_id")"
     escaped_reason="$(json_escape "$reason")"
-    printf -v event_line '{"generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
-      "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
+    event_id="$(stable_event_id "${reason}|${history_format}|${run_id}|${row_generated_at}")"
+    escaped_event_id="$(json_escape "$event_id")"
+    printf -v event_line '{"event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
+      "$escaped_event_id" "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
     with_drop_events_lock "$drop_events_lock_file" append_drop_event_line "$event_line"
   }
 
@@ -2574,6 +2619,36 @@ PY
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
   fi
 
+  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" ]]; then
+    prepare_history_jsonl_file "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
+    # First trim existing rows to accumulate drop counters before appending this run.
+    trim_history_jsonl \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
+    {
+      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d},"drop_events_summary":{"total":%d,"reasons":{"future_skew":%d},"history_format":{"tsv":%d,"jsonl":%d}}}\n' \
+        "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
+        "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
+        "$mode_total" "$mode_out_pass" "$mode_out_fail" "$mode_out_xfail" \
+        "$mode_out_xpass" "$mode_out_epass" "$mode_out_efail" "$mode_out_unskip" \
+        "$mode_skipped" "$mode_skipped_pass" "$mode_skipped_fail" \
+        "$mode_skipped_expected" "$mode_skipped_unexpected" \
+        "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
+        "$mode_skip_reason_no_property" "$mode_skip_reason_other" \
+        "$((history_drop_future_tsv + history_drop_future_jsonl))" \
+        "$((history_drop_future_tsv + history_drop_future_jsonl))" \
+        "$history_drop_future_tsv" "$history_drop_future_jsonl"
+    } >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
+    # Re-apply entry cap after appending this run row.
+    trim_history_jsonl \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" \
+      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
+      0 \
+      0
+  fi
+
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE" ]]; then
     : > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"
     {
@@ -2608,29 +2683,19 @@ PY
       printf '    "fail_no_macro": %d,\n' "$mode_skip_reason_fail_no_macro"
       printf '    "no_property": %d,\n' "$mode_skip_reason_no_property"
       printf '    "other": %d\n' "$mode_skip_reason_other"
+      printf '  },\n'
+      printf '  "drop_events_summary": {\n'
+      printf '    "total": %d,\n' "$((history_drop_future_tsv + history_drop_future_jsonl))"
+      printf '    "reasons": {\n'
+      printf '      "future_skew": %d\n' "$((history_drop_future_tsv + history_drop_future_jsonl))"
+      printf '    },\n'
+      printf '    "history_format": {\n'
+      printf '      "tsv": %d,\n' "$history_drop_future_tsv"
+      printf '      "jsonl": %d\n' "$history_drop_future_jsonl"
+      printf '    }\n'
       printf '  }\n'
       printf '}\n'
     } > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"
-  fi
-
-  if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" ]]; then
-    prepare_history_jsonl_file "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
-    {
-      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d}}\n' \
-        "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
-        "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
-        "$mode_total" "$mode_out_pass" "$mode_out_fail" "$mode_out_xfail" \
-        "$mode_out_xpass" "$mode_out_epass" "$mode_out_efail" "$mode_out_unskip" \
-        "$mode_skipped" "$mode_skipped_pass" "$mode_skipped_fail" \
-        "$mode_skipped_expected" "$mode_skipped_unexpected" \
-        "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
-        "$mode_skip_reason_no_property" "$mode_skip_reason_other"
-    } >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
-    trim_history_jsonl \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE" \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_ENTRIES" \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
-      "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
   fi
 
   if ((history_drop_future_tsv > 0 || history_drop_future_jsonl > 0)); then
