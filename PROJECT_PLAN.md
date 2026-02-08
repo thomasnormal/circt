@@ -14379,6 +14379,74 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 593
+- Yosys SVA BMC reusable selector macros:
+  - Added `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MACROS_JSON`
+    for named selector expressions.
+  - Added `macro` selector combinator to clauses and profiles:
+    - `{ "macro": "<name>" }`
+  - Macro references compose with all existing predicate/combinator fields in
+    the same expression object (conjunctive semantics).
+- Migration engine updates:
+  - Added strict macro specification parsing:
+    - macros JSON must be a non-empty object
+    - macro names must match `[A-Za-z0-9][A-Za-z0-9_.-]*`
+    - macro entries must be non-empty selector expression objects
+  - Added macro reference resolution with diagnostics for:
+    - unknown macro references
+    - recursive macro cycles
+  - Extended recursive selector evaluation and row-timestamp dependency
+    traversal to include expanded macro expressions.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-macros.test`
+      covering:
+      - positive clause macro rewrite behavior
+      - positive profile macro rewrite behavior
+      - unknown macro rejection
+      - macro cycle rejection
+      - invalid macro JSON shape rejection
+  - Focused lit run:
+    - 9/9 PASS (`rewrite-macros`, `rewrite-cardinality`,
+      `rewrite-profile-layers`, `rewrite-profiles`, `rewrite-clauses`,
+      `rewrite-selectors`, `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-goto-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Selector macros are currently non-parameterized and cannot be imported
+    across policy files.
+  - Profile layering is ordered stacking only; no environment-aware policy
+    routing yet.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+- Long-term features to prioritize:
+  - Add environment-aware policy routing for profile defaults/overlays.
+  - Add parameterized/importable selector macro libraries.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference
