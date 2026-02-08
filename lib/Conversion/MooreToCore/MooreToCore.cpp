@@ -6250,17 +6250,21 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
     auto loc = op.getLoc();
     auto kind = op.getKind();
 
-    // Support wire, tri, uwire, interconnect, supply0, and supply1 nets.
-    // Tri nets behave identically to wire nets (multiple drivers produce X).
-    // UWire is a single-driver wire (lowered the same as wire).
-    // Interconnect nets are used for connecting signals with potentially
-    // different types but can be treated as wires for lowering purposes.
-    // Supply0/supply1 are constant-driven nets (ground/power).
+    // Support wire, tri, uwire, interconnect, supply0, supply1, wand, wor,
+    // triand, and trior nets. Tri nets behave identically to wire nets
+    // (multiple drivers produce X). UWire is a single-driver wire (lowered the
+    // same as wire). Interconnect nets are used for connecting signals with
+    // potentially different types but can be treated as wires for lowering
+    // purposes. Supply0/supply1 are constant-driven nets (ground/power).
+    // WAnd/TriAnd are wired-AND nets (multi-driver value = AND of all drivers).
+    // WOr/TriOr are wired-OR nets (multi-driver value = OR of all drivers).
     if (kind != NetKind::Wire && kind != NetKind::Tri &&
         kind != NetKind::UWire && kind != NetKind::Interconnect &&
-        kind != NetKind::Supply0 && kind != NetKind::Supply1)
+        kind != NetKind::Supply0 && kind != NetKind::Supply1 &&
+        kind != NetKind::WAnd && kind != NetKind::WOr &&
+        kind != NetKind::TriAnd && kind != NetKind::TriOr)
       return rewriter.notifyMatchFailure(
-          loc, "only wire/tri/uwire/interconnect/supply nets supported");
+          loc, "unsupported net kind");
 
     auto resultType = typeConverter->convertType(op.getResult().getType());
     if (!resultType)
@@ -6372,6 +6376,15 @@ struct NetOpConversion : public OpConversionPattern<NetOp> {
 
     auto signal = rewriter.replaceOpWithNewOp<llhd::SignalOp>(
         op, resultType, op.getNameAttr(), init);
+
+    // For wand/wor/triand/trior nets, attach a resolution attribute so the
+    // simulator knows to use AND/OR resolution for multiple drivers.
+    if (kind == NetKind::WAnd || kind == NetKind::TriAnd)
+      signal->setAttr("circt.resolution",
+                      rewriter.getStringAttr("wired_and"));
+    else if (kind == NetKind::WOr || kind == NetKind::TriOr)
+      signal->setAttr("circt.resolution",
+                      rewriter.getStringAttr("wired_or"));
 
     // For nets with assigned values, also emit a continuous drive to handle
     // dynamic updates. The initial value handles t=0, the drive handles
@@ -24630,11 +24643,35 @@ void MooreToCorePass::runOnOperation() {
   ConversionTarget target(context);
   populateLegality(target, typeConverter);
 
-  RewritePatternSet prePatterns(&context);
-  prePatterns.add<SimplifyXorOpPattern, SimplifyAndOpPattern, SimplifyOrOpPattern>(
-      &context);
-  if (failed(applyPatternsGreedily(module, std::move(prePatterns))))
-    signalPassFailure();
+  // Use a config that skips expensive region simplification (CSE, unreachable
+  // block elimination) during greedy rewrites. These patterns are simple
+  // peepholes that don't create/remove blocks, so region simplification is
+  // unnecessary and causes O(n^2) behavior on modules with many sub-modules.
+  GreedyRewriteConfig greedyConfig;
+  greedyConfig.setRegionSimplificationLevel(
+      GreedySimplifyRegionLevel::Disabled);
+
+  // Only run pre-pattern simplification if there are any moore.xor, moore.and,
+  // or moore.or operations to simplify. Scanning for matching ops first avoids
+  // the overhead of building a full worklist of all operations in the module.
+  {
+    bool hasTargetOps = false;
+    module.walk([&](Operation *op) {
+      if (isa<XorOp, AndOp, OrOp>(op)) {
+        hasTargetOps = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (hasTargetOps) {
+      RewritePatternSet prePatterns(&context);
+      prePatterns.add<SimplifyXorOpPattern, SimplifyAndOpPattern,
+                      SimplifyOrOpPattern>(&context);
+      if (failed(applyPatternsGreedily(module, std::move(prePatterns),
+                                        greedyConfig)))
+        signalPassFailure();
+    }
+  }
 
   ConversionPatternSet patterns(&context, typeConverter);
   populateOpConversion(patterns, typeConverter, classCache, interfaceCache);
@@ -24650,11 +24687,106 @@ void MooreToCorePass::runOnOperation() {
   if (failed(applyFullConversion(module, target, std::move(patterns), config)))
     signalPassFailure();
 
-  RewritePatternSet cleanupPatterns(&context);
-  cleanupPatterns.add<UnrealizedCastToBoolRewrite, LLHDProbeToLLVMRewrite,
-                      LLHDDriveToLLVMRewrite>(&context);
-  if (failed(applyPatternsGreedily(module, std::move(cleanupPatterns))))
-    signalPassFailure();
+  // Apply cleanup rewrites via direct walks instead of applyPatternsGreedily.
+  // The greedy driver scans ALL operations in the module to build its worklist,
+  // which is O(N) even when zero patterns match. For modules with thousands of
+  // sub-modules (and hundreds of thousands of ops after conversion), this
+  // becomes a major bottleneck. Direct walks only visit the relevant op types.
+  {
+    IRRewriter cleanupRewriter(module);
+
+    // UnrealizedCastToBoolRewrite: cast 4-state i1 struct -> i1
+    SmallVector<UnrealizedConversionCastOp> castsToRewrite;
+    module.walk([&](UnrealizedConversionCastOp op) {
+      if (op.getNumOperands() != 1 || op.getNumResults() != 1)
+        return;
+      auto input = op.getOperand(0);
+      auto resultType = op.getResult(0).getType();
+      if (!resultType.isInteger(1))
+        return;
+      if (!isFourStateStructType(input.getType()))
+        return;
+      auto structType = cast<hw::StructType>(input.getType());
+      auto valueType = structType.getElements()[0].type;
+      if (!valueType.isInteger(1))
+        return;
+      castsToRewrite.push_back(op);
+    });
+    for (auto op : castsToRewrite) {
+      cleanupRewriter.setInsertionPoint(op);
+      auto input = op.getOperand(0);
+      auto structType = cast<hw::StructType>(input.getType());
+      auto valueType = structType.getElements()[0].type;
+      Value value = extractFourStateValue(cleanupRewriter, op.getLoc(), input);
+      Value unknown =
+          extractFourStateUnknown(cleanupRewriter, op.getLoc(), input);
+      Value trueConst =
+          hw::ConstantOp::create(cleanupRewriter, op.getLoc(), valueType, 1);
+      Value notUnknown =
+          comb::XorOp::create(cleanupRewriter, op.getLoc(), unknown, trueConst);
+      Value result = comb::AndOp::create(
+          cleanupRewriter, op.getLoc(), ValueRange{value, notUnknown}, true);
+      cleanupRewriter.replaceOp(op, result);
+    }
+
+    // LLHDProbeToLLVMRewrite: probe on LLVM ptr -> LLVM load
+    SmallVector<llhd::ProbeOp> probesToRewrite;
+    module.walk([&](llhd::ProbeOp op) {
+      Value base = op.getSignal();
+      while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1)
+          break;
+        base = castOp.getInputs()[0];
+      }
+      if (isa<LLVM::LLVMPointerType>(base.getType()))
+        probesToRewrite.push_back(op);
+    });
+    for (auto op : probesToRewrite) {
+      cleanupRewriter.setInsertionPoint(op);
+      Value base = op.getSignal();
+      while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1)
+          break;
+        base = castOp.getInputs()[0];
+      }
+      Type resultType = op.getResult().getType();
+      Type llvmResultType = convertToLLVMType(resultType);
+      Value loaded = LLVM::LoadOp::create(cleanupRewriter, op.getLoc(),
+                                          llvmResultType, base);
+      if (llvmResultType != resultType) {
+        loaded = UnrealizedConversionCastOp::create(cleanupRewriter, op.getLoc(),
+                                                    resultType, loaded)
+                     .getResult(0);
+      }
+      cleanupRewriter.replaceOp(op, loaded);
+    }
+
+    // LLHDDriveToLLVMRewrite: drive on LLVM ptr -> LLVM store
+    SmallVector<llhd::DriveOp> drivesToRewrite;
+    module.walk([&](llhd::DriveOp op) {
+      Value base = op.getSignal();
+      while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1)
+          break;
+        base = castOp.getInputs()[0];
+      }
+      if (isa<LLVM::LLVMPointerType>(base.getType()))
+        drivesToRewrite.push_back(op);
+    });
+    for (auto op : drivesToRewrite) {
+      cleanupRewriter.setInsertionPoint(op);
+      Value base = op.getSignal();
+      while (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1)
+          break;
+        base = castOp.getInputs()[0];
+      }
+      Value storeVal =
+          convertValueToLLVMType(op.getValue(), op.getLoc(), cleanupRewriter);
+      LLVM::StoreOp::create(cleanupRewriter, op.getLoc(), storeVal, base);
+      cleanupRewriter.eraseOp(op);
+    }
+  }
 
   // Fix sim.fork entry blocks that have predecessors (e.g., from forever
   // loops). During dialect conversion, inlineRegionBefore doesn't always

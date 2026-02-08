@@ -965,9 +965,19 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
   Type innerType = sigOp.getInit().getType();
   unsigned width = getTypeWidth(innerType);
 
+  // Check for resolution attribute (wand/wor nets).
+  SignalResolution resolution = SignalResolution::Default;
+  if (auto resAttr = sigOp->getAttrOfType<mlir::StringAttr>("circt.resolution")) {
+    if (resAttr.getValue() == "wired_and")
+      resolution = SignalResolution::WiredAnd;
+    else if (resAttr.getValue() == "wired_or")
+      resolution = SignalResolution::WiredOr;
+  }
+
   // Register with the scheduler
   SignalId sigId =
-      scheduler.registerSignal(name, width, getSignalEncoding(innerType));
+      scheduler.registerSignal(name, width, getSignalEncoding(innerType),
+                               resolution);
 
   // Store the mapping
   valueToSignal[sigOp.getResult()] = sigId;
@@ -1576,17 +1586,28 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
                                                 : std::to_string(driveVal.getUInt64()))
                             << " at time " << targetTime.realTime << " fs\n");
 
-    // Schedule the signal update
+    // Schedule the signal update.
+    // Use updateSignalWithStrength for multi-driver resolution (wand/wor).
     SignalValue newVal = driveVal.toSignalValue();
-    if (scheduler.getSignalValue(sigId) == newVal) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Module drive unchanged for signal " << sigId << "\n");
-      continue;
-    }
+
+    // Extract drive strength from the drive operation.
+    DriveStrength strength0 = DriveStrength::Strong;
+    DriveStrength strength1 = DriveStrength::Strong;
+    if (auto s0Attr = driveOp.getStrength0Attr())
+      strength0 = static_cast<DriveStrength>(
+          static_cast<uint8_t>(s0Attr.getValue()));
+    if (auto s1Attr = driveOp.getStrength1Attr())
+      strength1 = static_cast<DriveStrength>(
+          static_cast<uint8_t>(s1Attr.getValue()));
+
+    uint64_t driverId =
+        reinterpret_cast<uint64_t>(driveOp.getOperation());
+
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::NBA,
-        Event([this, sigId, newVal]() {
-          scheduler.updateSignal(sigId, newVal);
+        Event([this, sigId, driverId, newVal, strength0, strength1]() {
+          scheduler.updateSignalWithStrength(sigId, driverId, newVal,
+                                             strength0, strength1);
         }));
   }
   (void)drivesProcessed;
@@ -2169,18 +2190,29 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
                                              : std::to_string(driveVal.getUInt64()))
                           << " at time " << targetTime.realTime << " fs\n");
 
-  // Schedule the signal update
+  // Schedule the signal update.
+  // Use updateSignalWithStrength to support multi-driver resolution (wand/wor).
+  // Each DriveOp gets a unique driver ID based on its pointer address.
   SignalValue newVal = driveVal.toSignalValue();
-  if (scheduler.getSignalValue(targetSigId) == newVal) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Continuous assignment unchanged for signal "
-               << targetSigId << "\n");
-    return;
-  }
+
+  // Extract drive strength from the drive operation.
+  DriveStrength strength0 = DriveStrength::Strong;
+  DriveStrength strength1 = DriveStrength::Strong;
+  if (auto s0Attr = driveOp.getStrength0Attr())
+    strength0 = static_cast<DriveStrength>(
+        static_cast<uint8_t>(s0Attr.getValue()));
+  if (auto s1Attr = driveOp.getStrength1Attr())
+    strength1 = static_cast<DriveStrength>(
+        static_cast<uint8_t>(s1Attr.getValue()));
+
+  uint64_t driverId =
+      reinterpret_cast<uint64_t>(driveOp.getOperation());
+
   scheduler.getEventScheduler().schedule(
       targetTime, SchedulingRegion::Active,
-      Event([this, targetSigId, newVal]() {
-        scheduler.updateSignal(targetSigId, newVal);
+      Event([this, targetSigId, driverId, newVal, strength0, strength1]() {
+        scheduler.updateSignalWithStrength(targetSigId, driverId, newVal,
+                                           strength0, strength1);
       }));
 }
 
@@ -5741,8 +5773,30 @@ arith_dispatch:
         --depthRef;
     }
 
-    if (failed(funcResult))
-      return failure();
+    if (failed(funcResult)) {
+      // Don't propagate internal failures from virtual method calls.
+      // During UVM phase traversal, individual component methods may fail
+      // (e.g., unimplemented sequencer interfaces, missing config_db entries).
+      // Propagating the failure would cascade through the recursive
+      // traverse_on -> traverse -> traverse_on chain, halting all phase
+      // processing.  Instead, absorb the failure, log a warning, and
+      // return zero results so the traversal can continue to the next
+      // component.
+      emitVtableWarning("dispatched function '" + calleeName.str() +
+                        "' failed internally");
+      for (Value result : callIndirectOp.getResults()) {
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      }
+      // Decrement depth counter since we're returning early
+      if (indAddedToVisited) {
+        auto &depthRef =
+            processStates[procId].recursionVisited[indFuncKey][indArg0Val];
+        if (depthRef > 0)
+          --depthRef;
+      }
+      return success();
+    }
 
     // Check if process suspended during function execution (e.g., due to wait)
     // If so, return early without setting results - the function didn't complete

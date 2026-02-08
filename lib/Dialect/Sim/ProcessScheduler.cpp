@@ -264,11 +264,38 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   return id;
 }
 
+SignalId ProcessScheduler::registerSignal(const std::string &name,
+                                          uint32_t width,
+                                          SignalEncoding encoding,
+                                          SignalResolution resolution) {
+  SignalId id = nextSignalId();
+  signalStates[id] = SignalState(width, resolution);
+  signalNames[id] = name;
+  signalEncodings[id] = encoding;
+
+  LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
+                          << " width=" << width
+                          << " resolution="
+                          << (resolution == SignalResolution::WiredAnd ? "wand"
+                              : resolution == SignalResolution::WiredOr ? "wor"
+                              : "default")
+                          << "\n");
+
+  return id;
+}
+
 SignalEncoding ProcessScheduler::getSignalEncoding(SignalId signalId) const {
   auto it = signalEncodings.find(signalId);
   if (it == signalEncodings.end())
     return SignalEncoding::Unknown;
   return it->second;
+}
+
+void ProcessScheduler::setSignalResolution(SignalId signalId,
+                                           SignalResolution resolution) {
+  auto it = signalStates.find(signalId);
+  if (it != signalStates.end())
+    it->second.setResolution(resolution);
 }
 
 void ProcessScheduler::setMaxDeltaCycles(size_t maxDeltaCycles) {
