@@ -2226,8 +2226,15 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
         isHvlModule = moduleName.contains_insensitive("hvl");
       }
 
+      // RandomizeOp conversion generates scf.if for rand_enabled checks,
+      // which later lowers to cf.cond_br creating multi-block regions that
+      // violate seq.initial's SingleBlock constraint. Detect this upfront.
+      bool hasRandomize = false;
+      op.getBody().walk([&](RandomizeOp) { hasRandomize = true; });
+
       if (!hasWaitEvent && !hasWaitDelay && allCapturesConstant &&
-          hasSingleBlock && !hasMultiBlockCalls && !isHvlModule) {
+          hasSingleBlock && !hasMultiBlockCalls && !isHvlModule &&
+          !hasRandomize) {
         auto initialOp =
             seq::InitialOp::create(rewriter, loc, TypeRange{}, std::function<void()>{});
         auto &body = initialOp.getBody();
