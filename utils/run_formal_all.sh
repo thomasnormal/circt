@@ -409,6 +409,7 @@ if [[ "$UPDATE_BASELINES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" DATE_STR="$DATE_STR" BASELINE_FILE="$BASELINE_FILE" PLAN_FILE="$PLAN_FILE" python3 - <<'PY'
 import csv
 import os
+import re
 from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
@@ -424,26 +425,113 @@ with summary_path.open() as f:
     for row in reader:
         rows.append(row)
 
+def parse_result_summary(summary: str):
+    parsed = {}
+    for match in re.finditer(r"([a-z_]+)=([0-9]+)", summary):
+        parsed[match.group(1)] = int(match.group(2))
+    return parsed
+
+def read_baseline_int(row, key, summary_counts):
+    raw = row.get(key)
+    if raw is not None and raw != "":
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return int(summary_counts.get(key, 0))
+
+def read_int(row, key, fallback=0):
+    value = row.get(key)
+    if value is None or value == "":
+        return fallback
+    try:
+        return int(value)
+    except ValueError:
+        return fallback
+
+def compute_pass_rate(total: int, passed: int, xfail: int, skipped: int) -> float:
+    eligible = total - skipped
+    if eligible <= 0:
+        return 0.0
+    return ((passed + xfail) * 100.0) / eligible
+
 baseline = {}
 if baseline_path.exists():
     with baseline_path.open() as f:
         reader = csv.DictReader(f, delimiter='\t')
         for row in reader:
             key = (row['date'], row['suite'], row['mode'])
-            baseline[key] = row
+            summary_counts = parse_result_summary(row.get('result', ''))
+            total = read_int(row, 'total', summary_counts.get('total', 0))
+            passed = read_int(row, 'pass', summary_counts.get('pass', 0))
+            fail = read_int(row, 'fail', summary_counts.get('fail', 0))
+            xfail = read_int(row, 'xfail', summary_counts.get('xfail', 0))
+            xpass = read_int(row, 'xpass', summary_counts.get('xpass', 0))
+            error = read_int(row, 'error', summary_counts.get('error', 0))
+            skip = read_int(row, 'skip', summary_counts.get('skip', 0))
+            pass_rate = row.get('pass_rate', '')
+            if not pass_rate:
+                pass_rate = f"{compute_pass_rate(total, passed, xfail, skip):.3f}"
+            baseline[key] = {
+                'date': row['date'],
+                'suite': row['suite'],
+                'mode': row['mode'],
+                'total': str(total),
+                'pass': str(passed),
+                'fail': str(fail),
+                'xfail': str(xfail),
+                'xpass': str(xpass),
+                'error': str(error),
+                'skip': str(skip),
+                'pass_rate': pass_rate,
+                'result': row.get('result', ''),
+            }
 
 for row in rows:
     key = (date_str, row['suite'], row['mode'])
+    total = int(row['total'])
+    passed = int(row['pass'])
+    fail = int(row['fail'])
+    xfail = int(row['xfail'])
+    xpass = int(row['xpass'])
+    error = int(row['error'])
+    skip = int(row['skip'])
+    pass_rate = compute_pass_rate(total, passed, xfail, skip)
     baseline[key] = {
         'date': date_str,
         'suite': row['suite'],
         'mode': row['mode'],
+        'total': str(total),
+        'pass': str(passed),
+        'fail': str(fail),
+        'xfail': str(xfail),
+        'xpass': str(xpass),
+        'error': str(error),
+        'skip': str(skip),
+        'pass_rate': f"{pass_rate:.3f}",
         'result': row['summary'],
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
 with baseline_path.open('w', newline='') as f:
-    writer = csv.DictWriter(f, fieldnames=['date', 'suite', 'mode', 'result'], delimiter='\t')
+    writer = csv.DictWriter(
+        f,
+        fieldnames=[
+            'date',
+            'suite',
+            'mode',
+            'total',
+            'pass',
+            'fail',
+            'xfail',
+            'xpass',
+            'error',
+            'skip',
+            'pass_rate',
+            'result',
+        ],
+        delimiter='\t',
+    )
     writer.writeheader()
     for key in sorted(baseline.keys()):
         writer.writerow(baseline[key])
@@ -515,6 +603,15 @@ def parse_result_summary(summary: str):
         parsed[match.group(1)] = int(match.group(2))
     return parsed
 
+def read_baseline_int(row, key, summary_counts):
+    raw = row.get(key)
+    if raw is not None and raw != "":
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return int(summary_counts.get(key, 0))
+
 def pass_rate(row):
     total = int(row.get("total", 0))
     passed = int(row.get("pass", 0))
@@ -560,9 +657,9 @@ for key, current_row in summary.items():
             gate_errors.append(f"{suite} {mode}: missing baseline row")
         continue
     baseline_counts = parse_result_summary(baseline_row.get("result", ""))
-    baseline_fail = int(baseline_counts.get("fail", 0))
-    baseline_error = int(baseline_counts.get("error", 0))
-    baseline_xpass = int(baseline_counts.get("xpass", 0))
+    baseline_fail = read_baseline_int(baseline_row, "fail", baseline_counts)
+    baseline_error = read_baseline_int(baseline_row, "error", baseline_counts)
+    baseline_xpass = read_baseline_int(baseline_row, "xpass", baseline_counts)
     current_fail = int(current_row["fail"])
     current_error = int(current_row["error"])
     current_xpass = int(current_row["xpass"])
@@ -580,10 +677,10 @@ for key, current_row in summary.items():
         )
     if fail_on_passrate_regression:
         baseline_row_for_rate = {
-            "total": baseline_counts.get("total", 0),
-            "pass": baseline_counts.get("pass", 0),
-            "xfail": baseline_counts.get("xfail", 0),
-            "skip": baseline_counts.get("skip", 0),
+            "total": read_baseline_int(baseline_row, "total", baseline_counts),
+            "pass": read_baseline_int(baseline_row, "pass", baseline_counts),
+            "xfail": read_baseline_int(baseline_row, "xfail", baseline_counts),
+            "skip": read_baseline_int(baseline_row, "skip", baseline_counts),
         }
         baseline_rate = pass_rate(baseline_row_for_rate)
         current_rate = pass_rate(current_row)

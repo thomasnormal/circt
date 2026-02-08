@@ -16379,7 +16379,29 @@ ninja -C build circt-verilog
       -> `aes_sbox_canright` XPROP_ONLY (accepted)
 - Current limitations / debt:
   - This closes smoke-mode reporting for the 3 chapter-16 cases, but full
-    non-smoke parity work (multi-clock/X-prop/proof-strength) remains.
+  non-smoke parity work (multi-clock/X-prop/proof-strength) remains.
+
+### Iteration 625
+- Formal baseline schema hardening in `run_formal_all.sh`:
+  - Upgraded `--update-baselines` output to structured baseline columns:
+    - `date suite mode total pass fail xfail xpass error skip pass_rate result`
+  - Preserved backward compatibility when reading legacy baseline rows by
+    deriving numeric fields from `result` summary text.
+  - Updated strict-gate baseline comparison to prefer structured numeric columns
+    with legacy summary fallback.
+- Regression coverage:
+  - Extended `test/Tools/run-formal-all-strict-gate.test` to validate baseline
+    header/row content includes the new `pass_rate` column.
+- Documentation:
+  - Updated `docs/FormalRegression.md` baseline output description.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-simfail.test` -> PASS
+- Current limitations / debt:
+  - Baseline comparison still uses latest snapshot only (no moving-window trend
+    logic).
+  - Strict-gate policy wiring to CI remains pending.
 
 ---
 
