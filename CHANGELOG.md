@@ -1,5 +1,71 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 502 - February 8, 2026
+
+### Summary
+
+Completed mixed event-arm witness parity between SMT-LIB and non-SMTLIB BMC
+lowering paths, so runtime (`--run`) and SMT-LIB (`--run-smtlib`) flows now
+share the same signal+sequence witness construction model.
+
+### Fixes
+
+1. **Non-SMTLIB witness emission parity**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Added runtime-path witness initialization and per-step constraints for
+     both:
+     - `kind = "signal"` edge witnesses
+     - `kind = "sequence"` acceptance/value witnesses
+   - Witness generation now uses common mixed-arm logic across both lowering
+     modes.
+
+2. **Shared witness firing logic**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Refactored witness boolean conversion/firing construction so SMT-LIB and
+     non-SMTLIB paths use the same semantics for:
+     - edge decoding (`posedge`/`negedge`/`both`)
+     - optional `iff` gating
+     - sequence step-0 and step-N behavior.
+
+3. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+   - Added dual-mode checks in one test:
+     - `--convert-verif-to-smt='for-smtlib-export=true'`
+     - `--convert-verif-to-smt`
+   - Runtime mode checks now verify witness declaration emission both before
+     and inside the generated `scf.for` loop body.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Witness synthesis still requires source/`iff` expressions to resolve to named
+  BMC inputs.
+- Complex expression-level arm attribution still falls back to estimated
+  activity.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 501 - February 8, 2026
 
 ### Summary

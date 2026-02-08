@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 501)
+## Current Status - February 8, 2026 (Iteration 502)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed signal+sequence arm witness emission for SMT-LIB export; next: expression-level witnesses, non-SMTLIB parity, alias deprecation, procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed mixed-arm witness parity for SMT-LIB and non-SMTLIB export; next: expression-level witnesses, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,60 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 502
+
+1. **Non-SMTLIB mixed-arm witness parity in VerifToSMT**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended runtime (`for-smtlib-export=false`) `verif.bmc` lowering to emit
+     and constrain `event_arm_witness_<set>_<arm>` symbols, matching SMT-LIB
+     export behavior for both:
+     - `kind = "signal"` edge witnesses
+     - `kind = "sequence"` acceptance/value witnesses
+   - Initial witness constraints are now emitted in both modes, and per-step
+     witness equations are generated in both the SMT-LIB and non-SMTLIB loop
+     lowering paths.
+
+2. **Regression coverage for both export modes**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+   - The test now checks both:
+     - `--convert-verif-to-smt='for-smtlib-export=true'`
+     - `--convert-verif-to-smt` (runtime/non-SMTLIB)
+   - Runtime checks validate witness declarations at initialization and inside
+     the generated `scf.for` iteration body.
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`, non-SMTLIB): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`, non-SMTLIB): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail, non-SMTLIB): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Witness synthesis still depends on resolvable named BMC inputs for source
+     and optional `iff` expressions.
+   - Complex/non-trivial source expressions still fall back to model-derived
+     attribution instead of explicit witness signals.
+   - Legacy alias attributes are still mirrored for compatibility.
+   - Highest-value long-term features:
+     - emit dedicated witnesses for complex Slang expressions by threading
+       canonical expression IDs/names into `bmc_event_source_details`,
+     - stage alias deprecation/removal with migration diagnostics,
+     - land upstream-compatible procedural `always @(property)` lowering.
 
 ### Session Summary - Iteration 501
 
