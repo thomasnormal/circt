@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 486)
+## Current Status - February 8, 2026 (Iteration 487)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed derived-clock mixed event-list UNSAT harness; next: non-vacuous multiclock forcing + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed non-vacuous derived-clock harness forcing; next: multiclock traceability diagnostics + procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,45 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 487
+
+1. **Non-vacuous multiclock forcing harness for derived-clock mixed event-lists**
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`
+   - New harness enforces non-vacuous behavior with:
+     - `assume final (via_ref > 0);`
+   - This guarantees at least one reference wakeup on the derived clock by
+     final step, so the UNSAT equivalence proof cannot pass via edge vacuity.
+
+2. **Validation**
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke (representative samples):
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+3. **Current limitations and best long-term next features**
+   - Direct procedural property events are still blocked by frontend legality
+     (`always @(p)` with `property p`).
+   - Derived/non-keyable multiclock equivalence still lacks first-class
+     trigger diagnostics in lowered IR/BMC traces.
+   - High-value next work:
+     - add optional trigger provenance tagging in mixed multiclock lowering
+       (which sequence/signal arm woke the process),
+     - extend non-vacuous forcing patterns to sequence-only multiclock OR
+       harnesses,
+     - upstream/design strategy for procedural property-like event controls.
 
 ### Session Summary - Iteration 486
 

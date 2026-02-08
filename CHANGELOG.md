@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 487 - February 8, 2026
+
+### Summary
+
+Added a non-vacuous derived-clock multiclock UNSAT regression for mixed
+sequence/signal procedural event-lists, and reran targeted BMC plus external
+suite smoke checks.
+
+### Fixes
+
+1. **Non-vacuous derived-clock mixed event-list UNSAT regression**
+   - Added:
+     - `test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`
+   - The test extends derived-clock mixed event-list equivalence with:
+     - `assume final (via_ref > 0);`
+   - This forces at least one reference wakeup by final step so the proof
+     cannot pass through edge-vacuous traces.
+
+2. **Validation**
+   - Targeted BMC:
+     - `sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`:
+       `BMC_RESULT=UNSAT`
+     - `sva-sequence-signal-event-list-multiclock-sat-e2e.sv`:
+       `BMC_RESULT=SAT`
+   - External smoke:
+     - `sv-tests` chapter-16 property compile: PASS
+     - `verilator-verification` assert_rose compile: PASS
+     - `yosys/tests/sva` basic00 compile: PASS
+     - `opentitan` prim secded compile: PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Direct procedural property event controls are still blocked by frontend
+  legality (`always @(p)` with `property p`).
+- `sequence_instance.matched` is still not legal in procedural expression
+  contexts (frontend restriction).
+- We still need multiclock trigger provenance diagnostics for mixed event-list
+  lowerings to improve long-trace debug and miter explainability.
+
 ## Iteration 486 - February 8, 2026
 
 ### Summary
