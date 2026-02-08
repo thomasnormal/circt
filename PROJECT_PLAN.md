@@ -12826,6 +12826,74 @@ ninja -C build circt-verilog
   - Add non-Python JSON parser path for portability.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 568
+- Yosys SVA BMC expanded drop-reason taxonomy and accounting:
+  - Added two new drop reasons for history pruning:
+    - `age_retention`
+    - `max_entries`
+  - History trimming now emits drop events for:
+    - future-skew drops
+    - age-retention drops
+    - max-entry-cap drops
+  - Extended `drop_events_summary` in history JSONL rows and summary JSON:
+    - `reasons.future_skew`
+    - `reasons.age_retention`
+    - `reasons.max_entries`
+    - `history_format.tsv` / `history_format.jsonl` now count all reasons
+  - Extended JSONL validator to accept and validate the new reason counters.
+  - Unified warning message now reports per-reason/per-format drop counts.
+- Regression tests:
+  - Added
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`:
+    - verifies `max_entries` drop events for both TSV and JSONL sources
+    - verifies summary JSON counters for max-entry drops
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`:
+    - updated warning shape
+    - updated `drop_events_summary` to include new reason counters
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`:
+    - asserts `age_retention` counters in history JSONL run row
+  - Updated
+    `test/Tools/run-yosys-sva-bmc-summary-history-retention.test`:
+    - verifies `max_entries` counters in summary JSON
+  - Re-ran summary + harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 51/51 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+  - Yosys LEC:
+    - total=14 pass=14 fail=0 error=0 skip=2
+  - External matrix:
+    - `sv-tests` BMC: total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+    - `sv-tests` LEC: total=23 pass=23 fail=0 error=0
+    - `verilator-verification` BMC: total=17 pass=17 fail=0 xfail=0 xpass=0
+      error=0
+    - `verilator-verification` LEC: total=17 pass=17 fail=0 error=0
+    - OpenTitan LEC (`aes_sbox_canright`,
+      `LEC_ACCEPT_XPROP_ONLY=1`): `XPROP_ONLY` accepted
+    - OpenTitan sim smoke (`prim_fifo_sync`): PASS
+    - AVIP APB compile smoke: PASS
+- Current limitations / debt:
+  - Unknown extension keys are still dropped during drop-event canonical
+    migration.
+  - Parser-backed validation still depends on `python3`.
+  - `cksum` remains required for generated drop-event IDs.
+  - xprop pass-mode failures remain baseline-tracked.
+  - Remaining gaps are primarily harness/policy portability and semantic
+    expected-failure retirement, not core Slang frontend feature gaps.
+- Long-term features to prioritize:
+  - Preserve extension metadata during drop-event migration.
+  - Add optional compression/rotation for drop-events logs.
+  - Add non-Python JSON parser path for portability.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

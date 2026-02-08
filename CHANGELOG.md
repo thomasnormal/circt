@@ -27128,3 +27128,73 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Parser-backed validation still depends on `python3`.
 - `cksum` remains required for generated drop-event IDs.
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 568 - February 8, 2026
+
+### Yosys SVA BMC Expanded Drop-Reason Accounting
+
+- Added two new history-drop reasons:
+  - `age_retention`
+  - `max_entries`
+- History trimming now emits drop events for:
+  - future-skew pruning
+  - age-retention pruning
+  - max-entry-cap pruning
+- Extended `drop_events_summary` in emitted history JSONL rows and summary JSON:
+  - `reasons.future_skew`
+  - `reasons.age_retention`
+  - `reasons.max_entries`
+  - `history_format.tsv` / `history_format.jsonl` now aggregate all reasons
+- Extended history JSONL validator to validate optional new reason counters.
+- Unified warning diagnostics for history pruning into per-reason/per-format
+  totals.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-max-entries.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-future-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-age-retention.test`
+  - `test/Tools/run-yosys-sva-bmc-summary-history-retention.test`
+- New/updated coverage verifies:
+  - `max_entries` drop-event emission for TSV + JSONL sources.
+  - `age_retention` counters in history JSONL run rows.
+  - expanded reason counters in summary JSON / history JSONL outputs.
+  - updated warning message shape.
+- Revalidated summary + harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Lit result: 51/51 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Unknown extension keys are still dropped during canonical drop-event migration.
+- Parser-backed validation still depends on `python3`.
+- `cksum` remains required for generated drop-event IDs.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

@@ -33,3 +33,4 @@
 // JSONL-NOT: "run_id":"run-old"
 // JSONL: "run_id":"run-keep"
 // JSONL: "run_id":"run-new"
+// JSONL: "drop_events_summary":{"total":2,"reasons":{"future_skew":0,"age_retention":2,"max_entries":0},"history_format":{"tsv":1,"jsonl":1}}

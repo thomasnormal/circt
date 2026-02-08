@@ -1934,6 +1934,10 @@ emit_mode_summary_outputs() {
   local tsv_row
   local history_drop_future_tsv=0
   local history_drop_future_jsonl=0
+  local history_drop_age_tsv=0
+  local history_drop_age_jsonl=0
+  local history_drop_max_entries_tsv=0
+  local history_drop_max_entries_jsonl=0
   local drop_events_lock_file="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE"
   local drop_events_lock_backend="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND"
   local drop_events_lock_timeout_secs="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS"
@@ -2102,6 +2106,10 @@ if drop_events_summary is not None:
     future_skew = reasons.get("future_skew")
     if isinstance(future_skew, bool) or not isinstance(future_skew, int) or future_skew < 0:
         fail(f"error: invalid numeric summary field 'drop_events_summary.reasons.future_skew' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
+    for field in ("age_retention", "max_entries"):
+        value = reasons.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            fail(f"error: invalid numeric summary field 'drop_events_summary.reasons.{field}' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
     history_format = drop_events_summary.get("history_format")
     if not isinstance(history_format, dict):
         fail(f"error: invalid object 'drop_events_summary.history_format' in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE {file} at line {lineno}")
@@ -2394,6 +2402,10 @@ PY
         fi
         if ((max_age_days == 0 || row_epoch >= cutoff_epoch)); then
           printf '%s\n' "$line" >> "$file"
+        else
+          history_drop_age_tsv=$((history_drop_age_tsv + 1))
+          emit_history_drop_event \
+            "$file" "tsv" "$((i + 1))" "$generated_at" "${cols[1]:-}" "age_retention"
         fi
       done
     fi
@@ -2405,9 +2417,18 @@ PY
     if ((rows <= max_entries)); then
       return 0
     fi
+    start=$(( ${#lines[@]} - max_entries ))
+    for ((i = 1; i < start; ++i)); do
+      line="${lines[$i]}"
+      [[ -z "$line" ]] && continue
+      IFS=$'\t' read -r -a cols <<<"$line"
+      generated_at="${cols[2]:-}"
+      history_drop_max_entries_tsv=$((history_drop_max_entries_tsv + 1))
+      emit_history_drop_event \
+        "$file" "tsv" "$((i + 1))" "$generated_at" "${cols[1]:-}" "max_entries"
+    done
     : > "$file"
     printf '%s\n' "$header" >> "$file"
-    start=$(( ${#lines[@]} - max_entries ))
     for ((i = start; i < ${#lines[@]}; ++i)); do
       printf '%s\n' "${lines[$i]}" >> "$file"
     done
@@ -2525,6 +2546,11 @@ PY
         fi
         if ((max_age_days == 0 || row_epoch >= cutoff_epoch)); then
           printf '%s\n' "$line" >> "$file"
+        else
+          history_drop_age_jsonl=$((history_drop_age_jsonl + 1))
+          run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+          emit_history_drop_event \
+            "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "age_retention"
         fi
       done
     fi
@@ -2535,6 +2561,15 @@ PY
     fi
     : > "$file"
     start=$(( ${#lines[@]} - max_entries ))
+    for ((i = 0; i < start; ++i)); do
+      line="${lines[$i]}"
+      [[ -z "$line" ]] && continue
+      generated_at="$(printf '%s\n' "$line" | sed -nE 's/.*"generated_at_utc"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+      run_id="$(printf '%s\n' "$line" | sed -nE 's/.*"run_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p')"
+      history_drop_max_entries_jsonl=$((history_drop_max_entries_jsonl + 1))
+      emit_history_drop_event \
+        "$file" "jsonl" "$((i + 1))" "$generated_at" "$run_id" "max_entries"
+    done
     for ((i = start; i < ${#lines[@]}; ++i)); do
       printf '%s\n' "${lines[$i]}" >> "$file"
     done
@@ -2719,7 +2754,7 @@ PY
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS" \
       "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS"
     {
-      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d},"drop_events_summary":{"total":%d,"reasons":{"future_skew":%d},"history_format":{"tsv":%d,"jsonl":%d}}}\n' \
+      printf '{"schema_version":"%s","run_id":"%s","generated_at_utc":"%s","test_summary":{"total":%d,"failures":%d,"xfail":%d,"xpass":%d,"skipped":%d},"mode_summary":{"total":%d,"pass":%d,"fail":%d,"xfail":%d,"xpass":%d,"epass":%d,"efail":%d,"unskip":%d,"skipped":%d,"skip_pass":%d,"skip_fail":%d,"skip_expected":%d,"skip_unexpected":%d},"skip_reasons":{"vhdl":%d,"fail_no_macro":%d,"no_property":%d,"other":%d},"drop_events_summary":{"total":%d,"reasons":{"future_skew":%d,"age_retention":%d,"max_entries":%d},"history_format":{"tsv":%d,"jsonl":%d}}}\n' \
         "$YOSYS_SVA_MODE_SUMMARY_SCHEMA_VERSION" "$run_id" "$generated_at" \
         "$total" "$failures" "$xfails" "$xpasses" "$skipped" \
         "$mode_total" "$mode_out_pass" "$mode_out_fail" "$mode_out_xfail" \
@@ -2728,9 +2763,12 @@ PY
         "$mode_skipped_expected" "$mode_skipped_unexpected" \
         "$mode_skip_reason_vhdl" "$mode_skip_reason_fail_no_macro" \
         "$mode_skip_reason_no_property" "$mode_skip_reason_other" \
+        "$((history_drop_future_tsv + history_drop_future_jsonl + history_drop_age_tsv + history_drop_age_jsonl + history_drop_max_entries_tsv + history_drop_max_entries_jsonl))" \
         "$((history_drop_future_tsv + history_drop_future_jsonl))" \
-        "$((history_drop_future_tsv + history_drop_future_jsonl))" \
-        "$history_drop_future_tsv" "$history_drop_future_jsonl"
+        "$((history_drop_age_tsv + history_drop_age_jsonl))" \
+        "$((history_drop_max_entries_tsv + history_drop_max_entries_jsonl))" \
+        "$((history_drop_future_tsv + history_drop_age_tsv + history_drop_max_entries_tsv))" \
+        "$((history_drop_future_jsonl + history_drop_age_jsonl + history_drop_max_entries_jsonl))"
     } >> "$YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE"
     # Re-apply entry cap after appending this run row.
     trim_history_jsonl \
@@ -2776,21 +2814,25 @@ PY
       printf '    "other": %d\n' "$mode_skip_reason_other"
       printf '  },\n'
       printf '  "drop_events_summary": {\n'
-      printf '    "total": %d,\n' "$((history_drop_future_tsv + history_drop_future_jsonl))"
+      printf '    "total": %d,\n' "$((history_drop_future_tsv + history_drop_future_jsonl + history_drop_age_tsv + history_drop_age_jsonl + history_drop_max_entries_tsv + history_drop_max_entries_jsonl))"
       printf '    "reasons": {\n'
       printf '      "future_skew": %d\n' "$((history_drop_future_tsv + history_drop_future_jsonl))"
+      printf '      ,"age_retention": %d\n' "$((history_drop_age_tsv + history_drop_age_jsonl))"
+      printf '      ,"max_entries": %d\n' "$((history_drop_max_entries_tsv + history_drop_max_entries_jsonl))"
       printf '    },\n'
       printf '    "history_format": {\n'
-      printf '      "tsv": %d,\n' "$history_drop_future_tsv"
-      printf '      "jsonl": %d\n' "$history_drop_future_jsonl"
+      printf '      "tsv": %d,\n' "$((history_drop_future_tsv + history_drop_age_tsv + history_drop_max_entries_tsv))"
+      printf '      "jsonl": %d\n' "$((history_drop_future_jsonl + history_drop_age_jsonl + history_drop_max_entries_jsonl))"
       printf '    }\n'
       printf '  }\n'
       printf '}\n'
     } > "$YOSYS_SVA_MODE_SUMMARY_JSON_FILE"
   fi
 
-  if ((history_drop_future_tsv > 0 || history_drop_future_jsonl > 0)); then
-    echo "warning: dropped future-skew history rows (tsv=${history_drop_future_tsv}, jsonl=${history_drop_future_jsonl}) due YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=warn" >&2
+  if ((history_drop_future_tsv > 0 || history_drop_future_jsonl > 0 || \
+        history_drop_age_tsv > 0 || history_drop_age_jsonl > 0 || \
+        history_drop_max_entries_tsv > 0 || history_drop_max_entries_jsonl > 0)); then
+    echo "warning: dropped history rows (future_skew: tsv=${history_drop_future_tsv}, jsonl=${history_drop_future_jsonl}; age_retention: tsv=${history_drop_age_tsv}, jsonl=${history_drop_age_jsonl}; max_entries: tsv=${history_drop_max_entries_tsv}, jsonl=${history_drop_max_entries_jsonl})" >&2
   fi
 
   if [[ -n "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE" ]]; then
