@@ -36,6 +36,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/ADT/APInt.h"
 #include <cctype>
 #include <memory>
 #include <functional>
@@ -152,7 +153,19 @@ static Value buildXOptimisticDiff(Value lhs, Value rhs, Type originalTy,
 namespace {
 
 struct ParsedNamedBoolExpr {
-  enum class Kind { Name, Const, Not, And, Or, Xor, Eq, Ne };
+  enum class Kind {
+    Name,
+    Const,
+    Not,
+    ReduceAnd,
+    ReduceOr,
+    ReduceXor,
+    And,
+    Or,
+    Xor,
+    Eq,
+    Ne
+  };
   Kind kind = Kind::Name;
   std::string name;
   bool constValue = false;
@@ -165,7 +178,19 @@ struct ResolvedNamedBoolExpr {
     unsigned lsb = 0;
     unsigned msb = 0;
   };
-  enum class Kind { Arg, Const, Not, And, Or, Xor, Eq, Ne };
+  enum class Kind {
+    Arg,
+    Const,
+    Not,
+    ReduceAnd,
+    ReduceOr,
+    ReduceXor,
+    And,
+    Or,
+    Xor,
+    Eq,
+    Ne
+  };
   Kind kind = Kind::Arg;
   unsigned argIndex = 0;
   std::optional<ArgSlice> argSlice;
@@ -284,6 +309,29 @@ private:
       if (!operand)
         return {};
       return makeUnary(ParsedNamedBoolExpr::Kind::Not, std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::And) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceAnd,
+                       std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::Or) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceOr, std::move(operand));
+    }
+    if (token.kind == NamedBoolTokenKind::Xor) {
+      consumeToken();
+      auto operand = parseUnary();
+      if (!operand)
+        return {};
+      return makeUnary(ParsedNamedBoolExpr::Kind::ReduceXor,
+                       std::move(operand));
     }
     return parsePrimary();
   }
@@ -516,6 +564,29 @@ resolveNamedBoolExpr(const ParsedNamedBoolExpr &expr,
     if (!operand)
       return {};
     resolved->kind = ResolvedNamedBoolExpr::Kind::Not;
+    resolved->lhs = std::move(operand);
+    return resolved;
+  }
+  case ParsedNamedBoolExpr::Kind::ReduceAnd:
+  case ParsedNamedBoolExpr::Kind::ReduceOr:
+  case ParsedNamedBoolExpr::Kind::ReduceXor: {
+    auto operand = resolveNamedBoolExpr(*expr.lhs, inputNameToArgIndex,
+                                        numNonStateArgs);
+    if (!operand)
+      return {};
+    switch (expr.kind) {
+    case ParsedNamedBoolExpr::Kind::ReduceAnd:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceAnd;
+      break;
+    case ParsedNamedBoolExpr::Kind::ReduceOr:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceOr;
+      break;
+    case ParsedNamedBoolExpr::Kind::ReduceXor:
+      resolved->kind = ResolvedNamedBoolExpr::Kind::ReduceXor;
+      break;
+    default:
+      break;
+    }
     resolved->lhs = std::move(operand);
     return resolved;
   }
@@ -5209,6 +5280,71 @@ struct VerifBoundedModelCheckingOpConversion
     auto evalResolvedExpr = [&](auto &self, OpBuilder &builder, ValueRange values,
                                 const ResolvedNamedBoolExpr &expr)
         -> FailureOr<Value> {
+      auto evalArgValue =
+          [&](unsigned argIndex,
+              std::optional<ResolvedNamedBoolExpr::ArgSlice> slice)
+          -> FailureOr<Value> {
+        if (argIndex >= values.size())
+          return failure();
+        Value value = values[argIndex];
+        if (!slice)
+          return value;
+        unsigned lsb = slice->lsb;
+        unsigned msb = slice->msb;
+        if (lsb > msb)
+          return failure();
+        if (isa<smt::BoolType>(value.getType())) {
+          if (lsb != 0 || msb != 0)
+            return failure();
+          return value;
+        }
+        if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
+          if (msb >= bvTy.getWidth())
+            return failure();
+          unsigned width = msb - lsb + 1;
+          auto extractTy = smt::BitVectorType::get(builder.getContext(), width);
+          return Value(
+              smt::ExtractOp::create(builder, loc, extractTy, lsb, value));
+        }
+        if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
+          if (intTy.getWidth() == 1 && lsb == 0 && msb == 0)
+            return value;
+        }
+        return failure();
+      };
+      auto evalReduce = [&](Value input, ResolvedNamedBoolExpr::Kind kind)
+          -> FailureOr<Value> {
+        if (isa<smt::BoolType>(input.getType()))
+          return input;
+        auto bvTy = dyn_cast<smt::BitVectorType>(input.getType());
+        if (!bvTy)
+          return failure();
+        unsigned width = bvTy.getWidth();
+        if (width == 0)
+          return failure();
+        if (kind == ResolvedNamedBoolExpr::Kind::ReduceOr) {
+          auto zero = smt::BVConstantOp::create(builder, loc, APInt(width, 0));
+          return Value(smt::DistinctOp::create(builder, loc, input, zero));
+        }
+        if (kind == ResolvedNamedBoolExpr::Kind::ReduceAnd) {
+          auto allOnes =
+              smt::BVConstantOp::create(builder, loc, APInt::getAllOnes(width));
+          return Value(smt::EqOp::create(builder, loc, input, allOnes));
+        }
+        if (kind == ResolvedNamedBoolExpr::Kind::ReduceXor) {
+          auto bitTy = smt::BitVectorType::get(builder.getContext(), 1);
+          auto one = smt::BVConstantOp::create(builder, loc, APInt(1, 1));
+          Value parity = smt::BoolConstantOp::create(builder, loc, false);
+          for (unsigned bit = 0; bit < width; ++bit) {
+            auto bitValue =
+                smt::ExtractOp::create(builder, loc, bitTy, bit, input);
+            Value bitBool = smt::EqOp::create(builder, loc, bitValue, one);
+            parity = smt::DistinctOp::create(builder, loc, parity, bitBool);
+          }
+          return parity;
+        }
+        return failure();
+      };
       switch (expr.kind) {
       case ResolvedNamedBoolExpr::Kind::Arg:
         if (expr.argIndex >= values.size())
@@ -5216,35 +5352,23 @@ struct VerifBoundedModelCheckingOpConversion
         if (!expr.argSlice)
           return toSMTBool(builder, values[expr.argIndex]);
         {
-          Value value = values[expr.argIndex];
-          auto slice = *expr.argSlice;
-          unsigned lsb = slice.lsb;
-          unsigned msb = slice.msb;
-          if (lsb > msb)
+          auto argValueOr = evalArgValue(expr.argIndex, expr.argSlice);
+          if (failed(argValueOr))
             return failure();
-          if (isa<smt::BoolType>(value.getType())) {
-            if (lsb != 0 || msb != 0)
-              return failure();
+          Value value = *argValueOr;
+          if (isa<smt::BoolType>(value.getType()))
             return value;
-          }
           if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
-            if (msb >= bvTy.getWidth())
-              return failure();
-            unsigned width = msb - lsb + 1;
-            auto extractTy =
-                smt::BitVectorType::get(builder.getContext(), width);
-            auto extractValue =
-                smt::ExtractOp::create(builder, loc, extractTy, lsb, value);
-            if (width == 1) {
-              auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
-              return Value(smt::EqOp::create(builder, loc, extractValue, one));
+            if (bvTy.getWidth() == 1) {
+              auto one = smt::BVConstantOp::create(builder, loc, APInt(1, 1));
+              return Value(smt::EqOp::create(builder, loc, value, one));
             }
-            auto zero = smt::BVConstantOp::create(builder, loc, 0, width);
-            return Value(
-                smt::DistinctOp::create(builder, loc, extractValue, zero));
+            auto zero =
+                smt::BVConstantOp::create(builder, loc, APInt(bvTy.getWidth(), 0));
+            return Value(smt::DistinctOp::create(builder, loc, value, zero));
           }
           if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
-            if (intTy.getWidth() == 1 && lsb == 0 && msb == 0)
+            if (intTy.getWidth() == 1)
               return toSMTBool(builder, value);
           }
           return failure();
@@ -5256,6 +5380,20 @@ struct VerifBoundedModelCheckingOpConversion
         if (failed(operandOr))
           return failure();
         return Value(smt::NotOp::create(builder, loc, *operandOr));
+      }
+      case ResolvedNamedBoolExpr::Kind::ReduceAnd:
+      case ResolvedNamedBoolExpr::Kind::ReduceOr:
+      case ResolvedNamedBoolExpr::Kind::ReduceXor: {
+        if (expr.lhs && expr.lhs->kind == ResolvedNamedBoolExpr::Kind::Arg) {
+          auto argValueOr = evalArgValue(expr.lhs->argIndex, expr.lhs->argSlice);
+          if (failed(argValueOr))
+            return failure();
+          return evalReduce(*argValueOr, expr.kind);
+        }
+        auto operandOr = self(self, builder, values, *expr.lhs);
+        if (failed(operandOr))
+          return failure();
+        return evalReduce(*operandOr, expr.kind);
       }
       case ResolvedNamedBoolExpr::Kind::And:
       case ResolvedNamedBoolExpr::Kind::Or:
