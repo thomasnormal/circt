@@ -4438,6 +4438,7 @@ def parse_context_presence_clause(
     unknown_keys = sorted(
         set(payload.keys())
         - {
+            "int_arithmetic",
             "keys_all",
             "keys_any",
             "equals",
@@ -4464,6 +4465,12 @@ def parse_context_presence_clause(
     if unknown_keys:
         fail(
             f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
+        )
+    clause_int_arithmetic = None
+    if "int_arithmetic" in payload:
+        clause_int_arithmetic = parse_context_int_arithmetic(
+            payload["int_arithmetic"],
+            f"{field_name}.int_arithmetic",
         )
     keys_all = None
     if "keys_all" in payload:
@@ -5246,6 +5253,7 @@ def parse_context_presence_clause(
             f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, int_affine, int_expr, or bool_expr"
         )
     return {
+        "int_arithmetic": clause_int_arithmetic,
         "keys_all": keys_all,
         "keys_any": keys_any,
         "equals_pairs": equals_pairs,
@@ -5314,6 +5322,9 @@ def format_context_scalar_literal(value_type: str, value):
 def is_context_presence_clause_satisfied(context, clause, int_arithmetic=None):
     if int_arithmetic is None:
         int_arithmetic = DEFAULT_CONTEXT_INT_ARITHMETIC
+    clause_int_arithmetic = clause["int_arithmetic"]
+    if clause_int_arithmetic is not None:
+        int_arithmetic = clause_int_arithmetic
     keys_all = clause["keys_all"]
     if keys_all is not None:
         for key in keys_all:
@@ -5568,6 +5579,15 @@ def format_int_affine_rhs_expr(rhs_terms, rhs_const):
 
 def format_context_presence_clause(clause):
     parts = []
+    clause_int_arithmetic = clause["int_arithmetic"]
+    if clause_int_arithmetic is not None:
+        parts.append(
+            "int_arithmetic=[div_mode="
+            + clause_int_arithmetic["div_mode"]
+            + ", mod_mode="
+            + clause_int_arithmetic["mod_mode"]
+            + "]"
+        )
     keys_all = clause["keys_all"]
     if keys_all is not None:
         parts.append("keys_all=[" + ", ".join(keys_all) + "]")
