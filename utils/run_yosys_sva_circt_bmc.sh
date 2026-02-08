@@ -3894,6 +3894,127 @@ def collect_int_expression_keys(expr, out_keys):
         collect_int_expression_keys(expr[2], out_keys)
 
 
+def parse_bool_expression(expr, field_name: str):
+    if not isinstance(expr, dict) or not expr:
+        fail(
+            f"error: invalid {field_name}: expected non-empty bool expression object"
+        )
+    if len(expr) != 1:
+        fail(
+            f"error: invalid {field_name}: expected single-key bool expression object"
+        )
+    op, payload = next(iter(expr.items()))
+    if op == "cmp":
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 3
+            or not isinstance(payload[1], str)
+        ):
+            fail(
+                f"error: invalid {field_name}.cmp: expected [lhs_expr, op, rhs_expr]"
+            )
+        lhs_expr = parse_int_expression(payload[0], f"{field_name}.cmp[0]")
+        cmp_op = payload[1].lower()
+        if cmp_op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
+            fail(
+                f"error: invalid {field_name}.cmp[1]: expected op in {{lt, le, gt, ge, eq, ne}}"
+            )
+        rhs_expr = parse_int_expression(payload[2], f"{field_name}.cmp[2]")
+        return ("cmp", lhs_expr, cmp_op, rhs_expr)
+    if op == "has":
+        validate_context_key_name(payload, f"{field_name}.has")
+        return ("has", payload)
+    if op in {"all", "any"}:
+        if not isinstance(payload, list) or not payload:
+            fail(
+                f"error: invalid {field_name}.{op}: expected non-empty array"
+            )
+        children = []
+        for idx, child in enumerate(payload):
+            children.append(
+                parse_bool_expression(child, f"{field_name}.{op}[{idx}]")
+            )
+        return (op, tuple(children))
+    if op == "not":
+        return ("not", parse_bool_expression(payload, f"{field_name}.not"))
+    fail(
+        f"error: invalid {field_name}: unknown bool expression operator '{op}'"
+    )
+
+
+def evaluate_bool_expression(expr, context):
+    kind = expr[0]
+    if kind == "cmp":
+        lhs_value = evaluate_int_expression(expr[1], context)
+        rhs_value = evaluate_int_expression(expr[3], context)
+        if lhs_value is None or rhs_value is None:
+            return False
+        op = expr[2]
+        if op == "lt":
+            return lhs_value < rhs_value
+        if op == "le":
+            return lhs_value <= rhs_value
+        if op == "gt":
+            return lhs_value > rhs_value
+        if op == "ge":
+            return lhs_value >= rhs_value
+        if op == "eq":
+            return lhs_value == rhs_value
+        return lhs_value != rhs_value
+    if kind == "has":
+        return expr[1] in context
+    if kind == "all":
+        return all(evaluate_bool_expression(child, context) for child in expr[1])
+    if kind == "any":
+        return any(evaluate_bool_expression(child, context) for child in expr[1])
+    if kind == "not":
+        return not evaluate_bool_expression(expr[1], context)
+    return False
+
+
+def format_bool_expression(expr):
+    kind = expr[0]
+    if kind == "cmp":
+        op_symbol = {
+            "lt": "<",
+            "le": "<=",
+            "gt": ">",
+            "ge": ">=",
+            "eq": "==",
+            "ne": "!=",
+        }
+        return (
+            f"{format_int_expression(expr[1])}"
+            f"{op_symbol[expr[2]]}"
+            f"{format_int_expression(expr[3])}"
+        )
+    if kind == "has":
+        return f"has({expr[1]})"
+    if kind in {"all", "any"}:
+        return (
+            f"{kind}("
+            + ", ".join(format_bool_expression(child) for child in expr[1])
+            + ")"
+        )
+    if kind == "not":
+        return f"not({format_bool_expression(expr[1])})"
+    return "<invalid-bool-expr>"
+
+
+def collect_bool_expression_integer_keys(expr, out_keys):
+    kind = expr[0]
+    if kind == "cmp":
+        collect_int_expression_keys(expr[1], out_keys)
+        collect_int_expression_keys(expr[3], out_keys)
+        return
+    if kind in {"all", "any"}:
+        for child in expr[1]:
+            collect_bool_expression_integer_keys(child, out_keys)
+        return
+    if kind == "not":
+        collect_bool_expression_integer_keys(expr[1], out_keys)
+
+
 def parse_context_presence_clause(payload, field_name: str):
     if not isinstance(payload, dict) or not payload:
         fail(
@@ -3922,6 +4043,7 @@ def parse_context_presence_clause(payload, field_name: str):
             "int_linear",
             "int_affine",
             "int_expr",
+            "bool_expr",
         }
     )
     if unknown_keys:
@@ -4646,6 +4768,26 @@ def parse_context_presence_clause(payload, field_name: str):
                 )
             int_expr_seen.add(term_key)
             int_expr_terms.append(term_key)
+    bool_expr_terms = None
+    if "bool_expr" in payload:
+        bool_expr_raw = payload["bool_expr"]
+        if not isinstance(bool_expr_raw, list) or not bool_expr_raw:
+            fail(
+                f"error: invalid {field_name}.bool_expr: expected non-empty array"
+            )
+        bool_expr_terms = []
+        bool_expr_seen = set()
+        for term_index, term in enumerate(bool_expr_raw):
+            term_expr = parse_bool_expression(
+                term,
+                f"{field_name}.bool_expr[{term_index}]",
+            )
+            if term_expr in bool_expr_seen:
+                fail(
+                    f"error: invalid {field_name}.bool_expr: duplicate expression"
+                )
+            bool_expr_seen.add(term_expr)
+            bool_expr_terms.append(term_expr)
     if (
         keys_all is None
         and keys_any is None
@@ -4667,10 +4809,11 @@ def parse_context_presence_clause(payload, field_name: str):
         and int_linear_terms is None
         and int_affine_terms is None
         and int_expr_terms is None
+        and bool_expr_terms is None
     ):
         fail(
             "error: invalid "
-            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, int_affine, or int_expr"
+            f"{field_name}: expected at least one of keys_all, keys_any, equals, not_equals, int_lt, int_le, int_gt, int_ge, int_lt_const, int_le_const, int_gt_const, int_ge_const, int_between, int_lt_offset, int_le_offset, int_gt_offset, int_ge_offset, int_linear, int_affine, int_expr, or bool_expr"
         )
     return {
         "keys_all": keys_all,
@@ -4693,6 +4836,7 @@ def parse_context_presence_clause(payload, field_name: str):
         "int_linear_terms": int_linear_terms,
         "int_affine_terms": int_affine_terms,
         "int_expr_terms": int_expr_terms,
+        "bool_expr_terms": bool_expr_terms,
     }
 
 
@@ -4934,6 +5078,11 @@ def is_context_presence_clause_satisfied(context, clause):
                 return False
             if op == "ne" and lhs_value == rhs_value:
                 return False
+    bool_expr_terms = clause["bool_expr_terms"]
+    if bool_expr_terms is not None:
+        for term_expr in bool_expr_terms:
+            if not evaluate_bool_expression(term_expr, context):
+                return False
     return True
 
 
@@ -5112,6 +5261,13 @@ def format_context_presence_clause(clause):
                 f"{format_int_expression(lhs_expr)}{op_symbol[op]}{format_int_expression(rhs_expr)}"
             )
         parts.append("int_expr=[" + ", ".join(expr_parts) + "]")
+    bool_expr_terms = clause["bool_expr_terms"]
+    if bool_expr_terms is not None:
+        parts.append(
+            "bool_expr=["
+            + ", ".join(format_bool_expression(term) for term in bool_expr_terms)
+            + "]"
+        )
     return ", ".join(parts)
 
 
@@ -5207,6 +5363,13 @@ def validate_context_presence_clause_comparator_key_types(clause, key_specs, fie
             collect_int_expression_keys(rhs_expr, expr_keys)
             for expr_key in sorted(expr_keys):
                 require_integer_key(expr_key, f"{field_name}.int_expr")
+    bool_expr_terms = clause["bool_expr_terms"]
+    if bool_expr_terms is not None:
+        for bool_expr in bool_expr_terms:
+            expr_keys = set()
+            collect_bool_expression_integer_keys(bool_expr, expr_keys)
+            for expr_key in sorted(expr_keys):
+                require_integer_key(expr_key, f"{field_name}.bool_expr")
 
 
 def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
