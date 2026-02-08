@@ -24252,3 +24252,70 @@ CIRCT/slang correctly enforces LRM restrictions.
   to distinguish semantically expected `fail` from temporary expected failures.
 - Skip-case baseline policy is not yet encoded in regeneration output.
 - xprop-profile pass-mode expected failures remain tracked, not retired.
+
+---
+
+## Iteration 524 - February 8, 2026
+
+### Yosys SVA BMC Regeneration Policy Controls
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with:
+  - `EXPECT_OBSERVED_INCLUDE_SKIPPED`
+  - `EXPECT_REGEN_FAIL_POLICY`
+  - `EXPECT_REGEN_SKIP_POLICY`
+- Added skip-case capture for observed snapshots:
+  - `SKIP(vhdl)` records `pass` and `fail` mode skip observations
+  - `SKIP(fail-no-macro)` records fail-mode skip observations
+  - `SKIP(no-property)` records mode-local skip observations
+- Added policy-driven regeneration mapping:
+  - observed `fail` -> `pass`/`fail`/`xfail`/`omit`
+  - observed `skip` -> `pass`/`fail`/`xfail`/`omit`
+- Default behavior remains compatible:
+  - `EXPECT_REGEN_FAIL_POLICY=xfail`
+  - `EXPECT_REGEN_SKIP_POLICY=omit`
+  - skipped observations excluded unless `EXPECT_OBSERVED_INCLUDE_SKIPPED=1`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-regen-policy.test`
+  - `test/Tools/run-yosys-sva-bmc-observed-snapshot.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff.test`
+  - `test/Tools/run-yosys-sva-bmc-expect-diff-artifacts.test`
+  - `test/Tools/run-yosys-sva-bmc-expected-matrix.test`
+  - `test/Tools/run-yosys-sva-bmc-rg-fallback.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Targeted lit result: 8/8 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- `utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+  - total=26 pass=26 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+  - total=23 pass=23 fail=0 error=0
+- `utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 xfail=0 xpass=0 error=0
+- `utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+  - total=17 pass=17 fail=0 error=0
+- `utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+  - total=14 pass=14 fail=0 error=0 skip=2
+- `LEC_ACCEPT_XPROP_ONLY=1 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+  - `XPROP_ONLY` accepted
+- `utils/run_opentitan_circt_sim.sh prim_fifo_sync`: PASS
+- `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/apb_avip`: PASS
+
+### Remaining Limitations
+
+- Regeneration policies are global and do not support per-case overrides yet.
+- Skip handling is snapshot/regeneration-only; skip is not yet a first-class
+  expected outcome in harness evaluation.
+- xprop-profile pass-mode expected failures remain baseline-tracked.

@@ -47,6 +47,9 @@ EXPECT_DIFF_TSV_FILE="${EXPECT_DIFF_TSV_FILE:-}"
 EXPECT_DIFF_JSON_FILE="${EXPECT_DIFF_JSON_FILE:-}"
 EXPECT_OBSERVED_FILE="${EXPECT_OBSERVED_FILE:-}"
 EXPECT_REGEN_FILE="${EXPECT_REGEN_FILE:-}"
+EXPECT_OBSERVED_INCLUDE_SKIPPED="${EXPECT_OBSERVED_INCLUDE_SKIPPED:-0}"
+EXPECT_REGEN_FAIL_POLICY="${EXPECT_REGEN_FAIL_POLICY:-xfail}"
+EXPECT_REGEN_SKIP_POLICY="${EXPECT_REGEN_SKIP_POLICY:-omit}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -304,6 +307,47 @@ record_observed_case() {
   observed_cases["$test|$mode|$profile"]="$observed"
 }
 
+record_skipped_case() {
+  local test="$1"
+  local mode="$2"
+  local profile="$3"
+  observed_cases["$test|$mode|$profile"]="skip"
+}
+
+map_observed_to_regen_expected() {
+  local observed="$1"
+  local policy
+  case "$observed" in
+    pass)
+      echo "pass"
+      return
+      ;;
+    fail)
+      policy="$EXPECT_REGEN_FAIL_POLICY"
+      ;;
+    skip)
+      policy="$EXPECT_REGEN_SKIP_POLICY"
+      ;;
+    *)
+      echo "warning: unexpected observed outcome '$observed'" >&2
+      echo ""
+      return
+      ;;
+  esac
+  case "$policy" in
+    pass|fail|xfail)
+      echo "$policy"
+      ;;
+    omit)
+      echo ""
+      ;;
+    *)
+      echo "warning: invalid regen policy '$policy' for observed '$observed'" >&2
+      echo ""
+      ;;
+  esac
+}
+
 emit_observed_outputs() {
   local -a keys=()
   local key
@@ -315,24 +359,31 @@ emit_observed_outputs() {
     printf '# test_name\tmode\tprofile\tobserved\n' >> "$EXPECT_OBSERVED_FILE"
     if ((${#keys[@]} > 0)); then
       while IFS= read -r key; do
-        local test mode profile
+        local test mode profile observed
         IFS='|' read -r test mode profile <<<"$key"
+        observed="${observed_cases["$key"]}"
+        if [[ "$observed" == "skip" && "$EXPECT_OBSERVED_INCLUDE_SKIPPED" != "1" ]]; then
+          continue
+        fi
         printf '%s\t%s\t%s\t%s\n' \
-          "$test" "$mode" "$profile" "${observed_cases["$key"]}" >> "$EXPECT_OBSERVED_FILE"
+          "$test" "$mode" "$profile" "$observed" >> "$EXPECT_OBSERVED_FILE"
       done < <(printf '%s\n' "${keys[@]}" | sort)
     fi
   fi
   if [[ -n "$EXPECT_REGEN_FILE" ]]; then
     : > "$EXPECT_REGEN_FILE"
     printf '# test_name\tmode\tprofile\texpected\n' >> "$EXPECT_REGEN_FILE"
-    printf '# generated from observed outcomes (pass->pass, fail->xfail)\n' >> "$EXPECT_REGEN_FILE"
+    printf '# generated from observed outcomes with policies:\n' >> "$EXPECT_REGEN_FILE"
+    printf '#   EXPECT_REGEN_FAIL_POLICY=%s\n' "$EXPECT_REGEN_FAIL_POLICY" >> "$EXPECT_REGEN_FILE"
+    printf '#   EXPECT_REGEN_SKIP_POLICY=%s\n' "$EXPECT_REGEN_SKIP_POLICY" >> "$EXPECT_REGEN_FILE"
     if ((${#keys[@]} > 0)); then
       while IFS= read -r key; do
-        local test mode profile expected
+        local test mode profile observed expected
         IFS='|' read -r test mode profile <<<"$key"
-        expected="xfail"
-        if [[ "${observed_cases["$key"]}" == "pass" ]]; then
-          expected="pass"
+        observed="${observed_cases["$key"]}"
+        expected="$(map_observed_to_regen_expected "$observed")"
+        if [[ -z "$expected" ]]; then
+          continue
         fi
         printf '%s\t%s\t%s\t%s\n' \
           "$test" "$mode" "$profile" "$expected" >> "$EXPECT_REGEN_FILE"
@@ -387,6 +438,7 @@ run_case() {
   if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
     if ! grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
       echo "SKIP(fail-no-macro): $(basename "$sv" .sv)"
+      record_skipped_case "$(basename "$sv" .sv)" "$mode" "$(case_profile)"
       return
     fi
   fi
@@ -445,6 +497,7 @@ run_case() {
       grep -q "no property provided to check in module" "$bmc_log"; then
     echo "SKIP(no-property): $base"
     skipped=$((skipped + 1))
+    record_skipped_case "$base" "$mode" "$(case_profile)"
     return
   fi
 
@@ -490,6 +543,8 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
     echo "SKIP(vhdl): $base"
     skipped=$((skipped + 1))
+    record_skipped_case "$base" pass "$(case_profile)"
+    record_skipped_case "$base" fail "$(case_profile)"
     continue
   fi
   total=$((total + 1))

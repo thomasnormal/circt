@@ -5,27 +5,28 @@
 // RUN: echo 'for arg in "$@"; do [[ "$arg" == *_pass.mlir ]] && exit 1; done' >> %t/fake-bmc.sh
 // RUN: echo 'exit 0' >> %t/fake-bmc.sh
 // RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
-// RUN: printf 'simple\tpass\t*\txfail\nsimple\tfail\t*\tpass\n' > %t/expect.txt
+// RUN: printf 'simple\tpass\t*\txfail\n' > %t/expect.txt
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
-// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 EXPECT_OBSERVED_FILE=%t/observed.tsv \
-// RUN:   EXPECT_REGEN_FILE=%t/regen.tsv \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_OBSERVED_FILE=%t/observed.tsv \
+// RUN:   EXPECT_REGEN_FILE=%t/regen.tsv EXPECT_OBSERVED_INCLUDE_SKIPPED=1 \
+// RUN:   EXPECT_REGEN_FAIL_POLICY=fail EXPECT_REGEN_SKIP_POLICY=xfail \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/observed.tsv | FileCheck %s --check-prefix=OBS
 // RUN: sed 's/\t/|/g' %t/regen.tsv | FileCheck %s --check-prefix=REGEN
 
 // OUT: XFAIL(pass): simple [known]
-// OUT: PASS(fail): simple
+// OUT: SKIP(fail-no-macro): simple
 // OUT: yosys SVA summary: 1 tests, failures=0, xfail=1, xpass=0, skipped=0
 
 // OBS: # test_name|mode|profile|observed
-// OBS: simple|fail|known|pass
+// OBS: simple|fail|known|skip
 // OBS: simple|pass|known|fail
 
 // REGEN: # test_name|mode|profile|expected
 // REGEN: # generated from observed outcomes with policies:
-// REGEN: #   EXPECT_REGEN_FAIL_POLICY=xfail
-// REGEN: #   EXPECT_REGEN_SKIP_POLICY=omit
-// REGEN: simple|fail|known|pass
-// REGEN: simple|pass|known|xfail
+// REGEN: #   EXPECT_REGEN_FAIL_POLICY=fail
+// REGEN: #   EXPECT_REGEN_SKIP_POLICY=xfail
+// REGEN: simple|fail|known|xfail
+// REGEN: simple|pass|known|fail
