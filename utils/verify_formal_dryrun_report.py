@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 from datetime import date
+from string import hexdigits
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +43,15 @@ def parse_iso_date(value: object, field_name: str) -> Optional[date]:
     fail(f"{field_name} must be YYYY-MM-DD string")
 
 
+def parse_sha256_hex(value: object, field_name: str) -> str:
+  if not isinstance(value, str):
+    fail(f"{field_name} must be 64-character hex SHA-256")
+  raw = value.strip().lower()
+  if len(raw) != 64 or any(ch not in hexdigits for ch in raw):
+    fail(f"{field_name} must be 64-character hex SHA-256")
+  return raw
+
+
 def read_hmac_keyring(
     path: Path,
 ) -> dict[str, tuple[bytes, Optional[date], Optional[date], str]]:
@@ -65,6 +75,8 @@ def read_hmac_keyring(
     if key_id in keyring:
       fail(f"{path}:{line_no}: duplicate hmac_key_id '{key_id}' in keyring")
     key_path = Path(key_file)
+    if not key_path.is_absolute():
+      key_path = path.parent / key_path
     if not key_path.is_file():
       fail(f"{path}:{line_no}: HMAC key file not found: {key_path}")
     not_before = None
@@ -282,6 +294,10 @@ def main() -> int:
       ),
   )
   parser.add_argument(
+      "--hmac-keyring-sha256",
+      help="Optional expected SHA-256 for keyring file content (requires --hmac-keyring-tsv)",
+  )
+  parser.add_argument(
       "--expected-hmac-key-id",
       help="Optional expected hmac_key_id for run_meta/run_end rows",
   )
@@ -299,7 +315,22 @@ def main() -> int:
     hmac_key_bytes = key_path.read_bytes()
   hmac_keyring = None
   if args.hmac_keyring_tsv:
-    hmac_keyring = read_hmac_keyring(Path(args.hmac_keyring_tsv))
+    keyring_path = Path(args.hmac_keyring_tsv)
+    if args.hmac_keyring_sha256:
+      expected_keyring_hash = parse_sha256_hex(
+          args.hmac_keyring_sha256, "--hmac-keyring-sha256"
+      )
+      if not keyring_path.is_file():
+        fail(f"HMAC keyring file not found: {keyring_path}")
+      actual_keyring_hash = hashlib.sha256(keyring_path.read_bytes()).hexdigest()
+      if actual_keyring_hash != expected_keyring_hash:
+        fail(
+            f"HMAC keyring sha256 mismatch; expected {expected_keyring_hash}, "
+            f"got {actual_keyring_hash}"
+        )
+    hmac_keyring = read_hmac_keyring(keyring_path)
+  elif args.hmac_keyring_sha256:
+    fail("--hmac-keyring-sha256 requires --hmac-keyring-tsv")
   if hmac_key_bytes is not None and hmac_keyring is not None:
     fail("cannot use both --hmac-key-file and --hmac-keyring-tsv")
 

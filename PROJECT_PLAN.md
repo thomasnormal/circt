@@ -17834,6 +17834,48 @@ ninja -C build circt-verilog
   - Rotation/revocation governance and key distribution remain external process.
   - AVIP compile regression remains unresolved and appears unrelated.
 
+### Iteration 668
+- Keyring integrity pinning + relative-path support:
+  - Extended `utils/verify_formal_dryrun_report.py` with
+    `--hmac-keyring-sha256 <hex>`.
+  - Added keyring content hash enforcement:
+    - when provided, verifier checks SHA-256 of keyring file bytes before
+      loading keys.
+    - requires `--hmac-keyring-tsv`.
+  - Added strict hash validation:
+    - `--hmac-keyring-sha256` must be 64-char hex digest.
+  - Added key-path resolution hardening:
+    - relative `key_file_path` entries in keyring are now resolved relative to
+      the keyring TSV location.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-all-strict-gate.test`:
+    - positive keyring hash-pinned verification
+    - negative mismatched keyring hash rejection
+    - positive relative key-file path resolution case
+- Documentation:
+  - Updated `docs/FormalRegression.md` with
+    `--hmac-keyring-sha256` usage.
+- Validation status:
+  - `python3 -m py_compile utils/verify_formal_dryrun_report.py` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Filtered external sweep:
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` -> total=2 pass=2 fail=0
+    - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva` -> total=1 pass=1 fail=0 error=0 skip=0
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests` -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/bmc utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 KEEP_LOGS_DIR=/tmp/verilator-debug/lec utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification` -> total=1 pass=1 fail=0 error=0 skip=16
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright` -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip` -> PASS
+    - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip` -> PASS
+- Current limitations / debt:
+  - Keyring authenticity still depends on out-of-band trust for provided
+    SHA-256 pin values.
+  - No native signature/certificate verification for keyring manifests yet.
+
 ---
 
 ## Architecture Reference
