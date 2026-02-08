@@ -43,6 +43,7 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MA
 YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS:-86400}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY:-error}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS:-0}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_FILE:-}"
@@ -194,6 +195,10 @@ if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; t
 fi
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES (expected non-negative integer)" >&2
+  exit 1
+fi
+if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" =~ ^[0-9]+$ ]]; then
+  echo "invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION: $YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION (expected non-negative integer)" >&2
   exit 1
 fi
 if [[ ! "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_AGE_DAYS" =~ ^[0-9]+$ ]]; then
@@ -2135,17 +2140,11 @@ PY
 
   stable_event_id() {
     local key="$1"
+    if ! command -v cksum >/dev/null 2>&1; then
+      echo "error: stable drop-event IDs require cksum in PATH" >&2
+      exit 1
+    fi
     local digest
-    if command -v sha256sum >/dev/null 2>&1; then
-      digest="$(printf '%s' "$key" | sha256sum | awk '{print $1}')"
-      printf 'drop-%s\n' "${digest:0:16}"
-      return 0
-    fi
-    if command -v shasum >/dev/null 2>&1; then
-      digest="$(printf '%s' "$key" | shasum -a 256 | awk '{print $1}')"
-      printf 'drop-%s\n' "${digest:0:16}"
-      return 0
-    fi
     digest="$(printf '%s' "$key" | cksum | awk '{print $1}')"
     printf 'drop-%s\n' "$digest"
     return 0
@@ -2328,6 +2327,7 @@ PY
     local escaped_run_id
     local escaped_reason
     local escaped_event_id
+    local escaped_schema_version
     local event_id
     local event_line
     now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -2336,10 +2336,11 @@ PY
     escaped_generated="$(json_escape "$row_generated_at")"
     escaped_run_id="$(json_escape "$run_id")"
     escaped_reason="$(json_escape "$reason")"
+    escaped_schema_version="$(json_escape "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION")"
     event_id="$(stable_event_id "${reason}|${history_format}|${run_id}|${row_generated_at}")"
     escaped_event_id="$(json_escape "$event_id")"
-    printf -v event_line '{"event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
-      "$escaped_event_id" "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
+    printf -v event_line '{"schema_version":"%s","event_id":"%s","generated_at_utc":"%s","reason":"%s","history_file":"%s","history_format":"%s","line":%d,"row_generated_at_utc":"%s","run_id":"%s"}' \
+      "$escaped_schema_version" "$escaped_event_id" "$now_utc" "$escaped_reason" "$escaped_file" "$escaped_format" "$lineno" "$escaped_generated" "$escaped_run_id"
     with_drop_events_lock "$drop_events_lock_file" append_drop_event_line "$event_line"
   }
 

@@ -79,11 +79,19 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS=bogus \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADTIMEOUT
 
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION=bogus \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMA
+
 // DROP-NOT: "run_id":"legacy"
 // DROP-NOT: "run_id":"run-future-1"
-// DROP: {"event_id":"drop-{{[^"]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
-// DROP: {"event_id":"drop-{{[^"]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.tsv}}","history_format":"tsv","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
+// DROP: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"{{[0-9T:\-]+Z}}","reason":"future_skew","history_file":"{{.*history\.jsonl}}","history_format":"jsonl","line":{{[0-9]+}},"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"run-future-2"}
 
 // BADENTRIES: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES: bogus (expected non-negative integer)
 // BADBACKEND: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND: bogus (expected auto|flock|mkdir|none)
 // BADTIMEOUT: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_TIMEOUT_SECS: bogus (expected non-negative integer)
+// BADSCHEMA: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION: bogus (expected non-negative integer)
