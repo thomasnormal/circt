@@ -1,5 +1,72 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 501 - February 8, 2026
+
+### Summary
+
+Extended producer-side BMC witness generation in `VerifToSMT` from
+signal-only arms to mixed sequence+signal event arm sets, enabling full
+step-accurate witness attribution for both arm kinds in SMT-LIB
+counterexamples.
+
+### Fixes
+
+1. **Sequence+signal arm witness synthesis in BMC SMT lowering**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - `bmc_event_source_details` witness generation now supports:
+     - `kind = "signal"`: edge-trigger witness (`posedge`/`negedge`/`both`)
+       with optional `iff`,
+     - `kind = "sequence"`: acceptance/value witness with optional `iff`.
+   - Deterministic witness names remain:
+     - `event_arm_witness_<set>_<arm>`
+   - Sequence witness semantics:
+     - initial step witness equals current sequence value (optionally `iff`-gated),
+     - subsequent step witnesses track current sequence value (optionally
+       `iff`-gated).
+
+2. **Metadata back-annotation for mixed arm sets**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Generated witness names are now back-annotated consistently for both
+     sequence and signal arms in `smt.solver` `bmc_event_source_details`.
+
+3. **Regression coverage updates**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-activity.mlir`
+   - Coverage now validates mixed-arm witness production and rendering:
+     - sequence arm fired at step 0,
+     - signal edge arm fired at step 1.
+
+4. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+### Remaining Gaps
+
+- Witness synthesis still requires event arm sources/`iff` to resolve to named
+  BMC inputs.
+- Non-SMT-LIB BMC export path does not yet mirror mixed-arm witness emission.
+- Legacy alias attributes remain mirrored for compatibility.
+- Procedural `always @(property)` support remains frontend-blocked by Slang.
+
 ## Iteration 500 - February 8, 2026
 
 ### Summary

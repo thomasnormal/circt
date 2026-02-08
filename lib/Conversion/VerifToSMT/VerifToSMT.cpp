@@ -4422,13 +4422,15 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<std::optional<unsigned>> finalCheckClockPos;
     resolveCheckClockPos(finalCheckClockPos, finalCheckInfos, finalCheckProps);
 
-    struct SignalArmWitnessInfo {
+    struct EventArmWitnessInfo {
+      enum class Kind { Signal, Sequence };
+      Kind kind = Kind::Signal;
       StringAttr witnessName;
-      unsigned signalArgIndex = 0;
+      unsigned sourceArgIndex = 0;
       std::optional<unsigned> iffArgIndex;
       ltl::ClockEdge edge = ltl::ClockEdge::Both;
     };
-    SmallVector<SignalArmWitnessInfo> signalArmWitnesses;
+    SmallVector<EventArmWitnessInfo> armWitnesses;
     if (auto eventSourceDetails =
             op->getAttrOfType<ArrayAttr>("bmc_event_source_details")) {
       auto parseEdge = [&](StringRef edgeText)
@@ -4455,21 +4457,39 @@ struct VerifBoundedModelCheckingOpConversion
           if (!detail)
             continue;
           auto kindAttr = dyn_cast_or_null<StringAttr>(detail.get("kind"));
-          if (!kindAttr || kindAttr.getValue() != "signal")
+          if (!kindAttr)
             continue;
+          StringRef kind = kindAttr.getValue();
 
-          auto signalNameAttr =
-              dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
-          auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
-          if (!signalNameAttr || !edgeAttr)
+          EventArmWitnessInfo witnessInfo;
+          witnessInfo.kind = EventArmWitnessInfo::Kind::Signal;
+          StringRef sourceName;
+          if (kind == "signal") {
+            auto signalNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("signal_name"));
+            auto edgeAttr = dyn_cast_or_null<StringAttr>(detail.get("edge"));
+            if (!signalNameAttr || !edgeAttr)
+              continue;
+            auto edge = parseEdge(edgeAttr.getValue());
+            if (!edge)
+              continue;
+            witnessInfo.edge = *edge;
+            sourceName = signalNameAttr.getValue();
+          } else if (kind == "sequence") {
+            auto sequenceNameAttr =
+                dyn_cast_or_null<StringAttr>(detail.get("sequence_name"));
+            if (!sequenceNameAttr)
+              continue;
+            witnessInfo.kind = EventArmWitnessInfo::Kind::Sequence;
+            sourceName = sequenceNameAttr.getValue();
+          } else {
             continue;
-          auto edge = parseEdge(edgeAttr.getValue());
-          if (!edge)
+          }
+          auto sourceIt = inputNameToArgIndex.find(sourceName);
+          if (sourceIt == inputNameToArgIndex.end() ||
+              sourceIt->second >= numNonStateArgs)
             continue;
-          auto signalIt = inputNameToArgIndex.find(signalNameAttr.getValue());
-          if (signalIt == inputNameToArgIndex.end() ||
-              signalIt->second >= numNonStateArgs)
-            continue;
+          witnessInfo.sourceArgIndex = sourceIt->second;
 
           std::optional<unsigned> iffArgIndex;
           if (auto iffNameAttr =
@@ -4480,14 +4500,18 @@ struct VerifBoundedModelCheckingOpConversion
               continue;
             iffArgIndex = iffIt->second;
           }
+          witnessInfo.iffArgIndex = iffArgIndex;
 
-          auto witnessName = rewriter.getStringAttr(
-              (Twine("event_arm_witness_") + Twine(setIdx) + "_" +
-               Twine(armIdx))
-                  .str());
-          signalArmWitnesses.push_back(
-              SignalArmWitnessInfo{witnessName, signalIt->second, iffArgIndex,
-                                   *edge});
+          StringAttr witnessName =
+              dyn_cast_or_null<StringAttr>(detail.get("witness_name"));
+          if (!witnessName || witnessName.getValue().empty()) {
+            witnessName = rewriter.getStringAttr(
+                (Twine("event_arm_witness_") + Twine(setIdx) + "_" +
+                 Twine(armIdx))
+                    .str());
+          }
+          witnessInfo.witnessName = witnessName;
+          armWitnesses.push_back(witnessInfo);
           uint64_t key = (static_cast<uint64_t>(setIdx) << 32) | armIdx;
           witnessByArm[key] = witnessName;
         }
@@ -4746,11 +4770,28 @@ struct VerifBoundedModelCheckingOpConversion
       size_t numCircuitArgs = circuitInputTy.size();
       size_t numBMCStateArgs = numRegs + totalDelaySlots + totalNFAStateSlots;
       auto boolTy = smt::BoolType::get(rewriter.getContext());
-      for (const auto &witness : signalArmWitnesses) {
+      for (const auto &witness : armWitnesses) {
+        if (witness.sourceArgIndex >= inputDecls.size())
+          continue;
+        Value initWitness = constFalse;
+        if (witness.kind == EventArmWitnessInfo::Kind::Sequence) {
+          auto initBoolOr = toSMTBool(inputDecls[witness.sourceArgIndex]);
+          if (failed(initBoolOr))
+            return failure();
+          initWitness = *initBoolOr;
+          if (witness.iffArgIndex &&
+              *witness.iffArgIndex < inputDecls.size()) {
+            auto iffBoolOr = toSMTBool(inputDecls[*witness.iffArgIndex]);
+            if (failed(iffBoolOr))
+              return failure();
+            initWitness =
+                smt::AndOp::create(rewriter, loc, *iffBoolOr, initWitness);
+          }
+        }
         auto initWitnessDecl =
             smt::DeclareFunOp::create(rewriter, loc, boolTy, witness.witnessName);
         auto initWitnessEq = smt::EqOp::create(rewriter, loc, initWitnessDecl,
-                                               constFalse);
+                                               initWitness);
         smt::AssertOp::create(rewriter, loc, initWitnessEq);
       }
       SmallVector<Value> iterArgs = inputDecls;
@@ -5231,34 +5272,39 @@ struct VerifBoundedModelCheckingOpConversion
           argIndex++;
         }
 
-        for (const auto &witness : signalArmWitnesses) {
-          if (witness.signalArgIndex >= numNonStateArgs ||
-              witness.signalArgIndex >= newDecls.size() ||
-              witness.signalArgIndex >= iterRange.size())
+        for (const auto &witness : armWitnesses) {
+          if (witness.sourceArgIndex >= numNonStateArgs ||
+              witness.sourceArgIndex >= newDecls.size() ||
+              witness.sourceArgIndex >= iterRange.size())
             continue;
 
-          auto prevBoolOr = toSMTBool(iterRange[witness.signalArgIndex]);
-          auto currBoolOr = toSMTBool(newDecls[witness.signalArgIndex]);
-          if (failed(prevBoolOr) || failed(currBoolOr))
+          auto currBoolOr = toSMTBool(newDecls[witness.sourceArgIndex]);
+          if (failed(currBoolOr))
             return failure();
-          Value prevBool = *prevBoolOr;
           Value currBool = *currBoolOr;
 
-          Value fired;
-          switch (witness.edge) {
-          case ltl::ClockEdge::Pos: {
-            auto notPrev = smt::NotOp::create(rewriter, loc, prevBool);
-            fired = smt::AndOp::create(rewriter, loc, notPrev, currBool);
-            break;
-          }
-          case ltl::ClockEdge::Neg: {
-            auto notCurr = smt::NotOp::create(rewriter, loc, currBool);
-            fired = smt::AndOp::create(rewriter, loc, prevBool, notCurr);
-            break;
-          }
-          case ltl::ClockEdge::Both:
-            fired = smt::DistinctOp::create(rewriter, loc, prevBool, currBool);
-            break;
+          Value fired = currBool;
+          if (witness.kind == EventArmWitnessInfo::Kind::Signal) {
+            auto prevBoolOr = toSMTBool(iterRange[witness.sourceArgIndex]);
+            if (failed(prevBoolOr))
+              return failure();
+            Value prevBool = *prevBoolOr;
+            switch (witness.edge) {
+            case ltl::ClockEdge::Pos: {
+              auto notPrev = smt::NotOp::create(rewriter, loc, prevBool);
+              fired = smt::AndOp::create(rewriter, loc, notPrev, currBool);
+              break;
+            }
+            case ltl::ClockEdge::Neg: {
+              auto notCurr = smt::NotOp::create(rewriter, loc, currBool);
+              fired = smt::AndOp::create(rewriter, loc, prevBool, notCurr);
+              break;
+            }
+            case ltl::ClockEdge::Both:
+              fired =
+                  smt::DistinctOp::create(rewriter, loc, prevBool, currBool);
+              break;
+            }
           }
 
           if (witness.iffArgIndex &&

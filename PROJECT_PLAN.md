@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 500)
+## Current Status - February 8, 2026 (Iteration 501)
 
 ### Test Results
 
@@ -52,7 +52,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
 | **Simulation** | Claude | Active | Fix NOCHILD empty names, fix `unique()` on fixed arrays, investigate AXI4Lite vtable |
-| **BMC/LEC** | Codex | Active | Landed signal-arm witness emission from VerifToSMT + witness-driven counterexamples; next: sequence-arm witnesses + alias deprecation + procedural `@property` strategy |
+| **BMC/LEC** | Codex | Active | Landed signal+sequence arm witness emission for SMT-LIB export; next: expression-level witnesses, non-SMTLIB parity, alias deprecation, procedural `@property` strategy |
 | **External Tests** | Claude | Monitoring | Refresh yosys/verilator baselines, track sv-tests 99.1% |
 | **Performance** | Claude | Stable | ~171 ns/s, no immediate bottlenecks |
 
@@ -76,6 +76,61 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | SVA runtime | MISSING | Advanced | No runtime assertion evaluation |
 | `$cast` dynamic | PARTIAL | Some TBs | Static cast works; dynamic `$cast` as task may not |
 | Randomize constraints | PARTIAL | Constraint TBs | Basic/dist/ranges work; complex constraints don't |
+
+### Session Summary - Iteration 501
+
+1. **Sequence-arm witness synthesis in VerifToSMT (SMT-LIB export path)**
+   - Updated:
+     - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - Extended per-arm witness lowering from `kind = "signal"` to both:
+     - `kind = "signal"` (edge-based trigger witness),
+     - `kind = "sequence"` (acceptance/value witness).
+   - Sequence witnesses now evaluate at step 0 and subsequent steps directly
+     from sequence source values, with optional `iff` gating when present.
+   - Existing signal witness behavior remains intact:
+     - step 0 witness initialized false,
+     - step N witness derived from edge predicate plus optional `iff`.
+
+2. **Metadata and regression updates for mixed sequence+signal arms**
+   - Updated:
+     - `test/Conversion/VerifToSMT/bmc-event-arm-witnesses.mlir`
+     - `test/Tools/circt-bmc/Inputs/fake-z3-sat-model-witness-activity.sh`
+     - `test/Tools/circt-bmc/bmc-run-smtlib-sat-counterexample-witness-activity.mlir`
+   - Coverage now checks mixed-arm witness names and mixed-arm activity:
+     - sequence arm fired at step 0,
+     - signal edge arm fired at step 1.
+
+3. **Validation**
+   - Targeted regressions:
+     - `bmc-event-arm-witnesses.mlir`: PASS
+     - `bmc-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-witness-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-event-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-mixed-event-sources.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-sequence-step0-activity.mlir`: PASS
+     - `bmc-run-smtlib-sat-counterexample-suffix-name-activity.mlir`: PASS
+   - External smoke:
+     - `sv-tests` BMC smoke (`16.12--property-iff`): PASS
+     - `sv-tests` LEC smoke (`16.12--property-iff`): PASS
+     - `verilator-verification` BMC smoke (`assert_rose`): PASS
+     - `verilator-verification` LEC smoke (`assert_rose`): PASS
+     - `yosys/tests/sva` BMC smoke (`basic00` pass/fail): PASS
+     - `yosys/tests/sva` LEC smoke (`basic00`): PASS
+     - `opentitan` LEC smoke (`aes_sbox_canright`, `LEC_ACCEPT_XPROP_ONLY=1`): PASS
+     - `mbit` APB AVIP compile smoke: PASS
+
+4. **Current limitations and best long-term next features**
+   - Witness synthesis still depends on resolvable named BMC inputs for
+     source and optional `iff` expressions.
+   - Non-SMT-LIB BMC export path still does not mirror witness emission.
+   - Legacy alias attributes are still mirrored for compatibility.
+   - Slang features worth using more aggressively for long-term parity:
+     - propagate canonical Slang expression names for non-trivial event sources
+       (not only direct named inputs),
+     - preserve richer procedural/property origin metadata to support future
+       `always @(property)` lowering and diagnostics,
+     - carry clocking/edge provenance from Slang analyses into BMC metadata for
+       multi-clock witness generation without heuristic fallback.
 
 ### Session Summary - Iteration 500
 
