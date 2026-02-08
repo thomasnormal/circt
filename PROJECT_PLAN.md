@@ -14678,6 +14678,78 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 597
+- Yosys SVA BMC declarative route-context registry + precedence:
+  - Added route context registry env:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON`
+  - Context JSON supports arbitrary key/value pairs (string keys + string
+    values) and is merged into auto-route context.
+  - Added route precedence field:
+    - `priority` (non-negative integer, default `0`) in route specs.
+- Route schema enhancements:
+  - Extended route `when` with generic key:
+    - `context_regex` (object mapping context key to regex pattern)
+  - `context_regex` composes with existing route `when` keys using conjunction
+    semantics.
+  - Added strict validation for:
+    - invalid context JSON shape/key/value types
+    - invalid `context_regex` key names
+    - invalid `priority` values
+- Auto-route selection semantics:
+  - Match candidates are filtered by `when` conditions as before.
+  - Matching route with highest `priority` wins.
+  - If multiple matches share highest priority, auto-route remains ambiguous
+    and errors.
+- Regression tests:
+  - Expanded:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+      with:
+      - priority-based route selection (`priority` tie-break)
+      - custom context match via `context_regex` + `...CONTEXT_JSON`
+      - invalid context JSON rejection
+      - invalid `context_regex` key rejection
+      - invalid `priority` rejection
+  - Focused lit run:
+    - 11/11 PASS (`rewrite-profile-route-auto`, `rewrite-profile-routes`,
+      `rewrite-macros`, `rewrite-cardinality`, `rewrite-profile-layers`,
+      `rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic00$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-cons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_sampled$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Context registry is JSON/env-driven; no first-class typed schema/versioning
+    for context contracts yet.
+  - Selector macros are non-parameterized and local to one JSON payload.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+- Long-term features to prioritize:
+  - Add typed/context-schema validation + versioning for route context inputs.
+  - Add parameterized/importable selector macro libraries.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference
