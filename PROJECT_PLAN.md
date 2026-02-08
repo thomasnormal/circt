@@ -15004,6 +15004,65 @@ ninja -C build circt-verilog
   - Reduce `XPROP_ONLY` dependence in OpenTitan LEC by improving 4-state/xprop
     alignment and unknown initialization semantics.
 
+### Iteration 602
+- Yosys SVA BMC top-level composite schema operators:
+  - Added schema-level operators:
+    - `all_of`: every clause must hold
+    - `any_of`: at least one clause must hold
+  - Added clause form:
+    - `keys_all`: all listed keys must be present
+    - `keys_any`: at least one listed key must be present
+  - Added strict schema validation for composite metadata:
+    - non-empty array checks
+    - unknown clause key rejection
+    - duplicate key rejection in `keys_all` / `keys_any`
+    - clause must define at least one of `keys_all` / `keys_any`
+  - Composite checks execute in required-check phase and therefore honor
+    `validate_merged_context=true` effective-context validation mode.
+- Regression tests:
+  - Expanded
+    `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    with:
+    - positive `all_of` + `any_of` merged-context route match
+    - unsatisfied `all_of` rejection
+    - unsatisfied `any_of` rejection
+    - malformed composite clause rejection
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test` -> 1/1 PASS
+  - `build/bin/llvm-lit -sv $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')` -> 16/16 PASS
+  - External smoke sweep:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic02$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='16.9--sequence-goto-repetition' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='assert_fell' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`
+      -> total=1 pass=1 fail=0 error=0 skip=16
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=200 --timeout=120`
+      -> PASS
+    - `LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`
+      -> `aes_sbox_canright` XPROP_ONLY (accepted)
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Composite operators currently express key-presence logic only.
+  - Composite clauses cannot yet encode cross-key value relationships.
+  - OpenTitan LEC still needs `LEC_ACCEPT_XPROP_ONLY=1` for
+    `aes_sbox_canright`.
+- Long-term features to prioritize:
+  - Add cross-key value predicates/operators to composite schema clauses.
+  - Add parameterized/importable selector macro libraries.
+  - Reduce `XPROP_ONLY` dependence in OpenTitan LEC through stronger 4-state
+    modeling and unknown alignment.
+
 ---
 
 ## Architecture Reference
