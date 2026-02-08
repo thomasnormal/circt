@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 474)
+## Current Status - February 8, 2026 (Iteration 475)
 
 ### Test Results
 
@@ -46,6 +46,62 @@ All 7 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in
 | Assignment conflict detection | 2 | Slang AnalysisManager SIGSEGV on frozen BumpAllocator | BLOCKED (upstream) |
 | Tagged union | 1 | OOM/crash during elaboration | UNKNOWN |
 | SVA negative tests | 4 | OOM/crash during SVA processing | LOW PRIORITY |
+
+### Session Summary - Iteration 475
+
+1. **Clocking-block event equivalence for sampled-value direct lowering**
+   - Extended timing-control equivalence in
+     `lib/Conversion/ImportVerilog/AssertionExpr.cpp` to canonicalize:
+     - clocking-block event references like `@(cb)` to the underlying
+       clocking event, and
+     - single-event `EventListControl` wrappers.
+   - This allows explicit sampled-value clocking arguments written as
+     `@(cb)` to be recognized as equivalent to enclosing
+     `@(posedge clk)` assertion clocks.
+   - Equivalent-clock forms now take direct `moore.past` lowering instead of
+     helper-procedure sampled state, avoiding temporal skew.
+
+2. **Regression coverage**
+   - Added import regressions in
+     `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`:
+     - `sampled_explicit_clocking_block_same_clock_in_assert`
+     - `sampled_past_explicit_clocking_block_same_clock_in_assert`
+     Both now expect direct `moore.past` lowering with no helper procedure.
+   - Added BMC e2e regression:
+     - `test/Tools/circt-bmc/sva-sampled-explicit-clocking-block-same-clock-nonoverlap-unsat-e2e.sv`
+       covering both `$rose(..., @(cb))` and `$past(..., @(cb))`.
+
+3. **Validation**
+   - Targeted direct BMC:
+     - `/tmp/sva_cb_sameclock_probe.sv` now `BMC_RESULT=UNSAT`
+       (previously `SAT` before this fix).
+     - New e2e modules:
+       - `sva_rose_explicit_clocking_block_same_clock_nonoverlap_unsat`:
+         `BMC_RESULT=UNSAT`
+       - `sva_past_explicit_clocking_block_same_clock_nonoverlap_unsat`:
+         `BMC_RESULT=UNSAT`
+   - Lit:
+     - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+     - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+     - BMC e2e tests are `UNSUPPORTED` in this local lit config
+       (`bmc-jit` feature gate), so validated by direct tool invocations.
+   - External smoke:
+     - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+     - `verilator-verification` LEC (`assert_rose`): PASS
+     - `sv-tests` BMC (`16.12--property`): PASS
+     - `sv-tests` LEC (`16.10--property-local-var`): PASS
+     - `yosys/tests/sva` BMC (`basic00`): PASS
+     - `yosys/tests/sva` LEC (`basic00`): PASS
+     - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
+4. **Current limitations and best long-term next features**
+   - Explicit sampled-value clocking with truly different clock domains still
+     uses helper-state lowering; we need broader cross-clock semantics tests
+     for implication ranges and disable-iff interactions.
+   - OpenTitan LEC still relies on `XPROP_ONLY` acceptance in broader flows;
+     improving initialization/X correlation remains the top LEC correctness
+     item.
+   - Upstream divergence remains large; we still need a planned sync window.
 
 ### Session Summary - Iteration 474
 

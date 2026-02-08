@@ -47,12 +47,33 @@ static Value createUnknownOrZeroConstant(Context &context, Location loc,
       FVInt(APInt(width, 0), APInt::getAllOnes(width)));
 }
 
+static const slang::ast::SignalEventControl *
+getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
+  if (auto *signal = ctrl.as_if<slang::ast::SignalEventControl>()) {
+    auto *symRef = signal->expr.getSymbolReference();
+    if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
+      auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
+      return getCanonicalSignalEventControl(clockingBlock.getEvent());
+    }
+    return signal;
+  }
+  if (auto *eventList = ctrl.as_if<slang::ast::EventListControl>()) {
+    if (eventList->events.size() != 1)
+      return nullptr;
+    auto *event = *eventList->events.begin();
+    if (!event)
+      return nullptr;
+    return getCanonicalSignalEventControl(*event);
+  }
+  return nullptr;
+}
+
 static bool isEquivalentTimingControl(const slang::ast::TimingControl &lhs,
                                       const slang::ast::TimingControl &rhs) {
   if (lhs.isEquivalentTo(rhs))
     return true;
-  auto *lhsSignal = lhs.as_if<slang::ast::SignalEventControl>();
-  auto *rhsSignal = rhs.as_if<slang::ast::SignalEventControl>();
+  auto *lhsSignal = getCanonicalSignalEventControl(lhs);
+  auto *rhsSignal = getCanonicalSignalEventControl(rhs);
   if (!lhsSignal || !rhsSignal)
     return false;
   if (lhsSignal->edge != rhsSignal->edge)

@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 475 - February 8, 2026
+
+### Summary
+
+Fixed same-clock explicit sampled-value lowering for clocking-block event
+arguments (`@(cb)`) by canonicalizing timing-control equivalence before
+direct/helper lowering selection.
+
+### Fixes
+
+1. **Canonical timing-control equivalence**
+   - Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp`:
+     - Added canonicalization of timing controls to `SignalEventControl`.
+     - Unwraps clocking-block event references (`@(cb)` -> clocking block
+       event).
+     - Unwraps single-entry event-list wrappers.
+   - `isEquivalentTimingControl` now compares canonicalized controls, allowing
+     explicit `@(cb)` forms to match enclosing `@(posedge clk)` assertions.
+
+2. **Direct lowering restored for equivalent `@(cb)` forms**
+   - Equivalent-clock sampled-value calls now use direct `moore.past` lowering
+     instead of helper-procedure sampled state for:
+     - `$rose(a, @(cb))`
+     - `$past(a, 1, @(cb))`
+   - This removes the helper-state skew that could produce spurious SAT
+     counterexamples.
+
+3. **Regression coverage**
+   - Extended
+     `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv` with:
+     - `sampled_explicit_clocking_block_same_clock_in_assert`
+     - `sampled_past_explicit_clocking_block_same_clock_in_assert`
+   - Added
+     `test/Tools/circt-bmc/sva-sampled-explicit-clocking-block-same-clock-nonoverlap-unsat-e2e.sv`
+     covering both `$rose(..., @(cb))` and `$past(..., @(cb))`.
+
+### Validation
+
+- Targeted direct BMC:
+  - `/tmp/sva_cb_sameclock_probe.sv`: `BMC_RESULT=UNSAT` (was `SAT` before fix)
+  - new e2e modules in
+    `sva-sampled-explicit-clocking-block-same-clock-nonoverlap-unsat-e2e.sv`:
+    both `BMC_RESULT=UNSAT`
+  - existing:
+    - `sva-rose-explicit-same-clock-nonoverlap-unsat-e2e.sv`: `UNSAT`
+    - `sva-past-nonoverlap-unsat-e2e.sv` explicit-same-clock module: `UNSAT`
+- Lit:
+  - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`: PASS
+  - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock-default-disable.sv`: PASS
+  - BMC e2e tests are unsupported in this local lit configuration
+    (`bmc-jit` feature requirement), validated via direct tool runs.
+- External smoke:
+  - `verilator-verification` BMC (`assert_rose`, no `BMC_ASSUME_KNOWN_INPUTS`): PASS
+  - `verilator-verification` LEC (`assert_rose`): PASS
+  - `sv-tests` BMC (`16.12--property`): PASS
+  - `sv-tests` LEC (`16.10--property-local-var`): PASS
+  - `yosys/tests/sva` BMC (`basic00`): PASS
+  - `yosys/tests/sva` LEC (`basic00`): PASS
+  - OpenTitan canright LEC (`--accept-xprop-only`): PASS
+
 ## Iteration 474 - February 8, 2026
 
 ### Summary
