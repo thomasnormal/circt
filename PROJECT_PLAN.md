@@ -14750,6 +14750,82 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 598
+- Yosys SVA BMC typed + versioned route context schema:
+  - Added schema envs:
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON`
+    - `YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION`
+  - Schema supports:
+    - `schema_version` (must match expected version env)
+    - `allow_unknown_keys` (default `true`)
+    - `keys` map with per-key spec fields:
+      - `type`: `string | integer | boolean`
+      - `required`: bool
+      - `regex`: optional regex (validated on canonical string value)
+- Context validation updates:
+  - Context registry JSON now supports typed scalars for schema-managed keys:
+    - strings, integers, booleans
+  - Canonicalization for route matching:
+    - booleans -> `true` / `false`
+    - integers -> decimal string
+  - Added strict diagnostics for:
+    - schema/object shape issues
+    - schema-version mismatch
+    - missing required key
+    - key type mismatch
+    - unknown key when `allow_unknown_keys=false`
+- Regression tests:
+  - Expanded:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+      with:
+      - positive typed-schema route match
+      - schema-version mismatch rejection
+      - missing required key rejection
+      - type mismatch rejection
+      - unknown key rejection under strict schema mode
+  - Focused lit run:
+    - 11/11 PASS (`rewrite-profile-route-auto`, `rewrite-profile-routes`,
+      `rewrite-macros`, `rewrite-cardinality`, `rewrite-profile-layers`,
+      `rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic01$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_rose$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_fifo_sync --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Typed schema currently validates the explicit context registry JSON only;
+    inferred built-in context fields are not schema-validated.
+  - Schema key constraints currently support `type`/`required`/`regex` only
+    (no enums/ranges/composite constraints).
+  - Selector macros are non-parameterized and local to one JSON payload.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+- Long-term features to prioritize:
+  - Extend schema validation to merged context (built-ins + registry) with
+    enum/range constraints.
+  - Add parameterized/importable selector macro libraries.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference

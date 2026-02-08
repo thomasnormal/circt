@@ -68,6 +68,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEX
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION:-1}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2038,6 +2040,8 @@ emit_mode_summary_outputs() {
   local drop_events_rewrite_selector_profile_route_context_ci_branch="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_BRANCH"
   local drop_events_rewrite_selector_profile_route_context_ci_target="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_CI_TARGET"
   local drop_events_rewrite_selector_profile_route_context_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+  local drop_events_rewrite_selector_profile_route_context_schema_json="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON"
+  local drop_events_rewrite_selector_profile_route_context_schema_version="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_route_context_ci_provider=""
@@ -3114,7 +3118,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_route_context_ci_provider" "$drop_events_route_context_ci_job" "$drop_events_route_context_ci_branch" "$drop_events_route_context_ci_target" "$drop_events_rewrite_selector_profile_route_context_json" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_schema_version_list" "$drop_events_rewrite_history_file_list" "$drop_events_rewrite_selector_mode" "$drop_events_rewrite_selector_clauses_json" "$drop_events_rewrite_selector_macros_json" "$drop_events_rewrite_selector_profiles_json" "$drop_events_rewrite_selector_profile_list" "$drop_events_rewrite_selector_profile_default_list" "$drop_events_rewrite_selector_profile_overlay_list" "$drop_events_rewrite_selector_profile_route" "$drop_events_rewrite_selector_profile_routes_json" "$drop_events_rewrite_selector_profile_route_auto_mode" "$YOSYS_SVA_DIR" "$TEST_FILTER" "$SCRIPT_DIR" "$drop_events_route_context_ci_provider" "$drop_events_route_context_ci_job" "$drop_events_route_context_ci_branch" "$drop_events_route_context_ci_target" "$drop_events_rewrite_selector_profile_route_context_json" "$drop_events_rewrite_selector_profile_route_context_schema_json" "$drop_events_rewrite_selector_profile_route_context_schema_version" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import csv
 import json
@@ -3157,8 +3161,10 @@ rewrite_selector_context_ci_job = sys.argv[29]
 rewrite_selector_context_ci_branch = sys.argv[30]
 rewrite_selector_context_ci_target = sys.argv[31]
 rewrite_selector_context_json_raw = sys.argv[32]
-rewrite_row_generated_at_utc_min = sys.argv[33]
-rewrite_row_generated_at_utc_max = sys.argv[34]
+rewrite_selector_context_schema_json_raw = sys.argv[33]
+rewrite_selector_context_schema_version_raw = sys.argv[34]
+rewrite_row_generated_at_utc_min = sys.argv[35]
+rewrite_row_generated_at_utc_max = sys.argv[36]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3680,19 +3686,130 @@ def parse_selector_profile_name_array(payload, field_name: str):
     return names
 
 
-def parse_selector_profile_route_context(raw: str):
-    if not raw:
-        return {}
+def format_context_scalar(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: str):
     field_name = (
-        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON"
     )
+    expected_version_field = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_VERSION"
+    )
+    expected_version = expected_version_raw.strip()
+    if not expected_version:
+        fail(
+            f"error: invalid {expected_version_field}: expected non-empty schema version"
+        )
+    if not raw:
+        return None
     try:
         payload = json.loads(raw)
     except Exception:
         fail(f"error: invalid {field_name}: expected JSON object")
-    if not isinstance(payload, dict):
-        fail(f"error: invalid {field_name}: expected JSON object")
+    if not isinstance(payload, dict) or not payload:
+        fail(f"error: invalid {field_name}: expected non-empty JSON object")
+    unknown_keys = sorted(
+        set(payload.keys()) - {"schema_version", "allow_unknown_keys", "keys"}
+    )
+    if unknown_keys:
+        fail(
+            f"error: invalid {field_name}: unknown key '{unknown_keys[0]}'"
+        )
+    schema_version = payload.get("schema_version")
+    if not isinstance(schema_version, str) or not schema_version:
+        fail(
+            f"error: invalid {field_name}.schema_version: expected non-empty string"
+        )
+    if schema_version != expected_version:
+        fail(
+            f"error: invalid {field_name}.schema_version: expected '{expected_version}', got '{schema_version}'"
+        )
+    allow_unknown_keys = payload.get("allow_unknown_keys", True)
+    if not isinstance(allow_unknown_keys, bool):
+        fail(
+            f"error: invalid {field_name}.allow_unknown_keys: expected boolean"
+        )
+    keys_payload = payload.get("keys")
+    if not isinstance(keys_payload, dict) or not keys_payload:
+        fail(
+            f"error: invalid {field_name}.keys: expected non-empty object"
+        )
+    key_specs = {}
+    for context_key, key_spec in keys_payload.items():
+        if not isinstance(context_key, str) or not context_key:
+            fail(
+                f"error: invalid {field_name}.keys: context keys must be non-empty strings"
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", context_key):
+            fail(
+                f"error: invalid {field_name}.keys: invalid context key '{context_key}'"
+            )
+        key_field = f"{field_name}.keys.{context_key}"
+        if not isinstance(key_spec, dict):
+            fail(
+                f"error: invalid {key_field}: expected object"
+            )
+        unknown_spec_keys = sorted(
+            set(key_spec.keys()) - {"type", "required", "regex"}
+        )
+        if unknown_spec_keys:
+            fail(
+                f"error: invalid {key_field}: unknown key '{unknown_spec_keys[0]}'"
+            )
+        value_type = key_spec.get("type", "string")
+        if value_type not in {"string", "integer", "boolean"}:
+            fail(
+                f"error: invalid {key_field}.type: expected one of string, integer, boolean"
+            )
+        required = key_spec.get("required", False)
+        if not isinstance(required, bool):
+            fail(
+                f"error: invalid {key_field}.required: expected boolean"
+            )
+        compiled_regex = None
+        if "regex" in key_spec:
+            compiled_regex = compile_clause_regex(
+                key_spec["regex"], f"{key_field}.regex"
+            )
+        key_specs[context_key] = {
+            "type": value_type,
+            "required": required,
+            "regex": compiled_regex,
+        }
+    return {
+        "allow_unknown_keys": allow_unknown_keys,
+        "key_specs": key_specs,
+    }
+
+
+def parse_selector_profile_route_context(raw: str, schema_spec):
+    if not raw:
+        payload = {}
+    else:
+        field_name = (
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            fail(f"error: invalid {field_name}: expected JSON object")
+        if not isinstance(payload, dict):
+            fail(f"error: invalid {field_name}: expected JSON object")
     context = {}
+    field_name = (
+        "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON"
+    )
+    key_specs = {}
+    allow_unknown_keys = True
+    if schema_spec is not None:
+        key_specs = schema_spec["key_specs"]
+        allow_unknown_keys = schema_spec["allow_unknown_keys"]
     for key, value in payload.items():
         if not isinstance(key, str) or not key:
             fail(
@@ -3702,11 +3819,47 @@ def parse_selector_profile_route_context(raw: str):
             fail(
                 f"error: invalid {field_name}: invalid context key '{key}'"
             )
-        if not isinstance(value, str):
-            fail(
-                f"error: invalid {field_name}.{key}: expected string value"
-            )
-        context[key] = value
+        key_spec = key_specs.get(key)
+        if key_spec is None:
+            if schema_spec is not None and not allow_unknown_keys:
+                fail(
+                    f"error: invalid {field_name}.{key}: unknown context key"
+                )
+            if not isinstance(value, str):
+                fail(
+                    f"error: invalid {field_name}.{key}: expected string value"
+                )
+            context[key] = value
+            continue
+        expected_type = key_spec["type"]
+        if expected_type == "string":
+            if not isinstance(value, str):
+                fail(
+                    f"error: invalid {field_name}.{key}: expected string value"
+                )
+        elif expected_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                fail(
+                    f"error: invalid {field_name}.{key}: expected integer value"
+                )
+        else:
+            if not isinstance(value, bool):
+                fail(
+                    f"error: invalid {field_name}.{key}: expected boolean value"
+                )
+        formatted_value = format_context_scalar(value)
+        if key_spec["regex"] is not None:
+            if not key_spec["regex"].search(formatted_value):
+                fail(
+                    f"error: invalid {field_name}.{key}: value does not match configured regex"
+                )
+        context[key] = formatted_value
+    if schema_spec is not None:
+        for key, key_spec in key_specs.items():
+            if key_spec["required"] and key not in context:
+                fail(
+                    f"error: invalid {field_name}: missing required context key '{key}'"
+                )
     return context
 
 
@@ -4060,8 +4213,13 @@ rewrite_selector_profile_overlay_names = parse_selector_profile_name_list(
     rewrite_selector_profile_overlay_list_raw,
     "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_OVERLAY_LIST",
 )
+rewrite_selector_profile_route_context_schema = parse_selector_profile_route_context_schema(
+    rewrite_selector_context_schema_json_raw,
+    rewrite_selector_context_schema_version_raw,
+)
 rewrite_selector_profile_route_context = parse_selector_profile_route_context(
-    rewrite_selector_context_json_raw
+    rewrite_selector_context_json_raw,
+    rewrite_selector_profile_route_context_schema,
 )
 rewrite_selector_profile_routes = parse_selector_profile_routes(
     rewrite_selector_profile_routes_json_raw

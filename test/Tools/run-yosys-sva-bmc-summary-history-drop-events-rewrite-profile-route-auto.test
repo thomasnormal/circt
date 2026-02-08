@@ -93,6 +93,25 @@
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto > %t/auto-route-context.out
 // RUN: cat %t/drop-events-auto-route-context.jsonl | FileCheck %s --check-prefix=AUTOCONTEXT
 
+// RUN: printf '{"schema_version":"1","event_id":"drop-auto-schema","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-schema.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-auto-route-schema.jsonl
+// RUN: printf '{"schema_version":"1","event_id":"drop-auto-schema-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"max_entries","history_file":"legacy-auto-schema-keep.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-auto-route-schema.jsonl
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-schema.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_HASH=crc32 \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE=required \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON='{"flavor":"nightly","attempt":7,"gated":true}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"1","allow_unknown_keys":false,"keys":{"flavor":{"type":"string","required":true,"regex":"^night"},"attempt":{"type":"integer","required":true},"gated":{"type":"boolean","required":true}}}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON='{"ctx_schema":[{"history_file_list":"legacy-auto-schema.tsv"}]}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON='{"ctx_schema_route":{"profile_list":["ctx_schema"],"when":{"context_regex":{"flavor":"^nightly$","attempt":"^7$","gated":"^true$"}}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto > %t/auto-route-schema.out
+// RUN: cat %t/drop-events-auto-route-schema.jsonl | FileCheck %s --check-prefix=AUTOSCHEMA
+
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-missing-routes.jsonl
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
@@ -191,6 +210,49 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILES_JSON='{"ci":[{"run_id_regex":"^ci$"}]}' \
 // RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto 2>&1 | FileCheck %s --check-prefix=BADPRIORITY
 
+// RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-schema-version-mismatch.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-schema-version-mismatch.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"2","keys":{"flavor":{"type":"string"}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto 2>&1 | FileCheck %s --check-prefix=BADSCHEMAVERSION
+
+// RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-schema-missing-required.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-schema-missing-required.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON='{}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"1","allow_unknown_keys":false,"keys":{"flavor":{"type":"string","required":true}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto 2>&1 | FileCheck %s --check-prefix=BADSCHEMAMISSINGREQ
+
+// RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-schema-bad-type.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-schema-bad-type.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON='{"attempt":"7"}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"1","allow_unknown_keys":false,"keys":{"attempt":{"type":"integer","required":true}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto 2>&1 | FileCheck %s --check-prefix=BADSCHEMATYPE
+
+// RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-auto-route-schema-unknown-key.jsonl
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=0 TEST_FILTER='^simple$' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-auto-route-schema-unknown-key.jsonl \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON='{"extra":"x"}' \
+// RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON='{"schema_version":"1","allow_unknown_keys":false,"keys":{"flavor":{"type":"string"}}}' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/suite-auto 2>&1 | FileCheck %s --check-prefix=BADSCHEMAUNKNOWNKEY
+
 // AUTO: {"schema_version":"2","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-default.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // AUTO: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-ci.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"ci","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // AUTO: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-overlay.tsv","history_format":"tsv","line":3,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
@@ -203,6 +265,8 @@
 // AUTOPRIO: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-priority-high.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // AUTOCONTEXT: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-context.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // AUTOCONTEXT: {"schema_version":"1","event_id":"drop-auto-context-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"max_entries","history_file":"legacy-auto-context-keep.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
+// AUTOSCHEMA: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-auto-schema.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
+// AUTOSCHEMA: {"schema_version":"1","event_id":"drop-auto-schema-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"max_entries","history_file":"legacy-auto-schema-keep.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"other","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
 
 // MISSINGROUTES: error: YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE=required requires YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON
 // NOMATCH: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_AUTO_MODE: no route matched auto context
@@ -213,3 +277,7 @@
 // BADCONTEXTJSON: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON: expected JSON object
 // BADCONTEXTREGEXKEY: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON.ci_auto.when.context_regex: invalid context key 'bad key'
 // BADPRIORITY: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTES_JSON.ci_auto.priority: expected non-negative integer
+// BADSCHEMAVERSION: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_SCHEMA_JSON.schema_version: expected '1', got '2'
+// BADSCHEMAMISSINGREQ: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON: missing required context key 'flavor'
+// BADSCHEMATYPE: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON.attempt: expected integer value
+// BADSCHEMAUNKNOWNKEY: error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_PROFILE_ROUTE_CONTEXT_JSON.extra: unknown context key
