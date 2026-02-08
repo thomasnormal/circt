@@ -14313,6 +14313,72 @@ ninja -C build circt-verilog
   - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
   - Introduce unified JSON schema + aggregation tooling across formal harnesses.
 
+### Iteration 592
+- Yosys SVA BMC selector cardinality combinators:
+  - Extended selector expression grammar with cardinality operators:
+    - `at_least`: `{ "count": <n>, "of": [expr, ...] }`
+    - `at_most`: `{ "count": <n>, "of": [expr, ...] }`
+    - `exactly`: `{ "count": <n>, "of": [expr, ...] }`
+  - Cardinality operators compose recursively with existing base predicates and
+    boolean combinators (`all_of`, `any_of`, `not`).
+- Migration engine updates:
+  - Added strict validation for cardinality combinators:
+    - requires keys `count` and `of`
+    - `count` must be a non-negative integer
+    - `of` must be a non-empty array of selector expressions
+    - rejects `count` values larger than expression count
+  - Added recursive evaluation semantics for cardinality operators in rewrite
+    selection.
+  - Extended recursive timestamp-dependency detection to include cardinality
+    child expressions.
+- Regression tests:
+  - Added:
+    - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+      covering:
+      - positive `exactly` rewrite behavior
+      - invalid `count` overflow
+      - invalid cardinality object shape
+      - invalid empty `of` list
+  - Focused lit run:
+    - 8/8 PASS (`rewrite-cardinality`, `rewrite-profile-layers`,
+      `rewrite-profiles`, `rewrite-clauses`, `rewrite-selectors`,
+      `event-id-policy`, `metadata-policy`, `migrate`).
+- Validation status:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+  - External smoke sweep (focused one-case-per-suite cadence):
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 failures=0 skipped=0
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+      -> total=1 pass=1 fail=0 error=0 skip=0
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`
+      -> total=1 pass=1 fail=0 error=0 skip=1027
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+    - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`
+      -> total=1 pass=1 fail=0 error=0 skip=9
+    - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`
+      -> PASS
+    - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`
+      -> `aes_sbox_canright` OK
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`
+      -> PASS
+    - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`
+      -> PASS
+- Current limitations / debt:
+  - Selector grammar still lacks reusable named selector subexpressions/macros.
+  - Profile layering is ordered stacking only; no environment-aware policy
+    routing yet.
+  - jtag compatibility currently depends on import-time rewrite shims rather
+    than native semantics.
+  - Strict duplicate-key/syntax JSON validation still depends on Python.
+- Long-term features to prioritize:
+  - Add selector macro blocks with reference-by-name in clauses/profiles.
+  - Add policy-level environment routing for profile defaults/overlays.
+  - Upstream native Slang/CIRCT handling to retire jtag rewrite shims.
+  - Introduce unified JSON schema + aggregation tooling across formal harnesses.
+
 ---
 
 ## Architecture Reference

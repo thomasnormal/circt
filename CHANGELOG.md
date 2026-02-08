@@ -28708,3 +28708,77 @@ CIRCT/slang correctly enforces LRM restrictions.
   subexpression aliases.
 - jtag compatibility currently relies on import-time rewrite shims.
 - Strict duplicate-key/syntax JSON validation still depends on Python.
+
+## Iteration 592 - February 8, 2026
+
+### Yosys SVA BMC Selector Cardinality Combinators
+
+- Extended selector expression grammar with cardinality operators:
+  - `at_least`: `{ "count": <n>, "of": [expr, ...] }`
+  - `at_most`: `{ "count": <n>, "of": [expr, ...] }`
+  - `exactly`: `{ "count": <n>, "of": [expr, ...] }`
+- Cardinality operators compose with existing selector predicates and boolean
+  combinators (`all_of`, `any_of`, `not`).
+
+### Migration Semantics
+
+- Added strict cardinality validation:
+  - cardinality objects must include `count` and `of`
+  - `count` must be non-negative integer
+  - `of` must be non-empty expression array
+  - `count` must not exceed number of expressions
+- Added recursive cardinality evaluation in rewrite selector matching.
+- Extended recursive row-timestamp dependency detection to traverse cardinality
+  child expressions.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - positive `exactly` rewrite behavior
+    - invalid `count` overflow rejection
+    - invalid cardinality object-shape rejection
+    - invalid empty `of` list rejection
+- Focused lit run:
+  - 8/8 PASS:
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-cardinality.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-layers.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-profiles.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-clauses.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-rewrite-selectors.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-event-id-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-metadata-policy.test`
+    - `run-yosys-sva-bmc-summary-history-drop-events-migrate.test`
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- External smoke sweep:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 failures=0 skipped=0
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^basic03$' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^16.9--sequence-noncons-repetition$' utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=9
+  - `LEC_SMOKE_ONLY=1 TEST_FILTER='^assert_fell$' utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification tests/asserts`:
+    - total=1 pass=1 fail=0 error=0 skip=9
+  - `utils/run_opentitan_circt_sim.sh prim_count --max-cycles=120 --timeout=120`:
+    - PASS
+  - `LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- Selector grammar still lacks reusable named selector subexpressions/macros.
+- Profile layering is ordered stacking only; no environment-aware policy
+  routing yet.
+- jtag compatibility currently relies on import-time rewrite shims.
+- Strict duplicate-key/syntax JSON validation still depends on Python.
