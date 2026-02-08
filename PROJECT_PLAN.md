@@ -11599,6 +11599,61 @@ ninja -C build circt-verilog
   - Add richer malformed reason/severity policy families.
   - Continue semantic root-cause fixes to retire xprop expected-failure rows.
 
+### Iteration 547
+- Yosys SVA BMC strict summary-history schema validation:
+  - Extended `utils/run_yosys_sva_circt_bmc.sh` validation to fail-fast on
+    malformed history rows before append/migration.
+  - Added strict checks for TSV history rows:
+    - schema row count and per-field numeric validation.
+    - non-empty `run_id`.
+    - `generated_at_utc` must match `YYYY-MM-DDTHH:MM:SSZ`.
+  - Added strict checks for legacy TSV rows before migration:
+    - exact legacy column count.
+    - all legacy fields must be non-negative integers.
+  - Added strict checks for JSONL schema rows:
+    - object-shape validation.
+    - required top-level keys:
+      - `schema_version`, `run_id`, `generated_at_utc`, `test_summary`,
+        `mode_summary`, `skip_reasons`.
+    - required summary counters under `test_summary`, `mode_summary`, and
+      `skip_reasons`.
+  - JSONL legacy migration now validates migrated rows before write.
+- Regression tests:
+  - Added `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`:
+    - invalid TSV timestamp fails with clear diagnostic.
+    - invalid JSONL schema entry (missing `mode_summary`) fails with clear
+      diagnostic.
+  - Re-ran summary lit suite:
+    - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+    - result: 7/7 PASS
+  - Re-ran harness lit suite:
+    - `test/Tools/run-yosys-sva-bmc-*.test`
+    - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+    - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+    - result: 30/30 PASS
+- Validation status:
+  - Yosys BMC known profile:
+    - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+  - Yosys BMC xprop profile:
+    - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+- Current limitations / debt:
+  - JSONL validation currently enforces key presence/object shape but does not
+    fully type-check nested values as integers.
+  - Legacy-migrated JSONL rows still use synthetic timestamp metadata.
+  - Retention remains count-based; no age/time-window mode yet.
+  - Comment-anchor policies remain row-local and do not yet support
+    sticky-group mode.
+  - Malformed severity tiers remain coarse (`error` vs `warning`).
+  - xprop pass-mode failures remain baseline-tracked and semantically
+    unresolved.
+- Long-term features to prioritize:
+  - Add strict numeric type-validation for JSONL nested counters.
+  - Add age/time-based history retention policies.
+  - Add configurable formatter comment-anchor modes (`local` vs
+    `sticky-group`).
+  - Add richer malformed reason/severity policy families.
+  - Continue semantic root-cause fixes to retire xprop expected-failure rows.
+
 ---
 
 ## Architecture Reference

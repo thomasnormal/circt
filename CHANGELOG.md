@@ -25782,3 +25782,59 @@ CIRCT/slang correctly enforces LRM restrictions.
   mode.
 - Malformed severity tiers remain coarse (`error` vs `warning`).
 - xprop-profile pass-mode expected failures remain baseline-tracked.
+
+---
+
+## Iteration 547 - February 8, 2026
+
+### Yosys SVA BMC Summary History Strict Validation
+
+- Extended `utils/run_yosys_sva_circt_bmc.sh` with strict schema validation for
+  history inputs before append or migration.
+- Added TSV current-schema validation:
+  - exact column count.
+  - non-empty `run_id`.
+  - strict UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`).
+  - non-negative integer checks for all numeric counters.
+- Added TSV legacy-schema validation:
+  - exact legacy column count.
+  - non-negative integer checks before migration.
+- Added JSONL schema-line validation:
+  - object-shape requirement.
+  - required top-level keys:
+    - `schema_version`, `run_id`, `generated_at_utc`, `test_summary`,
+      `mode_summary`, `skip_reasons`.
+  - required summary keys across `test_summary`, `mode_summary`, and
+    `skip_reasons`.
+- JSONL legacy migration now validates transformed lines before write.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-validate.test`
+- Revalidated summary lit tests:
+  - `test/Tools/run-yosys-sva-bmc-summary-*.test`
+- Summary lit result: 7/7 PASS
+- Revalidated harness lit tests:
+  - `test/Tools/run-yosys-sva-bmc-*.test`
+  - `test/Tools/circt-bmc/yosys-sva-smoke.mlir`
+  - `test/Tools/circt-bmc/yosys-sva-no-property-skip.mlir`
+- Harness lit result: 30/30 PASS
+
+### Validation
+
+- `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=1, xpass=0, skipped=2
+- `BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+  - 14 tests, failures=0, xfail=8, xpass=0, skipped=2
+
+### Remaining Limitations
+
+- JSONL validation now checks key presence but does not fully type-check all
+  nested counter values as integers.
+- Legacy migrated rows still carry synthetic timestamp metadata.
+- Retention remains count-based only (no age/time-window policy).
+- Comment-anchor policies remain row-local and do not yet support sticky-group
+  mode.
+- Malformed severity tiers remain coarse (`error` vs `warning`).
+- xprop-profile pass-mode expected failures remain baseline-tracked.
