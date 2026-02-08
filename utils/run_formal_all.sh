@@ -36,6 +36,8 @@ Options:
                          Fail when observed failing cases are not expected
   --fail-on-expired-expected-failure-cases
                          Fail when any expected case is expired by expires_on
+  --fail-on-unmatched-expected-failure-cases
+                         Fail when expected cases have no observed match
   --json-summary FILE    Write machine-readable JSON summary (default: <out-dir>/summary.json)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
@@ -81,6 +83,7 @@ FAIL_ON_UNEXPECTED_FAILURES=0
 EXPECTED_FAILURE_CASES_FILE=""
 FAIL_ON_UNEXPECTED_FAILURE_CASES=0
 FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=0
+FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=0
 JSON_SUMMARY_FILE=""
 WITH_OPENTITAN=0
 WITH_AVIP=0
@@ -151,6 +154,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_UNEXPECTED_FAILURE_CASES=1; shift ;;
     --fail-on-expired-expected-failure-cases)
       FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES=1; shift ;;
+    --fail-on-unmatched-expected-failure-cases)
+      FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES=1; shift ;;
     --json-summary)
       JSON_SUMMARY_FILE="$2"; shift 2 ;;
     -h|--help)
@@ -188,6 +193,10 @@ if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_
 fi
 if [[ "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
   echo "--fail-on-expired-expected-failure-cases requires --expected-failure-cases-file" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
+  echo "--fail-on-unmatched-expected-failure-cases requires --expected-failure-cases-file" >&2
   exit 1
 fi
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" && ! -r "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -725,12 +734,14 @@ fi
 
 if [[ -n "$EXPECTED_FAILURE_CASES_FILE" || \
       "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" || \
-      "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" ]]; then
+      "$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" == "1" || \
+      "$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" \
   JSON_SUMMARY_FILE="$JSON_SUMMARY_FILE" \
   EXPECTED_FAILURE_CASES_FILE="$EXPECTED_FAILURE_CASES_FILE" \
   FAIL_ON_UNEXPECTED_FAILURE_CASES="$FAIL_ON_UNEXPECTED_FAILURE_CASES" \
   FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES="$FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES" \
+  FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES="$FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES" \
   python3 - <<'PY'
 import csv
 import datetime as dt
@@ -744,6 +755,7 @@ expected_file_raw = os.environ.get("EXPECTED_FAILURE_CASES_FILE", "")
 expected_path = Path(expected_file_raw) if expected_file_raw else None
 fail_on_unexpected = os.environ.get("FAIL_ON_UNEXPECTED_FAILURE_CASES", "0") == "1"
 fail_on_expired = os.environ.get("FAIL_ON_EXPIRED_EXPECTED_FAILURE_CASES", "0") == "1"
+fail_on_unmatched = os.environ.get("FAIL_ON_UNMATCHED_EXPECTED_FAILURE_CASES", "0") == "1"
 today = dt.date.today()
 
 case_summary_path = out_dir / "expected-failure-cases-summary.tsv"
@@ -1056,6 +1068,15 @@ if fail_on_expired and expired_rows:
     print(
         f"  {row['suite']} {row['mode']} id_kind={row['id_kind']} "
         f"id={row['id']} expires_on={row['expires_on']} matched_count={row['matched_count']}"
+      )
+  raise SystemExit(1)
+
+if fail_on_unmatched and unmatched_rows:
+  print("unmatched expected failure cases:")
+  for row in unmatched_rows:
+    print(
+        f"  {row['suite']} {row['mode']} id_kind={row['id_kind']} "
+        f"id={row['id']} status={row['status']}"
     )
   raise SystemExit(1)
 PY
