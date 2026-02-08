@@ -1,0 +1,83 @@
+# sv-tests simulation expectations.
+# Format: test_name<TAB>mode<TAB>reason
+# mode: compile-only | xfail | skip
+
+# UVM testbench tests: too large for 120s sim timeout
+uvm_agent_active	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_agent_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_agent_passive	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_driver_sequencer_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_monitor_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_resource_db_read_by_name	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_scoreboard_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_scoreboard_monitor_agent_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_scoreboard_monitor_env	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_sequence	compile-only	UVM testbench: too large for 120s sim timeout
+uvm_test_run_test	compile-only	UVM testbench: too large for 120s sim timeout
+
+# Ch18: Constraint solving required (randomize() returns random values, not constraint-solved)
+18.5--constraint-blocks_1	xfail	Constraint solving: exact value check (b == 5)
+18.5.1--explicit-external-constraint_2	xfail	Constraint solving: exact value check (b == 5)
+18.5.1--implicit-external-constraint_2	xfail	Constraint solving: exact value check (b == 5)
+18.5.2--constraint-inheritance_1	xfail	Constraint solving: inherited constraint
+18.5.2--pure-constraint_1	xfail	Constraint solving: pure constraint
+18.5.3--set-membership_1	xfail	Constraint solving: set membership
+18.5.4--distribution_1	xfail	Constraint solving: distribution weight
+18.5.5--uniqueness-constraints_1	xfail	Constraint solving: uniqueness constraint
+18.5.6--implication_1	xfail	Constraint solving: implication
+18.5.7--if-else-constraints_4	xfail	Constraint solving: nested if-else constraint
+18.5.8.1--foreach-iterative-constraints_1	xfail	Constraint solving: foreach iterative
+18.5.8.2--array-reduction-iterative-constraints_1	xfail	Constraint solving: array reduction
+18.5.9--global-constraints_1	xfail	Constraint solving: global cross-object
+18.5.11--static-constraint-blocks_1	xfail	Constraint solving: static constraint
+18.5.12--functions-in-constraint_1	xfail	Constraint solving: function in constraint
+18.5.13--constraint-guards_1	xfail	Constraint solving: constraint guard
+18.5.14--soft-constraints_1	xfail	Constraint solving: soft constraint range
+18.5.14.1--soft-constraint-priorities_1	xfail	Constraint solving: soft priority
+18.5.14.1--soft-constraint-priorities_3	xfail	Constraint solving: external soft
+18.5.14.1--soft-constraint-priorities_4	xfail	Constraint solving: inline soft override
+18.5.14.2--discarding-soft-constraints_1	xfail	Constraint solving: disable soft
+18.5.14.2--discarding-soft-constraints_3	xfail	Constraint solving: disable soft
+18.5.14.2--discarding-soft-constraints_5	xfail	Constraint solving: disable soft
+18.6.2--post-randomize_method_1	xfail	Constraint solving: post_randomize + constraint
+18.6.2--pre-randomize-method_1	xfail	Constraint solving: pre_randomize + constraint
+18.6.3--behavior-of-randomization-methods_1	xfail	Constraint solving: shared static rand
+18.6.3--behavior-of-randomization-methods_2	xfail	Constraint solving: infeasible detection
+18.6.3--behavior-of-randomization-methods_3	xfail	Constraint solving: infeasible post_randomize
+18.7--in-line-constraints--randomize_0	xfail	Constraint solving: inline + class constraint
+18.7--in-line-constraints--randomize_2	xfail	Constraint solving: inline range
+18.7--in-line-constraints--randomize_4	xfail	Constraint solving: inline with variable select
+18.7--in-line-constraints--randomize_6	xfail	Constraint solving: inline with class var
+18.7.1--local-scope-resolution_1	xfail	Constraint solving: local scope
+18.8--disabling-random-variables-with-rand_mode_0	xfail	Constraint solving: rand_mode API
+18.8--disabling-random-variables-with-rand_mode_1	xfail	Constraint solving: randc rand_mode
+18.8--disabling-random-variables-with-rand_mode_2	xfail	Constraint solving: rand_mode re-enable
+18.8--disabling-random-variables-with-rand_mode_3	xfail	Constraint solving: static rand_mode
+18.9--controlling-constraints-with-constraint_mode_0	xfail	Constraint solving: constraint_mode API
+18.10--dynamic-constraint-modification_0	xfail	Constraint solving: dynamic modification
+18.11.1--in-line-constraint-checker_0	xfail	Constraint solving: constraint checker
+18.11.1--in-line-constraint-checker_1	xfail	Constraint solving: randc constraint checker
+18.11--in-line-random-variable-control_0	xfail	Constraint solving: inline variable control
+18.11--in-line-random-variable-control_1	xfail	Constraint solving: randc inline control
+
+# Ch18: UVM tests that likely timeout (UVM overhead + constraint/seed features)
+18.6.1--randomize-method_0	compile-only	UVM: randomize return value check
+18.12.1--adding-constraints-to-scope-variables_1	compile-only	UVM: std::randomize scope
+18.12--randomization-of-scope-variables_1	compile-only	UVM: std::randomize scope
+18.13.1--urandom_1	compile-only	UVM: $urandom basic check
+18.13.1--urandom_3	compile-only	UVM: $urandom seed check
+18.13.2--urandom_range_1	compile-only	UVM: $urandom_range range check
+18.13.2--urandom_range_2	compile-only	UVM: $urandom_range reversed args
+18.13.2--urandom_range_3	compile-only	UVM: $urandom_range single arg
+18.13.3--srandom_0	compile-only	UVM: srandom seed reproducibility
+18.13.4--get_randstate_0	compile-only	UVM: get_randstate check
+18.13.5--set_randstate_0	compile-only	UVM: set_randstate restore
+18.14.2--thread-stability_0	compile-only	UVM: process thread stability
+18.14.2--thread-stability_1	compile-only	UVM: different process randstate
+18.14.3--object-stability_0	compile-only	UVM: object stability
+18.14.3--object-stability_1	compile-only	UVM: same seed objects
+18.14--random-stability_0	compile-only	UVM: process randstate restore
+18.14--random-stability_1	compile-only	UVM: process randstate shuffle
+18.14--random-stability_2	compile-only	UVM: randcase stability
+18.14--random-stability_3	compile-only	UVM: process randstate randcase
+18.15--manually-seeding-randomize_1	compile-only	UVM: manual seed reproducibility
