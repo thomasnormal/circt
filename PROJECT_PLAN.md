@@ -16485,6 +16485,31 @@ ninja -C build circt-verilog
     supported.
   - Cadence runner still lacks failure notification hooks (webhook/email).
 
+### Iteration 629
+- Formal cadence failure hook integration:
+  - Added `--on-fail-hook <path>` to `utils/run_formal_cadence.sh`.
+  - Hook is invoked on iteration failure before fail-fast exit with positional
+    args:
+    - `<iteration> <exit_code> <run_dir> <out_root> <cadence_log> <cadence_state>`
+  - Added hook executability validation and state metadata:
+    - rejects non-executable hook path
+    - records `on_fail_hook` in `cadence.state`.
+  - Added hook invocation logging and hook-failure logging to `cadence.log`.
+- Regression coverage:
+  - Updated `test/Tools/run-formal-cadence.test`:
+    - fail-fast scenario now wires `--on-fail-hook`
+    - verifies hook side-effect file (`hook_invoked=1`) is emitted.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with `--on-fail-hook` usage and hook
+    argument contract.
+- Validation status:
+  - `bash -n utils/run_formal_cadence.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-cadence.test` -> PASS
+- Current limitations / debt:
+  - Hook is executable-path based only; no built-in HTTP webhook or SMTP
+    notifiers are bundled yet.
+  - Retention policy remains count-based only (no size/age policy).
+
 ---
 
 ## Architecture Reference

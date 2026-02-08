@@ -64,6 +64,15 @@ Limit retained run directories to cap disk usage:
 utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --retain-runs 12 -- --with-opentitan --opentitan ~/opentitan
 ```
 
+Invoke an executable hook when a cadence iteration fails:
+
+```bash
+utils/run_formal_cadence.sh --interval-secs 21600 --iterations 0 --on-fail-hook ./notify_failure.sh -- --with-opentitan --opentitan ~/opentitan
+```
+
+Fail hook arguments:
+`<iteration> <exit_code> <run_dir> <out_root> <cadence_log> <cadence_state>`.
+
 ## Inputs and Suites
 
 The harness wraps existing suite runners:

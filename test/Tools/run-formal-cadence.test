@@ -12,9 +12,13 @@
 // RUN: cat %t/formal-cadence-retain/cadence.log | FileCheck %s --check-prefix=RETAINLOG
 //
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE_FILE=\"%t/fail-counter.txt\"\ncount=0\nif [[ -f \"$STATE_FILE\" ]]; then count=$(cat \"$STATE_FILE\"); fi\ncount=$((count + 1))\necho \"$count\" > \"$STATE_FILE\"\nif [[ \"$count\" -ge 2 ]]; then\n  echo \"forced failure\"\n  exit 3\nfi\nexit 0\n' > %t/utils/fake-formal-all-fail.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"hook_invoked=1\" > %t/hook-call.txt\n' > %t/utils/fail-hook.sh
 // RUN: chmod +x %t/utils/fake-formal-all-fail.sh
-// RUN: not sh -c 'cd %t && utils/run_formal_cadence.sh --interval-secs 0 --iterations 3 --run-formal-all %t/utils/fake-formal-all-fail.sh --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=FAILFAST
+// RUN: chmod +x %t/utils/fail-hook.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_cadence.sh --interval-secs 0 --iterations 3 --run-formal-all %t/utils/fake-formal-all-fail.sh --on-fail-hook %t/utils/fail-hook.sh --no-strict-gate' 2>&1 | FileCheck %s --check-prefix=FAILFAST
+// RUN: cat %t/hook-call.txt | FileCheck %s --check-prefix=HOOK
 //
 // PASSLOG: completed_iterations=2
 // RETAINLOG: pruned_run_dir=
 // FAILFAST: failing fast: iteration 2 failed
+// HOOK: hook_invoked=1
