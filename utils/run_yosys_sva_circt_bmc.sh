@@ -49,6 +49,8 @@ YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY="${YOSYS_SVA_MODE_SUM
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY:-infer}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX:-}"
+YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES="${YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_MAX_ENTRIES:-0}"
@@ -2000,6 +2002,8 @@ emit_mode_summary_outputs() {
   local drop_events_id_metadata_policy="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY"
   local drop_events_rewrite_run_id_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX"
   local drop_events_rewrite_reason_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX"
+  local drop_events_rewrite_schema_version_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX"
+  local drop_events_rewrite_history_file_regex="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX"
   local drop_events_rewrite_row_generated_at_utc_min="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN"
   local drop_events_rewrite_row_generated_at_utc_max="$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX"
   local drop_events_id_hash_mode_effective
@@ -3002,7 +3006,7 @@ PY
 
     prepare_drop_events_jsonl_file() {
       local migrate_file="$1"
-      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
+      python3 - "$migrate_file" "$YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_SCHEMA_VERSION" "$drop_events_id_hash_mode" "$drop_events_id_hash_mode_effective" "$drop_events_id_hash_algorithm" "$drop_events_id_hash_version" "$drop_events_event_id_policy" "$drop_events_id_metadata_policy" "$drop_events_rewrite_run_id_regex" "$drop_events_rewrite_reason_regex" "$drop_events_rewrite_schema_version_regex" "$drop_events_rewrite_history_file_regex" "$drop_events_rewrite_row_generated_at_utc_min" "$drop_events_rewrite_row_generated_at_utc_max" <<'PY'
 from datetime import datetime, timezone
 import json
 import re
@@ -3022,8 +3026,10 @@ event_id_policy = sys.argv[7]
 id_metadata_policy = sys.argv[8]
 rewrite_run_id_regex = sys.argv[9]
 rewrite_reason_regex = sys.argv[10]
-rewrite_row_generated_at_utc_min = sys.argv[11]
-rewrite_row_generated_at_utc_max = sys.argv[12]
+rewrite_schema_version_regex = sys.argv[11]
+rewrite_history_file_regex = sys.argv[12]
+rewrite_row_generated_at_utc_min = sys.argv[13]
+rewrite_row_generated_at_utc_max = sys.argv[14]
 
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
@@ -3075,6 +3081,28 @@ if rewrite_reason_regex:
     except re.error as ex:
         fail(
             f"error: invalid YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_REASON_REGEX: {rewrite_reason_regex} ({ex})"
+        )
+
+rewrite_schema_version_pattern = None
+if rewrite_schema_version_regex:
+    try:
+        rewrite_schema_version_pattern = re.compile(rewrite_schema_version_regex)
+    except re.error as ex:
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX: "
+            f"{rewrite_schema_version_regex} ({ex})"
+        )
+
+rewrite_history_file_pattern = None
+if rewrite_history_file_regex:
+    try:
+        rewrite_history_file_pattern = re.compile(rewrite_history_file_regex)
+    except re.error as ex:
+        fail(
+            "error: invalid "
+            "YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX: "
+            f"{rewrite_history_file_regex} ({ex})"
         )
 
 rewrite_row_generated_at_min_epoch = None
@@ -3215,10 +3243,26 @@ def parse_row_generated_at_epoch(row_generated_at: str, lineno: int) -> int:
     )
 
 
-def selected_for_rewrite(reason: str, run_id: str, row_generated_at_epoch) -> bool:
+def selected_for_rewrite(
+    reason: str,
+    run_id: str,
+    schema_version: str,
+    history_file: str,
+    row_generated_at_epoch,
+) -> bool:
     if rewrite_run_id_pattern is not None and rewrite_run_id_pattern.search(run_id) is None:
         return False
     if rewrite_reason_pattern is not None and rewrite_reason_pattern.search(reason) is None:
+        return False
+    if (
+        rewrite_schema_version_pattern is not None
+        and rewrite_schema_version_pattern.search(schema_version) is None
+    ):
+        return False
+    if (
+        rewrite_history_file_pattern is not None
+        and rewrite_history_file_pattern.search(history_file) is None
+    ):
         return False
     if (
         rewrite_row_generated_at_min_epoch is not None
@@ -3263,7 +3307,11 @@ for lineno, line in enumerate(lines, start=1):
             obj["row_generated_at_utc"], lineno
         )
     rewrite_selected = selected_for_rewrite(
-        obj["reason"], obj["run_id"], row_generated_at_epoch
+        obj["reason"],
+        obj["run_id"],
+        schema_version,
+        obj["history_file"],
+        row_generated_at_epoch,
     )
     event_id = obj.get("event_id")
     had_event_id = isinstance(event_id, str) and bool(event_id)
