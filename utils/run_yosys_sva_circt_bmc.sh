@@ -68,6 +68,8 @@ EXPECT_FORMAT_REWRITE_MALFORMED="${EXPECT_FORMAT_REWRITE_MALFORMED:-0}"
 EXPECT_FORMAT_MALFORMED_FIX_FILE="${EXPECT_FORMAT_MALFORMED_FIX_FILE:-}"
 EXPECT_FORMAT_FAIL_ON_UNFIXABLE="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE:-0}"
 EXPECT_FORMAT_UNFIXABLE_FILE="${EXPECT_FORMAT_UNFIXABLE_FILE:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-}"
+EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is emitted before LTLToCore/LowerClockedAssertLike run, so clocked
 # assertions may be present but not lowered yet. Setting this to 1 can cause
@@ -176,7 +178,7 @@ if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_MALFORMED_FIX_F
 fi
 if [[ "$EXPECT_FORMAT_MODE" != "off" ]] && [[ -n "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
   : > "$EXPECT_FORMAT_UNFIXABLE_FILE"
-  printf 'file\tline\treason\n' >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
+  printf 'file\tline\treason\tprofile\tstrict_selected\n' >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
 fi
 
 emit_expect_lint() {
@@ -575,13 +577,65 @@ emit_unfixable_format_issue() {
   local file="$1"
   local line="$2"
   local reason="$3"
+  local profile="$4"
+  local strict_selected="$5"
   if [[ -z "$EXPECT_FORMAT_UNFIXABLE_FILE" ]]; then
     return 0
   fi
-  printf '%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\n' \
     "$(sanitize_tsv_field "$file")" \
     "$(sanitize_tsv_field "$line")" \
-    "$(sanitize_tsv_field "$reason")" >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
+    "$(sanitize_tsv_field "$reason")" \
+    "$(sanitize_tsv_field "$profile")" \
+    "$strict_selected" >> "$EXPECT_FORMAT_UNFIXABLE_FILE"
+  return 0
+}
+
+csv_pattern_match() {
+  local value="$1"
+  local csv="$2"
+  local pattern
+  if [[ -z "$csv" ]]; then
+    return 0
+  fi
+  while IFS= read -r pattern; do
+    pattern="$(trim_whitespace "$pattern")"
+    [[ -z "$pattern" ]] && continue
+    if [[ "$value" == $pattern ]]; then
+      return 0
+    fi
+  done < <(printf '%s\n' "$csv" | tr ',' '\n')
+  return 1
+}
+
+infer_malformed_profile() {
+  local raw_line="$1"
+  local -a toks=()
+  local profile="unknown"
+  read -r -a toks <<<"$raw_line"
+  if ((${#toks[@]} >= 3)); then
+    profile="${toks[2],,}"
+    [[ -z "$profile" ]] && profile="unknown"
+  fi
+  printf '%s' "$profile"
+}
+
+strict_unfixable_scope_matches() {
+  local file="$1"
+  local profile="$2"
+  local base
+  base="$(basename "$file")"
+  if [[ -n "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER" ]]; then
+    if ! csv_pattern_match "$file" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER" && \
+       ! csv_pattern_match "$base" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER"; then
+      return 1
+    fi
+  fi
+  if [[ -n "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER" ]]; then
+    if ! csv_pattern_match "$profile" "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER"; then
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -751,7 +805,9 @@ format_expectation_file() {
   local malformed_suggested=0
   local malformed_fixed=0
   local malformed_unfixable=0
+  local malformed_unfixable_strict=0
   local allow_auto_omit=0
+  local inferred_profile strict_selected
   local suggestion reason suggest_pair applied
   local -a comment_lines=()
   local -a row_lines=()
@@ -810,7 +866,13 @@ format_expectation_file() {
       else
         malformed_lines+=("$trimmed")
         malformed_unfixable=$((malformed_unfixable + 1))
-        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite"
+        inferred_profile="$(infer_malformed_profile "$trimmed")"
+        strict_selected=0
+        if strict_unfixable_scope_matches "$file" "$inferred_profile"; then
+          strict_selected=1
+          malformed_unfixable_strict=$((malformed_unfixable_strict + 1))
+        fi
+        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite" "$inferred_profile" "$strict_selected"
       fi
       continue
     fi
@@ -837,7 +899,13 @@ format_expectation_file() {
       else
         malformed_lines+=("$trimmed")
         malformed_unfixable=$((malformed_unfixable + 1))
-        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite"
+        inferred_profile="$(infer_malformed_profile "$trimmed")"
+        strict_selected=0
+        if strict_unfixable_scope_matches "$file" "$inferred_profile"; then
+          strict_selected=1
+          malformed_unfixable_strict=$((malformed_unfixable_strict + 1))
+        fi
+        emit_unfixable_format_issue "$file" "$trimmed" "no-canonical-rewrite" "$inferred_profile" "$strict_selected"
       fi
       continue
     fi
@@ -875,7 +943,7 @@ format_expectation_file() {
     fi
   fi
   append_expect_format_diff "$diff_file" "$file" "$changed"
-  echo "$changed|$rows|$malformed|$malformed_suggested|$malformed_fixed|$malformed_unfixable"
+  echo "$changed|$rows|$malformed|$malformed_suggested|$malformed_fixed|$malformed_unfixable|$malformed_unfixable_strict"
   return 0
 }
 
@@ -883,10 +951,11 @@ run_expectation_formatter() {
   local mode="$1"
   local -a files=()
   local -a defaults=()
-  local i file default_expected result changed rows malformed malformed_suggested malformed_fixed malformed_unfixable
+  local i file default_expected result changed rows malformed malformed_suggested malformed_fixed malformed_unfixable malformed_unfixable_strict
   local changed_files=0
   local file_count=0
   local unfixable_total=0
+  local unfixable_strict_total=0
 
   resolve_expect_format_files files defaults
   if [[ -n "$EXPECT_FORMAT_DIFF_FILE" ]]; then
@@ -899,7 +968,7 @@ run_expectation_formatter() {
     [[ -z "$file" || "$file" == "/dev/null" ]] && continue
     file_count=$((file_count + 1))
     result="$(format_expectation_file "$file" "$default_expected" "$mode" "$((i + 1))")"
-    IFS='|' read -r changed rows malformed malformed_suggested malformed_fixed malformed_unfixable <<<"$result"
+    IFS='|' read -r changed rows malformed malformed_suggested malformed_fixed malformed_unfixable malformed_unfixable_strict <<<"$result"
     if [[ "$changed" == "SKIP" ]]; then
       echo "EXPECT_FORMAT: mode=$mode file=$file rows=0 malformed=0 changed=0 missing=1"
       continue
@@ -908,13 +977,18 @@ run_expectation_formatter() {
       changed_files=$((changed_files + 1))
     fi
     unfixable_total=$((unfixable_total + ${malformed_unfixable:-0}))
-    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed malformed_suggested=${malformed_suggested:-0} malformed_fixed=${malformed_fixed:-0} malformed_unfixable=${malformed_unfixable:-0}"
+    unfixable_strict_total=$((unfixable_strict_total + ${malformed_unfixable_strict:-0}))
+    echo "EXPECT_FORMAT: mode=$mode file=$file rows=$rows malformed=$malformed changed=$changed malformed_suggested=${malformed_suggested:-0} malformed_fixed=${malformed_fixed:-0} malformed_unfixable=${malformed_unfixable:-0} malformed_unfixable_strict=${malformed_unfixable_strict:-0}"
   done
   format_unfixable_issues="$unfixable_total"
-  echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files malformed_unfixable=$unfixable_total"
-  if [[ "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" == "1" ]] && ((unfixable_total > 0)); then
-    echo "EXPECT_FORMAT_STRICT: unfixable=$unfixable_total fail=1"
-    failures=$((failures + 1))
+  echo "EXPECT_FORMAT: mode=$mode files=$file_count changed=$changed_files malformed_unfixable=$unfixable_total malformed_unfixable_strict=$unfixable_strict_total"
+  if [[ "$EXPECT_FORMAT_FAIL_ON_UNFIXABLE" == "1" ]]; then
+    if ((unfixable_strict_total > 0)); then
+      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=$unfixable_strict_total fail=1 file_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-*} profile_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-*}"
+      failures=$((failures + 1))
+    else
+      echo "EXPECT_FORMAT_STRICT: unfixable_total=$unfixable_total scoped=0 fail=0 file_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_FILE_FILTER:-*} profile_filter=${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_PROFILE_FILTER:-*}"
+    fi
   fi
   return 0
 }
