@@ -3287,7 +3287,12 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         break;
       }
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      finish(InterpretedValue(lhs.getAPInt().shl(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        finish(InterpretedValue(APInt::getZero(bitWidth)));
+      } else {
+        finish(InterpretedValue(lhs.getAPInt().shl(shift)));
+      }
       break;
     }
     case EvalKind::ShrU: {
@@ -3299,7 +3304,12 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         break;
       }
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      finish(InterpretedValue(lhs.getAPInt().lshr(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        finish(InterpretedValue(APInt::getZero(bitWidth)));
+      } else {
+        finish(InterpretedValue(lhs.getAPInt().lshr(shift)));
+      }
       break;
     }
     case EvalKind::ShrS: {
@@ -3311,7 +3321,16 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         break;
       }
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      finish(InterpretedValue(lhs.getAPInt().ashr(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        // Arithmetic shift right by >= bitWidth: result is all sign bits
+        finish(InterpretedValue(
+            lhs.getAPInt().isNegative()
+                ? APInt::getAllOnes(bitWidth)
+                : APInt::getZero(bitWidth)));
+      } else {
+        finish(InterpretedValue(lhs.getAPInt().ashr(shift)));
+      }
       break;
     }
     case EvalKind::Mul: {
@@ -3904,13 +3923,26 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   size_t localStepCount = 0;
   while (!state.halted && !state.waiting) {
     ++localStepCount;
-    // Periodically check for abort requests (e.g., from timeout watchdog)
-    if (localStepCount % kAbortCheckInterval == 0 && isAbortRequested()) {
-      LLVM_DEBUG(llvm::dbgs() << "  Abort requested, halting process\n");
-      finalizeProcess(procId, /*killed=*/false);
-      if (abortCallback)
-        abortCallback();
-      break;
+    // Periodically check for abort or termination requests.
+    // terminationRequested is set when sim.terminate fires (e.g., UVM die()
+    // after UVM_FATAL). We must stop all processes promptly to avoid hanging
+    // when forked children are stuck waiting for events that will never arrive
+    // (e.g., missing BFMs in HVL-only AVIPs like AXI4Lite).
+    if (localStepCount % kAbortCheckInterval == 0) {
+      if (isAbortRequested()) {
+        LLVM_DEBUG(llvm::dbgs() << "  Abort requested, halting process\n");
+        finalizeProcess(procId, /*killed=*/false);
+        if (abortCallback)
+          abortCallback();
+        break;
+      }
+      if (terminationRequested) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Termination requested, halting process " << procId
+                   << "\n");
+        finalizeProcess(procId, /*killed=*/false);
+        break;
+      }
     }
     // Per-activation infinite loop detection: if a process runs too many
     // steps without hitting llhd.wait (which sets state.waiting=true), it's
@@ -4653,8 +4685,14 @@ comb_dispatch:
       return success();
     }
     uint64_t shift = rhs.getAPInt().getLimitedValue();
-    setValue(procId, shlOp.getResult(),
-             InterpretedValue(lhs.getAPInt().shl(shift)));
+    unsigned bitWidth = lhs.getAPInt().getBitWidth();
+    if (shift >= bitWidth) {
+      setValue(procId, shlOp.getResult(),
+               InterpretedValue(APInt::getZero(bitWidth)));
+    } else {
+      setValue(procId, shlOp.getResult(),
+               InterpretedValue(lhs.getAPInt().shl(shift)));
+    }
     return success();
   }
 
@@ -4667,8 +4705,14 @@ comb_dispatch:
       return success();
     }
     uint64_t shift = rhs.getAPInt().getLimitedValue();
-    setValue(procId, shruOp.getResult(),
-             InterpretedValue(lhs.getAPInt().lshr(shift)));
+    unsigned bitWidth = lhs.getAPInt().getBitWidth();
+    if (shift >= bitWidth) {
+      setValue(procId, shruOp.getResult(),
+               InterpretedValue(APInt::getZero(bitWidth)));
+    } else {
+      setValue(procId, shruOp.getResult(),
+               InterpretedValue(lhs.getAPInt().lshr(shift)));
+    }
     return success();
   }
 
@@ -4681,8 +4725,17 @@ comb_dispatch:
       return success();
     }
     uint64_t shift = rhs.getAPInt().getLimitedValue();
-    setValue(procId, shrsOp.getResult(),
-             InterpretedValue(lhs.getAPInt().ashr(shift)));
+    unsigned bitWidth = lhs.getAPInt().getBitWidth();
+    if (shift >= bitWidth) {
+      setValue(procId, shrsOp.getResult(),
+               InterpretedValue(
+                   lhs.getAPInt().isNegative()
+                       ? APInt::getAllOnes(bitWidth)
+                       : APInt::getZero(bitWidth)));
+    } else {
+      setValue(procId, shrsOp.getResult(),
+               InterpretedValue(lhs.getAPInt().ashr(shift)));
+    }
     return success();
   }
 
@@ -6559,8 +6612,14 @@ llvm_dispatch:
                InterpretedValue::makeX(getTypeWidth(shlOp.getType())));
     } else {
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      setValue(procId, shlOp.getResult(),
-               InterpretedValue(lhs.getAPInt().shl(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        setValue(procId, shlOp.getResult(),
+                 InterpretedValue(APInt::getZero(bitWidth)));
+      } else {
+        setValue(procId, shlOp.getResult(),
+                 InterpretedValue(lhs.getAPInt().shl(shift)));
+      }
     }
     return success();
   }
@@ -6574,8 +6633,14 @@ llvm_dispatch:
                InterpretedValue::makeX(getTypeWidth(lshrOp.getType())));
     } else {
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      setValue(procId, lshrOp.getResult(),
-               InterpretedValue(lhs.getAPInt().lshr(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        setValue(procId, lshrOp.getResult(),
+                 InterpretedValue(APInt::getZero(bitWidth)));
+      } else {
+        setValue(procId, lshrOp.getResult(),
+                 InterpretedValue(lhs.getAPInt().lshr(shift)));
+      }
     }
     return success();
   }
@@ -6589,8 +6654,17 @@ llvm_dispatch:
                InterpretedValue::makeX(getTypeWidth(ashrOp.getType())));
     } else {
       uint64_t shift = rhs.getAPInt().getLimitedValue();
-      setValue(procId, ashrOp.getResult(),
-               InterpretedValue(lhs.getAPInt().ashr(shift)));
+      unsigned bitWidth = lhs.getAPInt().getBitWidth();
+      if (shift >= bitWidth) {
+        setValue(procId, ashrOp.getResult(),
+                 InterpretedValue(
+                     lhs.getAPInt().isNegative()
+                         ? APInt::getAllOnes(bitWidth)
+                         : APInt::getZero(bitWidth)));
+      } else {
+        setValue(procId, ashrOp.getResult(),
+                 InterpretedValue(lhs.getAPInt().ashr(shift)));
+      }
     }
     return success();
   }
@@ -7586,14 +7660,28 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             }
           }
 
-          // Extract the requested bit range
-          APInt extractedVal = fullVal.extractBits(resultWidth, totalBitOffset);
-          setValue(procId, probeOp.getResult(), InterpretedValue(extractedVal));
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  Probe sig.extract memory: bits ["
-                     << totalBitOffset << ":" << (totalBitOffset + resultWidth)
-                     << "] offset " << blockOffset
-                     << " = " << extractedVal.getZExtValue() << "\n");
+          // Extract the requested bit range (with bounds check)
+          if (totalBitOffset + resultWidth <= parentWidth) {
+            APInt extractedVal =
+                fullVal.extractBits(resultWidth, totalBitOffset);
+            setValue(procId, probeOp.getResult(),
+                     InterpretedValue(extractedVal));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe sig.extract memory: bits ["
+                       << totalBitOffset << ":"
+                       << (totalBitOffset + resultWidth)
+                       << "] offset " << blockOffset
+                       << " = " << extractedVal.getZExtValue() << "\n");
+          } else {
+            // Out-of-bounds bit extraction - return X
+            setValue(procId, probeOp.getResult(),
+                     InterpretedValue::makeX(resultWidth));
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Probe sig.extract memory: out-of-bounds bits ["
+                       << totalBitOffset << ":"
+                       << (totalBitOffset + resultWidth)
+                       << "] parentWidth=" << parentWidth << "\n");
+          }
           return success();
         }
       }
@@ -7607,7 +7695,8 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
         const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
         InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
 
-        if (parentVal.isX()) {
+        if (parentVal.isX() ||
+            totalBitOffset + resultWidth > parentVal.getWidth()) {
           setValue(procId, probeOp.getResult(),
                   InterpretedValue::makeX(resultWidth));
         } else {
@@ -7649,10 +7738,15 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                     fullVal.insertBits(byteVal, insertPos);
                   }
                 }
-                APInt extractedVal =
-                    fullVal.extractBits(resultWidth, totalBitOffset);
-                setValue(procId, probeOp.getResult(),
-                         InterpretedValue(extractedVal));
+                if (totalBitOffset + resultWidth <= parentWidth) {
+                  APInt extractedVal =
+                      fullVal.extractBits(resultWidth, totalBitOffset);
+                  setValue(procId, probeOp.getResult(),
+                           InterpretedValue(extractedVal));
+                } else {
+                  setValue(procId, probeOp.getResult(),
+                           InterpretedValue::makeX(resultWidth));
+                }
               }
               LLVM_DEBUG(llvm::dbgs()
                          << "  Probe sig.extract memory-backed ref: bits ["
@@ -8019,7 +8113,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                        : parentVal.getAPInt();
 
         unsigned extractWidth = driveVal.getWidth();
-        if (!driveVal.isX()) {
+        if (!driveVal.isX() &&
+            totalBitOffset + extractWidth <= parentWidth) {
           APInt insertVal = driveVal.getAPInt();
           if (insertVal.getBitWidth() != extractWidth)
             insertVal = insertVal.zextOrTrunc(extractWidth);
@@ -8592,9 +8687,17 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // Get the value to drive
       InterpretedValue driveVal = getValue(procId, driveOp.getValue());
 
-      // Get the current value of the parent signal
-      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+      // Get the current value of the parent signal, checking pending epsilon
+      // drives first so that multiple struct field drives in the same process
+      // accumulate correctly (e.g., s.a=1; s.b=2; $display(s)).
+      InterpretedValue parentVal;
+      auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+      if (pendingIt != pendingEpsilonDrives.end()) {
+        parentVal = pendingIt->second;
+      } else {
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        parentVal = InterpretedValue::fromSignalValue(parentSV);
+      }
 
       // If parent is X, we can still drive a field (result will be X except for
       // the driven field)
@@ -8670,6 +8773,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                DriveStrength::Strong,
                                                DriveStrength::Strong);
           }));
+
+      // For epsilon/zero delays, store in pending drives for immediate reads.
+      // This enables blocking assignment semantics for struct field writes:
+      // s.a=1; s.b=2; $display(s) should see {1,2} not {0,0}.
+      if (delay.realTime == 0 && delay.deltaStep <= 1) {
+        pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
+      }
 
       return success();
     }
@@ -8779,9 +8889,17 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // Get the value to drive
       InterpretedValue driveVal = getValue(procId, driveOp.getValue());
 
-      // Get the current value of the parent signal
-      const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
-      InterpretedValue parentVal = InterpretedValue::fromSignalValue(parentSV);
+      // Get the current value of the parent signal, checking pending epsilon
+      // drives first so that multiple array element drives in the same process
+      // accumulate correctly (e.g., b[0]=0; b[1]=1; b[2]=2; $display(b)).
+      InterpretedValue parentVal;
+      auto pendingIt = pendingEpsilonDrives.find(parentSigId);
+      if (pendingIt != pendingEpsilonDrives.end()) {
+        parentVal = pendingIt->second;
+      } else {
+        const SignalValue &parentSV = scheduler.getSignalValue(parentSigId);
+        parentVal = InterpretedValue::fromSignalValue(parentSV);
+      }
 
       unsigned parentWidth = parentVal.getWidth();
       APInt result = parentVal.isX() ? APInt::getZero(parentWidth)
@@ -8838,6 +8956,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                DriveStrength::Strong,
                                                DriveStrength::Strong);
           }));
+
+      // For epsilon/zero delays, store in pending drives for immediate reads.
+      // This enables blocking assignment semantics for array element writes:
+      // b[0]=0; b[1]=1; b[2]=2; $display(b) should see {0,1,2} not {0,0,0}.
+      if (delay.realTime == 0 && delay.deltaStep <= 1) {
+        pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
+      }
 
       return success();
     }
@@ -10471,6 +10596,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   bool skipToResumeOp = (resumeBlock != nullptr);
 
   while (currentBlock && opCount < maxOps) {
+    // Check if termination was requested (e.g., UVM die() -> sim.terminate).
+    // This prevents spending time executing function bodies in processes that
+    // are still running after the simulation has been told to stop.
+    // Skip during global init as sim.terminate can be triggered re-entrantly.
+    if (terminationRequested && !inGlobalInit) {
+      cleanupTempMappings();
+      return failure();
+    }
     bool tookBranch = false;  // Track if we branched to another block
     for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
          ++opIt) {
@@ -11282,11 +11415,12 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
     if (val.isX())
       return "x";
     llvm::SmallString<32> hexStr;
-    val.getAPInt().toStringUnsigned(hexStr, 16);
-    if (hexOp.getIsHexUppercase()) {
-      std::string upperHex = hexStr.str().upper();
-      return upperHex;
-    }
+    bool isUpper = hexOp.getIsHexUppercase();
+    // Use toString() directly to control case: toStringUnsigned() calls
+    // toString with UpperCase defaulting to true, which always produces A-F.
+    // IEEE 1800-2017 %h requires lowercase a-f.
+    val.getAPInt().toString(hexStr, /*Radix=*/16, /*Signed=*/false,
+                            /*formatAsCLiteral=*/false, /*UpperCase=*/isUpper);
     return std::string(hexStr.str());
   }
 
@@ -11437,9 +11571,13 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     // waiting for events that will never arrive (e.g., missing BFMs in
     // HVL-only AVIPs like AXI4Lite). The main loop's control.shouldContinue()
     // must return false to prevent an infinite hang.
-    terminationRequested = true;
-    if (terminateCallback) {
-      terminateCallback(success, verbose);
+    // Skip during global init - UVM's m_uvm_get_root() can trigger
+    // sim.terminate re-entrantly, and we must let init finish.
+    if (!inGlobalInit) {
+      terminationRequested = true;
+      if (terminateCallback) {
+        terminateCallback(success, verbose);
+      }
     }
 
     // Suspend the process instead of terminating - it will be resumed when
