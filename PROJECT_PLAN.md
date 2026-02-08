@@ -17305,6 +17305,48 @@ ninja -C build circt-verilog
     expected-failure budgets).
   - No dry-run report mode yet for prune decisions.
 
+### Iteration 653
+- Automated prune workflow for expected-failure budget files:
+  - Added `--prune-expected-failures-file FILE` in
+    `utils/run_formal_all.sh`.
+  - Added policy flag:
+    - `--prune-expected-failures-drop-unused`
+  - If prune is enabled and no explicit prune policy is provided, unused-row
+    pruning is enabled by default.
+  - If `--expected-failures-file` is omitted, prune file is used as the
+    expected-failure source automatically.
+- Implementation details:
+  - Reuses existing expected-failures matching against current `summary.tsv`.
+  - Rewrites expected-failures TSV in canonical schema:
+    - `suite mode expected_fail expected_error notes`
+  - Emits prune diagnostics:
+    - kept row count
+    - dropped-unused row count
+- Regression coverage:
+  - Extended `test/Tools/run-formal-all-strict-gate.test`:
+    - `PRUNEBUDGET` scenario validates stale budget row pruning while preserving
+      matched row + notes.
+- Documentation:
+  - Updated `docs/FormalRegression.md` with prune-budget workflow and policy
+    semantics.
+- Validation status:
+  - `bash -n utils/run_formal_all.sh` -> PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test` -> PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')` -> 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test` -> 3/3 PASS
+  - Integrated smoke sweep with budget prune enabled:
+    - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-prune-budget-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --expected-failures-file /tmp/formal-expected-failures-prune-smoke.tsv --prune-expected-failures-file /tmp/formal-expected-failures-prune-smoke.tsv --prune-expected-failures-drop-unused`
+      - `sv-tests`/`verilator-verification`/`yosys` BMC+LEC lanes: PASS
+      - OpenTitan LEC lane: PASS
+      - AVIP compile lanes: mixed (includes failures in this sweep)
+      - prune result:
+        - `kept=1 dropped_unused=1`
+        - `/tmp/formal-expected-failures-prune-smoke.tsv` retains only
+          `sv-tests LEC`
+- Current limitations / debt:
+  - No dry-run/preview mode for budget prune decisions yet.
+  - No threshold-based budget auto-adjust (only prune stale rows).
+
 ---
 
 ## Architecture Reference

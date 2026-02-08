@@ -79,6 +79,12 @@ Refresh expected-failure budgets for a scoped subset:
 utils/run_formal_all.sh --refresh-expected-failures-file utils/formal-expected-failures.tsv --refresh-expected-failures-include-suite-regex '^sv-tests$' --refresh-expected-failures-include-mode-regex '^LEC$'
 ```
 
+Prune stale expected-failure budget rows:
+
+```bash
+utils/run_formal_all.sh --expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-file utils/formal-expected-failures.tsv --prune-expected-failures-drop-unused
+```
+
 Gate on per-test expected failure cases with expiry policy:
 
 ```bash
@@ -248,6 +254,11 @@ Expected-failure budget file:
 - Missing suite/mode rows default to `expected_fail=0 expected_error=0`.
 - `--fail-on-unused-expected-failures` fails when expected-failures rows do not
   match any suite/mode in current run results.
+- `--prune-expected-failures-file <file>` rewrites expected-failures rows after
+  summary matching.
+- `--prune-expected-failures-drop-unused` drops rows not present in current run
+  summary. If prune is enabled and no explicit prune policy is set, this policy
+  is enabled by default.
 - `--refresh-expected-failures-file <file>` rewrites expected-failures rows from
   current summary fail/error counts (preserves existing notes by suite/mode).
 - `--refresh-expected-failures-include-suite-regex <regex>` keeps only matching

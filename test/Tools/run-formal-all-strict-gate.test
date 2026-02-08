@@ -45,6 +45,9 @@
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-fail --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/expected-failures-tight.tsv --fail-on-unexpected-failures' 2>&1 | FileCheck %s --check-prefix=EXPECTEDFAIL
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\nmissing-suite\tLEC\t0\t0\n' > %t/expected-failures-unused.tsv
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-unused --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/expected-failures-unused.tsv --fail-on-unused-expected-failures' 2>&1 | FileCheck %s --check-prefix=EXPECTEDUNUSED
+// RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t1\t0\tkeep_budget\nmissing-suite\tLEC\t0\t0\tdrop_unused\n' > %t/prune-expected-failures.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-prune-budget --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failures-file %t/prune-expected-failures.tsv --prune-expected-failures-file %t/prune-expected-failures.tsv --prune-expected-failures-drop-unused
+// RUN: FileCheck %s --check-prefix=PRUNEBUDGET < %t/prune-expected-failures.tsv
 // RUN: printf 'suite\tmode\texpected_fail\texpected_error\tnotes\nsv-tests\tLEC\t9\t9\tcarry_note\n' > %t/refresh-expected-failures.tsv
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tbasic02\tbase\tFAIL\t2099-05-05\tkeep_reason\n' > %t/refresh-expected-failure-cases.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh-expected --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --refresh-expected-failures-file %t/refresh-expected-failures.tsv --refresh-expected-failure-cases-file %t/refresh-expected-failure-cases.tsv --refresh-expected-failure-cases-default-expires-on 2099-12-31
@@ -118,6 +121,8 @@
 // EXPECTEDFAIL: sv-tests LEC: fail 1 (expected 0), error 0 (expected 0)
 // EXPECTEDUNUSED: unused expected-failures entries:
 // EXPECTEDUNUSED: missing-suite LEC
+// PRUNEBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}keep_budget
+// PRUNEBUDGET-NOT: missing-suite
 // REFRESHBUDGET: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}carry_note
 // REFRESHCASE: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}aggregate{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-12-31
 // REFRESHCASE: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}basic02{{[[:space:]]+}}base{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-05-05{{[[:space:]]+}}keep_reason
