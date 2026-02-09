@@ -337,6 +337,27 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(initializeGlobals(globalOps)))
     return failure();
 
+  // Pre-populate function lookup cache by walking the module symbol table once.
+  // ModuleOp::lookupSymbol is O(n) per call (linear scan of all ops); by
+  // building the cache here we turn all subsequent lookups into O(1) hash hits
+  // during global constructor execution and simulation.
+  if (rootModule) {
+    for (Operation &op : *rootModule.getBody()) {
+      if (auto llvmFunc = dyn_cast<LLVM::LLVMFuncOp>(&op)) {
+        StringRef name = llvmFunc.getName();
+        if (!funcLookupCache.count(name))
+          funcLookupCache[name] = {llvmFunc.getOperation(), 0};
+      } else if (auto funcOp = dyn_cast<func::FuncOp>(&op)) {
+        StringRef name = funcOp.getName();
+        if (!funcLookupCache.count(name))
+          funcLookupCache[name] = {funcOp.getOperation(), 1};
+      }
+    }
+    LLVM_DEBUG(llvm::dbgs()
+               << "LLHDProcessInterpreter: Pre-cached "
+               << funcLookupCache.size() << " function lookups\n");
+  }
+
   inGlobalInit = true;
   // Execute LLVM global constructors (e.g., __moore_global_init_uvm_pkg::uvm_top)
   // This initializes UVM globals like uvm_top before processes start
