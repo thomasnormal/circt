@@ -1,5 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 715 - February 9, 2026
+
+### Refresh-Policy Manifest Signer Keyring Mode
+
+- Added keyring-backed signer resolution for refresh-policy profile manifests in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-sha256`
+- Extended signed-manifest mode selection:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`
+    and signer keyring mode are now mutually exclusive.
+  - manifest JSON now requires one of:
+    - public key file mode, or
+    - signer keyring mode.
+
+### Signer-Keyring Validation
+
+- Added strict signer keyring parser/validator with field-qualified diagnostics:
+  - row format:
+    - `<key_id>\t<public_key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+  - status policy:
+    - `active` / `revoked`
+  - optional SHA pin checks for:
+    - keyring content (`--...manifest-keyring-sha256`)
+    - resolved signer public key (`key_sha256` column)
+  - signer validity window checks (`not_before` / `not_after`) against manifest
+    `generated_at_utc`.
+- Added signed-manifest key_id routing behavior:
+  - signer key is selected by manifest `key_id` in keyring mode.
+  - optional expected key-id pin (`--...manifest-key-id`) remains enforced.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material with profile-manifest signer trust
+  mode and keyring metadata:
+  - signer mode (`file` vs `keyring`)
+  - signer keyring SHA256
+  - signer key validity window fields
+  - existing signer key SHA / key-id fields remain included.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: keyring-mode dependency and conflict checks
+    - negative: invalid signer-keyring SHA format
+    - positive: CRL profile-manifest flow via signer keyring
+    - negative: keyring mode with manifest missing `key_id`
+  - `docs/FormalRegression.md`
+    - documented signer keyring options, row schema, and usage examples.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
 ## Iteration 714 - February 9, 2026
 
 ### Signed Refresh-Policy Profile Registry Manifests
