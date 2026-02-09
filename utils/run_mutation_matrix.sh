@@ -117,6 +117,11 @@ Optional:
                             Exclude lane_ids matching any provided ERE
                             (repeatable, applied after include filters)
   --lane-jobs N             Number of concurrent lanes (default: 1)
+  --lane-schedule-policy MODE
+                            Lane scheduling policy:
+                            fifo|cache-aware (default: fifo)
+                            cache-aware prioritizes one lane per generated-cache
+                            key before scheduling same-key followers
   --stop-on-fail            Stop at first failed lane (requires --lane-jobs=1)
   -h, --help                Show help
 
@@ -166,6 +171,7 @@ REUSE_COMPAT_MODE="warn"
 INCLUDE_LANE_REGEX=()
 EXCLUDE_LANE_REGEX=()
 LANE_JOBS=1
+LANE_SCHEDULE_POLICY="fifo"
 STOP_ON_FAIL=0
 
 while [[ $# -gt 0 ]]; do
@@ -224,6 +230,7 @@ while [[ $# -gt 0 ]]; do
     --include-lane-regex) INCLUDE_LANE_REGEX+=("$2"); shift 2 ;;
     --exclude-lane-regex) EXCLUDE_LANE_REGEX+=("$2"); shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
+    --lane-schedule-policy) LANE_SCHEDULE_POLICY="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -249,6 +256,10 @@ if [[ ! "$JOBS_PER_LANE" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --lane-jobs value: $LANE_JOBS" >&2
+  exit 1
+fi
+if [[ ! "$LANE_SCHEDULE_POLICY" =~ ^(fifo|cache-aware)$ ]]; then
+  echo "Invalid --lane-schedule-policy value: $LANE_SCHEDULE_POLICY (expected fifo|cache-aware)." >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
@@ -359,6 +370,28 @@ declare -a BMC_ORIG_CACHE_MAX_AGE_SECONDS
 declare -a BMC_ORIG_CACHE_EVICTION_POLICY
 SELECTED_INDICES=()
 EXECUTED_INDICES=()
+SCHEDULED_INDICES=()
+
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | awk '{print $NF}'
+    return
+  fi
+  python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+}
+
+hash_string() {
+  local s="$1"
+  printf "%s" "$s" | hash_stdin
+}
 
 parse_failures=0
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -456,6 +489,109 @@ if [[ "${#SELECTED_INDICES[@]}" -eq 0 ]]; then
   echo "No lanes selected after applying include/exclude regex filters." >&2
   exit 1
 fi
+
+lane_cache_schedule_key() {
+  local i="$1"
+  local key_payload=""
+  local lane_generate_count="${GENERATE_COUNT[$i]}"
+  local lane_mutations_file="${MUTATIONS_FILE[$i]}"
+  local lane_mutations_top="${MUTATIONS_TOP[$i]}"
+  local lane_mutations_seed="${MUTATIONS_SEED[$i]}"
+  local lane_mutations_yosys="${MUTATIONS_YOSYS[$i]}"
+  local lane_mutations_modes="${MUTATIONS_MODES[$i]}"
+  local lane_mutations_mode_counts="${MUTATIONS_MODE_COUNTS[$i]}"
+  local lane_mutations_profiles="${MUTATIONS_PROFILES[$i]}"
+  local lane_mutations_cfg="${MUTATIONS_CFG[$i]}"
+  local lane_mutations_select="${MUTATIONS_SELECT[$i]}"
+
+  if [[ -z "$REUSE_CACHE_DIR" ]]; then
+    printf "lane:%s\n" "${LANE_ID[$i]}"
+    return
+  fi
+  if [[ "$lane_mutations_file" != "-" ]]; then
+    printf "lane:%s\n" "${LANE_ID[$i]}"
+    return
+  fi
+  if [[ "$lane_generate_count" == "-" || -z "$lane_generate_count" ]]; then
+    printf "lane:%s\n" "${LANE_ID[$i]}"
+    return
+  fi
+
+  if [[ "$lane_mutations_top" == "-" ]]; then
+    lane_mutations_top=""
+  fi
+  if [[ "$lane_mutations_seed" == "-" || -z "$lane_mutations_seed" ]]; then
+    lane_mutations_seed="1"
+  fi
+  if [[ "$lane_mutations_yosys" == "-" || -z "$lane_mutations_yosys" ]]; then
+    lane_mutations_yosys="yosys"
+  fi
+  if [[ "$lane_mutations_modes" == "-" || -z "$lane_mutations_modes" ]]; then
+    lane_mutations_modes="$DEFAULT_MUTATIONS_MODES"
+  fi
+  if [[ "$lane_mutations_mode_counts" == "-" || -z "$lane_mutations_mode_counts" ]]; then
+    lane_mutations_mode_counts="$DEFAULT_MUTATIONS_MODE_COUNTS"
+  fi
+  if [[ "$lane_mutations_profiles" == "-" || -z "$lane_mutations_profiles" ]]; then
+    lane_mutations_profiles="$DEFAULT_MUTATIONS_PROFILES"
+  fi
+  if [[ "$lane_mutations_cfg" == "-" || -z "$lane_mutations_cfg" ]]; then
+    lane_mutations_cfg="$DEFAULT_MUTATIONS_CFG"
+  fi
+  if [[ "$lane_mutations_select" == "-" || -z "$lane_mutations_select" ]]; then
+    lane_mutations_select="$DEFAULT_MUTATIONS_SELECT"
+  fi
+
+  key_payload="$(
+    cat <<EOF
+v1
+design=${DESIGN[$i]}
+count=$lane_generate_count
+top=$lane_mutations_top
+seed=$lane_mutations_seed
+yosys=$lane_mutations_yosys
+modes=$lane_mutations_modes
+mode_counts=$lane_mutations_mode_counts
+profiles=$lane_mutations_profiles
+cfg=$lane_mutations_cfg
+select=$lane_mutations_select
+EOF
+  )"
+  printf "cache:%s\n" "$(hash_string "$key_payload")"
+}
+
+schedule_lanes() {
+  local i=""
+  local key=""
+  local unique_keys=0
+  local followers=0
+  declare -A seen=()
+  declare -a leaders=()
+  declare -a deferred=()
+
+  if [[ "$LANE_SCHEDULE_POLICY" != "cache-aware" ]]; then
+    SCHEDULED_INDICES=("${SELECTED_INDICES[@]}")
+    echo "Lane scheduling policy: ${LANE_SCHEDULE_POLICY} (selected=${#SELECTED_INDICES[@]})"
+    return
+  fi
+
+  for i in "${SELECTED_INDICES[@]}"; do
+    key="$(lane_cache_schedule_key "$i")"
+    if [[ -z "${seen[$key]+x}" ]]; then
+      seen["$key"]=1
+      leaders+=("$i")
+      unique_keys=$((unique_keys + 1))
+    else
+      deferred+=("$i")
+      followers=$((followers + 1))
+    fi
+  done
+
+  SCHEDULED_INDICES=("${leaders[@]}" "${deferred[@]}")
+  echo "Lane scheduling policy: ${LANE_SCHEDULE_POLICY} (selected=${#SELECTED_INDICES[@]} unique_keys=${unique_keys} deferred_followers=${followers})"
+}
+
+schedule_lanes
 
 run_lane() {
   local i="$1"
@@ -863,7 +999,7 @@ run_lane() {
 }
 
 if [[ "$LANE_JOBS" -le 1 ]]; then
-  for i in "${SELECTED_INDICES[@]}"; do
+  for i in "${SCHEDULED_INDICES[@]}"; do
     run_lane "$i"
     EXECUTED_INDICES+=("$i")
     if [[ "$STOP_ON_FAIL" -eq 1 ]]; then
@@ -876,7 +1012,7 @@ if [[ "$LANE_JOBS" -le 1 ]]; then
   done
 else
   active_jobs=0
-  for i in "${SELECTED_INDICES[@]}"; do
+  for i in "${SCHEDULED_INDICES[@]}"; do
     run_lane "$i" &
     EXECUTED_INDICES+=("$i")
     active_jobs=$((active_jobs + 1))

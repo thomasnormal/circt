@@ -362,6 +362,9 @@ runs/lanes.
 Generation cache writes are now coordinated with per-key locking, so parallel
 matrix lanes with identical generation settings reuse one synthesis result
 instead of duplicating `yosys mutate -list` work.
+Use `run_mutation_matrix.sh --lane-schedule-policy cache-aware` to prioritize
+one lane per generated-cache key before same-key followers and reduce cache
+lock contention under high `--lane-jobs`.
 `metrics.tsv` now reports generated-list cache usage via:
 - `generated_mutations_cache_status` (`hit|miss|disabled`)
 - `generated_mutations_cache_hit`

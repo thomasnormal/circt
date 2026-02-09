@@ -31,4 +31,5 @@
 // CHECK: --include-lane-regex
 // CHECK: --exclude-lane-regex
 // CHECK: --lane-jobs
+// CHECK: --lane-schedule-policy
 // CHECK: --stop-on-fail
