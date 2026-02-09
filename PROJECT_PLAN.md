@@ -18304,6 +18304,16 @@ ninja -C build circt-verilog
     for OCSP signing usage.
   - Tightens OCSP signer policy toward production PKI role separation.
 
+### Iteration 696
+- Added OCSP responder AKI/SKI linkage policy control for Ed25519 lane-state
+  keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski`
+  - enforces responder cert AKI keyid linkage against CA cert SKI.
+- Planning impact:
+  - Tightens responder-to-issuer binding beyond chain validity by requiring
+    explicit key-identifier linkage.
+  - Reduces multi-issuer ambiguity risk in long-running distributed closure.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18314,8 +18324,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add OCSP responder issuer/AKI-SKI linkage assertion controls for complex
-    multi-issuer PKI deployments.
+  - Add explicit responder-issuer cert selection controls when CA bundles
+    contain multiple issuers.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
