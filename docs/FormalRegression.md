@@ -93,6 +93,7 @@ Generated artifacts (default under `./mutation-cover-results`):
 - `pair_qualification.tsv`: activation/propagation status per test-mutant pair
 - `results.tsv`: detection outcomes for executed pairs
 - `metrics.tsv`: gate-oriented aggregate metrics (coverage, bucket counts, errors)
+- `summary.json`: machine-readable gate/coverage summary for CI trend ingestion
 - `improvement.tsv`: actionable bucket-to-remediation mapping
 
 Gate behavior:

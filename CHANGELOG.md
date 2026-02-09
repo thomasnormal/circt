@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 725 - February 9, 2026
+
+### Mutation Harness CI JSON Summary Artifact
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--summary-json-file <file>` (default: `<work-dir>/summary.json`)
+- The JSON artifact now captures gate- and trend-oriented fields:
+  - mutant bucket counts
+  - `mutation_coverage_percent`
+  - configured `coverage_threshold_percent` (or `null`)
+  - `gate_status`
+  - strictness toggles (`fail_on_undetected`, `fail_on_errors`)
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-mutation-cover-classification.test`
+    - now checks `summary.json` content
+  - `docs/FormalRegression.md`
+    - documented `summary.json` artifact purpose
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level regression for classification scenario:
+  - expected TSV metrics preserved (`50.00%`)
+  - `summary.json` emitted with expected keys/values.
+
 ## Iteration 724 - February 9, 2026
 
 ### Mutation Harness Throughput/Resume Upgrade

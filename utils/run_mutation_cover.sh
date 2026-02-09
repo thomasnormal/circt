@@ -18,6 +18,7 @@ Optional:
   --pair-file FILE           Pair-level qualification TSV (default: <work-dir>/pair_qualification.tsv)
   --results-file FILE        Pair-level detection TSV (default: <work-dir>/results.tsv)
   --metrics-file FILE        Metric-mode summary TSV (default: <work-dir>/metrics.tsv)
+  --summary-json-file FILE   Machine-readable summary JSON (default: <work-dir>/summary.json)
   --improvement-file FILE    Improvement-mode summary TSV (default: <work-dir>/improvement.tsv)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
@@ -59,6 +60,7 @@ SUMMARY_FILE=""
 PAIR_FILE=""
 RESULTS_FILE=""
 METRICS_FILE=""
+SUMMARY_JSON_FILE=""
 IMPROVEMENT_FILE=""
 CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
@@ -82,6 +84,7 @@ while [[ $# -gt 0 ]]; do
     --pair-file) PAIR_FILE="$2"; shift 2 ;;
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --metrics-file) METRICS_FILE="$2"; shift 2 ;;
+    --summary-json-file) SUMMARY_JSON_FILE="$2"; shift 2 ;;
     --improvement-file) IMPROVEMENT_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
@@ -146,6 +149,7 @@ SUMMARY_FILE="${SUMMARY_FILE:-${WORK_DIR}/summary.tsv}"
 PAIR_FILE="${PAIR_FILE:-${WORK_DIR}/pair_qualification.tsv}"
 RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
 METRICS_FILE="${METRICS_FILE:-${WORK_DIR}/metrics.tsv}"
+SUMMARY_JSON_FILE="${SUMMARY_JSON_FILE:-${WORK_DIR}/summary.json}"
 IMPROVEMENT_FILE="${IMPROVEMENT_FILE:-${WORK_DIR}/improvement.tsv}"
 
 declare -A TEST_CMD
@@ -597,12 +601,34 @@ elif [[ -n "$COVERAGE_THRESHOLD" ]]; then
   fi
 fi
 
+threshold_json="null"
+if [[ -n "$COVERAGE_THRESHOLD" ]]; then
+  threshold_json="$COVERAGE_THRESHOLD"
+fi
+cat > "$SUMMARY_JSON_FILE" <<EOF
+{
+  "total_mutants": $total_mutants,
+  "relevant_mutants": $count_relevant,
+  "detected_mutants": $count_detected,
+  "propagated_not_detected_mutants": $count_propagated_not_detected,
+  "not_propagated_mutants": $count_not_propagated,
+  "not_activated_mutants": $count_not_activated,
+  "errors": $errors,
+  "mutation_coverage_percent": $coverage_pct,
+  "coverage_threshold_percent": $threshold_json,
+  "gate_status": "$gate_status",
+  "fail_on_undetected": $FAIL_ON_UNDETECTED,
+  "fail_on_errors": $FAIL_ON_ERRORS
+}
+EOF
+
 echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
 echo "Results: ${RESULTS_FILE}"
 echo "Metrics: ${METRICS_FILE}"
+echo "Summary JSON: ${SUMMARY_JSON_FILE}"
 echo "Improvement: ${IMPROVEMENT_FILE}"
 
 exit "$exit_code"
