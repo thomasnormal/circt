@@ -40,7 +40,8 @@ Optional:
                              in seconds (0 disables limit, default: 0)
   --bmc-orig-cache-eviction-policy MODE
                              Differential-BMC original-cache eviction policy
-                             for count/byte limits: lru|fifo (default: lru)
+                             for count/byte limits: lru|fifo|cost-lru
+                             (default: lru)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -337,8 +338,8 @@ if [[ ! "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --bmc-orig-cache-max-age-seconds value: $BMC_ORIG_CACHE_MAX_AGE_SECONDS" >&2
   exit 1
 fi
-if [[ ! "$BMC_ORIG_CACHE_EVICTION_POLICY" =~ ^(lru|fifo)$ ]]; then
-  echo "Invalid --bmc-orig-cache-eviction-policy value: $BMC_ORIG_CACHE_EVICTION_POLICY (expected lru|fifo)." >&2
+if [[ ! "$BMC_ORIG_CACHE_EVICTION_POLICY" =~ ^(lru|fifo|cost-lru)$ ]]; then
+  echo "Invalid --bmc-orig-cache-eviction-policy value: $BMC_ORIG_CACHE_EVICTION_POLICY (expected lru|fifo|cost-lru)." >&2
   exit 1
 fi
 if [[ -z "$REUSE_CACHE_DIR" ]]; then
@@ -962,17 +963,24 @@ normalize_epoch_for_compare() {
   printf "%s\n" "$raw"
 }
 
+current_epoch_ns() {
+  local now_raw=0
+  now_raw="$(date +%s%N 2>/dev/null || true)"
+  if [[ ! "$now_raw" =~ ^[0-9]+$ ]]; then
+    now_raw="$(date +%s 2>/dev/null || printf "0")"
+  fi
+  normalize_epoch_for_compare "$now_raw"
+}
+
 touch_bmc_orig_cache_access() {
   local cache_base="$1"
   local atime="${cache_base}.orig.atime"
   local tmp="${atime}.tmp.$$"
-  local now_raw=0
   local now_norm=0
-  if [[ "$BMC_ORIG_CACHE_EVICTION_POLICY" != "lru" ]]; then
+  if [[ "$BMC_ORIG_CACHE_EVICTION_POLICY" != "lru" && "$BMC_ORIG_CACHE_EVICTION_POLICY" != "cost-lru" ]]; then
     return 0
   fi
-  now_raw="$(date +%s%N 2>/dev/null || date +%s 2>/dev/null || printf "0")"
-  now_norm="$(normalize_epoch_for_compare "$now_raw")"
+  now_norm="$(current_epoch_ns)"
   printf "%s\n" "$now_norm" > "$tmp" 2>/dev/null || true
   mv "$tmp" "$atime" 2>/dev/null || true
 }
@@ -994,6 +1002,18 @@ cache_entry_access_epoch() {
   fi
   raw_mtime="$(file_mtime_epoch "$meta_file")"
   printf "%s\n" "$(normalize_epoch_for_compare "$raw_mtime")"
+}
+
+cache_entry_runtime_ns() {
+  local meta_file="$1"
+  local rc=""
+  local result=""
+  local runtime_raw=0
+  read -r rc result runtime_raw _ < "$meta_file" || true
+  if [[ -z "$runtime_raw" ]]; then
+    runtime_raw=0
+  fi
+  normalize_epoch_for_compare "$runtime_raw"
 }
 
 measure_bmc_orig_cache_dir() {
@@ -1053,10 +1073,15 @@ prune_bmc_orig_cache_dir() {
   local oldest_log=""
   local oldest_atime=""
   local now_epoch=0
+  local now_ns=0
   local meta_mtime=0
   local age_seconds=0
   local access_epoch=0
   local oldest_access_epoch=0
+  local runtime_ns=0
+  local age_ns=0
+  local eviction_priority=0
+  local selected_priority=0
   local meta=""
   local meta_bytes=0
   local log_bytes=0
@@ -1124,6 +1149,33 @@ prune_bmc_orig_cache_dir() {
     oldest_meta=""
     if [[ "$eviction_policy" == "fifo" ]]; then
       oldest_meta="$(ls -1tr "$cache_dir"/*.orig.meta 2>/dev/null | head -n1 || true)"
+    elif [[ "$eviction_policy" == "cost-lru" ]]; then
+      now_ns="$(current_epoch_ns)"
+      selected_priority=0
+      oldest_access_epoch=0
+      for meta in "$cache_dir"/*.orig.meta; do
+        [[ -f "$meta" ]] || continue
+        oldest_log="${meta%.orig.meta}.orig.log"
+        [[ -f "$oldest_log" ]] || continue
+        access_epoch="$(cache_entry_access_epoch "$meta" "$eviction_policy")"
+        runtime_ns="$(cache_entry_runtime_ns "$meta")"
+        if [[ "$runtime_ns" -le 0 ]]; then
+          runtime_ns=1
+        fi
+        age_ns=0
+        if [[ "$now_ns" -gt "$access_epoch" ]]; then
+          age_ns=$((now_ns - access_epoch))
+        fi
+        eviction_priority=$((age_ns / runtime_ns))
+        if [[ -z "$oldest_meta" || "$eviction_priority" -gt "$selected_priority" ]]; then
+          oldest_meta="$meta"
+          selected_priority="$eviction_priority"
+          oldest_access_epoch="$access_epoch"
+        elif [[ "$eviction_priority" -eq "$selected_priority" && "$access_epoch" -lt "$oldest_access_epoch" ]]; then
+          oldest_meta="$meta"
+          oldest_access_epoch="$access_epoch"
+        fi
+      done
     else
       oldest_access_epoch=0
       for meta in "$cache_dir"/*.orig.meta; do
@@ -1412,6 +1464,9 @@ classify_global_propagate_circt_bmc_raw() {
   local bmc_orig_cache_tmp_log=""
   local bmc_orig_cache_tmp_meta=""
   local bmc_orig_design_hash=""
+  local orig_runtime_ns=0
+  local orig_start_ns=0
+  local orig_end_ns=0
   local -a bmc_common_cmd
   local -a extra_args
 
@@ -1458,7 +1513,8 @@ classify_global_propagate_circt_bmc_raw() {
 
   if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
     if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
-      read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+      read -r orig_rc orig_result orig_runtime_ns _ < "$bmc_orig_cache_meta" || true
+      orig_runtime_ns="$(normalize_epoch_for_compare "${orig_runtime_ns:-0}")"
       bmc_orig_cache_mode="hit"
       touch_bmc_orig_cache_access "$bmc_orig_cache_base"
     fi
@@ -1469,21 +1525,28 @@ classify_global_propagate_circt_bmc_raw() {
       if mkdir "$bmc_orig_cache_lock" 2>/dev/null; then
         if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
           if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
-            read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+            read -r orig_rc orig_result orig_runtime_ns _ < "$bmc_orig_cache_meta" || true
+            orig_runtime_ns="$(normalize_epoch_for_compare "${orig_runtime_ns:-0}")"
             bmc_orig_cache_mode="hit"
             touch_bmc_orig_cache_access "$bmc_orig_cache_base"
           fi
         fi
         if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
           orig_rc=0
+          orig_start_ns="$(current_epoch_ns)"
           if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
             orig_rc=$?
+          fi
+          orig_end_ns="$(current_epoch_ns)"
+          orig_runtime_ns=0
+          if [[ "$orig_end_ns" -gt "$orig_start_ns" ]]; then
+            orig_runtime_ns=$((orig_end_ns - orig_start_ns))
           fi
           orig_result="$(extract_bmc_result_token "$orig_log")"
           bmc_orig_cache_tmp_log="${bmc_orig_cache_log}.tmp.$$"
           bmc_orig_cache_tmp_meta="${bmc_orig_cache_meta}.tmp.$$"
           cp "$orig_log" "$bmc_orig_cache_tmp_log" 2>/dev/null || true
-          printf "%s\t%s\n" "$orig_rc" "$orig_result" > "$bmc_orig_cache_tmp_meta"
+          printf "%s\t%s\t%s\n" "$orig_rc" "$orig_result" "$orig_runtime_ns" > "$bmc_orig_cache_tmp_meta"
           mv "$bmc_orig_cache_tmp_log" "$bmc_orig_cache_log" 2>/dev/null || true
           mv "$bmc_orig_cache_tmp_meta" "$bmc_orig_cache_meta" 2>/dev/null || true
           touch_bmc_orig_cache_access "$bmc_orig_cache_base"
@@ -1495,7 +1558,8 @@ classify_global_propagate_circt_bmc_raw() {
 
       if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
         if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
-          read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+          read -r orig_rc orig_result orig_runtime_ns _ < "$bmc_orig_cache_meta" || true
+          orig_runtime_ns="$(normalize_epoch_for_compare "${orig_runtime_ns:-0}")"
           bmc_orig_cache_mode="hit"
           touch_bmc_orig_cache_access "$bmc_orig_cache_base"
           break
@@ -1505,8 +1569,14 @@ classify_global_propagate_circt_bmc_raw() {
       bmc_orig_cache_wait_loops=$((bmc_orig_cache_wait_loops + 1))
       if [[ "$bmc_orig_cache_wait_loops" -ge "$bmc_orig_cache_wait_max" ]]; then
         orig_rc=0
+        orig_start_ns="$(current_epoch_ns)"
         if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
           orig_rc=$?
+        fi
+        orig_end_ns="$(current_epoch_ns)"
+        orig_runtime_ns=0
+        if [[ "$orig_end_ns" -gt "$orig_start_ns" ]]; then
+          orig_runtime_ns=$((orig_end_ns - orig_start_ns))
         fi
         orig_result="$(extract_bmc_result_token "$orig_log")"
         bmc_orig_cache_mode="timeout_fallback"
@@ -1529,7 +1599,7 @@ classify_global_propagate_circt_bmc_raw() {
   {
     printf "# bmc_orig_cache=%s cache_key=%s orig_design_sha256=%s\n" \
       "$bmc_orig_cache_mode" "$bmc_orig_cache_key" "$bmc_orig_design_hash"
-    printf "# bmc_orig_exit=%s bmc_orig_result=%s\n" "$orig_rc" "${orig_result:-none}"
+    printf "# bmc_orig_exit=%s bmc_orig_result=%s bmc_orig_runtime_ns=%s\n" "$orig_rc" "${orig_result:-none}" "${orig_runtime_ns:-0}"
     cat "$orig_log"
     printf "\n# bmc_mutant_exit=%s bmc_mutant_result=%s\n" "$mutant_rc" "${mutant_result:-none}"
     cat "$mutant_log"
@@ -1818,6 +1888,9 @@ process_mutation() {
   local chain_auto_parallel=0
   local bmc_orig_cache_hit=0
   local bmc_orig_cache_miss=0
+  local bmc_orig_runtime_ns=0
+  local bmc_orig_cache_saved_runtime_ns=0
+  local bmc_orig_cache_miss_runtime_ns=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -1851,6 +1924,8 @@ process_mutation() {
       printf "chain_auto_parallel\t0\n"
       printf "bmc_orig_cache_hit\t0\n"
       printf "bmc_orig_cache_miss\t0\n"
+      printf "bmc_orig_cache_saved_runtime_ns\t0\n"
+      printf "bmc_orig_cache_miss_runtime_ns\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -1918,12 +1993,21 @@ process_mutation() {
       chain_auto_parallel=1
     fi
   fi
-  if [[ "$reused_global_filter" -eq 0 ]]; then
+  if [[ "$reused_global_filter" -eq 0 && -f "$mutation_dir/global_propagate.log" ]]; then
     if grep -Eq '^# bmc_orig_cache=hit ' "$mutation_dir/global_propagate.log"; then
       bmc_orig_cache_hit=1
     fi
     if grep -Eq '^# bmc_orig_cache=(miss|timeout_fallback) ' "$mutation_dir/global_propagate.log"; then
       bmc_orig_cache_miss=1
+    fi
+    bmc_orig_runtime_ns="$(sed -n 's/^# bmc_orig_exit=.* bmc_orig_result=.* bmc_orig_runtime_ns=\([0-9][0-9]*\).*/\1/p' "$mutation_dir/global_propagate.log" | tail -n1)"
+    bmc_orig_runtime_ns="${bmc_orig_runtime_ns:-0}"
+    if [[ "$bmc_orig_runtime_ns" =~ ^[0-9]+$ ]]; then
+      if [[ "$bmc_orig_cache_hit" -eq 1 ]]; then
+        bmc_orig_cache_saved_runtime_ns="$bmc_orig_runtime_ns"
+      elif [[ "$bmc_orig_cache_miss" -eq 1 ]]; then
+        bmc_orig_cache_miss_runtime_ns="$bmc_orig_runtime_ns"
+      fi
     fi
   fi
   if [[ -n "$global_filter_state" ]]; then
@@ -2106,6 +2190,8 @@ process_mutation() {
     printf "chain_auto_parallel\t%s\n" "$chain_auto_parallel"
     printf "bmc_orig_cache_hit\t%s\n" "$bmc_orig_cache_hit"
     printf "bmc_orig_cache_miss\t%s\n" "$bmc_orig_cache_miss"
+    printf "bmc_orig_cache_saved_runtime_ns\t%s\n" "$bmc_orig_cache_saved_runtime_ns"
+    printf "bmc_orig_cache_miss_runtime_ns\t%s\n" "$bmc_orig_cache_miss_runtime_ns"
   } > "$meta_local"
 }
 
@@ -2231,6 +2317,8 @@ count_chain_consensus_error=0
 count_chain_auto_parallel=0
 count_bmc_orig_cache_hit=0
 count_bmc_orig_cache_miss=0
+count_bmc_orig_cache_saved_runtime_ns=0
+count_bmc_orig_cache_miss_runtime_ns=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -2405,6 +2493,24 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_bmc_orig_cache_miss" =~ ^[0-9]+$ ]]; then
     count_bmc_orig_cache_miss=$((count_bmc_orig_cache_miss + local_bmc_orig_cache_miss))
   fi
+
+  local_bmc_orig_cache_saved_runtime_ns=0
+  if [[ -f "$meta_local" ]]; then
+    local_bmc_orig_cache_saved_runtime_ns="$(awk -F$'\t' '$1=="bmc_orig_cache_saved_runtime_ns"{print $2}' "$meta_local" | head -n1)"
+    local_bmc_orig_cache_saved_runtime_ns="${local_bmc_orig_cache_saved_runtime_ns:-0}"
+  fi
+  if [[ "$local_bmc_orig_cache_saved_runtime_ns" =~ ^[0-9]+$ ]]; then
+    count_bmc_orig_cache_saved_runtime_ns=$((count_bmc_orig_cache_saved_runtime_ns + local_bmc_orig_cache_saved_runtime_ns))
+  fi
+
+  local_bmc_orig_cache_miss_runtime_ns=0
+  if [[ -f "$meta_local" ]]; then
+    local_bmc_orig_cache_miss_runtime_ns="$(awk -F$'\t' '$1=="bmc_orig_cache_miss_runtime_ns"{print $2}' "$meta_local" | head -n1)"
+    local_bmc_orig_cache_miss_runtime_ns="${local_bmc_orig_cache_miss_runtime_ns:-0}"
+  fi
+  if [[ "$local_bmc_orig_cache_miss_runtime_ns" =~ ^[0-9]+$ ]]; then
+    count_bmc_orig_cache_miss_runtime_ns=$((count_bmc_orig_cache_miss_runtime_ns + local_bmc_orig_cache_miss_runtime_ns))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -2536,6 +2642,8 @@ fi
   printf "chain_auto_parallel_mutants\t%s\n" "$count_chain_auto_parallel"
   printf "bmc_orig_cache_hit_mutants\t%s\n" "$count_bmc_orig_cache_hit"
   printf "bmc_orig_cache_miss_mutants\t%s\n" "$count_bmc_orig_cache_miss"
+  printf "bmc_orig_cache_saved_runtime_ns\t%s\n" "$count_bmc_orig_cache_saved_runtime_ns"
+  printf "bmc_orig_cache_miss_runtime_ns\t%s\n" "$count_bmc_orig_cache_miss_runtime_ns"
   printf "bmc_orig_cache_max_entries\t%s\n" "$BMC_ORIG_CACHE_MAX_ENTRIES"
   printf "bmc_orig_cache_max_bytes\t%s\n" "$BMC_ORIG_CACHE_MAX_BYTES"
   printf "bmc_orig_cache_max_age_seconds\t%s\n" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
@@ -2584,6 +2692,8 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "chain_auto_parallel_mutants": $count_chain_auto_parallel,
   "bmc_orig_cache_hit_mutants": $count_bmc_orig_cache_hit,
   "bmc_orig_cache_miss_mutants": $count_bmc_orig_cache_miss,
+  "bmc_orig_cache_saved_runtime_ns": $count_bmc_orig_cache_saved_runtime_ns,
+  "bmc_orig_cache_miss_runtime_ns": $count_bmc_orig_cache_miss_runtime_ns,
   "bmc_orig_cache_max_entries": $BMC_ORIG_CACHE_MAX_ENTRIES,
   "bmc_orig_cache_max_bytes": $BMC_ORIG_CACHE_MAX_BYTES,
   "bmc_orig_cache_max_age_seconds": $BMC_ORIG_CACHE_MAX_AGE_SECONDS,
@@ -2616,7 +2726,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
@@ -2629,7 +2739,7 @@ echo "Reuse pair source: ${REUSE_PAIR_SOURCE}"
 echo "Reuse summary source: ${REUSE_SUMMARY_SOURCE}"
 echo "Reuse cache mode: ${REUSE_CACHE_MODE}"
 echo "BMC orig cache limits: entries=${BMC_ORIG_CACHE_MAX_ENTRIES} bytes=${BMC_ORIG_CACHE_MAX_BYTES} max_age_seconds=${BMC_ORIG_CACHE_MAX_AGE_SECONDS} eviction_policy=${BMC_ORIG_CACHE_EVICTION_POLICY}"
-echo "BMC orig cache stats: entries=${BMC_ORIG_CACHE_ENTRIES} bytes=${BMC_ORIG_CACHE_BYTES} pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PRUNED_AGE_BYTES}"
+echo "BMC orig cache stats: entries=${BMC_ORIG_CACHE_ENTRIES} bytes=${BMC_ORIG_CACHE_BYTES} pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PRUNED_AGE_BYTES} saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns}"
 if [[ -n "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
   echo "BMC orig cache persist stats: entries=${BMC_ORIG_CACHE_PERSIST_ENTRIES} bytes=${BMC_ORIG_CACHE_PERSIST_BYTES} pruned_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES}"
 fi

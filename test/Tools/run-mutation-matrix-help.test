@@ -28,5 +28,7 @@
 // CHECK: --default-bmc-orig-cache-eviction-policy
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
+// CHECK: --include-lane-regex
+// CHECK: --exclude-lane-regex
 // CHECK: --lane-jobs
 // CHECK: --stop-on-fail
