@@ -34,6 +34,9 @@ Options:
   --fail-on-new-e2e-mode-diff-status-diff
                          Fail when OpenTitan E2E mode-diff status_diff
                          count increases vs baseline
+  --fail-on-new-e2e-mode-diff-strict-only-pass
+                         Fail when OpenTitan E2E mode-diff strict_only_pass
+                         count increases vs baseline
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1634,6 +1637,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
+FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
@@ -1904,6 +1908,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
     --fail-on-new-e2e-mode-diff-status-diff)
       FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1; shift ;;
+    --fail-on-new-e2e-mode-diff-strict-only-pass)
+      FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1; shift ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
@@ -3721,6 +3727,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
+  FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -8798,7 +8805,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_PASSRATE_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
-      "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" ]]; then
+      "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
+      "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" == "1" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
   BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
@@ -8807,6 +8815,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" \
+  FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -8943,6 +8952,9 @@ fail_on_new_e2e_mode_diff_strict_only_fail = (
 fail_on_new_e2e_mode_diff_status_diff = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF", "0") == "1"
 )
+fail_on_new_e2e_mode_diff_strict_only_pass = (
+    os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS", "0") == "1"
+)
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
@@ -9064,6 +9076,22 @@ for key, current_row in summary.items():
                 if current_status_diff > baseline_status_diff:
                     gate_errors.append(
                         f"{suite} {mode}: status_diff increased ({baseline_status_diff} -> {current_status_diff}, window={baseline_window})"
+                    )
+        if fail_on_new_e2e_mode_diff_strict_only_pass:
+            baseline_strict_only_pass_values = []
+            for counts in parsed_counts:
+                if "strict_only_pass" in counts:
+                    baseline_strict_only_pass_values.append(
+                        int(counts["strict_only_pass"])
+                    )
+            if baseline_strict_only_pass_values:
+                baseline_strict_only_pass = min(baseline_strict_only_pass_values)
+                current_strict_only_pass = int(
+                    current_counts.get("strict_only_pass", 0)
+                )
+                if current_strict_only_pass > baseline_strict_only_pass:
+                    gate_errors.append(
+                        f"{suite} {mode}: strict_only_pass increased ({baseline_strict_only_pass} -> {current_strict_only_pass}, window={baseline_window})"
                     )
     if fail_on_passrate_regression:
         baseline_rate = max(
