@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 713 - February 9, 2026
+
+### Lane-State Refresh Policy Registry Integrity Pinning
+
+- Added new option in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-sha256`
+  - optional SHA256 pin for
+    `--lane-state-manifest-ed25519-refresh-policy-profiles-json`
+- Added strict validation:
+  - SHA pin requires profile-registry JSON option
+  - SHA pin must be 64 hex chars
+  - mismatched profile-registry SHA fails fast with expected/found diagnostic.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material to include:
+  - selected refresh profile name
+    (`--lane-state-manifest-ed25519-refresh-policy-profile`)
+  - resolved refresh profile-registry SHA256
+- This prevents unsafe resume/merge across workers when the selected profile or
+  profile-registry content drifts.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: SHA pin without JSON
+    - negative: invalid SHA pin format
+    - negative: SHA pin mismatch
+    - positive: CRL/OCSP profile-driven auto-URI flows with SHA pin
+  - `docs/FormalRegression.md`
+    - documented SHA pin option in examples and lane-state semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
 ## Iteration 712 - February 9, 2026
 
 ### Lane-State Ed25519 Refresh Policy Profiles

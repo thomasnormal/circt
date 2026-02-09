@@ -148,6 +148,9 @@ Options:
   --lane-state-manifest-ed25519-refresh-policy-profile NAME
                          Profile name selected from
                          --lane-state-manifest-ed25519-refresh-policy-profiles-json
+  --lane-state-manifest-ed25519-refresh-policy-profiles-sha256 HEX
+                         Optional SHA256 pin for
+                         --lane-state-manifest-ed25519-refresh-policy-profiles-json
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -516,6 +519,7 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -567,6 +571,7 @@ LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON=""
 LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
@@ -737,6 +742,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-policy-profile)
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-sha256)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -949,9 +956,28 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE" && -z "$LANE_STAT
   echo "--lane-state-manifest-ed25519-refresh-policy-profile requires --lane-state-manifest-ed25519-refresh-policy-profiles-json" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-sha256 requires --lane-state-manifest-ed25519-refresh-policy-profiles-json" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-sha256: expected 64 hex chars" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
   echo "refresh policy profiles JSON not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" >&2
   exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED="$(
+    sha256sum "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" | awk '{print $1}'
+  )"
+  if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" && "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED" != "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" ]]; then
+    echo "refresh policy profiles SHA256 mismatch: expected $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256, found $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED" >&2
+    exit 1
+  fi
+else
+  LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED=""
 fi
 
 PROFILE_SHARED_AUTO_URI_POLICY=""
@@ -3433,6 +3459,8 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_auto_uri_from_cert_cdp=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP"
     printf "lane_state_ed25519_crl_refresh_auto_uri_policy=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY"
     printf "lane_state_ed25519_crl_refresh_auto_uri_allowed_schemes=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
+    printf "lane_state_ed25519_refresh_policy_profile=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE"
+    printf "lane_state_ed25519_refresh_policy_profiles_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
