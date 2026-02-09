@@ -8,3 +8,5 @@
 // CHECK: --fail-on-undetected
 // CHECK: --jobs
 // CHECK: --resume
+// CHECK: --generate-mutations
+// CHECK: --mutations-yosys

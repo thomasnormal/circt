@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CIRCT mutation coverage harness with formal pre-qualification and 4-way classes.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -8,9 +9,11 @@ usage: run_mutation_cover.sh [options]
 
 Required:
   --design FILE              Original design netlist (.il/.v/.sv)
-  --mutations-file FILE      Mutations file: "<id> <mutation-spec>" per line
   --tests-manifest FILE      TSV with columns:
                                test_id<TAB>run_cmd<TAB>result_file<TAB>kill_pattern<TAB>survive_pattern
+  One of:
+    --mutations-file FILE    Existing mutation list file
+    --generate-mutations N   Generate N mutations via yosys mutate -list
 
 Optional:
   --work-dir DIR             Output/work directory (default: ./mutation-cover-results)
@@ -27,6 +30,9 @@ Optional:
   --formal-activate-cmd CMD  Optional per-(test,mutant) activation classification cmd
   --formal-propagate-cmd CMD Optional per-(test,mutant) propagation classification cmd
   --mutation-limit N         Process first N mutations (default: all)
+  --mutations-top NAME       Top module name when auto-generating mutations
+  --mutations-seed N         Seed used with --generate-mutations (default: 1)
+  --mutations-yosys PATH     Yosys executable for auto-generation (default: yosys)
   --jobs N                   Worker processes for per-mutant execution (default: 1)
   --resume                   Reuse existing per-mutant artifacts when present
   --coverage-threshold PCT   Hard-fail if detected/relevant * 100 below threshold
@@ -67,6 +73,10 @@ MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
 MUTATION_LIMIT=0
+GENERATE_MUTATIONS=0
+MUTATIONS_TOP=""
+MUTATIONS_SEED=1
+MUTATIONS_YOSYS="yosys"
 JOBS=1
 RESUME=0
 COVERAGE_THRESHOLD=""
@@ -91,6 +101,10 @@ while [[ $# -gt 0 ]]; do
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --mutation-limit) MUTATION_LIMIT="$2"; shift 2 ;;
+    --generate-mutations) GENERATE_MUTATIONS="$2"; shift 2 ;;
+    --mutations-top) MUTATIONS_TOP="$2"; shift 2 ;;
+    --mutations-seed) MUTATIONS_SEED="$2"; shift 2 ;;
+    --mutations-yosys) MUTATIONS_YOSYS="$2"; shift 2 ;;
     --jobs) JOBS="$2"; shift 2 ;;
     --resume) RESUME=1; shift ;;
     --coverage-threshold) COVERAGE_THRESHOLD="$2"; shift 2 ;;
@@ -106,17 +120,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$DESIGN" || -z "$MUTATIONS_FILE" || -z "$TESTS_MANIFEST" ]]; then
+if [[ -z "$DESIGN" || -z "$TESTS_MANIFEST" ]]; then
   echo "Missing required arguments." >&2
   usage >&2
   exit 1
 fi
 if [[ ! -f "$DESIGN" ]]; then
   echo "Design file not found: $DESIGN" >&2
-  exit 1
-fi
-if [[ ! -f "$MUTATIONS_FILE" ]]; then
-  echo "Mutations file not found: $MUTATIONS_FILE" >&2
   exit 1
 fi
 if [[ ! -f "$TESTS_MANIFEST" ]]; then
@@ -135,12 +145,28 @@ if [[ ! "$MUTATION_LIMIT" =~ ^[0-9]+$ ]]; then
   echo "Invalid --mutation-limit value: $MUTATION_LIMIT" >&2
   exit 1
 fi
+if [[ ! "$GENERATE_MUTATIONS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --generate-mutations value: $GENERATE_MUTATIONS" >&2
+  exit 1
+fi
+if [[ ! "$MUTATIONS_SEED" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --mutations-seed value: $MUTATIONS_SEED" >&2
+  exit 1
+fi
 if [[ ! "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --jobs value: $JOBS" >&2
   exit 1
 fi
 if [[ -n "$COVERAGE_THRESHOLD" ]] && ! [[ "$COVERAGE_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid --coverage-threshold value: $COVERAGE_THRESHOLD" >&2
+  exit 1
+fi
+if [[ -n "$MUTATIONS_FILE" && "$GENERATE_MUTATIONS" -gt 0 ]]; then
+  echo "Use either --mutations-file or --generate-mutations, not both." >&2
+  exit 1
+fi
+if [[ -z "$MUTATIONS_FILE" && "$GENERATE_MUTATIONS" -eq 0 ]]; then
+  echo "Provide one mutation source: --mutations-file or --generate-mutations." >&2
   exit 1
 fi
 
@@ -151,6 +177,26 @@ RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
 METRICS_FILE="${METRICS_FILE:-${WORK_DIR}/metrics.tsv}"
 SUMMARY_JSON_FILE="${SUMMARY_JSON_FILE:-${WORK_DIR}/summary.json}"
 IMPROVEMENT_FILE="${IMPROVEMENT_FILE:-${WORK_DIR}/improvement.tsv}"
+
+if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
+  MUTATIONS_FILE="${WORK_DIR}/generated_mutations.txt"
+  gen_cmd=(
+    "${SCRIPT_DIR}/generate_mutations_yosys.sh"
+    --design "$DESIGN"
+    --out "$MUTATIONS_FILE"
+    --count "$GENERATE_MUTATIONS"
+    --seed "$MUTATIONS_SEED"
+    --yosys "$MUTATIONS_YOSYS"
+  )
+  if [[ -n "$MUTATIONS_TOP" ]]; then
+    gen_cmd+=(--top "$MUTATIONS_TOP")
+  fi
+  "${gen_cmd[@]}" > "${WORK_DIR}/generate_mutations.log" 2>&1
+fi
+if [[ ! -f "$MUTATIONS_FILE" ]]; then
+  echo "Mutations file not found: $MUTATIONS_FILE" >&2
+  exit 1
+fi
 
 declare -A TEST_CMD
 declare -A TEST_RESULT_FILE
@@ -454,6 +500,10 @@ process_mutation() {
 
 load_tests_manifest
 load_mutations
+if [[ "${#MUTATION_IDS[@]}" -eq 0 ]]; then
+  echo "No usable mutations loaded from: $MUTATIONS_FILE" >&2
+  exit 1
+fi
 
 if [[ "$SKIP_BASELINE" -eq 0 ]]; then
   baseline_dir="${WORK_DIR}/baseline"

@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript=\"${@: -1}\"\ncp \"$script\" \"$CAPTURE\"\nout=$(sed -n \"s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p\" \"$script\" | tail -n1)\necho \"1 MUT_A\" > \"$out\"\necho \"2 MUT_B\" >> \"$out\"\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+
+// RUN: env CAPTURE=%t/captured.ys %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --top top --count 2 --seed 7 --yosys %t/fake-yosys.sh
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=SCRIPT < %t/captured.ys
+
+// OUT: 1 MUT_A
+// OUT: 2 MUT_B
+
+// SCRIPT: read_verilog
+// SCRIPT: prep -top top
+// SCRIPT: mutate -list 2 -seed 7 -none
