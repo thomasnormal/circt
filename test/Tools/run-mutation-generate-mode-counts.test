@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \"\([^\"]*\)\".*/\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \([^ ]*\).*/\1/p" "$script" | tail -n1)\ncount=$(sed -n "s/.*mutate -list \([0-9][0-9]*\).*/\1/p" "$script" | tail -n1)\nif [[ "$mode" == "arith" ]]; then\n  [[ "$count" == "3" ]] || exit 4\n  echo "100 M_ARITH_A" > "$out"\n  echo "101 M_ARITH_B" >> "$out"\n  echo "102 M_ARITH_C" >> "$out"\nelif [[ "$mode" == "control" ]]; then\n  [[ "$count" == "1" ]] || exit 5\n  echo "200 M_CTRL_A" > "$out"\nelse\n  exit 3\nfi\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+
+// RUN: %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 4 --seed 7 --modes arith,control --mode-counts arith=3,control=1 --yosys %t/fake-yosys.sh
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+
+// OUT: 1 M_ARITH_A
+// OUT: 2 M_ARITH_B
+// OUT: 3 M_ARITH_C
+// OUT: 4 M_CTRL_A

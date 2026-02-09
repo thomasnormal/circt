@@ -8,6 +8,8 @@
 // CHECK: --yosys
 // CHECK: --mode
 // CHECK: --modes
+// CHECK: --mode-count
+// CHECK: --mode-counts
 // CHECK: --profile
 // CHECK: --profiles
 // CHECK: --cfg
