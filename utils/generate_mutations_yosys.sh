@@ -574,6 +574,7 @@ fi
 declare -a MODE_OUT_FILES
 declare -a MODE_TARGET_LIST=()
 declare -a MODE_TARGET_COUNTS=()
+declare -a ROUND_COUNTS=()
 
 for idx in "${!MODE_LIST[@]}"; do
   mode="${MODE_LIST[$idx]}"
@@ -606,78 +607,134 @@ for idx in "${!MODE_LIST[@]}"; do
   done
 done
 
-for idx in "${!MODE_TARGET_LIST[@]}"; do
-  mode="${MODE_TARGET_LIST[$idx]}"
-  list_count="${MODE_TARGET_COUNTS[$idx]}"
-  script_file="${WORK_DIR}/mutate.${idx}.ys"
-  log_file="${WORK_DIR}/mutate.${idx}.log"
-  sources_file="${WORK_DIR}/sources.${idx}.txt"
-  mode_out_file="${WORK_DIR}/mutations.${idx}.txt"
-  MODE_OUT_FILES+=("$mode_out_file")
+run_generation_round() {
+  local round_tag="$1"
+  local round_seed="$2"
+  local idx=0
+  local mode=""
+  local list_count=0
+  local script_file=""
+  local log_file=""
+  local sources_file=""
+  local mode_out_file=""
+  local mode_arg=""
+  local mutate_cmd=""
+  local key=""
+  local value=""
 
-  mode_arg=""
-  if [[ -n "$mode" ]]; then
-    mode_arg="-mode $mode"
-  fi
+  MODE_OUT_FILES=()
+  for idx in "${!MODE_TARGET_LIST[@]}"; do
+    mode="${MODE_TARGET_LIST[$idx]}"
+    list_count="${ROUND_COUNTS[$idx]:-0}"
+    [[ "$list_count" -le 0 ]] && continue
 
-  mutate_cmd="mutate -list $list_count -seed $SEED -none"
-  for cfg in "${CFG_LIST[@]}"; do
-    key="${cfg%%=*}"
-    value="${cfg#*=}"
-    mutate_cmd+=" -cfg $key $value"
+    script_file="${WORK_DIR}/mutate.${round_tag}.${idx}.ys"
+    log_file="${WORK_DIR}/mutate.${round_tag}.${idx}.log"
+    sources_file="${WORK_DIR}/sources.${round_tag}.${idx}.txt"
+    mode_out_file="${WORK_DIR}/mutations.${round_tag}.${idx}.txt"
+    MODE_OUT_FILES+=("$mode_out_file")
+
+    mode_arg=""
+    if [[ -n "$mode" ]]; then
+      mode_arg="-mode $mode"
+    fi
+
+    mutate_cmd="mutate -list $list_count -seed $round_seed -none"
+    for cfg in "${CFG_LIST[@]}"; do
+      key="${cfg%%=*}"
+      value="${cfg#*=}"
+      mutate_cmd+=" -cfg $key $value"
+    done
+    if [[ -n "$mode_arg" ]]; then
+      mutate_cmd+=" $mode_arg"
+    fi
+    mutate_cmd+=" -o \"$mode_out_file\" -s \"$sources_file\""
+    for sel in "${SELECT_LIST[@]}"; do
+      mutate_cmd+=" $sel"
+    done
+
+    {
+      echo "$read_cmd"
+      echo "$prep_cmd"
+      echo "$mutate_cmd"
+    } > "$script_file"
+
+    "$YOSYS_BIN" -ql "$log_file" "$script_file"
+    if [[ ! -f "$mode_out_file" ]]; then
+      echo "Mutation generation failed: output file missing for mode '${mode:-default}': $mode_out_file" >&2
+      exit 1
+    fi
   done
-  if [[ -n "$mode_arg" ]]; then
-    mutate_cmd+=" $mode_arg"
-  fi
-  mutate_cmd+=" -o \"$mode_out_file\" -s \"$sources_file\""
-  for sel in "${SELECT_LIST[@]}"; do
-    mutate_cmd+=" $sel"
+}
+
+consume_generated_mutations() {
+  local mode_out_file=""
+  local raw_line=""
+  local line=""
+  local mut_id=""
+  local mut_spec=""
+  local done_flag=0
+
+  for mode_out_file in "${MODE_OUT_FILES[@]}"; do
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+      [[ -z "$line" ]] && continue
+      [[ "${line:0:1}" == "#" ]] && continue
+      mut_id="${line%%[[:space:]]*}"
+      mut_spec="${line#"$mut_id"}"
+      mut_spec="${mut_spec#"${mut_spec%%[![:space:]]*}"}"
+      [[ -z "$mut_spec" ]] && continue
+      if [[ -n "${SEEN_SPECS[$mut_spec]+x}" ]]; then
+        continue
+      fi
+      SEEN_SPECS["$mut_spec"]=1
+      printf "%s %s\n" "$next_id" "$mut_spec" >> "$OUT_FILE"
+      next_id=$((next_id + 1))
+      if [[ "$next_id" -gt "$COUNT" ]]; then
+        done_flag=1
+        break
+      fi
+    done < "$mode_out_file"
+    if [[ "$done_flag" -eq 1 ]]; then
+      break
+    fi
   done
-
-  {
-    echo "$read_cmd"
-    echo "$prep_cmd"
-    echo "$mutate_cmd"
-  } > "$script_file"
-
-  "$YOSYS_BIN" -ql "$log_file" "$script_file"
-  if [[ ! -f "$mode_out_file" ]]; then
-    echo "Mutation generation failed: output file missing for mode '${mode:-default}': $mode_out_file" >&2
-    exit 1
-  fi
-done
+}
 
 : > "$OUT_FILE"
 declare -A SEEN_SPECS
 next_id=1
-done_flag=0
-for mode_out_file in "${MODE_OUT_FILES[@]}"; do
-  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
-    line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-    [[ -z "$line" ]] && continue
-    [[ "${line:0:1}" == "#" ]] && continue
-    mut_id="${line%%[[:space:]]*}"
-    mut_spec="${line#"$mut_id"}"
-    mut_spec="${mut_spec#"${mut_spec%%[![:space:]]*}"}"
-    [[ -z "$mut_spec" ]] && continue
-    if [[ -n "${SEEN_SPECS[$mut_spec]+x}" ]]; then
-      continue
+MAX_TOPUP_ROUNDS=8
+
+ROUND_COUNTS=("${MODE_TARGET_COUNTS[@]}")
+run_generation_round "base" "$SEED"
+consume_generated_mutations
+
+for ((topup_round=1; topup_round<=MAX_TOPUP_ROUNDS; ++topup_round)); do
+  [[ "$next_id" -gt "$COUNT" ]] && break
+  needed=$((COUNT - next_id + 1))
+  target_count="${#MODE_TARGET_LIST[@]}"
+  topup_base=$((needed / target_count))
+  topup_extra=$((needed % target_count))
+  ROUND_COUNTS=()
+  for idx in "${!MODE_TARGET_LIST[@]}"; do
+    topup_count="$topup_base"
+    if [[ "$idx" -lt "$topup_extra" ]]; then
+      topup_count=$((topup_count + 1))
     fi
-    SEEN_SPECS["$mut_spec"]=1
-    printf "%s %s\n" "$next_id" "$mut_spec" >> "$OUT_FILE"
-    next_id=$((next_id + 1))
-    if [[ "$next_id" -gt "$COUNT" ]]; then
-      done_flag=1
-      break
-    fi
-  done < "$mode_out_file"
-  if [[ "$done_flag" -eq 1 ]]; then
-    break
-  fi
+    ROUND_COUNTS+=("$topup_count")
+  done
+  run_generation_round "topup${topup_round}" "$((SEED + topup_round))"
+  consume_generated_mutations
 done
 
 if [[ ! -s "$OUT_FILE" ]]; then
   echo "Mutation generation failed: generated mutation set is empty: $OUT_FILE" >&2
+  exit 1
+fi
+if [[ "$next_id" -le "$COUNT" ]]; then
+  generated_count=$((next_id - 1))
+  echo "Mutation generation failed: unable to produce requested count after dedup/top-up (requested=$COUNT generated=$generated_count)." >&2
   exit 1
 fi
 
