@@ -299,6 +299,8 @@ LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON=""
 LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER=""
@@ -940,14 +942,65 @@ if [[ -z "$JSON_SUMMARY_FILE" ]]; then
   JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
 fi
 
+lane_state_ed25519_build_refresh_provenance_json() {
+  local artifact_kind="$1"
+  local max_attempts="$2"
+  local attempt_count="$3"
+  local outcome="$4"
+  local attempts_tsv="$5"
+  REFRESH_ARTIFACT_KIND="$artifact_kind" \
+  REFRESH_MAX_ATTEMPTS="$max_attempts" \
+  REFRESH_ATTEMPT_COUNT="$attempt_count" \
+  REFRESH_OUTCOME="$outcome" \
+  REFRESH_ATTEMPTS_TSV="$attempts_tsv" \
+  python3 - <<'PY'
+import json
+import os
+
+attempt_rows = []
+raw_rows = os.environ.get("REFRESH_ATTEMPTS_TSV", "")
+for line in raw_rows.splitlines():
+  if not line.strip():
+    continue
+  fields = line.split("\t")
+  if len(fields) != 7:
+    print("invalid refresh provenance row shape", file=os.sys.stderr)
+    raise SystemExit(1)
+  artifact_sha = fields[6].strip()
+  attempt_rows.append(
+      {
+          "attempt": int(fields[0]),
+          "started_at_utc": fields[1],
+          "ended_at_utc": fields[2],
+          "exit_code": int(fields[3]),
+          "timed_out": fields[4] == "1",
+          "artifact_readable": fields[5] == "1",
+          "artifact_sha256": artifact_sha if artifact_sha else None,
+      }
+  )
+
+payload = {
+    "schema_version": 1,
+    "artifact_kind": os.environ["REFRESH_ARTIFACT_KIND"],
+    "max_attempts": int(os.environ["REFRESH_MAX_ATTEMPTS"]),
+    "attempts_used": int(os.environ["REFRESH_ATTEMPT_COUNT"]),
+    "outcome": os.environ["REFRESH_OUTCOME"],
+    "attempts": attempt_rows,
+}
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+PY
+}
+
 run_lane_state_ed25519_refresh_hook() {
-  local artifact_name="$1"
-  local refresh_cmd="$2"
-  local artifact_file="$3"
-  local refresh_retries="$4"
-  local refresh_delay_secs="$5"
-  local refresh_timeout_secs="$6"
-  local refresh_jitter_secs="$7"
+  local artifact_kind="$1"
+  local artifact_name="$2"
+  local refresh_cmd="$3"
+  local artifact_file="$4"
+  local refresh_retries="$5"
+  local refresh_delay_secs="$6"
+  local refresh_timeout_secs="$7"
+  local refresh_jitter_secs="$8"
+  local provenance_var_name="$9"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -956,10 +1009,23 @@ run_lane_state_ed25519_refresh_hook() {
   local attempt=1
   local cmd_rc=0
   local sleep_secs=0
+  local attempt_started_utc=""
+  local attempt_ended_utc=""
+  local timed_out=0
+  local artifact_readable=0
+  local artifact_sha256=""
+  local outcome="success"
+  local attempts_tsv=""
+  local attempt_count=0
+  local provenance_json=""
   if [[ -z "$refresh_cmd" ]]; then
     return
   fi
   while (( attempt <= max_attempts )); do
+    attempt_started_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    timed_out=0
+    artifact_readable=0
+    artifact_sha256=""
     if (( timeout_secs > 0 )); then
       if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
          LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
@@ -999,17 +1065,38 @@ PY
         cmd_rc=$?
       fi
     fi
+    attempt_ended_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ "$cmd_rc" == "124" ]]; then
+      timed_out=1
+    fi
     if [[ "$cmd_rc" == "0" ]]; then
       if [[ -r "$artifact_file" ]]; then
+        artifact_readable=1
+        artifact_sha256="$(sha256sum "$artifact_file" | awk '{print $1}')"
+        attempt_count="$attempt"
+        attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\n'
+        provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv")"
+        if [[ -n "$provenance_json" ]]; then
+          printf -v "$provenance_var_name" '%s' "$provenance_json"
+        fi
         return
       fi
+      outcome="artifact_unreadable"
       echo "lane state Ed25519 ${artifact_name} file not readable after refresh attempt ${attempt}/${max_attempts}: $artifact_file" >&2
     elif [[ "$cmd_rc" == "124" ]]; then
+      outcome="timeout"
       echo "lane state Ed25519 ${artifact_name} refresh command timed out on attempt ${attempt}/${max_attempts} (timeout=${timeout_secs}s): $refresh_cmd" >&2
     else
+      outcome="cmd_failed"
       echo "lane state Ed25519 ${artifact_name} refresh command failed on attempt ${attempt}/${max_attempts}: $refresh_cmd" >&2
     fi
+    attempt_count="$attempt"
+    attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\n'
     if (( attempt >= max_attempts )); then
+      provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv")"
+      if [[ -n "$provenance_json" ]]; then
+        printf -v "$provenance_var_name" '%s' "$provenance_json"
+      fi
       exit 1
     fi
     sleep_secs="$delay_secs"
@@ -1029,22 +1116,28 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
     exit 1
   fi
   if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON=""
     run_lane_state_ed25519_refresh_hook \
+      "crl" \
       "CRL" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" \
-      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" \
+      "LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON"
     run_lane_state_ed25519_refresh_hook \
+      "ocsp" \
       "OCSP response" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" \
-      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" \
+      "LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -2090,6 +2183,8 @@ lane_state_emit_manifest() {
   LANE_STATE_MANIFEST_ED25519_OCSP_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256" \
   LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256" \
   LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256" \
+  LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON="$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON" \
+  LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON="$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   python3 - <<'PY'
@@ -2169,6 +2264,40 @@ elif sign_mode == "ed25519":
   issuer_cert_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256", "").strip()
   if issuer_cert_sha:
     payload["ed25519_ocsp_issuer_cert_sha256"] = issuer_cert_sha
+  crl_refresh_provenance = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON", "").strip()
+  if crl_refresh_provenance:
+    try:
+      parsed_crl_refresh_provenance = json.loads(crl_refresh_provenance)
+    except Exception as ex:
+      print(
+          f"invalid lane-state Ed25519 CRL refresh provenance payload: {ex}",
+          file=os.sys.stderr,
+      )
+      raise SystemExit(1)
+    if not isinstance(parsed_crl_refresh_provenance, dict):
+      print(
+          "invalid lane-state Ed25519 CRL refresh provenance payload: expected JSON object",
+          file=os.sys.stderr,
+      )
+      raise SystemExit(1)
+    payload["ed25519_crl_refresh_provenance"] = parsed_crl_refresh_provenance
+  ocsp_refresh_provenance = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON", "").strip()
+  if ocsp_refresh_provenance:
+    try:
+      parsed_ocsp_refresh_provenance = json.loads(ocsp_refresh_provenance)
+    except Exception as ex:
+      print(
+          f"invalid lane-state Ed25519 OCSP refresh provenance payload: {ex}",
+          file=os.sys.stderr,
+      )
+      raise SystemExit(1)
+    if not isinstance(parsed_ocsp_refresh_provenance, dict):
+      print(
+          "invalid lane-state Ed25519 OCSP refresh provenance payload: expected JSON object",
+          file=os.sys.stderr,
+      )
+      raise SystemExit(1)
+    payload["ed25519_ocsp_refresh_provenance"] = parsed_ocsp_refresh_provenance
   ed_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
   ed_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
   ed_window_start = parse_window_date(ed_key_not_before, "not_before", "Ed25519")

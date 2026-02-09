@@ -152,6 +152,9 @@ Lane-state semantics:
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs` adds randomized
   retry delay (`0..N` seconds) for OCSP refresh retries.
+- When Ed25519 manifest signing is enabled, CRL/OCSP refresh hooks now emit
+  signed refresh provenance into `<lane-state>.manifest.json` (attempt timeline,
+  timeout/failure markers, and observed artifact SHA256 per attempt).
 - `--lane-state-manifest-ed25519-ocsp-response-sha256` optionally pins exact
   OCSP response content by SHA256.
 - `--lane-state-manifest-ed25519-ocsp-max-age-secs` bounds OCSP response age

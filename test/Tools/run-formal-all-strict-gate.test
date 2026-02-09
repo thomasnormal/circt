@@ -120,6 +120,8 @@
 // RUN: cp %t/ed25519-ca/index.txt %t/ed25519-ca/index.pre-revoke.txt
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nopenssl ocsp -index %t/ed25519-ca/index.pre-revoke.txt -rsigner %t/lane-state-ed25519-cert.pem -rkey %t/lane-state-ed25519-private.pem -CA %t/lane-state-ed25519-cert.pem -issuer %t/lane-state-ed25519-cert.pem -cert %t/lane-state-ed25519-cert.pem -respout %t/lane-state-ed25519-good.ocsp.der >/dev/null 2>&1\n' > %t/lane-state-ed25519-refresh-ocsp.sh
 // RUN: chmod +x %t/lane-state-ed25519-refresh-ocsp.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntest -r %t/lane-state-ed25519.crl.pem\n' > %t/lane-state-ed25519-refresh-crl.sh
+// RUN: chmod +x %t/lane-state-ed25519-refresh-crl.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncount_file=%t/lane-state-ed25519-refresh-ocsp.count\ncount=0\nif [[ -r \"$count_file\" ]]; then\n  count=$(cat \"$count_file\")\nfi\ncount=$((count + 1))\necho \"$count\" > \"$count_file\"\nif [[ \"$count\" -lt 2 ]]; then\n  exit 1\nfi\nopenssl ocsp -index %t/ed25519-ca/index.pre-revoke.txt -rsigner %t/lane-state-ed25519-cert.pem -rkey %t/lane-state-ed25519-private.pem -CA %t/lane-state-ed25519-cert.pem -issuer %t/lane-state-ed25519-cert.pem -cert %t/lane-state-ed25519-cert.pem -respout %t/lane-state-ed25519-good.ocsp.der >/dev/null 2>&1\n' > %t/lane-state-ed25519-refresh-ocsp-flaky.sh
 // RUN: chmod +x %t/lane-state-ed25519-refresh-ocsp-flaky.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncount_file=%t/lane-state-ed25519-refresh-ocsp-timeout.count\ncount=0\nif [[ -r \"$count_file\" ]]; then\n  count=$(cat \"$count_file\")\nfi\ncount=$((count + 1))\necho \"$count\" > \"$count_file\"\nif [[ \"$count\" -lt 2 ]]; then\n  sleep 2\nfi\nopenssl ocsp -index %t/ed25519-ca/index.pre-revoke.txt -rsigner %t/lane-state-ed25519-cert.pem -rkey %t/lane-state-ed25519-private.pem -CA %t/lane-state-ed25519-cert.pem -issuer %t/lane-state-ed25519-cert.pem -cert %t/lane-state-ed25519-cert.pem -respout %t/lane-state-ed25519-good.ocsp.der >/dev/null 2>&1\n' > %t/lane-state-ed25519-refresh-ocsp-timeout.sh
@@ -152,7 +154,7 @@
 // RUN: FileCheck %s --check-prefix=LANESTATEED25519KEYRINGCARESUME < %t/out-lane-state-ed25519-keyring-ca-resume/summary.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-ed25519-keyring-ca-subject-seed --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-ed25519-keyring-ca-subject.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file %t/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv %t/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file %t/lane-state-ed25519-cert.pem --lane-state-manifest-ed25519-cert-subject-regex 'CN=lane-state-ed25519' --lane-state-manifest-ed25519-key-id lane-ed25519-1 --include-lane-regex '^sv-tests/BMC$'
 // RUN: FileCheck %s --check-prefix=LANESTATEED25519KEYRINGCASUBJECT < %t/lane-state-ed25519-keyring-ca-subject.tsv.manifest.json
-// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-ed25519-keyring-ca-crl-seed --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-ed25519-keyring-ca-crl.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file %t/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv %t/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file %t/lane-state-ed25519-cert.pem --lane-state-manifest-ed25519-crl-file %t/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-key-id lane-ed25519-1 --include-lane-regex '^sv-tests/BMC$'
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-ed25519-keyring-ca-crl-seed --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-ed25519-keyring-ca-crl.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file %t/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv %t/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file %t/lane-state-ed25519-cert.pem --lane-state-manifest-ed25519-crl-file %t/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-crl-refresh-cmd %t/lane-state-ed25519-refresh-crl.sh --lane-state-manifest-ed25519-key-id lane-ed25519-1 --include-lane-regex '^sv-tests/BMC$'
 // RUN: FileCheck %s --check-prefix=LANESTATEED25519KEYRINGCACRL < %t/lane-state-ed25519-keyring-ca-crl.tsv.manifest.json
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-ed25519-keyring-ca-ocsp-seed --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-ed25519-keyring-ca-ocsp.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file %t/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv %t/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file %t/lane-state-ed25519-cert.pem --lane-state-manifest-ed25519-ocsp-response-file %t/lane-state-ed25519-good.ocsp.der --lane-state-manifest-ed25519-key-id lane-ed25519-1 --include-lane-regex '^sv-tests/BMC$'
 // RUN: FileCheck %s --check-prefix=LANESTATEED25519KEYRINGCAOCSP < %t/lane-state-ed25519-keyring-ca-ocsp.tsv.manifest.json
@@ -423,14 +425,20 @@
 // LANESTATEED25519KEYRINGCAMANIFEST: "ed25519_cert_sha256":
 // LANESTATEED25519KEYRINGCARESUME: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}10{{[[:space:]]+}}9{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0
 // LANESTATEED25519KEYRINGCASUBJECT: "ed25519_cert_sha256":
+// LANESTATEED25519KEYRINGCACRL: "ed25519_crl_refresh_provenance":
+// LANESTATEED25519KEYRINGCACRL: "artifact_kind": "crl"
 // LANESTATEED25519KEYRINGCACRL: "ed25519_crl_sha256":
 // LANESTATEED25519KEYRINGCAOCSP: "ed25519_ocsp_sha256":
 // LANESTATEED25519KEYRINGSHABAD: lane state Ed25519 keyring SHA256 mismatch:
 // LANESTATEED25519KEYRINGCANOCERT: lane state Ed25519 keyring key_id '{{.*}}' missing cert_file_path while --lane-state-manifest-ed25519-ca-file is set
 // LANESTATEED25519KEYRINGCACRLSTALE: lane state Ed25519 CRL is stale for key_id '{{.*}}':
 // LANESTATEED25519KEYRINGCAOCSPSTALE: lane state Ed25519 OCSP response is stale for key_id '{{.*}}':
+// LANESTATEED25519KEYRINGCAOCSPREFRESH: "ed25519_ocsp_refresh_provenance":
+// LANESTATEED25519KEYRINGCAOCSPREFRESH: "artifact_kind": "ocsp"
 // LANESTATEED25519KEYRINGCAOCSPREFRESH: "ed25519_ocsp_sha256":
+// LANESTATEED25519KEYRINGCAOCSPRETRY: "attempts_used": 2
 // LANESTATEED25519KEYRINGCAOCSPRETRY: "ed25519_ocsp_sha256":
+// LANESTATEED25519KEYRINGCAOCSPTIMEOUTRETRY: "timed_out": true
 // LANESTATEED25519KEYRINGCAOCSPTIMEOUTRETRY: "ed25519_ocsp_sha256":
 // LANESTATEED25519KEYRINGCAOCSPNEXTUPDATEMISSING: lane state Ed25519 OCSP nextUpdate missing for key_id '{{.*}}'
 // LANESTATEED25519KEYRINGCAOCSPSHABAD: lane state Ed25519 OCSP response SHA256 mismatch for key_id '{{.*}}':
