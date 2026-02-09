@@ -456,6 +456,12 @@ declare -A REUSE_PROPAGATION
 declare -A REUSE_ACTIVATE_EXIT
 declare -A REUSE_PROPAGATE_EXIT
 declare -A REUSE_DETECTED_TEST
+declare -A REUSE_GLOBAL_FILTER_STATE
+declare -A REUSE_GLOBAL_FILTER_RC
+declare -A REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK
+declare -A REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED
+declare -A REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK
+declare -A REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED
 
 REUSE_COMPAT_HASH=""
 DESIGN_FILE_HASH=""
@@ -547,6 +553,7 @@ load_reuse_pairs() {
   local propagation=""
   local activate_exit=""
   local propagate_exit=""
+  local note=""
   local key=""
 
   if [[ -z "$REUSE_PAIR_FILE" ]]; then
@@ -557,8 +564,24 @@ load_reuse_pairs() {
     line="${line%$'\r'}"
     [[ -z "$line" ]] && continue
     [[ "${line:0:1}" == "#" ]] && continue
-    IFS=$'\t' read -r mutation_id test_id activation propagation activate_exit propagate_exit _ <<< "$line"
+    IFS=$'\t' read -r mutation_id test_id activation propagation activate_exit propagate_exit note <<< "$line"
     if [[ -z "$mutation_id" || -z "$test_id" ]]; then
+      continue
+    fi
+    if [[ "$test_id" == "-" ]]; then
+      case "$propagation" in
+        not_propagated|propagated) ;;
+        *) continue ;;
+      esac
+      if [[ "$note" != global_filter_* ]]; then
+        continue
+      fi
+      REUSE_GLOBAL_FILTER_STATE["$mutation_id"]="$propagation"
+      REUSE_GLOBAL_FILTER_RC["$mutation_id"]="${propagate_exit:--1}"
+      REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_lec_unknown_fallback=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_bmc_resolved_not_propagated=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_bmc_unknown_fallback=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_lec_resolved_not_propagated=1"* ]] && printf "1" || printf "0")"
       continue
     fi
     if [[ "$activation" != "activated" && "$activation" != "not_activated" ]]; then
@@ -1289,7 +1312,9 @@ process_mutation() {
   local hint_hit=0
   local global_filter_state=""
   local global_filter_rc="-1"
+  local global_filter_note=""
   local global_filtered_not_propagated=0
+  local reused_global_filter=0
   local chain_lec_unknown_fallback=0
   local chain_bmc_resolved_not_propagated=0
   local chain_bmc_unknown_fallback=0
@@ -1316,6 +1341,7 @@ process_mutation() {
       printf "hinted_mutant\t0\n"
       printf "hint_hit\t0\n"
       printf "global_filtered_not_propagated\t0\n"
+      printf "reused_global_filter\t0\n"
       printf "chain_lec_unknown_fallback\t0\n"
       printf "chain_bmc_resolved_not_propagated\t0\n"
       printf "chain_bmc_unknown_fallback\t0\n"
@@ -1331,38 +1357,29 @@ process_mutation() {
   export MUTATION_SPEC="$mutation_spec"
   export MUTATION_WORKDIR="$mutation_dir"
 
-  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
-    read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_chain "$mutation_dir" "$mutation_dir/global_propagate.log")
-  elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" ]]; then
-    read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_lec "$mutation_dir" "$mutation_dir/global_propagate.log")
-  elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
-    read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_bmc "$mutation_dir" "$mutation_dir/global_propagate.log")
-  elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
-    read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" || -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" || -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" || -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
+    if [[ -n "$REUSE_PAIR_FILE" && -n "${REUSE_GLOBAL_FILTER_STATE[$mutation_id]+x}" ]]; then
+      global_filter_state="${REUSE_GLOBAL_FILTER_STATE[$mutation_id]}"
+      global_filter_rc="${REUSE_GLOBAL_FILTER_RC[$mutation_id]:--1}"
+      reused_global_filter=1
+      chain_lec_unknown_fallback="${REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK[$mutation_id]:-0}"
+      chain_bmc_resolved_not_propagated="${REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED[$mutation_id]:-0}"
+      chain_bmc_unknown_fallback="${REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK[$mutation_id]:-0}"
+      chain_lec_resolved_not_propagated="${REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED[$mutation_id]:-0}"
+      {
+        printf "# reused_global_filter=1 source=%s state=%s rc=%s\n" "$REUSE_PAIR_SOURCE" "$global_filter_state" "$global_filter_rc"
+      } > "$mutation_dir/global_propagate.log"
+    elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
+      read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_chain "$mutation_dir" "$mutation_dir/global_propagate.log")
+    elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" ]]; then
+      read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_lec "$mutation_dir" "$mutation_dir/global_propagate.log")
+    elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
+      read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_bmc "$mutation_dir" "$mutation_dir/global_propagate.log")
+    elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
+      read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
+    fi
   fi
-  if [[ -n "$global_filter_state" ]]; then
-    case "$global_filter_state" in
-      not_propagated)
-        global_filtered_not_propagated=1
-        activated_any=1
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-          "$mutation_id" "-" "activated" "not_propagated" "-1" "$global_filter_rc" "global_filter_not_propagated" >> "$pair_local"
-        ;;
-      propagated)
-        ;;
-      error)
-        mutation_errors=$((mutation_errors + 1))
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-          "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "global_filter_error_continue" >> "$pair_local"
-        ;;
-      *)
-        mutation_errors=$((mutation_errors + 1))
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-          "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "global_filter_invalid_state" >> "$pair_local"
-        ;;
-    esac
-  fi
-  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
+  if [[ "$reused_global_filter" -eq 0 && -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
     if grep -Eq '^# chain_mode=lec-then-bmc primary=lec primary_state=unknown ' "$mutation_dir/global_propagate.log"; then
       chain_lec_unknown_fallback=1
     fi
@@ -1374,6 +1391,36 @@ process_mutation() {
     fi
     if grep -Eq '^# chain_fallback=lec fallback_state=eq ' "$mutation_dir/global_propagate.log"; then
       chain_lec_resolved_not_propagated=1
+    fi
+  fi
+  if [[ -n "$global_filter_state" ]]; then
+    case "$global_filter_state" in
+      not_propagated)
+        global_filtered_not_propagated=1
+        activated_any=1
+        global_filter_note="$([[ "$reused_global_filter" -eq 1 ]] && printf "global_filter_cached_not_propagated" || printf "global_filter_not_propagated")"
+        ;;
+      propagated)
+        global_filter_note="$([[ "$reused_global_filter" -eq 1 ]] && printf "global_filter_cached_propagated" || printf "global_filter_propagated")"
+        ;;
+      error)
+        mutation_errors=$((mutation_errors + 1))
+        global_filter_note="global_filter_error_continue"
+        ;;
+      *)
+        mutation_errors=$((mutation_errors + 1))
+        global_filter_note="global_filter_invalid_state"
+        ;;
+    esac
+    if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
+      global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated}"
+    fi
+    if [[ "$global_filter_state" == "not_propagated" || "$global_filter_state" == "propagated" ]]; then
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "-" "activated" "$global_filter_state" "-1" "$global_filter_rc" "$global_filter_note" >> "$pair_local"
+    else
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "$global_filter_note" >> "$pair_local"
     fi
   fi
 
@@ -1498,6 +1545,7 @@ process_mutation() {
     printf "hinted_mutant\t%s\n" "$hinted_mutant"
     printf "hint_hit\t%s\n" "$hint_hit"
     printf "global_filtered_not_propagated\t%s\n" "$global_filtered_not_propagated"
+    printf "reused_global_filter\t%s\n" "$reused_global_filter"
     printf "chain_lec_unknown_fallback\t%s\n" "$chain_lec_unknown_fallback"
     printf "chain_bmc_resolved_not_propagated\t%s\n" "$chain_bmc_resolved_not_propagated"
     printf "chain_bmc_unknown_fallback\t%s\n" "$chain_bmc_unknown_fallback"
@@ -1603,6 +1651,7 @@ count_not_propagated=0
 count_detected=0
 count_propagated_not_detected=0
 count_reused_pairs=0
+count_reused_global_filters=0
 count_hinted_mutants=0
 count_hint_hits=0
 count_global_filtered_not_propagated=0
@@ -1657,6 +1706,15 @@ for i in "${!MUTATION_IDS[@]}"; do
   fi
   if [[ "$local_reused" =~ ^[0-9]+$ ]]; then
     count_reused_pairs=$((count_reused_pairs + local_reused))
+  fi
+
+  local_reused_global_filter=0
+  if [[ -f "$meta_local" ]]; then
+    local_reused_global_filter="$(awk -F$'\t' '$1=="reused_global_filter"{print $2}' "$meta_local" | head -n1)"
+    local_reused_global_filter="${local_reused_global_filter:-0}"
+  fi
+  if [[ "$local_reused_global_filter" =~ ^[0-9]+$ ]]; then
+    count_reused_global_filters=$((count_reused_global_filters + local_reused_global_filter))
   fi
 
   local_hinted=0
@@ -1797,6 +1855,7 @@ fi
   printf "not_propagated_mutants\t%s\n" "$count_not_propagated"
   printf "not_activated_mutants\t%s\n" "$count_not_activated"
   printf "reused_pairs\t%s\n" "$count_reused_pairs"
+  printf "reused_global_filters\t%s\n" "$count_reused_global_filters"
   printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
   printf "hint_hits\t%s\n" "$count_hint_hits"
   printf "global_filtered_not_propagated_mutants\t%s\n" "$count_global_filtered_not_propagated"
@@ -1821,6 +1880,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "not_propagated_mutants": $count_not_propagated,
   "not_activated_mutants": $count_not_activated,
   "reused_pairs": $count_reused_pairs,
+  "reused_global_filters": $count_reused_global_filters,
   "hinted_mutants": $count_hinted_mutants,
   "hint_hits": $count_hint_hits,
   "global_filtered_not_propagated_mutants": $count_global_filtered_not_propagated,
@@ -1843,7 +1903,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
