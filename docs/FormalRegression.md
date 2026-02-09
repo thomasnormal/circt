@@ -82,6 +82,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-mani
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing --lane-state-manifest-ed25519-key-id ci-ed25519-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -141,6 +142,9 @@ Lane-state semantics:
   exact responder certificate bytes by SHA256.
 - `--lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing` requires
   the pinned responder cert to carry `Extended Key Usage: OCSP Signing`.
+- `--lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski`
+  requires responder cert `Authority Key Identifier` keyid to match CA cert
+  `Subject Key Identifier`.
 - `--lane-state-manifest-ed25519-cert-subject-regex` enforces certificate
   identity constraints for selected keyring entries.
 - `--lane-state-manifest-ed25519-key-id` pins manifest `ed25519_key_id`.

@@ -133,6 +133,8 @@ Options:
                          --lane-state-manifest-ed25519-ocsp-responder-cert-file
   --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing
                          Require responder cert EKU to include OCSP Signing
+  --lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski
+                         Require responder cert AKI keyid to match CA cert SKI
   --lane-state-manifest-ed25519-ocsp-max-age-secs N
                          Max allowed OCSP response age in seconds from
                          thisUpdate (default when OCSP is enabled: 604800)
@@ -242,6 +244,7 @@ LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING=0
+LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI=0
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=0
@@ -414,6 +417,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing)
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING=1; shift ;;
+    --lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI=1; shift ;;
     --lane-state-manifest-ed25519-ocsp-max-age-secs)
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-require-next-update)
@@ -605,6 +610,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED" && !
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing requires --lane-state-manifest-ed25519-ocsp-responder-cert-file" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski requires --lane-state-manifest-ed25519-ocsp-responder-cert-file" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -800,6 +809,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED" \
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI" \
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX" \
@@ -824,6 +834,7 @@ ocsp_response_expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RE
 ocsp_responder_cert_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE", "").strip()
 ocsp_responder_cert_expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256_EXPECTED", "").strip()
 ocsp_require_responder_ocsp_signing = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING", "").strip() == "1"
+ocsp_require_responder_aki_match_ca_ski = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI", "").strip() == "1"
 ocsp_max_age_secs = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS", "").strip()
 ocsp_require_next_update = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE", "").strip() == "1"
 ocsp_responder_id_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX", "").strip()
@@ -1132,16 +1143,48 @@ if cert_file_path:
             ["openssl", "verify", "-CAfile", ca_file, ocsp_responder_cert_file],
             f"lane state Ed25519 OCSP responder cert verify failed for key_id '{target_key_id}'",
         )
-        if ocsp_require_responder_ocsp_signing:
+        responder_cert_text = ""
+        if ocsp_require_responder_ocsp_signing or ocsp_require_responder_aki_match_ca_ski:
           responder_cert_text = run_openssl(
               ["openssl", "x509", "-in", ocsp_responder_cert_file, "-noout", "-text"],
-              f"lane state Ed25519 OCSP responder cert EKU extraction failed for key_id '{target_key_id}'",
+              f"lane state Ed25519 OCSP responder cert metadata extraction failed for key_id '{target_key_id}'",
           ).stdout.decode("utf-8", errors="replace")
+        if ocsp_require_responder_ocsp_signing:
           eku_match = re.search(r"X509v3 Extended Key Usage:\s*\n((?:\s+.+\n)+)", responder_cert_text)
           eku_block = eku_match.group(1) if eku_match is not None else ""
           if "OCSP Signing" not in eku_block:
             print(
                 f"lane state Ed25519 OCSP responder cert EKU missing OCSP Signing for key_id '{target_key_id}'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if ocsp_require_responder_aki_match_ca_ski:
+          ca_cert_text = run_openssl(
+              ["openssl", "x509", "-in", ca_file, "-noout", "-text"],
+              f"lane state Ed25519 CA cert SKI extraction failed for key_id '{target_key_id}'",
+          ).stdout.decode("utf-8", errors="replace")
+          responder_aki_match = re.search(
+              r"X509v3 Authority Key Identifier:\s*\n\s*(?:keyid:)?\s*([0-9A-Fa-f:]+)",
+              responder_cert_text,
+          )
+          if responder_aki_match is None:
+            print(
+                f"lane state Ed25519 OCSP responder cert AKI keyid missing for key_id '{target_key_id}'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+          ca_ski_match = re.search(r"X509v3 Subject Key Identifier:\s*\n\s*([0-9A-Fa-f:]+)", ca_cert_text)
+          if ca_ski_match is None:
+            print(
+                f"lane state Ed25519 CA cert SKI missing for key_id '{target_key_id}'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+          responder_aki = re.sub(r"[^0-9A-Fa-f]", "", responder_aki_match.group(1)).lower()
+          ca_ski = re.sub(r"[^0-9A-Fa-f]", "", ca_ski_match.group(1)).lower()
+          if responder_aki != ca_ski:
+            print(
+                f"lane state Ed25519 OCSP responder cert AKI/SKI mismatch for key_id '{target_key_id}': responder AKI {responder_aki} != CA SKI {ca_ski}",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -1649,6 +1692,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"
+    printf "lane_state_ed25519_ocsp_require_responder_aki_match_ca_ski=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI"
     printf "lane_state_ed25519_ocsp_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE"
     printf "lane_state_ed25519_ocsp_require_next_update=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE"
     printf "lane_state_ed25519_ocsp_responder_id_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX"
