@@ -39645,6 +39645,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
 
+## Iteration 740 - February 9, 2026
+
+### Expected-Failure Case Matching by Diagnostic Class (`base_diag`)
+
+1. Extended `utils/run_formal_all.sh` expected-failure case matcher with new
+   `id_kind=base_diag`:
+   - matches `"<base>#<DIAG>"` where `DIAG` is parsed from artifact-path
+     diagnostic suffixes (for example `#XPROP_ONLY`).
+2. Extended expected-failure case refresh derivation:
+   - when a fail-like case has both `base` and parsed diagnostic suffix, refresh
+     now emits `id_kind=base_diag` instead of plain `base`.
+3. This removes the need for path-regex expectations in strict OpenTitan LEC
+   diagnostic tracking and keeps case expectations stable across out-dir
+   changes.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-expected-failure-cases-base-diag.test`
+    - verifies matching with `id_kind=base_diag`
+    - verifies refresh emits `id_kind=base_diag` for strict OpenTitan LEC
+      diagnostic cases.
+- Existing compatibility retained:
+  - `test/Tools/run-formal-all-expected-failure-cases-regex.test`
+    - `path_regex` matching still works.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec.test`:
+    - 4/4 PASS
+- OpenTitan strict case matching check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-base-diag-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --expected-failure-cases-file /tmp/opentitan-lec-strict-base-diag-cases.tsv --fail-on-unexpected-failure-cases`:
+    - `expected-failure-cases totals: observed_fail_like=1 matched_expected=1 unexpected_observed=0 expired_expected=0 unmatched_expected=0`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+- OpenTitan lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-base-diag-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-base-diag-lane --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
 ## Iteration 739 - February 9, 2026
 
 ### Deterministic OpenTitan LEC Artifact Paths

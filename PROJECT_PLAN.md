@@ -214,6 +214,9 @@ See CHANGELOG.md on recent progress.
 17. OpenTitan LEC artifact paths are now deterministic in both formal-all and
     OpenTitan E2E harnesses (`opentitan-lec-work`, `opentitan-lec-strict-work`,
     `opentitan-formal-e2e/lec-workdir`) for stable case-level gating/triage.
+18. `run_formal_all.sh` expected-failure case matching now supports
+    `id_kind=base_diag` (`<base>#<DIAG>`), enabling stable strict OpenTitan
+    diagnostic tracking (`XPROP_ONLY`) without path-regex coupling.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
