@@ -616,8 +616,10 @@ declare -A REUSE_GLOBAL_FILTER_STATE
 declare -A REUSE_GLOBAL_FILTER_RC
 declare -A REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK
 declare -A REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED
+declare -A REUSE_GLOBAL_CHAIN_BMC_RESOLVED_PROPAGATED
 declare -A REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK
 declare -A REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED
+declare -A REUSE_GLOBAL_CHAIN_LEC_RESOLVED_PROPAGATED
 declare -A REUSE_GLOBAL_CHAIN_LEC_ERROR_FALLBACK
 declare -A REUSE_GLOBAL_CHAIN_BMC_ERROR_FALLBACK
 declare -A REUSE_GLOBAL_CHAIN_CONSENSUS_NOT_PROPAGATED
@@ -745,8 +747,10 @@ load_reuse_pairs() {
       REUSE_GLOBAL_FILTER_RC["$mutation_id"]="${propagate_exit:--1}"
       REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_lec_unknown_fallback=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_bmc_resolved_not_propagated=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_BMC_RESOLVED_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_bmc_resolved_propagated=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_bmc_unknown_fallback=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_lec_resolved_not_propagated=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_LEC_RESOLVED_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_lec_resolved_propagated=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_LEC_ERROR_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_lec_error_fallback=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_BMC_ERROR_FALLBACK["$mutation_id"]="$([[ "$note" == *"chain_bmc_error_fallback=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_CONSENSUS_NOT_PROPAGATED["$mutation_id"]="$([[ "$note" == *"chain_consensus_not_propagated=1"* ]] && printf "1" || printf "0")"
@@ -2000,8 +2004,10 @@ process_mutation() {
   local reused_global_filter=0
   local chain_lec_unknown_fallback=0
   local chain_bmc_resolved_not_propagated=0
+  local chain_bmc_resolved_propagated=0
   local chain_bmc_unknown_fallback=0
   local chain_lec_resolved_not_propagated=0
+  local chain_lec_resolved_propagated=0
   local chain_lec_error_fallback=0
   local chain_bmc_error_fallback=0
   local chain_consensus_not_propagated=0
@@ -2040,8 +2046,10 @@ process_mutation() {
       printf "reused_global_filter\t0\n"
       printf "chain_lec_unknown_fallback\t0\n"
       printf "chain_bmc_resolved_not_propagated\t0\n"
+      printf "chain_bmc_resolved_propagated\t0\n"
       printf "chain_bmc_unknown_fallback\t0\n"
       printf "chain_lec_resolved_not_propagated\t0\n"
+      printf "chain_lec_resolved_propagated\t0\n"
       printf "chain_lec_error_fallback\t0\n"
       printf "chain_bmc_error_fallback\t0\n"
       printf "chain_consensus_not_propagated\t0\n"
@@ -2072,8 +2080,10 @@ process_mutation() {
       reused_global_filter=1
       chain_lec_unknown_fallback="${REUSE_GLOBAL_CHAIN_LEC_UNKNOWN_FALLBACK[$mutation_id]:-0}"
       chain_bmc_resolved_not_propagated="${REUSE_GLOBAL_CHAIN_BMC_RESOLVED_NOT_PROPAGATED[$mutation_id]:-0}"
+      chain_bmc_resolved_propagated="${REUSE_GLOBAL_CHAIN_BMC_RESOLVED_PROPAGATED[$mutation_id]:-0}"
       chain_bmc_unknown_fallback="${REUSE_GLOBAL_CHAIN_BMC_UNKNOWN_FALLBACK[$mutation_id]:-0}"
       chain_lec_resolved_not_propagated="${REUSE_GLOBAL_CHAIN_LEC_RESOLVED_NOT_PROPAGATED[$mutation_id]:-0}"
+      chain_lec_resolved_propagated="${REUSE_GLOBAL_CHAIN_LEC_RESOLVED_PROPAGATED[$mutation_id]:-0}"
       chain_lec_error_fallback="${REUSE_GLOBAL_CHAIN_LEC_ERROR_FALLBACK[$mutation_id]:-0}"
       chain_bmc_error_fallback="${REUSE_GLOBAL_CHAIN_BMC_ERROR_FALLBACK[$mutation_id]:-0}"
       chain_consensus_not_propagated="${REUSE_GLOBAL_CHAIN_CONSENSUS_NOT_PROPAGATED[$mutation_id]:-0}"
@@ -2103,12 +2113,18 @@ process_mutation() {
       if grep -Eq '^# chain_fallback=bmc fallback_state=equal ' "$mutation_dir/global_propagate.log"; then
         chain_bmc_resolved_not_propagated=1
       fi
+      if grep -Eq '^# chain_fallback=bmc fallback_state=(different|unknown) ' "$mutation_dir/global_propagate.log"; then
+        chain_bmc_resolved_propagated=1
+      fi
     elif [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "bmc-then-lec" ]]; then
       if grep -Eq '^# chain_mode=bmc-then-lec primary=bmc primary_state=unknown ' "$mutation_dir/global_propagate.log"; then
         chain_bmc_unknown_fallback=1
       fi
       if grep -Eq '^# chain_fallback=lec fallback_state=eq ' "$mutation_dir/global_propagate.log"; then
         chain_lec_resolved_not_propagated=1
+      fi
+      if grep -Eq '^# chain_fallback=lec fallback_state=(neq|unknown) ' "$mutation_dir/global_propagate.log"; then
+        chain_lec_resolved_propagated=1
       fi
     elif [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "consensus" ]]; then
       if grep -Eq '^# chain_mode=consensus lec_state=eq ' "$mutation_dir/global_propagate.log" && \
@@ -2202,7 +2218,7 @@ process_mutation() {
         ;;
     esac
     if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
-      global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated};chain_lec_error_fallback=${chain_lec_error_fallback};chain_bmc_error_fallback=${chain_bmc_error_fallback};chain_consensus_not_propagated=${chain_consensus_not_propagated};chain_consensus_disagreement=${chain_consensus_disagreement};chain_consensus_error=${chain_consensus_error};chain_auto_parallel=${chain_auto_parallel}"
+      global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_resolved_propagated=${chain_bmc_resolved_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated};chain_lec_resolved_propagated=${chain_lec_resolved_propagated};chain_lec_error_fallback=${chain_lec_error_fallback};chain_bmc_error_fallback=${chain_bmc_error_fallback};chain_consensus_not_propagated=${chain_consensus_not_propagated};chain_consensus_disagreement=${chain_consensus_disagreement};chain_consensus_error=${chain_consensus_error};chain_auto_parallel=${chain_auto_parallel}"
     fi
     if [[ "$bmc_orig_cache_hit" -eq 1 ]]; then
       global_filter_note="${global_filter_note};bmc_orig_cache=hit"
@@ -2348,8 +2364,10 @@ process_mutation() {
     printf "reused_global_filter\t%s\n" "$reused_global_filter"
     printf "chain_lec_unknown_fallback\t%s\n" "$chain_lec_unknown_fallback"
     printf "chain_bmc_resolved_not_propagated\t%s\n" "$chain_bmc_resolved_not_propagated"
+    printf "chain_bmc_resolved_propagated\t%s\n" "$chain_bmc_resolved_propagated"
     printf "chain_bmc_unknown_fallback\t%s\n" "$chain_bmc_unknown_fallback"
     printf "chain_lec_resolved_not_propagated\t%s\n" "$chain_lec_resolved_not_propagated"
+    printf "chain_lec_resolved_propagated\t%s\n" "$chain_lec_resolved_propagated"
     printf "chain_lec_error_fallback\t%s\n" "$chain_lec_error_fallback"
     printf "chain_bmc_error_fallback\t%s\n" "$chain_bmc_error_fallback"
     printf "chain_consensus_not_propagated\t%s\n" "$chain_consensus_not_propagated"
@@ -2479,8 +2497,10 @@ count_hint_hits=0
 count_global_filtered_not_propagated=0
 count_chain_lec_unknown_fallbacks=0
 count_chain_bmc_resolved_not_propagated=0
+count_chain_bmc_resolved_propagated=0
 count_chain_bmc_unknown_fallbacks=0
 count_chain_lec_resolved_not_propagated=0
+count_chain_lec_resolved_propagated=0
 count_chain_lec_error_fallbacks=0
 count_chain_bmc_error_fallbacks=0
 count_chain_consensus_not_propagated=0
@@ -2596,6 +2616,15 @@ for i in "${!MUTATION_IDS[@]}"; do
     count_chain_bmc_resolved_not_propagated=$((count_chain_bmc_resolved_not_propagated + local_chain_bmc_resolved_not_propagated))
   fi
 
+  local_chain_bmc_resolved_propagated=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_bmc_resolved_propagated="$(awk -F$'\t' '$1=="chain_bmc_resolved_propagated"{print $2}' "$meta_local" | head -n1)"
+    local_chain_bmc_resolved_propagated="${local_chain_bmc_resolved_propagated:-0}"
+  fi
+  if [[ "$local_chain_bmc_resolved_propagated" =~ ^[0-9]+$ ]]; then
+    count_chain_bmc_resolved_propagated=$((count_chain_bmc_resolved_propagated + local_chain_bmc_resolved_propagated))
+  fi
+
   local_chain_bmc_unknown_fallback=0
   if [[ -f "$meta_local" ]]; then
     local_chain_bmc_unknown_fallback="$(awk -F$'\t' '$1=="chain_bmc_unknown_fallback"{print $2}' "$meta_local" | head -n1)"
@@ -2612,6 +2641,15 @@ for i in "${!MUTATION_IDS[@]}"; do
   fi
   if [[ "$local_chain_lec_resolved_not_propagated" =~ ^[0-9]+$ ]]; then
     count_chain_lec_resolved_not_propagated=$((count_chain_lec_resolved_not_propagated + local_chain_lec_resolved_not_propagated))
+  fi
+
+  local_chain_lec_resolved_propagated=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_lec_resolved_propagated="$(awk -F$'\t' '$1=="chain_lec_resolved_propagated"{print $2}' "$meta_local" | head -n1)"
+    local_chain_lec_resolved_propagated="${local_chain_lec_resolved_propagated:-0}"
+  fi
+  if [[ "$local_chain_lec_resolved_propagated" =~ ^[0-9]+$ ]]; then
+    count_chain_lec_resolved_propagated=$((count_chain_lec_resolved_propagated + local_chain_lec_resolved_propagated))
   fi
 
   local_chain_lec_error_fallback=0
@@ -2844,8 +2882,10 @@ fi
   printf "global_filtered_not_propagated_mutants\t%s\n" "$count_global_filtered_not_propagated"
   printf "chain_lec_unknown_fallbacks\t%s\n" "$count_chain_lec_unknown_fallbacks"
   printf "chain_bmc_resolved_not_propagated_mutants\t%s\n" "$count_chain_bmc_resolved_not_propagated"
+  printf "chain_bmc_resolved_propagated_mutants\t%s\n" "$count_chain_bmc_resolved_propagated"
   printf "chain_bmc_unknown_fallbacks\t%s\n" "$count_chain_bmc_unknown_fallbacks"
   printf "chain_lec_resolved_not_propagated_mutants\t%s\n" "$count_chain_lec_resolved_not_propagated"
+  printf "chain_lec_resolved_propagated_mutants\t%s\n" "$count_chain_lec_resolved_propagated"
   printf "chain_lec_error_fallbacks\t%s\n" "$count_chain_lec_error_fallbacks"
   printf "chain_bmc_error_fallbacks\t%s\n" "$count_chain_bmc_error_fallbacks"
   printf "chain_consensus_not_propagated_mutants\t%s\n" "$count_chain_consensus_not_propagated"

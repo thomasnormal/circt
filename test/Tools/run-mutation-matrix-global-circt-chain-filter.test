@@ -36,3 +36,4 @@
 // METRICS: global_filtered_not_propagated_mutants{{.*}}1
 // METRICS: chain_lec_unknown_fallbacks{{.*}}2
 // METRICS: chain_bmc_resolved_not_propagated_mutants{{.*}}1
+// METRICS: chain_bmc_resolved_propagated_mutants{{.*}}1
