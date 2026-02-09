@@ -407,9 +407,19 @@ struct MatrixRewriteResult {
   SmallVector<std::string, 32> rewrittenArgs;
 };
 
-static bool preflightMatrixLaneMutationsYosys(StringRef lanesTSVPath,
-                                              StringRef defaultMutationsYosys,
-                                              std::string &error) {
+struct MatrixLanePreflightDefaults {
+  std::string mutationsYosys;
+  std::string globalFilterCmd;
+  std::string globalFilterCirctLEC;
+  std::string globalFilterCirctBMC;
+  std::string globalFilterCirctChain;
+  std::string globalFilterZ3;
+  std::string globalFilterBMCZ3;
+};
+
+static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
+                                     const MatrixLanePreflightDefaults &defaults,
+                                     std::string &error) {
   auto bufferOrErr = MemoryBuffer::getFile(lanesTSVPath);
   if (!bufferOrErr) {
     error = (Twine("circt-mut matrix: unable to read --lanes-tsv: ") +
@@ -434,11 +444,130 @@ static bool preflightMatrixLaneMutationsYosys(StringRef lanesTSVPath,
         return StringRef();
       return cols[idx].trim();
     };
+    auto normalized = [&](StringRef value) -> StringRef {
+      return value.empty() || value == "-" ? StringRef() : value;
+    };
+    auto withDefault = [&](StringRef laneValue,
+                           StringRef defaultValue) -> StringRef {
+      StringRef lane = normalized(laneValue);
+      if (!lane.empty())
+        return lane;
+      return normalized(defaultValue);
+    };
 
     StringRef laneID = getCol(0);
     StringRef mutationsFile = getCol(2);
     StringRef generateCount = getCol(7);
     StringRef laneMutationsYosys = getCol(10);
+    StringRef laneGlobalFilterCmd = getCol(14);
+    StringRef laneGlobalFilterLEC = getCol(15);
+    StringRef laneGlobalFilterBMC = getCol(16);
+    StringRef laneGlobalFilterBMCZ3 = getCol(21);
+    StringRef laneGlobalFilterZ3 = getCol(27);
+    StringRef laneGlobalFilterChain = getCol(34);
+    std::string laneLabel = laneID.empty() ? "<unknown>" : laneID.str();
+
+    auto resolveLaneTool = [&](StringRef laneValue, StringRef defaultValue,
+                               StringRef flag, StringRef toolName,
+                               bool allowAuto) -> bool {
+      StringRef requested = withDefault(laneValue, defaultValue);
+      if (requested.empty())
+        return true;
+      std::optional<std::string> resolved;
+      if (allowAuto)
+        resolved = resolveCirctToolPathForWorkflow(argv0, requested, toolName,
+                                                   "run_mutation_matrix.sh");
+      else
+        resolved = resolveToolPath(requested);
+      if (resolved)
+        return true;
+      error =
+          (Twine("circt-mut matrix: unable to resolve lane ") + flag +
+           " executable in --lanes-tsv at line " +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + requested)
+              .str();
+      return false;
+    };
+
+    StringRef effectiveCmd =
+        withDefault(laneGlobalFilterCmd, defaults.globalFilterCmd);
+    StringRef effectiveLEC =
+        withDefault(laneGlobalFilterLEC, defaults.globalFilterCirctLEC);
+    StringRef effectiveBMC =
+        withDefault(laneGlobalFilterBMC, defaults.globalFilterCirctBMC);
+    StringRef effectiveChain =
+        withDefault(laneGlobalFilterChain, defaults.globalFilterCirctChain);
+
+    if (!effectiveChain.empty()) {
+      if (effectiveChain != "lec-then-bmc" && effectiveChain != "bmc-then-lec" &&
+          effectiveChain != "consensus" && effectiveChain != "auto") {
+        error =
+            (Twine("Invalid lane global_propagate_circt_chain value in "
+                   "--lanes-tsv at line ") +
+             Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+             laneLabel + "): " + effectiveChain +
+             " (expected lec-then-bmc|bmc-then-lec|consensus|auto).")
+                .str();
+        return false;
+      }
+      if (!effectiveCmd.empty()) {
+        error =
+            (Twine("Lane global filter config conflict in --lanes-tsv at line ") +
+             Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+             laneLabel +
+             "): --formal-global-propagate-circt-chain cannot be combined "
+             "with --formal-global-propagate-cmd.")
+                .str();
+        return false;
+      }
+      if (effectiveLEC.empty() || effectiveBMC.empty()) {
+        error =
+            (Twine("Lane global filter config error in --lanes-tsv at line ") +
+             Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+             laneLabel +
+             "): --formal-global-propagate-circt-chain requires both "
+             "--formal-global-propagate-circt-lec and "
+             "--formal-global-propagate-circt-bmc (lane or default).")
+                .str();
+        return false;
+      }
+    } else {
+      int modeCount = 0;
+      modeCount += effectiveCmd.empty() ? 0 : 1;
+      modeCount += effectiveLEC.empty() ? 0 : 1;
+      modeCount += effectiveBMC.empty() ? 0 : 1;
+      if (modeCount > 1) {
+        error =
+            (Twine("Lane global filter config conflict in --lanes-tsv at line ") +
+             Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+             laneLabel +
+             "): use only one global filter mode "
+             "(cmd|circt-lec|circt-bmc) unless chain mode is set.")
+                .str();
+        return false;
+      }
+    }
+
+    if (!resolveLaneTool(laneGlobalFilterLEC, defaults.globalFilterCirctLEC,
+                         "global_propagate_circt_lec", "circt-lec",
+                         /*allowAuto=*/true))
+      return false;
+    if (!resolveLaneTool(laneGlobalFilterBMC, defaults.globalFilterCirctBMC,
+                         "global_propagate_circt_bmc", "circt-bmc",
+                         /*allowAuto=*/true))
+      return false;
+
+    bool useLECFilter = !effectiveLEC.empty();
+    bool useBMCFilter = !effectiveBMC.empty();
+    if (useLECFilter &&
+        !resolveLaneTool(laneGlobalFilterZ3, defaults.globalFilterZ3,
+                         "global_propagate_z3", "", /*allowAuto=*/false))
+      return false;
+    if (useBMCFilter &&
+        !resolveLaneTool(laneGlobalFilterBMCZ3, defaults.globalFilterBMCZ3,
+                         "global_propagate_bmc_z3", "", /*allowAuto=*/false))
+      return false;
 
     bool autoGenerateLane =
         mutationsFile == "-" && !generateCount.empty() && generateCount != "-";
@@ -447,14 +576,13 @@ static bool preflightMatrixLaneMutationsYosys(StringRef lanesTSVPath,
 
     StringRef requestedYosys = laneMutationsYosys;
     if (requestedYosys.empty() || requestedYosys == "-") {
-      if (!defaultMutationsYosys.empty())
-        requestedYosys = defaultMutationsYosys;
+      if (!defaults.mutationsYosys.empty())
+        requestedYosys = defaults.mutationsYosys;
       else
         requestedYosys = "yosys";
     }
 
     if (!resolveToolPath(requestedYosys)) {
-      std::string laneLabel = laneID.empty() ? "<unknown>" : laneID.str();
       error = (Twine("circt-mut matrix: unable to resolve lane mutations_yosys "
                      "executable in --lanes-tsv at line ") +
                Twine(static_cast<unsigned long long>(lineIdx + 1)) +
@@ -469,18 +597,19 @@ static bool preflightMatrixLaneMutationsYosys(StringRef lanesTSVPath,
 static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                                              ArrayRef<StringRef> args) {
   MatrixRewriteResult result;
+  MatrixLanePreflightDefaults defaults;
   bool hasDefaultGlobalFilterCmd = false;
   bool hasDefaultGlobalFilterLEC = false;
   bool hasDefaultGlobalFilterBMC = false;
   bool hasDefaultGlobalFilterChain = false;
   std::string defaultGlobalFilterChainMode;
   std::string lanesTSVPath;
-  std::string defaultMutationsYosys;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
 
     auto resolveWithOptionalValue =
-        [&](StringRef flag, StringRef toolName) -> bool {
+        [&](StringRef flag, StringRef toolName,
+            std::string *resolvedOut) -> bool {
       std::string requested = "auto";
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos) {
@@ -500,11 +629,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                 .str();
         return false;
       }
+      if (resolvedOut)
+        *resolvedOut = *resolved;
       result.rewrittenArgs.push_back(flag.str());
       result.rewrittenArgs.push_back(*resolved);
       return true;
     };
-    auto resolveWithRequiredValue = [&](StringRef flag) -> bool {
+    auto resolveWithRequiredValue = [&](StringRef flag,
+                                        std::string *resolvedOut) -> bool {
       std::string requested;
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos) {
@@ -524,6 +656,8 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                            .str();
         return false;
       }
+      if (resolvedOut)
+        *resolvedOut = *resolved;
       result.rewrittenArgs.push_back(flag.str());
       result.rewrittenArgs.push_back(*resolved);
       return true;
@@ -532,28 +666,32 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     if (arg == "--default-formal-global-propagate-circt-lec" ||
         arg.starts_with("--default-formal-global-propagate-circt-lec=")) {
       hasDefaultGlobalFilterLEC = true;
-      if (!resolveWithOptionalValue("--default-formal-global-propagate-circt-lec",
-                                    "circt-lec"))
+      if (!resolveWithOptionalValue(
+              "--default-formal-global-propagate-circt-lec", "circt-lec",
+              &defaults.globalFilterCirctLEC))
         return result;
       continue;
     }
     if (arg == "--default-formal-global-propagate-circt-bmc" ||
         arg.starts_with("--default-formal-global-propagate-circt-bmc=")) {
       hasDefaultGlobalFilterBMC = true;
-      if (!resolveWithOptionalValue("--default-formal-global-propagate-circt-bmc",
-                                    "circt-bmc"))
+      if (!resolveWithOptionalValue(
+              "--default-formal-global-propagate-circt-bmc", "circt-bmc",
+              &defaults.globalFilterCirctBMC))
         return result;
       continue;
     }
     if (arg == "--default-formal-global-propagate-z3" ||
         arg.starts_with("--default-formal-global-propagate-z3=")) {
-      if (!resolveWithRequiredValue("--default-formal-global-propagate-z3"))
+      if (!resolveWithRequiredValue("--default-formal-global-propagate-z3",
+                                    &defaults.globalFilterZ3))
         return result;
       continue;
     }
     if (arg == "--default-formal-global-propagate-bmc-z3" ||
         arg.starts_with("--default-formal-global-propagate-bmc-z3=")) {
-      if (!resolveWithRequiredValue("--default-formal-global-propagate-bmc-z3"))
+      if (!resolveWithRequiredValue("--default-formal-global-propagate-bmc-z3",
+                                    &defaults.globalFilterBMCZ3))
         return result;
       continue;
     }
@@ -579,7 +717,7 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                 .str();
         return result;
       }
-      defaultMutationsYosys = *resolved;
+      defaults.mutationsYosys = *resolved;
       result.rewrittenArgs.push_back("--default-mutations-yosys");
       result.rewrittenArgs.push_back(*resolved);
       continue;
@@ -595,8 +733,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       lanesTSVPath = arg.substr(lanesPrefix.size()).str();
     }
     if (arg == "--default-formal-global-propagate-cmd" ||
-        arg.starts_with("--default-formal-global-propagate-cmd="))
+        arg.starts_with("--default-formal-global-propagate-cmd=")) {
       hasDefaultGlobalFilterCmd = true;
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos)
+        defaults.globalFilterCmd = arg.substr(eqPos + 1).str();
+      else if (i + 1 < args.size())
+        defaults.globalFilterCmd = args[i + 1].str();
+    }
     if (arg == "--default-formal-global-propagate-circt-chain" ||
         arg.starts_with("--default-formal-global-propagate-circt-chain=")) {
       constexpr StringRef chainPrefix =
@@ -608,6 +752,7 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         defaultGlobalFilterChainMode = args[i + 1].str();
       else
         defaultGlobalFilterChainMode.clear();
+      defaults.globalFilterCirctChain = defaultGlobalFilterChainMode;
     }
 
     result.rewrittenArgs.push_back(arg.str());
@@ -668,8 +813,7 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   }
 
   if (!lanesTSVPath.empty() &&
-      !preflightMatrixLaneMutationsYosys(lanesTSVPath, defaultMutationsYosys,
-                                         result.error))
+      !preflightMatrixLaneTools(argv0, lanesTSVPath, defaults, result.error))
     return result;
 
   result.ok = true;
