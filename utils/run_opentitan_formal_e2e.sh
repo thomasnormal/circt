@@ -18,7 +18,6 @@ Options:
   --sim-timeout SECS       Per-target wall timeout for sim runs (default: 180)
   --impl-filter REGEX      Regex filter for OpenTitan AES S-Box LEC implementations
   --include-masked         Include masked AES S-Box implementations in LEC
-  --allow-xprop-only       Accept XPROP_ONLY LEC rows (otherwise they fail parity)
   --lec-assume-known-inputs
                            Run LEC with known-input assumptions enabled
   --lec-x-optimistic       Force optimistic X equivalence in LEC
@@ -43,7 +42,6 @@ VERILOG_TARGETS="gpio,uart,spi_device,usbdev,i2c,dma,keymgr_dpe"
 SIM_TIMEOUT=180
 IMPL_FILTER=""
 INCLUDE_MASKED=0
-ALLOW_XPROP_ONLY=0
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_X_OPTIMISTIC_MODE="auto"
 LEC_X_MODE_FLAG_COUNT=0
@@ -65,7 +63,6 @@ while [[ $# -gt 0 ]]; do
     --sim-timeout) SIM_TIMEOUT="$2"; shift 2 ;;
     --impl-filter) IMPL_FILTER="$2"; shift 2 ;;
     --include-masked) INCLUDE_MASKED=1; shift ;;
-    --allow-xprop-only) ALLOW_XPROP_ONLY=1; shift ;;
     --lec-assume-known-inputs) LEC_ASSUME_KNOWN_INPUTS=1; shift ;;
     --lec-x-optimistic) LEC_X_OPTIMISTIC_MODE="on"; LEC_X_MODE_FLAG_COUNT=$((LEC_X_MODE_FLAG_COUNT + 1)); shift ;;
     --lec-strict-x) LEC_X_OPTIMISTIC_MODE="off"; LEC_X_MODE_FLAG_COUNT=$((LEC_X_MODE_FLAG_COUNT + 1)); shift ;;
@@ -211,13 +208,8 @@ if [[ "$RUN_LEC" == "1" ]]; then
           passes=$((passes + 1))
           ;;
         XFAIL)
-          if [[ "$ALLOW_XPROP_ONLY" == "1" ]]; then
-            append_result "LEC" "$impl" "PASS" "xprop_only_accepted" "$detail"
-            passes=$((passes + 1))
-          else
-            append_result "LEC" "$impl" "FAIL" "xprop_only" "$detail"
-            failures=$((failures + 1))
-          fi
+          append_result "LEC" "$impl" "FAIL" "xprop_only" "$detail"
+          failures=$((failures + 1))
           ;;
         FAIL|*)
           append_result "LEC" "$impl" "FAIL" "non_equivalent" "$detail"

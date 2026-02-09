@@ -6852,178 +6852,113 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   fi
 fi
 
-# OpenTitan LEC (optional)
-if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
-  if lane_resume_from_state "opentitan/LEC"; then
-    :
-  else
-    opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
-    opentitan_xprop_summary="$OUT_DIR/opentitan-lec-xprop-summary.tsv"
-    opentitan_lec_workdir="$OUT_DIR/opentitan-lec-work"
-    : > "$opentitan_case_results"
-    : > "$opentitan_xprop_summary"
-    rm -rf "$opentitan_lec_workdir"
-    opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
-    if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
-      opentitan_lec_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
-    fi
-    if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
-      opentitan_lec_args+=(--include-masked)
-    fi
-    opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
-      OUT="$opentitan_case_results"
-      OUT_XPROP_SUMMARY="$opentitan_xprop_summary"
-      CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
-    if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
-      opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
-    fi
-    run_suite opentitan-lec \
-      env "${opentitan_env[@]}" \
-      utils/run_opentitan_circt_lec.py --workdir "$opentitan_lec_workdir" "${opentitan_lec_args[@]}" || true
-    if [[ ! -s "$opentitan_case_results" ]]; then
-      OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
-      OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
-import os
-import re
-from pathlib import Path
+run_opentitan_lec_lane() {
+  local lane_id="$1"
+  local mode_name="$2"
+  local suite_name="$3"
+  local case_results="$4"
+  local xprop_summary_file="$5"
+  local workdir="$6"
+  local strict_x="$7"
 
-log_path = Path(os.environ["OPENTITAN_LOG_FILE"])
-out_path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+  if ! lane_enabled "$lane_id"; then
+    return
+  fi
+  if lane_resume_from_state "$lane_id"; then
+    return
+  fi
 
-rows = []
-if log_path.exists():
-  for line in log_path.read_text().splitlines():
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+OK\s*$", line)
-    if m:
-      impl = m.group(1)
-      rows.append(("PASS", impl, impl, "opentitan", "LEC"))
-      continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
-    if m:
-      impl = m.group(1)
-      rows.append(("XFAIL", impl, f"{impl}#XPROP_ONLY", "opentitan", "LEC"))
-      continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\(([^)]+)\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
-    if m:
-      impl = m.group(1)
-      diag_raw = (m.group(2) or "").strip()
-      diag = diag_raw if re.fullmatch(r"[A-Z0-9_]+", diag_raw) else ""
-      detail = m.group(3) or impl
-      if diag and "#" not in detail:
-        detail = f"{detail}#{diag}"
-      rows.append(("FAIL", impl, detail, "opentitan", "LEC"))
+  : > "$case_results"
+  : > "$xprop_summary_file"
+  rm -rf "$workdir"
 
-rows.sort(key=lambda r: (r[1], r[0], r[2]))
-with out_path.open("w") as f:
-  for row in rows:
-    f.write("\t".join(row) + "\n")
-PY
-    fi
-    line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 || true)
-    total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
-    failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
-    if [[ -n "$total" ]]; then
-      if [[ -z "$failures" ]]; then
-        failures=0
-      fi
-      pass=$((total - failures))
-      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=0"
-      xprop_summary="$(summarize_opentitan_xprop_file "$opentitan_xprop_summary")"
-      if [[ -n "$xprop_summary" ]]; then
-        summary="${summary} ${xprop_summary}"
-      fi
-      record_result_with_summary "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0 "$summary"
+  local opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
+  if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+    opentitan_lec_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
+  fi
+  if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
+    opentitan_lec_args+=(--include-masked)
+  fi
+
+  local opentitan_lec_env=(OUT="$case_results"
+    OUT_XPROP_SUMMARY="$xprop_summary_file"
+    CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
+  if [[ "$strict_x" == "1" ]]; then
+    opentitan_lec_env+=(LEC_X_OPTIMISTIC=0 LEC_MODE_LABEL=LEC_STRICT)
+    if [[ "$OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES" == "1" ]]; then
+      opentitan_lec_env+=(LEC_DUMP_UNKNOWN_SOURCES=1)
     fi
   fi
+  if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+    opentitan_lec_env+=(LEC_ASSUME_KNOWN_INPUTS=1)
+  fi
+
+  run_suite "$suite_name" \
+    env "${opentitan_lec_env[@]}" \
+    utils/run_opentitan_circt_lec.py --workdir "$workdir" "${opentitan_lec_args[@]}" || true
+
+  if [[ ! -s "$case_results" ]]; then
+    printf "FAIL\taes_sbox\tmissing_results\topentitan\t%s\n" "$mode_name" > "$case_results"
+    local missing_summary="total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
+    record_result_with_summary "opentitan" "$mode_name" 1 0 1 0 0 1 0 "$missing_summary"
+    return
+  fi
+
+  local counts total pass fail
+  counts="$(
+    OPENTITAN_CASE_RESULTS_FILE="$case_results" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+total = 0
+passed = 0
+failed = 0
+for line in path.read_text().splitlines():
+  cols = line.split("\t")
+  if not cols or not cols[0]:
+    continue
+  total += 1
+  if cols[0].strip().upper() == "PASS":
+    passed += 1
+  else:
+    failed += 1
+print(f"{total}\t{passed}\t{failed}")
+PY
+  )"
+  IFS=$'\t' read -r total pass fail <<< "$counts"
+
+  local summary="total=${total} pass=${pass} fail=${fail} xfail=0 xpass=0 error=0 skip=0"
+  local xprop_summary
+  xprop_summary="$(summarize_opentitan_xprop_file "$xprop_summary_file")"
+  if [[ -n "$xprop_summary" ]]; then
+    summary="${summary} ${xprop_summary}"
+  fi
+  record_result_with_summary "opentitan" "$mode_name" "$total" "$pass" "$fail" 0 0 0 0 "$summary"
+}
+
+# OpenTitan LEC (optional)
+if [[ "$WITH_OPENTITAN" == "1" ]]; then
+  run_opentitan_lec_lane \
+    "opentitan/LEC" \
+    "LEC" \
+    "opentitan-lec" \
+    "$OUT_DIR/opentitan-lec-results.txt" \
+    "$OUT_DIR/opentitan-lec-xprop-summary.tsv" \
+    "$OUT_DIR/opentitan-lec-work" \
+    "0"
 fi
 
 # OpenTitan strict LEC audit lane (optional)
-if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
-  if lane_resume_from_state "opentitan/LEC_STRICT"; then
-    :
-  else
-    opentitan_strict_case_results="$OUT_DIR/opentitan-lec-strict-results.txt"
-    opentitan_strict_xprop_summary="$OUT_DIR/opentitan-lec-strict-xprop-summary.tsv"
-    opentitan_strict_workdir="$OUT_DIR/opentitan-lec-strict-work"
-    : > "$opentitan_strict_case_results"
-    : > "$opentitan_strict_xprop_summary"
-    rm -rf "$opentitan_strict_workdir"
-    opentitan_strict_args=(--opentitan-root "$OPENTITAN_DIR")
-    if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
-      opentitan_strict_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
-    fi
-    if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
-      opentitan_strict_args+=(--include-masked)
-    fi
-    opentitan_strict_env=(LEC_X_OPTIMISTIC=0
-      LEC_MODE_LABEL=LEC_STRICT
-      OUT="$opentitan_strict_case_results"
-      OUT_XPROP_SUMMARY="$opentitan_strict_xprop_summary"
-      CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
-    if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-      opentitan_strict_env+=(LEC_ASSUME_KNOWN_INPUTS=1)
-    fi
-    if [[ "$OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES" == "1" ]]; then
-      opentitan_strict_env+=(LEC_DUMP_UNKNOWN_SOURCES=1)
-    fi
-    run_suite opentitan-lec-strict \
-      env "${opentitan_strict_env[@]}" \
-      utils/run_opentitan_circt_lec.py --workdir "$opentitan_strict_workdir" "${opentitan_strict_args[@]}" || true
-    if [[ ! -s "$opentitan_strict_case_results" ]]; then
-      OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec-strict.log" \
-      OPENTITAN_CASE_RESULTS_FILE="$opentitan_strict_case_results" python3 - <<'PY'
-import os
-import re
-from pathlib import Path
-
-log_path = Path(os.environ["OPENTITAN_LOG_FILE"])
-out_path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
-
-rows = []
-if log_path.exists():
-  for line in log_path.read_text().splitlines():
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+OK\s*$", line)
-    if m:
-      impl = m.group(1)
-      rows.append(("PASS", impl, impl, "opentitan", "LEC_STRICT"))
-      continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
-    if m:
-      impl = m.group(1)
-      rows.append(("XFAIL", impl, f"{impl}#XPROP_ONLY", "opentitan", "LEC_STRICT"))
-      continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\(([^)]+)\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
-    if m:
-      impl = m.group(1)
-      diag_raw = (m.group(2) or "").strip()
-      diag = diag_raw if re.fullmatch(r"[A-Z0-9_]+", diag_raw) else ""
-      detail = m.group(3) or impl
-      if diag and "#" not in detail:
-        detail = f"{detail}#{diag}"
-      rows.append(("FAIL", impl, detail, "opentitan", "LEC_STRICT"))
-
-rows.sort(key=lambda r: (r[1], r[0], r[2]))
-with out_path.open("w") as f:
-  for row in rows:
-    f.write("\t".join(row) + "\n")
-PY
-    fi
-    line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec-strict.log" | tail -1 || true)
-    total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
-    failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec-strict.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
-    if [[ -n "$total" ]]; then
-      if [[ -z "$failures" ]]; then
-        failures=0
-      fi
-      pass=$((total - failures))
-      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=0"
-      xprop_summary="$(summarize_opentitan_xprop_file "$opentitan_strict_xprop_summary")"
-      if [[ -n "$xprop_summary" ]]; then
-        summary="${summary} ${xprop_summary}"
-      fi
-      record_result_with_summary "opentitan" "LEC_STRICT" "$total" "$pass" "$failures" 0 0 0 0 "$summary"
-    fi
-  fi
+if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
+  run_opentitan_lec_lane \
+    "opentitan/LEC_STRICT" \
+    "LEC_STRICT" \
+    "opentitan-lec-strict" \
+    "$OUT_DIR/opentitan-lec-strict-results.txt" \
+    "$OUT_DIR/opentitan-lec-strict-xprop-summary.tsv" \
+    "$OUT_DIR/opentitan-lec-strict-work" \
+    "1"
 fi
 
 run_opentitan_e2e_lane() {
@@ -7071,9 +7006,6 @@ run_opentitan_e2e_lane() {
   fi
   if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
     opentitan_e2e_cmd+=(--lec-assume-known-inputs)
-  fi
-  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
-    opentitan_e2e_cmd+=(--allow-xprop-only)
   fi
   run_suite "$suite_name" \
     env CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN" \
