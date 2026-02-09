@@ -18143,6 +18143,18 @@ ninja -C build circt-verilog
   - Gives CI a first-class checkpoint audit gate.
   - Enables deterministic pre-resume checks before consuming worker artifacts.
 
+### Iteration 680
+- Added signed lane-state provenance in `utils/run_formal_all.sh`:
+  - `--lane-state-hmac-key-file`
+  - `--lane-state-hmac-key-id`
+  - `<lane-state>.manifest.json` sidecar emission + verification on
+    resume/merge paths.
+- Planning impact:
+  - Prevents silent lane-state tampering and accidental key-id drift in 24/7
+    distributed closure workflows.
+  - Moves lane-state toward a verifiable artifact contract suitable for CI
+    promotion gates.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18153,8 +18165,7 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add signed provenance chain for lane-state artifacts.
-  - Add compatibility policy version field (explicit migration contract).
+  - Add lane-state key rotation/signing-keyring policy (not single-key only).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

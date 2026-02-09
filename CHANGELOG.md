@@ -32754,6 +32754,63 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 680 - February 9, 2026
+
+### Lane-State Signed Provenance (HMAC Manifest)
+
+- Added lane-state signing and verification options in `utils/run_formal_all.sh`:
+  - `--lane-state-hmac-key-file <file>`
+  - `--lane-state-hmac-key-id <id>`
+- Added sidecar manifest emission on lane-state writes:
+  - `<lane-state>.manifest.json`
+  - fields include: `schema_version`, `generated_at_utc`,
+    `lane_state_file`, `lane_state_sha256`, optional `hmac_key_id`,
+    `signature_hmac_sha256`
+- Added strict manifest verification on lane-state reads used for:
+  - `--resume-from-lane-state`
+  - `--merge-lane-state-tsv`
+- Verification now fails fast on:
+  - missing manifest
+  - lane-state content hash mismatch
+  - signature mismatch
+  - key-id mismatch when `--lane-state-hmac-key-id` is provided
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive signed lane-state seed + resume path
+    - negative tampered lane-state hash mismatch path
+    - negative key-id mismatch path
+    - negative missing manifest path
+  - `docs/FormalRegression.md`
+    - documented lane-state signing flags and behavior
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/inspect_formal_lane_state.py`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep with signed lane-state:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-manifest-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-manifest-smoke.tsv --reset-lane-state --lane-state-hmac-key-file /tmp/formal-lane-state.key --lane-state-hmac-key-id ci-lane-key-1`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, and filtered `avip/*`)
+  - Resume replay with signature verification:
+    - `... --lane-state-tsv /tmp/formal-lane-manifest-smoke.tsv --resume-from-lane-state --lane-state-hmac-key-file /tmp/formal-lane-state.key --lane-state-hmac-key-id ci-lane-key-1`:
+      - PASS (all lanes resumed from signed state)
+
+### Remaining Limitations
+
+- Lane-state signing currently uses a single shared HMAC key file (no keyring
+  rotation policy yet).
+- Lane-state provenance is currently one-file manifest based; no chained
+  multi-artifact attestation model.
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 661 - February 8, 2026
 
 ### Dry-Run JSONL Sampled Diff Payloads

@@ -68,6 +68,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --resume-from-lane-state
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state --merge-lane-state-tsv /tmp/formal-lanes-worker-a.tsv --merge-lane-state-tsv /tmp/formal-lanes-worker-b.tsv
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-key-file /secrets/lane-state.key --lane-state-hmac-key-id ci-lane-key-1
 ```
 
 Lane-state semantics:
@@ -82,6 +83,10 @@ Lane-state semantics:
 - Resume also enforces lane-state compatibility policy versioning
   (`compat_policy_version`) to prevent unsafe replay across format/semantic
   policy shifts.
+- `--lane-state-hmac-key-file` signs lane-state files via
+  `<lane-state>.manifest.json` and verifies signatures during resume/merge.
+- When `--lane-state-hmac-key-id` is set, manifest key-id must match on
+  resume/merge (prevents accidental key drift).
 
 Inspect and validate lane-state artifacts (single or federated files):
 

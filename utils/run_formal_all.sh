@@ -90,6 +90,12 @@ Options:
   --reset-lane-state     Reset/truncate --lane-state-tsv before running
   --merge-lane-state-tsv FILE
                          Merge lane-state rows from FILE (repeatable)
+  --lane-state-hmac-key-file FILE
+                         HMAC key file used to sign and verify lane-state
+                         manifests (<lane-state>.manifest.json)
+  --lane-state-hmac-key-id ID
+                         Optional key identifier embedded in lane-state
+                         manifests; verified on resume/merge when set
   --include-lane-regex REGEX
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
@@ -166,6 +172,8 @@ LANE_STATE_TSV=""
 RESUME_FROM_LANE_STATE=0
 RESET_LANE_STATE=0
 declare -a MERGE_LANE_STATE_TSVS=()
+LANE_STATE_HMAC_KEY_FILE=""
+LANE_STATE_HMAC_KEY_ID=""
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -291,6 +299,10 @@ while [[ $# -gt 0 ]]; do
       RESET_LANE_STATE=1; shift ;;
     --merge-lane-state-tsv)
       MERGE_LANE_STATE_TSVS+=("$2"); shift 2 ;;
+    --lane-state-hmac-key-file)
+      LANE_STATE_HMAC_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-hmac-key-id)
+      LANE_STATE_HMAC_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
       INCLUDE_LANE_REGEX="$2"; shift 2 ;;
     --exclude-lane-regex)
@@ -352,6 +364,10 @@ if [[ "${#MERGE_LANE_STATE_TSVS[@]}" -gt 0 && -z "$LANE_STATE_TSV" ]]; then
   echo "--merge-lane-state-tsv requires --lane-state-tsv" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--lane-state-hmac-key-file requires --lane-state-tsv" >&2
+  exit 1
+fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
   echo "--resume-from-lane-state and --reset-lane-state are mutually exclusive" >&2
   exit 1
@@ -370,6 +386,14 @@ for merge_lane_state_file in "${MERGE_LANE_STATE_TSVS[@]}"; do
     exit 1
   fi
 done
+if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && ! -r "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  echo "lane state HMAC key file not readable: $LANE_STATE_HMAC_KEY_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  echo "--lane-state-hmac-key-id requires --lane-state-hmac-key-file" >&2
+  exit 1
+fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
       ! -r "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" ]]; then
   echo "expectations dry-run report HMAC key file not readable: $EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" >&2
@@ -602,6 +626,8 @@ compute_lane_state_config_hash() {
     printf "yosys_dir=%s\n" "$YOSYS_DIR"
     printf "opentitan_dir=%s\n" "$OPENTITAN_DIR"
     printf "avip_glob=%s\n" "$AVIP_GLOB"
+    printf "lane_state_hmac_enabled=%s\n" "$(if [[ -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then echo 1; else echo 0; fi)"
+    printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -698,6 +724,150 @@ lane_state_write_file() {
     done
   } > "$tmp"
   mv "$tmp" "$LANE_STATE_TSV"
+  lane_state_emit_manifest "$LANE_STATE_TSV"
+}
+
+lane_state_emit_manifest() {
+  local lane_state_file="$1"
+  if [[ -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+    return
+  fi
+  local manifest_file="${lane_state_file}.manifest.json"
+  local lane_state_sha
+  lane_state_sha="$(sha256sum "$lane_state_file" | awk '{print $1}')"
+  LANE_STATE_MANIFEST_PATH="$manifest_file" \
+  LANE_STATE_FILE="$lane_state_file" \
+  LANE_STATE_SHA256="$lane_state_sha" \
+  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE" \
+  LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
+  python3 - <<'PY'
+import hashlib
+import hmac
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+payload = {
+    "schema_version": 1,
+    "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "lane_state_file": os.environ["LANE_STATE_FILE"],
+    "lane_state_sha256": os.environ["LANE_STATE_SHA256"],
+}
+key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
+if key_id:
+  payload["hmac_key_id"] = key_id
+key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
+canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+payload["signature_hmac_sha256"] = hmac.new(
+    key_bytes, canonical_payload, hashlib.sha256
+).hexdigest()
+Path(os.environ["LANE_STATE_MANIFEST_PATH"]).write_text(
+    json.dumps(payload, sort_keys=True), encoding="utf-8"
+)
+PY
+}
+
+lane_state_verify_manifest() {
+  local lane_state_file="$1"
+  local source_label="$2"
+  if [[ -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+    return
+  fi
+  local manifest_file="${lane_state_file}.manifest.json"
+  if [[ ! -r "$manifest_file" ]]; then
+    echo "missing lane-state manifest for ${source_label}: ${manifest_file}" >&2
+    exit 1
+  fi
+  local lane_state_sha
+  lane_state_sha="$(sha256sum "$lane_state_file" | awk '{print $1}')"
+  LANE_STATE_MANIFEST_PATH="$manifest_file" \
+  LANE_STATE_FILE="$lane_state_file" \
+  LANE_STATE_SHA256="$lane_state_sha" \
+  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE" \
+  LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
+  SOURCE_LABEL="$source_label" \
+  python3 - <<'PY'
+import hashlib
+import hmac
+import json
+import os
+import re
+from pathlib import Path
+
+source = os.environ["SOURCE_LABEL"]
+manifest_path = Path(os.environ["LANE_STATE_MANIFEST_PATH"])
+expected_sha = os.environ["LANE_STATE_SHA256"]
+expected_file = os.environ["LANE_STATE_FILE"]
+expected_key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
+
+try:
+  payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception as ex:
+  print(f"invalid lane-state manifest for {source}: unable to parse '{manifest_path}' ({ex})", file=os.sys.stderr)
+  raise SystemExit(1)
+
+if not isinstance(payload, dict):
+  print(f"invalid lane-state manifest for {source}: expected JSON object", file=os.sys.stderr)
+  raise SystemExit(1)
+
+schema_version = payload.get("schema_version")
+if schema_version != 1:
+  print(f"invalid lane-state manifest for {source}: schema_version must be 1", file=os.sys.stderr)
+  raise SystemExit(1)
+
+manifest_file = payload.get("lane_state_file")
+if not isinstance(manifest_file, str) or not manifest_file:
+  print(f"invalid lane-state manifest for {source}: lane_state_file must be non-empty string", file=os.sys.stderr)
+  raise SystemExit(1)
+if manifest_file != expected_file:
+  print(
+      f"invalid lane-state manifest for {source}: lane_state_file mismatch (expected '{expected_file}', found '{manifest_file}')",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+
+manifest_sha = payload.get("lane_state_sha256")
+if not isinstance(manifest_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha):
+  print(f"invalid lane-state manifest for {source}: lane_state_sha256 must be 64 hex chars", file=os.sys.stderr)
+  raise SystemExit(1)
+if manifest_sha != expected_sha:
+  print(
+      f"invalid lane-state manifest for {source}: lane_state_sha256 mismatch (expected {expected_sha}, found {manifest_sha})",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+
+generated_at = payload.get("generated_at_utc")
+if not isinstance(generated_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at):
+  print(f"invalid lane-state manifest for {source}: generated_at_utc must be UTC RFC3339 timestamp", file=os.sys.stderr)
+  raise SystemExit(1)
+
+signature = payload.get("signature_hmac_sha256")
+if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+  print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 must be 64 hex chars", file=os.sys.stderr)
+  raise SystemExit(1)
+
+manifest_key_id = payload.get("hmac_key_id", "")
+if manifest_key_id and not isinstance(manifest_key_id, str):
+  print(f"invalid lane-state manifest for {source}: hmac_key_id must be string", file=os.sys.stderr)
+  raise SystemExit(1)
+if expected_key_id and manifest_key_id != expected_key_id:
+  print(
+      f"invalid lane-state manifest for {source}: hmac_key_id mismatch (expected '{expected_key_id}', found '{manifest_key_id}')",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+
+sig_payload = dict(payload)
+del sig_payload["signature_hmac_sha256"]
+canonical_payload = json.dumps(sig_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
+expected_sig = hmac.new(key_bytes, canonical_payload, hashlib.sha256).hexdigest()
+if signature != expected_sig:
+  print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 mismatch", file=os.sys.stderr)
+  raise SystemExit(1)
+PY
 }
 
 lane_state_load_file() {
@@ -706,6 +876,7 @@ lane_state_load_file() {
   if [[ ! -f "$lane_state_file" ]]; then
     return
   fi
+  lane_state_verify_manifest "$lane_state_file" "$source_label"
   local line_no=0
   while IFS=$'\t' read -r lane_id suite mode total pass fail xfail xpass error skip updated_at_utc compat_policy_version config_hash extra; do
     line_no=$((line_no + 1))
