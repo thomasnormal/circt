@@ -228,6 +228,8 @@ It also runs native global-filter preflight checks:
 - validates `--formal-global-propagate-circt-chain` mode values
 - auto-injects LEC/BMC built-in tools for chain mode when omitted
 - rejects conflicting non-chain global filter mode combinations early.
+`circt-mut matrix` now applies the same preflight model for default global
+filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified

@@ -171,13 +171,12 @@ static std::optional<std::string> resolveToolPath(StringRef tool) {
 }
 
 static std::optional<std::string>
-resolveCoverCirctToolPath(const char *argv0, StringRef requested,
-                          StringRef toolName) {
+resolveCirctToolPathForWorkflow(const char *argv0, StringRef requested,
+                                StringRef toolName, StringRef scriptName) {
   if (requested != "auto")
     return resolveToolPath(requested);
 
-  std::optional<std::string> scriptPath =
-      resolveScriptPath(argv0, "run_mutation_cover.sh");
+  std::optional<std::string> scriptPath = resolveScriptPath(argv0, scriptName);
   std::string installCandidate;
   std::string repoCandidate;
   if (scriptPath) {
@@ -255,7 +254,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       } else if (i + 1 < args.size() && !args[i + 1].starts_with("--")) {
         requested = args[++i].str();
       }
-      auto resolved = resolveCoverCirctToolPath(argv0, requested, toolName);
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, requested, toolName, "run_mutation_cover.sh");
       if (!resolved) {
         result.error =
             (Twine("circt-mut cover: unable to resolve ") + flag +
@@ -322,8 +322,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       return result;
     }
     if (!hasGlobalFilterLEC) {
-      auto resolved =
-          resolveCoverCirctToolPath(argv0, "auto", "circt-lec");
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, "auto", "circt-lec", "run_mutation_cover.sh");
       if (!resolved) {
         result.error =
             "circt-mut cover: unable to resolve --formal-global-propagate-circt-lec executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
@@ -334,8 +334,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       hasGlobalFilterLEC = true;
     }
     if (!hasGlobalFilterBMC) {
-      auto resolved =
-          resolveCoverCirctToolPath(argv0, "auto", "circt-bmc");
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, "auto", "circt-bmc", "run_mutation_cover.sh");
       if (!resolved) {
         result.error =
             "circt-mut cover: unable to resolve --formal-global-propagate-circt-bmc executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
@@ -353,6 +353,142 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     if (modeCount > 1) {
       result.error =
           "Use only one global filter mode: --formal-global-propagate-cmd, --formal-global-propagate-circt-lec, --formal-global-propagate-circt-bmc, or --formal-global-propagate-circt-chain.";
+      return result;
+    }
+  }
+
+  result.ok = true;
+  return result;
+}
+
+struct MatrixRewriteResult {
+  bool ok = false;
+  std::string error;
+  SmallVector<std::string, 32> rewrittenArgs;
+};
+
+static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
+                                             ArrayRef<StringRef> args) {
+  MatrixRewriteResult result;
+  bool hasDefaultGlobalFilterCmd = false;
+  bool hasDefaultGlobalFilterLEC = false;
+  bool hasDefaultGlobalFilterBMC = false;
+  bool hasDefaultGlobalFilterChain = false;
+  std::string defaultGlobalFilterChainMode;
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+
+    auto resolveWithOptionalValue =
+        [&](StringRef flag, StringRef toolName) -> bool {
+      std::string requested = "auto";
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        requested = arg.substr(eqPos + 1).str();
+        if (requested.empty())
+          requested = "auto";
+      } else if (i + 1 < args.size() && !args[i + 1].starts_with("--")) {
+        requested = args[++i].str();
+      }
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, requested, toolName, "run_mutation_matrix.sh");
+      if (!resolved) {
+        result.error =
+            (Twine("circt-mut matrix: unable to resolve ") + flag +
+             " executable: " + requested +
+             " (searched repo build/bin, install-tree sibling bin, and PATH).")
+                .str();
+        return false;
+      }
+      result.rewrittenArgs.push_back(flag.str());
+      result.rewrittenArgs.push_back(*resolved);
+      return true;
+    };
+
+    if (arg == "--default-formal-global-propagate-circt-lec" ||
+        arg.starts_with("--default-formal-global-propagate-circt-lec=")) {
+      hasDefaultGlobalFilterLEC = true;
+      if (!resolveWithOptionalValue("--default-formal-global-propagate-circt-lec",
+                                    "circt-lec"))
+        return result;
+      continue;
+    }
+    if (arg == "--default-formal-global-propagate-circt-bmc" ||
+        arg.starts_with("--default-formal-global-propagate-circt-bmc=")) {
+      hasDefaultGlobalFilterBMC = true;
+      if (!resolveWithOptionalValue("--default-formal-global-propagate-circt-bmc",
+                                    "circt-bmc"))
+        return result;
+      continue;
+    }
+    if (arg == "--default-formal-global-propagate-cmd" ||
+        arg.starts_with("--default-formal-global-propagate-cmd="))
+      hasDefaultGlobalFilterCmd = true;
+    if (arg == "--default-formal-global-propagate-circt-chain" ||
+        arg.starts_with("--default-formal-global-propagate-circt-chain=")) {
+      constexpr StringRef chainPrefix =
+          "--default-formal-global-propagate-circt-chain=";
+      hasDefaultGlobalFilterChain = true;
+      if (arg.starts_with(chainPrefix))
+        defaultGlobalFilterChainMode = arg.substr(chainPrefix.size()).str();
+      else if (i + 1 < args.size())
+        defaultGlobalFilterChainMode = args[i + 1].str();
+      else
+        defaultGlobalFilterChainMode.clear();
+    }
+
+    result.rewrittenArgs.push_back(arg.str());
+  }
+
+  if (hasDefaultGlobalFilterChain) {
+    if (defaultGlobalFilterChainMode != "lec-then-bmc" &&
+        defaultGlobalFilterChainMode != "bmc-then-lec" &&
+        defaultGlobalFilterChainMode != "consensus" &&
+        defaultGlobalFilterChainMode != "auto") {
+      result.error =
+          (Twine("Invalid --default-formal-global-propagate-circt-chain value: ") +
+           defaultGlobalFilterChainMode +
+           " (expected lec-then-bmc|bmc-then-lec|consensus|auto).")
+              .str();
+      return result;
+    }
+    if (hasDefaultGlobalFilterCmd) {
+      result.error =
+          "--default-formal-global-propagate-circt-chain cannot be combined "
+          "with --default-formal-global-propagate-cmd.";
+      return result;
+    }
+    if (!hasDefaultGlobalFilterLEC) {
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, "auto", "circt-lec", "run_mutation_matrix.sh");
+      if (!resolved) {
+        result.error =
+            "circt-mut matrix: unable to resolve --default-formal-global-propagate-circt-lec executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
+        return result;
+      }
+      result.rewrittenArgs.push_back("--default-formal-global-propagate-circt-lec");
+      result.rewrittenArgs.push_back(*resolved);
+      hasDefaultGlobalFilterLEC = true;
+    }
+    if (!hasDefaultGlobalFilterBMC) {
+      auto resolved = resolveCirctToolPathForWorkflow(
+          argv0, "auto", "circt-bmc", "run_mutation_matrix.sh");
+      if (!resolved) {
+        result.error =
+            "circt-mut matrix: unable to resolve --default-formal-global-propagate-circt-bmc executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
+        return result;
+      }
+      result.rewrittenArgs.push_back("--default-formal-global-propagate-circt-bmc");
+      result.rewrittenArgs.push_back(*resolved);
+      hasDefaultGlobalFilterBMC = true;
+    }
+  } else {
+    int modeCount = 0;
+    modeCount += hasDefaultGlobalFilterCmd ? 1 : 0;
+    modeCount += hasDefaultGlobalFilterLEC ? 1 : 0;
+    modeCount += hasDefaultGlobalFilterBMC ? 1 : 0;
+    if (modeCount > 1) {
+      result.error =
+          "Use only one default global filter mode: --default-formal-global-propagate-cmd, --default-formal-global-propagate-circt-lec, --default-formal-global-propagate-circt-bmc, or --default-formal-global-propagate-circt-chain.";
       return result;
     }
   }
@@ -1374,6 +1510,30 @@ int main(int argc, char **argv) {
     auto scriptPath = resolveScriptPath(argv[0], "run_mutation_cover.sh");
     if (!scriptPath) {
       errs() << "circt-mut: unable to locate script 'run_mutation_cover.sh'.\n";
+      errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+                " utils scripts.\n";
+      return 1;
+    }
+
+    SmallVector<StringRef, 32> rewrittenArgsRef;
+    for (const std::string &arg : rewrite.rewrittenArgs)
+      rewrittenArgsRef.push_back(arg);
+    return dispatchToScript(*scriptPath, rewrittenArgsRef);
+  }
+
+  if (firstArg == "matrix") {
+    SmallVector<StringRef, 32> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+    MatrixRewriteResult rewrite = rewriteMatrixArgs(argv[0], forwardedArgs);
+    if (!rewrite.ok) {
+      errs() << rewrite.error << "\n";
+      return 1;
+    }
+
+    auto scriptPath = resolveScriptPath(argv[0], "run_mutation_matrix.sh");
+    if (!scriptPath) {
+      errs() << "circt-mut: unable to locate script 'run_mutation_matrix.sh'.\n";
       errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
                 " utils scripts.\n";
       return 1;
