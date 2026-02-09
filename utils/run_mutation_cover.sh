@@ -35,6 +35,9 @@ Optional:
   --bmc-orig-cache-max-bytes N
                              Max differential-BMC original-cache bytes
                              (0 disables limit, default: 0)
+  --bmc-orig-cache-max-age-seconds N
+                             Max differential-BMC original-cache entry age
+                             in seconds (0 disables limit, default: 0)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -191,14 +194,19 @@ BMC_ORIG_CACHE_DIR=""
 BMC_ORIG_CACHE_PERSIST_DIR=""
 BMC_ORIG_CACHE_MAX_ENTRIES=0
 BMC_ORIG_CACHE_MAX_BYTES=0
+BMC_ORIG_CACHE_MAX_AGE_SECONDS=0
 BMC_ORIG_CACHE_ENTRIES=0
 BMC_ORIG_CACHE_BYTES=0
 BMC_ORIG_CACHE_PRUNED_ENTRIES=0
 BMC_ORIG_CACHE_PRUNED_BYTES=0
+BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES=0
+BMC_ORIG_CACHE_PRUNED_AGE_BYTES=0
 BMC_ORIG_CACHE_PERSIST_ENTRIES=0
 BMC_ORIG_CACHE_PERSIST_BYTES=0
 BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES=0
 BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES=0
+BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES=0
+BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES=0
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -236,6 +244,7 @@ while [[ $# -gt 0 ]]; do
     --reuse-cache-mode) REUSE_CACHE_MODE="$2"; shift 2 ;;
     --bmc-orig-cache-max-entries) BMC_ORIG_CACHE_MAX_ENTRIES="$2"; shift 2 ;;
     --bmc-orig-cache-max-bytes) BMC_ORIG_CACHE_MAX_BYTES="$2"; shift 2 ;;
+    --bmc-orig-cache-max-age-seconds) BMC_ORIG_CACHE_MAX_AGE_SECONDS="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -317,6 +326,10 @@ if [[ ! "$BMC_ORIG_CACHE_MAX_ENTRIES" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$BMC_ORIG_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]]; then
   echo "Invalid --bmc-orig-cache-max-bytes value: $BMC_ORIG_CACHE_MAX_BYTES" >&2
+  exit 1
+fi
+if [[ ! "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --bmc-orig-cache-max-age-seconds value: $BMC_ORIG_CACHE_MAX_AGE_SECONDS" >&2
   exit 1
 fi
 if [[ -z "$REUSE_CACHE_DIR" ]]; then
@@ -954,19 +967,65 @@ prune_bmc_orig_cache_dir() {
   local cache_dir="$1"
   local max_entries="$2"
   local max_bytes="$3"
+  local max_age_seconds="$4"
   local pruned_entries=0
   local pruned_bytes=0
+  local pruned_age_entries=0
+  local pruned_age_bytes=0
   local entries=0
   local total_bytes=0
   local oldest_meta=""
   local oldest_log=""
+  local now_epoch=0
+  local meta_mtime=0
+  local age_seconds=0
+  local meta=""
   local meta_bytes=0
   local log_bytes=0
 
   read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
-  if [[ "$max_entries" -eq 0 && "$max_bytes" -eq 0 ]]; then
-    printf "%s\t%s\t%s\t%s\n" "$pruned_entries" "$pruned_bytes" "$entries" "$total_bytes"
+  if [[ "$max_entries" -eq 0 && "$max_bytes" -eq 0 && "$max_age_seconds" -eq 0 ]]; then
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$pruned_entries" "$pruned_bytes" "$pruned_age_entries" "$pruned_age_bytes" "$entries" "$total_bytes"
     return 0
+  fi
+
+  if [[ "$max_age_seconds" -gt 0 ]]; then
+    now_epoch="$(date +%s 2>/dev/null || printf "0")"
+    if [[ "$now_epoch" =~ ^[0-9]+$ ]]; then
+      for meta in "$cache_dir"/*.orig.meta; do
+        [[ -f "$meta" ]] || continue
+        oldest_log="${meta%.orig.meta}.orig.log"
+        [[ -f "$oldest_log" ]] || continue
+        meta_mtime="$(stat -c %Y "$meta" 2>/dev/null || stat -f %m "$meta" 2>/dev/null || printf "0")"
+        if [[ ! "$meta_mtime" =~ ^[0-9]+$ ]]; then
+          meta_mtime=0
+        fi
+        age_seconds=$((now_epoch - meta_mtime))
+        if [[ "$age_seconds" -le "$max_age_seconds" ]]; then
+          continue
+        fi
+        meta_bytes=0
+        log_bytes=0
+        if [[ -f "$meta" ]]; then
+          meta_bytes="$(wc -c < "$meta" 2>/dev/null || printf "0")"
+          if [[ ! "$meta_bytes" =~ ^[0-9]+$ ]]; then
+            meta_bytes=0
+          fi
+        fi
+        if [[ -f "$oldest_log" ]]; then
+          log_bytes="$(wc -c < "$oldest_log" 2>/dev/null || printf "0")"
+          if [[ ! "$log_bytes" =~ ^[0-9]+$ ]]; then
+            log_bytes=0
+          fi
+        fi
+        rm -f "$meta" "$oldest_log"
+        pruned_entries=$((pruned_entries + 1))
+        pruned_bytes=$((pruned_bytes + meta_bytes + log_bytes))
+        pruned_age_entries=$((pruned_age_entries + 1))
+        pruned_age_bytes=$((pruned_age_bytes + meta_bytes + log_bytes))
+      done
+      read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
+    fi
   fi
 
   while true; do
@@ -1003,7 +1062,7 @@ prune_bmc_orig_cache_dir() {
     read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
   done
 
-  printf "%s\t%s\t%s\t%s\n" "$pruned_entries" "$pruned_bytes" "$entries" "$total_bytes"
+  printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$pruned_entries" "$pruned_bytes" "$pruned_age_entries" "$pruned_age_bytes" "$entries" "$total_bytes"
 }
 
 hydrate_bmc_orig_cache() {
@@ -1976,11 +2035,13 @@ fi
 load_reuse_pairs
 load_reuse_summary
 hydrate_bmc_orig_cache
-read -r local_pruned_entries local_pruned_bytes local_entries local_bytes < <(
-  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES"
+read -r local_pruned_entries local_pruned_bytes local_age_pruned_entries local_age_pruned_bytes local_entries local_bytes < <(
+  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
 )
 BMC_ORIG_CACHE_PRUNED_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_ENTRIES + local_pruned_entries))
 BMC_ORIG_CACHE_PRUNED_BYTES=$((BMC_ORIG_CACHE_PRUNED_BYTES + local_pruned_bytes))
+BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES + local_age_pruned_entries))
+BMC_ORIG_CACHE_PRUNED_AGE_BYTES=$((BMC_ORIG_CACHE_PRUNED_AGE_BYTES + local_age_pruned_bytes))
 BMC_ORIG_CACHE_ENTRIES="$local_entries"
 BMC_ORIG_CACHE_BYTES="$local_bytes"
 
@@ -2274,11 +2335,13 @@ if [[ -n "$COVERAGE_THRESHOLD" ]]; then
 fi
 
 # Enforce local BMC-orig cache bounds after this run's updates.
-read -r local_pruned_entries local_pruned_bytes local_entries local_bytes < <(
-  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES"
+read -r local_pruned_entries local_pruned_bytes local_age_pruned_entries local_age_pruned_bytes local_entries local_bytes < <(
+  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
 )
 BMC_ORIG_CACHE_PRUNED_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_ENTRIES + local_pruned_entries))
 BMC_ORIG_CACHE_PRUNED_BYTES=$((BMC_ORIG_CACHE_PRUNED_BYTES + local_pruned_bytes))
+BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES + local_age_pruned_entries))
+BMC_ORIG_CACHE_PRUNED_AGE_BYTES=$((BMC_ORIG_CACHE_PRUNED_AGE_BYTES + local_age_pruned_bytes))
 BMC_ORIG_CACHE_ENTRIES="$local_entries"
 BMC_ORIG_CACHE_BYTES="$local_bytes"
 if [[ -n "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
@@ -2311,11 +2374,13 @@ write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
 
 if [[ "$BMC_ORIG_CACHE_WRITE_STATUS" == "pending_write" ]]; then
   if publish_bmc_orig_cache; then
-    read -r persist_pruned_entries persist_pruned_bytes persist_entries persist_bytes < <(
-      prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_PERSIST_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES"
+    read -r persist_pruned_entries persist_pruned_bytes persist_age_pruned_entries persist_age_pruned_bytes persist_entries persist_bytes < <(
+      prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_PERSIST_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
     )
     BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES="$persist_pruned_entries"
     BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES="$persist_pruned_bytes"
+    BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES="$persist_age_pruned_entries"
+    BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES="$persist_age_pruned_bytes"
     BMC_ORIG_CACHE_PERSIST_ENTRIES="$persist_entries"
     BMC_ORIG_CACHE_PERSIST_BYTES="$persist_bytes"
     BMC_ORIG_CACHE_WRITE_STATUS="written"
@@ -2362,14 +2427,19 @@ fi
   printf "bmc_orig_cache_miss_mutants\t%s\n" "$count_bmc_orig_cache_miss"
   printf "bmc_orig_cache_max_entries\t%s\n" "$BMC_ORIG_CACHE_MAX_ENTRIES"
   printf "bmc_orig_cache_max_bytes\t%s\n" "$BMC_ORIG_CACHE_MAX_BYTES"
+  printf "bmc_orig_cache_max_age_seconds\t%s\n" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
   printf "bmc_orig_cache_entries\t%s\n" "$BMC_ORIG_CACHE_ENTRIES"
   printf "bmc_orig_cache_bytes\t%s\n" "$BMC_ORIG_CACHE_BYTES"
   printf "bmc_orig_cache_pruned_entries\t%s\n" "$BMC_ORIG_CACHE_PRUNED_ENTRIES"
   printf "bmc_orig_cache_pruned_bytes\t%s\n" "$BMC_ORIG_CACHE_PRUNED_BYTES"
+  printf "bmc_orig_cache_pruned_age_entries\t%s\n" "$BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES"
+  printf "bmc_orig_cache_pruned_age_bytes\t%s\n" "$BMC_ORIG_CACHE_PRUNED_AGE_BYTES"
   printf "bmc_orig_cache_persist_entries\t%s\n" "$BMC_ORIG_CACHE_PERSIST_ENTRIES"
   printf "bmc_orig_cache_persist_bytes\t%s\n" "$BMC_ORIG_CACHE_PERSIST_BYTES"
   printf "bmc_orig_cache_persist_pruned_entries\t%s\n" "$BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES"
   printf "bmc_orig_cache_persist_pruned_bytes\t%s\n" "$BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES"
+  printf "bmc_orig_cache_persist_pruned_age_entries\t%s\n" "$BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES"
+  printf "bmc_orig_cache_persist_pruned_age_bytes\t%s\n" "$BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES"
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
@@ -2404,14 +2474,19 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "bmc_orig_cache_miss_mutants": $count_bmc_orig_cache_miss,
   "bmc_orig_cache_max_entries": $BMC_ORIG_CACHE_MAX_ENTRIES,
   "bmc_orig_cache_max_bytes": $BMC_ORIG_CACHE_MAX_BYTES,
+  "bmc_orig_cache_max_age_seconds": $BMC_ORIG_CACHE_MAX_AGE_SECONDS,
   "bmc_orig_cache_entries": $BMC_ORIG_CACHE_ENTRIES,
   "bmc_orig_cache_bytes": $BMC_ORIG_CACHE_BYTES,
   "bmc_orig_cache_pruned_entries": $BMC_ORIG_CACHE_PRUNED_ENTRIES,
   "bmc_orig_cache_pruned_bytes": $BMC_ORIG_CACHE_PRUNED_BYTES,
+  "bmc_orig_cache_pruned_age_entries": $BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES,
+  "bmc_orig_cache_pruned_age_bytes": $BMC_ORIG_CACHE_PRUNED_AGE_BYTES,
   "bmc_orig_cache_persist_entries": $BMC_ORIG_CACHE_PERSIST_ENTRIES,
   "bmc_orig_cache_persist_bytes": $BMC_ORIG_CACHE_PERSIST_BYTES,
   "bmc_orig_cache_persist_pruned_entries": $BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES,
   "bmc_orig_cache_persist_pruned_bytes": $BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES,
+  "bmc_orig_cache_persist_pruned_age_entries": $BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES,
+  "bmc_orig_cache_persist_pruned_age_bytes": $BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES,
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
@@ -2428,7 +2503,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
@@ -2440,10 +2515,10 @@ echo "Reuse manifest: ${REUSE_MANIFEST_FILE}"
 echo "Reuse pair source: ${REUSE_PAIR_SOURCE}"
 echo "Reuse summary source: ${REUSE_SUMMARY_SOURCE}"
 echo "Reuse cache mode: ${REUSE_CACHE_MODE}"
-echo "BMC orig cache limits: entries=${BMC_ORIG_CACHE_MAX_ENTRIES} bytes=${BMC_ORIG_CACHE_MAX_BYTES}"
-echo "BMC orig cache stats: entries=${BMC_ORIG_CACHE_ENTRIES} bytes=${BMC_ORIG_CACHE_BYTES} pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PRUNED_BYTES}"
+echo "BMC orig cache limits: entries=${BMC_ORIG_CACHE_MAX_ENTRIES} bytes=${BMC_ORIG_CACHE_MAX_BYTES} max_age_seconds=${BMC_ORIG_CACHE_MAX_AGE_SECONDS}"
+echo "BMC orig cache stats: entries=${BMC_ORIG_CACHE_ENTRIES} bytes=${BMC_ORIG_CACHE_BYTES} pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PRUNED_AGE_BYTES}"
 if [[ -n "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
-  echo "BMC orig cache persist stats: entries=${BMC_ORIG_CACHE_PERSIST_ENTRIES} bytes=${BMC_ORIG_CACHE_PERSIST_BYTES} pruned_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES}"
+  echo "BMC orig cache persist stats: entries=${BMC_ORIG_CACHE_PERSIST_ENTRIES} bytes=${BMC_ORIG_CACHE_PERSIST_BYTES} pruned_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES}"
 fi
 echo "BMC orig cache write status: ${BMC_ORIG_CACHE_WRITE_STATUS}"
 echo "Reuse cache write status: ${REUSE_CACHE_WRITE_STATUS}"

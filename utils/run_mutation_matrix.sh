@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]<TAB>[bmc_orig_cache_max_age_seconds]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -95,6 +95,9 @@ Optional:
   --default-bmc-orig-cache-max-bytes N
                             Default --bmc-orig-cache-max-bytes for lanes
                             without lane-specific bmc_orig_cache_max_bytes
+  --default-bmc-orig-cache-max-age-seconds N
+                            Default --bmc-orig-cache-max-age-seconds for lanes
+                            without lane-specific bmc_orig_cache_max_age_seconds
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
@@ -141,6 +144,7 @@ DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=0
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL=""
 DEFAULT_BMC_ORIG_CACHE_MAX_ENTRIES=""
 DEFAULT_BMC_ORIG_CACHE_MAX_BYTES=""
+DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
@@ -179,6 +183,7 @@ while [[ $# -gt 0 ]]; do
     --default-formal-global-propagate-bmc-ignore-asserts-until) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL="$2"; shift 2 ;;
     --default-bmc-orig-cache-max-entries) DEFAULT_BMC_ORIG_CACHE_MAX_ENTRIES="$2"; shift 2 ;;
     --default-bmc-orig-cache-max-bytes) DEFAULT_BMC_ORIG_CACHE_MAX_BYTES="$2"; shift 2 ;;
+    --default-bmc-orig-cache-max-age-seconds) DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS="$2"; shift 2 ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
@@ -223,6 +228,10 @@ if [[ -n "$DEFAULT_BMC_ORIG_CACHE_MAX_ENTRIES" ]] && ! [[ "$DEFAULT_BMC_ORIG_CAC
 fi
 if [[ -n "$DEFAULT_BMC_ORIG_CACHE_MAX_BYTES" ]] && ! [[ "$DEFAULT_BMC_ORIG_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]]; then
   echo "Invalid --default-bmc-orig-cache-max-bytes value: $DEFAULT_BMC_ORIG_CACHE_MAX_BYTES" >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS" ]] && ! [[ "$DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --default-bmc-orig-cache-max-age-seconds value: $DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS" >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
@@ -282,6 +291,7 @@ declare -a GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS
 declare -a GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL
 declare -a BMC_ORIG_CACHE_MAX_ENTRIES
 declare -a BMC_ORIG_CACHE_MAX_BYTES
+declare -a BMC_ORIG_CACHE_MAX_AGE_SECONDS
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -290,7 +300,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes bmc_orig_cache_max_age_seconds _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -334,6 +344,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL+=("${global_propagate_bmc_ignore_asserts_until:--}")
   BMC_ORIG_CACHE_MAX_ENTRIES+=("${bmc_orig_cache_max_entries:--}")
   BMC_ORIG_CACHE_MAX_BYTES+=("${bmc_orig_cache_max_bytes:--}")
+  BMC_ORIG_CACHE_MAX_AGE_SECONDS+=("${bmc_orig_cache_max_age_seconds:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -379,6 +390,7 @@ run_lane() {
   local lane_global_propagate_bmc_ignore_asserts_until=""
   local lane_bmc_orig_cache_max_entries=""
   local lane_bmc_orig_cache_max_bytes=""
+  local lane_bmc_orig_cache_max_age_seconds=""
 
   mkdir -p "$lane_dir"
 
@@ -657,6 +669,20 @@ run_lane() {
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-bytes "$lane_bmc_orig_cache_max_bytes")
+  fi
+
+  lane_bmc_orig_cache_max_age_seconds="${BMC_ORIG_CACHE_MAX_AGE_SECONDS[$i]}"
+  if [[ "$lane_bmc_orig_cache_max_age_seconds" == "-" || -z "$lane_bmc_orig_cache_max_age_seconds" ]]; then
+    lane_bmc_orig_cache_max_age_seconds="$DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS"
+  fi
+  if [[ -n "$lane_bmc_orig_cache_max_age_seconds" ]]; then
+    if ! [[ "$lane_bmc_orig_cache_max_age_seconds" =~ ^[0-9]+$ ]]; then
+      gate="CONFIG_ERROR"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      return 0
+    fi
+    cmd+=(--bmc-orig-cache-max-age-seconds "$lane_bmc_orig_cache_max_age_seconds")
   fi
 
   if [[ -n "${THRESHOLD[$i]}" && "${THRESHOLD[$i]}" != "-" ]]; then
