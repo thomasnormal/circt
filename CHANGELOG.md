@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 727 - February 9, 2026
+
+### Mutation Generation Pipeline Upgrade
+
+- Added `utils/generate_mutations_yosys.sh`:
+  - generates MCY-compatible mutation lists using `yosys mutate -list`
+  - supports `.il`, `.v`, `.sv` input, seed/count control, and optional top
+    module selection.
+- Extended `utils/run_mutation_cover.sh` with built-in generation mode:
+  - `--generate-mutations <N>`
+  - `--mutations-seed <N>`
+  - `--mutations-yosys <path>`
+  - optional `--mutations-top <module>`
+- Mutation source policy:
+  - exactly one of `--mutations-file` or `--generate-mutations` is required.
+
+### Test and Docs Updates
+
+- Added lit tests:
+  - `test/Tools/run-mutation-generate-help.test`
+  - `test/Tools/run-mutation-generate-basic.test`
+  - `test/Tools/run-mutation-cover-generate.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks generation options in CLI help
+  - `docs/FormalRegression.md`
+    - documented auto-generation workflow
+  - `PROJECT_PLAN.md`
+    - marked yosys-backed mutation list generation as done.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation (sandbox-compatible): PASS
+  - generator script emits expected mutation list from fake yosys
+  - run_mutation_cover auto-generation path (`--generate-mutations`) produces
+    expected mutant classifications and generated mutation artifact.
+
 ## Iteration 726 - February 9, 2026
 
 ### Mutation Lane Matrix Runner

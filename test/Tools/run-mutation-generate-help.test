@@ -1,0 +1,8 @@
+// RUN: %S/../../utils/generate_mutations_yosys.sh --help | FileCheck %s
+
+// CHECK: generate_mutations_yosys.sh [options]
+// CHECK: --design
+// CHECK: --out
+// CHECK: --count
+// CHECK: --seed
+// CHECK: --yosys

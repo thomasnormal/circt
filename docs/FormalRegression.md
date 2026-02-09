@@ -71,6 +71,17 @@ utils/run_mutation_cover.sh \
   --coverage-threshold 90
 ```
 
+Auto-generate mutations (instead of `--mutations-file`):
+
+```bash
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --tests-manifest /path/to/tests.tsv \
+  --generate-mutations 1000 \
+  --mutations-yosys yosys \
+  --mutations-seed 1
+```
+
 Execution controls:
 - `--jobs <N>`: run per-mutant execution with up to `N` local workers.
 - `--resume`: reuse existing per-mutant artifacts in `<work-dir>/mutations/*`
