@@ -56,6 +56,8 @@ declare -a SELECT_LIST=()
 CACHE_LOCK_DIR=""
 CACHE_LOCK_STALE_SECONDS=3600
 CACHE_LOCK_POLL_SECONDS=0.1
+CACHE_LOCK_WAIT_NS=0
+CACHE_LOCK_CONTENDED=0
 
 cleanup() {
   if [[ -n "${WORK_DIR:-}" && -d "${WORK_DIR:-}" ]]; then
@@ -209,14 +211,25 @@ acquire_cache_lock() {
   local now_sec=0
   local lock_mtime=0
   local lock_age=0
+  local lock_start_ns=0
+  local lock_end_ns=0
+  local local_contended=0
 
+  lock_start_ns="$(current_epoch_ns)"
   while true; do
     if mkdir "$lock_dir" 2>/dev/null; then
       CACHE_LOCK_DIR="$lock_dir"
       printf "%s\n" "$$" > "${lock_dir}/pid" 2>/dev/null || true
+      lock_end_ns="$(current_epoch_ns)"
+      CACHE_LOCK_WAIT_NS=0
+      if [[ "$lock_end_ns" =~ ^[0-9]+$ ]] && [[ "$lock_start_ns" =~ ^[0-9]+$ ]] && [[ "$lock_end_ns" -ge "$lock_start_ns" ]]; then
+        CACHE_LOCK_WAIT_NS=$((lock_end_ns - lock_start_ns))
+      fi
+      CACHE_LOCK_CONTENDED="$local_contended"
       return 0
     fi
 
+    local_contended=1
     if [[ -d "$lock_dir" ]]; then
       now_sec="$(date +%s 2>/dev/null || printf "0")"
       lock_mtime="$(file_mtime_epoch "$lock_dir")"
@@ -481,6 +494,8 @@ EOF
   )"
   cache_key="$(hash_string "$cache_payload")"
   cache_file="${CACHE_DIR}/${cache_key}.mutations.txt"
+  CACHE_LOCK_WAIT_NS=0
+  CACHE_LOCK_CONTENDED=0
   if [[ -s "$cache_file" ]]; then
     cache_saved_runtime_ns=0
     cache_meta_file="${cache_file}.meta"
@@ -496,6 +511,8 @@ EOF
     echo "Mutation file: $OUT_FILE"
     echo "Mutation generation runtime_ns: $(elapsed_ns_since "$SCRIPT_START_NS")"
     echo "Mutation cache saved_runtime_ns: $cache_saved_runtime_ns"
+    echo "Mutation cache lock_wait_ns: $CACHE_LOCK_WAIT_NS"
+    echo "Mutation cache lock_contended: $CACHE_LOCK_CONTENDED"
     echo "Mutation cache status: hit"
     echo "Mutation cache file: $cache_file"
     exit 0
@@ -517,6 +534,8 @@ EOF
     echo "Mutation file: $OUT_FILE"
     echo "Mutation generation runtime_ns: $(elapsed_ns_since "$SCRIPT_START_NS")"
     echo "Mutation cache saved_runtime_ns: $cache_saved_runtime_ns"
+    echo "Mutation cache lock_wait_ns: $CACHE_LOCK_WAIT_NS"
+    echo "Mutation cache lock_contended: $CACHE_LOCK_CONTENDED"
     echo "Mutation cache status: hit"
     echo "Mutation cache file: $cache_file"
     exit 0
@@ -677,6 +696,8 @@ echo "Generated mutations: $(wc -l < "$OUT_FILE")"
 echo "Mutation file: $OUT_FILE"
 echo "Mutation generation runtime_ns: $generation_runtime_ns"
 echo "Mutation cache saved_runtime_ns: 0"
+echo "Mutation cache lock_wait_ns: $CACHE_LOCK_WAIT_NS"
+echo "Mutation cache lock_contended: $CACHE_LOCK_CONTENDED"
 if [[ -n "$cache_file" ]]; then
   echo "Mutation cache status: miss"
   echo "Mutation cache file: $cache_file"

@@ -12,7 +12,11 @@
 // CACHE: 1
 // MISS: Mutation generation runtime_ns: {{[0-9]+}}
 // MISS: Mutation cache saved_runtime_ns: 0
+// MISS: Mutation cache lock_wait_ns: {{[0-9]+}}
+// MISS: Mutation cache lock_contended: 0
 // MISS: Mutation cache status: miss
 // HIT: Mutation generation runtime_ns: {{[0-9]+}}
 // HIT: Mutation cache saved_runtime_ns: {{[0-9]+}}
+// HIT: Mutation cache lock_wait_ns: {{[0-9]+}}
+// HIT: Mutation cache lock_contended: 0
 // HIT: Mutation cache status: hit
