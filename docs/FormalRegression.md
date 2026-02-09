@@ -276,6 +276,7 @@ Lane-state semantics:
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256`
+    - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-ca-cert-in-cert-chain`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-in-cert-chain`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-length-min`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs`
@@ -327,10 +328,13 @@ Lane-state semantics:
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-ca-cert-in-cert-chain`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-in-cert-chain`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-length-min`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs`
+  - `...require-ca-cert-in-cert-chain` requires configured CA-cert digest
+    membership in `cert_chain_sha256`.
   - `...require-tls-peer-in-cert-chain` is an opt-in strict linkage gate that
     requires `https` transport and requires `tls_peer_sha256` membership in
     `cert_chain_sha256`.
