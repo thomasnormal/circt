@@ -4144,7 +4144,13 @@ def evaluate_int_modulus(lhs_value: int, rhs_value: int, mod_mode: str):
     return lhs_value % rhs_value
 
 
-def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
+def parse_int_expression(
+    expr,
+    field_name: str,
+    budget=None,
+    int_arithmetic_presets=None,
+    depth: int = 1,
+):
     if budget is None:
         budget = create_expression_budget(
             DEFAULT_CONTEXT_EXPR_LIMITS["max_int_expr_nodes"],
@@ -4175,7 +4181,13 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
     if op == "neg":
         return (
             "neg",
-            parse_int_expression(payload, f"{field_name}.neg", budget, depth + 1),
+            parse_int_expression(
+                payload,
+                f"{field_name}.neg",
+                budget,
+                int_arithmetic_presets,
+                depth + 1,
+            ),
         )
     if op in {"add", "sub", "mul", "min", "max"}:
         if not isinstance(payload, list):
@@ -4196,6 +4208,7 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
                     operand,
                     f"{field_name}.{op}[{idx}]",
                     budget,
+                    int_arithmetic_presets,
                     depth + 1,
                 )
             )
@@ -4216,12 +4229,14 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
             payload[0],
             f"{field_name}.{op}[0]",
             budget,
+            int_arithmetic_presets,
             depth + 1,
         )
         rhs_expr = parse_int_expression(
             payload[1],
             f"{field_name}.{op}[1]",
             budget,
+            int_arithmetic_presets,
             depth + 1,
         )
         if op == "div":
@@ -4256,12 +4271,52 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
             payload[1],
             f"{field_name}.with_int_arithmetic[1]",
             budget,
+            int_arithmetic_presets,
             depth + 1,
         )
         return (
             "with_int_arithmetic",
             parsed_int_arithmetic["div_mode"],
             parsed_int_arithmetic["mod_mode"],
+            nested_expr,
+        )
+    if op == "with_int_arithmetic_ref":
+        if not isinstance(payload, list) or len(payload) != 2:
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic_ref: expected [int_arithmetic_ref, expr]"
+            )
+        int_arithmetic_ref = payload[0]
+        if (
+            not isinstance(int_arithmetic_ref, str)
+            or not int_arithmetic_ref.strip()
+        ):
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic_ref[0]: expected non-empty string"
+            )
+        validate_context_key_name(
+            int_arithmetic_ref,
+            f"{field_name}.with_int_arithmetic_ref[0]",
+        )
+        if not int_arithmetic_presets:
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic_ref[0]: int_arithmetic_presets are not configured"
+            )
+        preset = int_arithmetic_presets.get(int_arithmetic_ref)
+        if preset is None:
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic_ref[0]: unknown int arithmetic preset '{int_arithmetic_ref}'"
+            )
+        nested_expr = parse_int_expression(
+            payload[1],
+            f"{field_name}.with_int_arithmetic_ref[1]",
+            budget,
+            int_arithmetic_presets,
+            depth + 1,
+        )
+        return (
+            "with_int_arithmetic",
+            preset["div_mode"],
+            preset["mod_mode"],
             nested_expr,
         )
     fail(
@@ -4436,6 +4491,7 @@ def parse_bool_expression(
     regex_defs=None,
     bool_budget=None,
     int_budget=None,
+    int_arithmetic_presets=None,
     depth: int = 1,
 ):
     if bool_budget is None:
@@ -4467,13 +4523,23 @@ def parse_bool_expression(
             fail(
                 f"error: invalid {field_name}.cmp: expected [lhs_expr, op, rhs_expr]"
             )
-        lhs_expr = parse_int_expression(payload[0], f"{field_name}.cmp[0]", int_budget)
+        lhs_expr = parse_int_expression(
+            payload[0],
+            f"{field_name}.cmp[0]",
+            int_budget,
+            int_arithmetic_presets,
+        )
         cmp_op = payload[1].lower()
         if cmp_op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
             fail(
                 f"error: invalid {field_name}.cmp[1]: expected op in {{lt, le, gt, ge, eq, ne}}"
             )
-        rhs_expr = parse_int_expression(payload[2], f"{field_name}.cmp[2]", int_budget)
+        rhs_expr = parse_int_expression(
+            payload[2],
+            f"{field_name}.cmp[2]",
+            int_budget,
+            int_arithmetic_presets,
+        )
         return ("cmp", lhs_expr, cmp_op, rhs_expr)
     if op == "has":
         validate_context_key_name(payload, f"{field_name}.has")
@@ -4570,6 +4636,7 @@ def parse_bool_expression(
                     regex_defs,
                     bool_budget,
                     int_budget,
+                    int_arithmetic_presets,
                     depth + 1,
                 )
             )
@@ -4583,6 +4650,7 @@ def parse_bool_expression(
                 regex_defs,
                 bool_budget,
                 int_budget,
+                int_arithmetic_presets,
                 depth + 1,
             ),
         )
@@ -5526,13 +5594,23 @@ def parse_context_presence_clause(
                 expr_limits["max_int_expr_nodes"],
                 expr_limits["max_int_expr_depth"],
             )
-            lhs_expr = parse_int_expression(term[0], f"{term_field}.lhs", int_budget)
+            lhs_expr = parse_int_expression(
+                term[0],
+                f"{term_field}.lhs",
+                int_budget,
+                int_arithmetic_presets,
+            )
             op = term[1].lower()
             if op not in {"lt", "le", "gt", "ge", "eq", "ne"}:
                 fail(
                     f"error: invalid {term_field}.op: expected op in {{lt, le, gt, ge, eq, ne}}"
                 )
-            rhs_expr = parse_int_expression(term[2], f"{term_field}.rhs", int_budget)
+            rhs_expr = parse_int_expression(
+                term[2],
+                f"{term_field}.rhs",
+                int_budget,
+                int_arithmetic_presets,
+            )
             term_key = (lhs_expr, op, rhs_expr)
             if term_key in int_expr_seen:
                 fail(
@@ -5564,6 +5642,7 @@ def parse_context_presence_clause(
                 regex_defs,
                 bool_budget,
                 int_budget,
+                int_arithmetic_presets,
             )
             if term_expr in bool_expr_seen:
                 fail(
