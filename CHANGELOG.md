@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 758 - February 9, 2026
+
+### MutationCover Auto Chain Mode (Parallel LEC+BMC)
+
+- Extended `utils/run_mutation_cover.sh` chained global formal filter modes:
+  - added `--formal-global-propagate-circt-chain auto`
+  - accepted values are now:
+    - `lec-then-bmc`
+    - `bmc-then-lec`
+    - `consensus`
+    - `auto`
+- `auto` mode semantics:
+  - runs `circt-lec` and differential `circt-bmc` in parallel.
+  - uses consensus-safe pruning semantics:
+    - `not_propagated` only when both engines report non-propagation
+      (`LEC_RESULT=EQ` and equal `BMC_RESULT`).
+    - otherwise classifies as `propagated` for decisive propagation evidence;
+      unresolved/engine failures remain `error`.
+- Added `chain_auto_parallel_mutants` metric and persisted note-tag telemetry
+  (`chain_auto_parallel=1`) for reuse visibility.
+
+### Matrix and Docs
+
+- Updated `utils/run_mutation_matrix.sh` help for
+  `--default-formal-global-propagate-circt-chain` accepted values to include
+  `auto`.
+- Updated documentation and planning:
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Tests
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test`
+    (accepted-value diagnostic now includes `auto`).
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test test/Tools/run-mutation-cover-global-filter-reuse.test`: PASS
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (32/32)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-chain-auto --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 757 - February 9, 2026
 
 ### MutationCover Consensus Chain Mode

@@ -154,7 +154,7 @@ Execution controls:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
 - Built-in chained circt-lec/circt-bmc global filter:
-  - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus`
+  - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
   - requires both `--formal-global-propagate-circt-lec` and
     `--formal-global-propagate-circt-bmc` options.
   - `lec-then-bmc`: use LEC first and fall back to differential BMC when LEC
@@ -163,6 +163,8 @@ Execution controls:
     returns `UNKNOWN` or an error.
   - `consensus`: run both LEC and differential BMC and classify
     `not_propagated` only when both agree on non-propagation.
+  - `auto`: run LEC and differential BMC in parallel with consensus-safe
+    classification (same pruning semantics as `consensus` with lower wall-time).
 
 `tests.tsv` format (tab-separated):
 
@@ -206,6 +208,8 @@ Generated artifacts (default under `./mutation-cover-results`):
     disagree in consensus mode (`eq+different` or `neq+equal`).
   - `chain_consensus_error_mutants`: count of consensus-mode mutants that
     resolved to `error`.
+  - `chain_auto_parallel_mutants`: count of mutants classified using
+    auto-mode parallel LEC/BMC execution.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
@@ -272,7 +276,7 @@ Execution controls:
   without a lane-specific circt-bmc global filter path.
 - `--default-formal-global-propagate-circt-chain <mode>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-chain` for lanes
-  without a lane-specific chain mode (`lec-then-bmc|bmc-then-lec|consensus`).
+  without a lane-specific chain mode (`lec-then-bmc|bmc-then-lec|consensus|auto`).
 - `--default-formal-global-propagate-circt-bmc-args <args>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc-args` for lanes
   without lane-specific bmc args.
