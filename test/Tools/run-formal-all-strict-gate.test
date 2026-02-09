@@ -9,7 +9,7 @@
 // RUN: printf '#!/usr/bin/env bash\necho "yosys SVA summary: 4 tests, failures=0, xfail=0, xpass=0, skipped=0"\n' > %t/utils/run_yosys_sva_circt_bmc.sh
 // RUN: printf '#!/usr/bin/env bash\necho "yosys LEC summary: total=4 pass=4 fail=0 error=0 skip=0"\n' > %t/utils/run_yosys_sva_circt_lec.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-avip\" ]]; then\n  echo \"bad_CIRCT_VERILOG_AVIP=${CIRCT_VERILOG:-}\"\n  exit 8\nfi\necho \"CIRCT_VERILOG_AVIP_OK\"\n' > %t/utils/run_avip_circt_verilog.sh
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\necho \"Running LEC on 1 modules\"\necho \"aes_sbox_canright        XPROP_ONLY (accepted)\"\necho \"LEC failures: 0\"\necho \"CIRCT_VERILOG_OPENTITAN_OK\"\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\nif [[ -z \"${OUT:-}\" ]]; then\n  echo \"missing_OUT\"\n  exit 8\nfi\nmkdir -p \"$(dirname \"$OUT\")\"\nwork=\"${1:-work}\"\nif [[ \"$#\" -ge 2 && \"$1\" == \"--workdir\" ]]; then\n  work=\"$2\"\nfi\nprintf \"PASS\\taes_sbox_canright\\t%s/aes_sbox_canright\\topentitan\\tLEC\\n\" \"$work\" > \"$OUT\"\necho \"Running LEC on 1 modules\"\necho \"aes_sbox_canright        OK\"\necho \"LEC completed successfully.\"\necho \"CIRCT_VERILOG_OPENTITAN_OK\"\n' > %t/utils/run_opentitan_circt_lec.py
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-avip
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
@@ -357,7 +357,9 @@
 // RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh %t/utils/run_sv_tests_circt_lec.sh
 // RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nsv-tests\tLEC\tmissing_case\tbase\tFAIL\t2099-01-01\tstale_entry\n' > %t/expected-failure-cases-unmatched.tsv
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-expected-cases-unmatched --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --expected-failure-cases-file %t/expected-failure-cases-unmatched.tsv --fail-on-unmatched-expected-failure-cases' 2>&1 | FileCheck %s --check-prefix=CASEUNMATCHED
-// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC\taes_sbox_canright\tbase\tXFAIL\t2099-01-01\tknown_xprop\n' > %t/expected-failure-cases-opentitan.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\nif [[ -z \"${OUT:-}\" ]]; then\n  echo \"missing_OUT\"\n  exit 8\nfi\nmkdir -p \"$(dirname \"$OUT\")\"\nwork=\"${1:-work}\"\nif [[ \"$#\" -ge 2 && \"$1\" == \"--workdir\" ]]; then\n  work=\"$2\"\nfi\nprintf \"FAIL\\taes_sbox_canright\\t%s/aes_sbox_canright#NEQ\\topentitan\\tLEC\\n\" \"$work\" > \"$OUT\"\necho \"Running LEC on 1 modules\"\necho \"aes_sbox_canright        FAIL (NEQ) (logs in ${work}/aes_sbox_canright)\"\necho \"LEC failures: 1\"\necho \"CIRCT_VERILOG_OPENTITAN_OK\"\nexit 1\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_opentitan_circt_lec.py
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC\taes_sbox_canright\tbase\tFAIL\t2099-01-01\tknown_neq\n' > %t/expected-failure-cases-opentitan.tsv
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-opentitan-cases --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog %t/fake-circt-verilog --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --expected-failure-cases-file %t/expected-failure-cases-opentitan.tsv --fail-on-unexpected-failure-cases
 // RUN: FileCheck %s --check-prefix=CASEOT < %t/out-opentitan-cases/expected-failure-cases-summary.tsv
 // RUN: FileCheck %s --check-prefix=OPENTITANDETAIL < %t/out-opentitan-cases/opentitan-lec-results.txt
@@ -777,8 +779,8 @@
 // LANESTATEKEYRINGWINDOW: lane state HMAC key_id '{{.*}}' not active at generated_at_utc
 // CASEUNMATCHED: unmatched expected failure cases:
 // CASEUNMATCHED: sv-tests LEC id_kind=base id=missing_case status=FAIL
-// CASEOT: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_xprop
-// OPENTITANDETAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// CASEOT: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_neq
+// OPENTITANDETAIL: FAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright#NEQ{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
 // CASEAVIP: avip/foo_avip{{[[:space:]]+}}compile{{[[:space:]]+}}base{{[[:space:]]+}}foo_avip{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_avip_fail
 // AVIPDETAIL: FAIL{{[[:space:]]+}}foo_avip{{[[:space:]]+}}{{.*}}/foo_avip{{[[:space:]]+}}avip/foo_avip{{[[:space:]]+}}compile
 // EXPECTEDOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}yes{{[[:space:]]+}}known_issue
