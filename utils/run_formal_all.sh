@@ -466,8 +466,27 @@ def emit_if_string(scope: dict, scope_name: str, key: str, out_key: str):
     raise SystemExit(1)
   print(f"{out_key}\t{value.strip()}")
 
+def emit_if_bool(scope: dict, scope_name: str, key: str, out_key: str):
+  if key not in scope:
+    return
+  value = scope[key]
+  if not isinstance(value, bool):
+    print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.{scope_name}.{key}: expected boolean",
+      file=sys.stderr,
+    )
+    raise SystemExit(1)
+  print(f"{out_key}\t{1 if value else 0}")
+
 unknown_profile_keys = sorted(
-  set(profile.keys()) - {"auto_uri_policy", "auto_uri_allowed_schemes", "crl", "ocsp"}
+  set(profile.keys()) - {
+      "auto_uri_policy",
+      "auto_uri_allowed_schemes",
+      "refresh_metadata_require_ca_cert_in_cert_chain",
+      "refresh_metadata_require_tls_peer_in_cert_chain",
+      "crl",
+      "ocsp",
+  }
 )
 if unknown_profile_keys:
   print(
@@ -478,6 +497,18 @@ if unknown_profile_keys:
 
 emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_policy", "shared_auto_uri_policy")
 emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_allowed_schemes", "shared_auto_uri_allowed_schemes")
+emit_if_bool(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_metadata_require_ca_cert_in_cert_chain",
+    "shared_refresh_metadata_require_ca_cert_in_cert_chain",
+)
+emit_if_bool(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_metadata_require_tls_peer_in_cert_chain",
+    "shared_refresh_metadata_require_tls_peer_in_cert_chain",
+)
 
 for artifact in ("crl", "ocsp"):
   section = profile.get(artifact)
@@ -489,7 +520,15 @@ for artifact in ("crl", "ocsp"):
         file=sys.stderr,
     )
     raise SystemExit(1)
-  unknown_section_keys = sorted(set(section.keys()) - {"auto_uri_policy", "auto_uri_allowed_schemes"})
+  unknown_section_keys = sorted(
+      set(section.keys())
+      - {
+          "auto_uri_policy",
+          "auto_uri_allowed_schemes",
+          "refresh_metadata_require_ca_cert_in_cert_chain",
+          "refresh_metadata_require_tls_peer_in_cert_chain",
+      }
+  )
   if unknown_section_keys:
     print(
         f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.profiles.{profile_name}.{artifact}: unknown key '{unknown_section_keys[0]}'",
@@ -498,6 +537,18 @@ for artifact in ("crl", "ocsp"):
     raise SystemExit(1)
   emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_policy", f"{artifact}_auto_uri_policy")
   emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_allowed_schemes", f"{artifact}_auto_uri_allowed_schemes")
+  emit_if_bool(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_metadata_require_ca_cert_in_cert_chain",
+      f"{artifact}_refresh_metadata_require_ca_cert_in_cert_chain",
+  )
+  emit_if_bool(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_metadata_require_tls_peer_in_cert_chain",
+      f"{artifact}_refresh_metadata_require_tls_peer_in_cert_chain",
+  )
 PY
 }
 
@@ -2173,14 +2224,26 @@ PROFILE_SHARED_AUTO_URI_POLICY=""
 PROFILE_SHARED_AUTO_URI_POLICY_SET=0
 PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
 PROFILE_CRL_AUTO_URI_POLICY=""
 PROFILE_CRL_AUTO_URI_POLICY_SET=0
 PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
 PROFILE_OCSP_AUTO_URI_POLICY=""
 PROFILE_OCSP_AUTO_URI_POLICY_SET=0
 PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
 
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
   profile_policy_rows="$(
@@ -2199,6 +2262,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=1
           ;;
+        shared_refresh_metadata_require_ca_cert_in_cert_chain)
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$profile_value"
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=1
+          ;;
+        shared_refresh_metadata_require_tls_peer_in_cert_chain)
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
+          ;;
         crl_auto_uri_policy)
           PROFILE_CRL_AUTO_URI_POLICY="$profile_value"
           PROFILE_CRL_AUTO_URI_POLICY_SET=1
@@ -2207,6 +2278,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=1
           ;;
+        crl_refresh_metadata_require_ca_cert_in_cert_chain)
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$profile_value"
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=1
+          ;;
+        crl_refresh_metadata_require_tls_peer_in_cert_chain)
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
+          ;;
         ocsp_auto_uri_policy)
           PROFILE_OCSP_AUTO_URI_POLICY="$profile_value"
           PROFILE_OCSP_AUTO_URI_POLICY_SET=1
@@ -2214,6 +2293,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         ocsp_auto_uri_allowed_schemes)
           PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        ocsp_refresh_metadata_require_ca_cert_in_cert_chain)
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$profile_value"
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=1
+          ;;
+        ocsp_refresh_metadata_require_tls_peer_in_cert_chain)
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
           ;;
         *)
           echo "internal error: unknown refresh policy profile field '$profile_key'" >&2
@@ -2282,6 +2369,34 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" !
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES"
   elif [[ "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN" != "1" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN" != "1" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN" != "1" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN" != "1" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
   fi
 fi
 if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then

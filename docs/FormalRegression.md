@@ -151,11 +151,24 @@ Lane-state semantics:
     auto-URI defaults from a JSON profile registry.
     - schema: `{"schema_version":1,"profiles":{...}}`
     - profile keys:
-      - shared: `auto_uri_policy`, `auto_uri_allowed_schemes`
-      - per-artifact: `crl.{...}`, `ocsp.{...}`
+      - shared:
+        `auto_uri_policy`, `auto_uri_allowed_schemes`,
+        `refresh_metadata_require_ca_cert_in_cert_chain`,
+        `refresh_metadata_require_tls_peer_in_cert_chain`
+      - per-artifact (`crl.{...}`, `ocsp.{...}`) may override:
+        `auto_uri_policy`, `auto_uri_allowed_schemes`,
+        `refresh_metadata_require_ca_cert_in_cert_chain`,
+        `refresh_metadata_require_tls_peer_in_cert_chain`
   - Effective precedence for policy/scheme defaults:
     - per-artifact CLI override
     - shared CLI override
+    - per-artifact profile value
+    - shared profile value
+    - built-in default
+  - Effective precedence for profile-driven refresh metadata chain-membership
+    defaults (`...require_ca_cert_in_cert_chain`,
+    `...require_tls_peer_in_cert_chain`):
+    - explicit per-artifact CLI flag
     - per-artifact profile value
     - shared profile value
     - built-in default

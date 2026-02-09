@@ -18001,6 +18001,18 @@ ninja -C build circt-verilog
     resume/reset paths.
   - Hardens 24/7 distributed checkpoint trust against stale or compromised certs.
 
+### Iteration 723
+- Extended refresh policy profiles to carry metadata chain-membership defaults:
+  - shared and per-artifact profile keys now support:
+    - `refresh_metadata_require_ca_cert_in_cert_chain`
+    - `refresh_metadata_require_tls_peer_in_cert_chain`
+- Planner impact:
+  - Enables deterministic rollout of stricter refresh metadata trust policy
+    through signed/hashed profile registries instead of per-run flag sprawl.
+  - Preserves explicit CLI overrides while allowing profile-based default
+    tightening for 24/7 distributed closures.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
