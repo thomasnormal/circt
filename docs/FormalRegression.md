@@ -463,6 +463,12 @@ Execution controls:
   followers to reduce lock contention when `--reuse-cache-dir` is enabled.
 - `--jobs-per-lane <N>`: per-lane mutant worker count passed through to
   `run_mutation_cover.sh`.
+- `--skip-baseline`: pass-through `run_mutation_cover.sh --skip-baseline`
+  for all lanes.
+- `--fail-on-undetected`: pass-through
+  `run_mutation_cover.sh --fail-on-undetected` for all lanes.
+- `--fail-on-errors`: pass-through
+  `run_mutation_cover.sh --fail-on-errors` for all lanes.
 - `--default-reuse-pair-file <path>`: default
   `run_mutation_cover.sh --reuse-pair-file` for lanes that do not set a
   lane-specific reuse file.

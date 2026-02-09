@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 782 - February 9, 2026
+
+### Mutation CLI Packaging + Matrix Strict Gate Pass-Through
+
+1. Extended `tools/circt-mut/CMakeLists.txt` install packaging:
+   - install mutation workflow scripts to `<prefix>/share/circt/utils`:
+     - `run_mutation_cover.sh`
+     - `run_mutation_matrix.sh`
+     - `generate_mutations_yosys.sh`
+     - `create_mutated_yosys.sh`
+   - aligns with `circt-mut` install-tree script discovery logic.
+2. Extended `utils/run_mutation_matrix.sh` with strict gate controls passed to
+   per-lane `run_mutation_cover.sh`:
+   - `--skip-baseline`
+   - `--fail-on-undetected`
+   - `--fail-on-errors`
+3. Updated mutation docs/planning:
+   - `README.md`
+   - `docs/FormalRegression.md`
+   - `PROJECT_PLAN.md`
+
+### Tests
+
+- Added:
+  - `test/Tools/circt-mut-install-tree-resolution.test`
+    - validates install-tree script resolution from
+      `<prefix>/share/circt/utils`.
+  - `test/Tools/run-mutation-matrix-skip-baseline-fail-on-undetected.test`
+  - `test/Tools/run-mutation-matrix-fail-on-errors.test`
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Build:
+  - `ninja -C build circt-mut`: PASS
+- Install-tree packaging check:
+  - `cmake --install build --prefix /tmp/circt-mut-install-test-<ts> --component circt-mut`: PASS
+  - verified installed artifacts:
+    - `bin/circt-mut`
+    - `share/circt/utils/run_mutation_cover.sh`
+    - `share/circt/utils/run_mutation_matrix.sh`
+    - `share/circt/utils/generate_mutations_yosys.sh`
+    - `share/circt/utils/create_mutated_yosys.sh`
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-install-tree-resolution.test test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-matrix-skip-baseline-fail-on-undetected.test test/Tools/run-mutation-matrix-fail-on-errors.test test/Tools/run-mutation-matrix.test`: PASS (5/5)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-create-mutated-yosys*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (73/73)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-matrix-gates --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 781 - February 9, 2026
 
 ### Mutation Cover: Verilog Input Support in Default Mutator

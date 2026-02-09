@@ -4,6 +4,9 @@
 // CHECK: --lanes-tsv
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
+// CHECK: --skip-baseline
+// CHECK: --fail-on-undetected
+// CHECK: --fail-on-errors
 // CHECK: --default-reuse-pair-file
 // CHECK: --default-reuse-summary-file
 // CHECK: --default-mutations-modes

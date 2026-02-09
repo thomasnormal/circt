@@ -16,6 +16,9 @@ Optional:
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
+  --skip-baseline           Passed through to run_mutation_cover.sh --skip-baseline
+  --fail-on-undetected      Passed through to run_mutation_cover.sh --fail-on-undetected
+  --fail-on-errors          Passed through to run_mutation_cover.sh --fail-on-errors
   --default-reuse-pair-file FILE
                             Default --reuse-pair-file for lanes that do not set reuse_pair_file
   --default-reuse-summary-file FILE
@@ -138,6 +141,9 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
+SKIP_BASELINE=0
+FAIL_ON_UNDETECTED=0
+FAIL_ON_ERRORS=0
 DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
 DEFAULT_MUTATIONS_MODES=""
@@ -181,6 +187,9 @@ while [[ $# -gt 0 ]]; do
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
+    --skip-baseline) SKIP_BASELINE=1; shift ;;
+    --fail-on-undetected) FAIL_ON_UNDETECTED=1; shift ;;
+    --fail-on-errors) FAIL_ON_ERRORS=1; shift ;;
     --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
@@ -662,6 +671,15 @@ run_lane() {
   )
   if [[ -n "$REUSE_CACHE_DIR" ]]; then
     cmd+=(--reuse-cache-dir "$REUSE_CACHE_DIR")
+  fi
+  if [[ "$SKIP_BASELINE" -eq 1 ]]; then
+    cmd+=(--skip-baseline)
+  fi
+  if [[ "$FAIL_ON_UNDETECTED" -eq 1 ]]; then
+    cmd+=(--fail-on-undetected)
+  fi
+  if [[ "$FAIL_ON_ERRORS" -eq 1 ]]; then
+    cmd+=(--fail-on-errors)
   fi
 
   if [[ "${MUTATIONS_FILE[$i]}" != "-" ]]; then

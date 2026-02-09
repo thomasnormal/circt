@@ -215,6 +215,9 @@ global filters:
 - then from `./build/bin` in this CIRCT checkout
 - you can still override with explicit paths.
 
+For installed toolchains, `circt-mut` expects mutation workflow scripts under
+`<prefix>/share/circt/utils` and CIRCT now installs them there by default.
+
 Use auto-generated mutations instead of a prebuilt list:
 
 ```sh
@@ -236,6 +239,8 @@ circt-mut matrix \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
+  --skip-baseline \
+  --fail-on-undetected \
   --include-lane-regex '^sv-tests|^verilator' \
   --exclude-lane-regex 'slow'
 ```
