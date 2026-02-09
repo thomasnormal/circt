@@ -291,6 +291,15 @@ Execution controls:
     conflicting non-chain global-filter mode combinations before dispatch.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
+  - cover formal numeric/cache controls are now validated natively:
+    `--formal-global-propagate-timeout-seconds`,
+    `--formal-global-propagate-lec-timeout-seconds`,
+    `--formal-global-propagate-bmc-timeout-seconds`,
+    `--formal-global-propagate-bmc-bound`,
+    `--formal-global-propagate-bmc-ignore-asserts-until`,
+    `--bmc-orig-cache-max-entries`, `--bmc-orig-cache-max-bytes`,
+    `--bmc-orig-cache-max-age-seconds`,
+    `--bmc-orig-cache-eviction-policy`.
 - `circt-mut matrix` migration note:
   - default built-in global-filter options are now pre-resolved/validated
     natively (`--default-formal-global-propagate-circt-lec`,

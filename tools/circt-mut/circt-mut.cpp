@@ -236,6 +236,15 @@ struct CoverRewriteResult {
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                                            ArrayRef<StringRef> args) {
   CoverRewriteResult result;
+  std::string globalFilterTimeoutSeconds;
+  std::string globalFilterLECTimeoutSeconds;
+  std::string globalFilterBMCTimeoutSeconds;
+  std::string globalFilterBMCBound;
+  std::string globalFilterBMCIgnoreAssertsUntil;
+  std::string bmcOrigCacheMaxEntries;
+  std::string bmcOrigCacheMaxBytes;
+  std::string bmcOrigCacheMaxAgeSeconds;
+  std::string bmcOrigCacheEvictionPolicy;
   bool hasGlobalFilterCmd = false;
   bool hasGlobalFilterLEC = false;
   bool hasGlobalFilterBMC = false;
@@ -243,6 +252,14 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   std::string globalFilterChainMode;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
+    auto valueFromArg = [&]() -> StringRef {
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos)
+        return arg.substr(eqPos + 1);
+      if (i + 1 < args.size())
+        return args[i + 1];
+      return StringRef();
+    };
 
     auto resolveWithOptionalValue =
         [&](StringRef flag, StringRef toolName) -> bool {
@@ -329,6 +346,42 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     if (arg == "--formal-global-propagate-cmd" ||
         arg.starts_with("--formal-global-propagate-cmd="))
       hasGlobalFilterCmd = true;
+    if (arg == "--formal-global-propagate-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-timeout-seconds=")) {
+      globalFilterTimeoutSeconds = valueFromArg().str();
+    }
+    if (arg == "--formal-global-propagate-lec-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-lec-timeout-seconds=")) {
+      globalFilterLECTimeoutSeconds = valueFromArg().str();
+    }
+    if (arg == "--formal-global-propagate-bmc-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-bmc-timeout-seconds=")) {
+      globalFilterBMCTimeoutSeconds = valueFromArg().str();
+    }
+    if (arg == "--formal-global-propagate-bmc-bound" ||
+        arg.starts_with("--formal-global-propagate-bmc-bound=")) {
+      globalFilterBMCBound = valueFromArg().str();
+    }
+    if (arg == "--formal-global-propagate-bmc-ignore-asserts-until" ||
+        arg.starts_with("--formal-global-propagate-bmc-ignore-asserts-until=")) {
+      globalFilterBMCIgnoreAssertsUntil = valueFromArg().str();
+    }
+    if (arg == "--bmc-orig-cache-max-entries" ||
+        arg.starts_with("--bmc-orig-cache-max-entries=")) {
+      bmcOrigCacheMaxEntries = valueFromArg().str();
+    }
+    if (arg == "--bmc-orig-cache-max-bytes" ||
+        arg.starts_with("--bmc-orig-cache-max-bytes=")) {
+      bmcOrigCacheMaxBytes = valueFromArg().str();
+    }
+    if (arg == "--bmc-orig-cache-max-age-seconds" ||
+        arg.starts_with("--bmc-orig-cache-max-age-seconds=")) {
+      bmcOrigCacheMaxAgeSeconds = valueFromArg().str();
+    }
+    if (arg == "--bmc-orig-cache-eviction-policy" ||
+        arg.starts_with("--bmc-orig-cache-eviction-policy=")) {
+      bmcOrigCacheEvictionPolicy = valueFromArg().str();
+    }
     if (arg == "--formal-global-propagate-circt-chain" ||
         arg.starts_with("--formal-global-propagate-circt-chain=")) {
       constexpr StringRef chainPrefix =
@@ -397,6 +450,52 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       return result;
     }
   }
+  auto validateCoverRegex = [&](StringRef value, const Regex &pattern,
+                                StringRef flag, StringRef expected) -> bool {
+    if (value.empty())
+      return true;
+    if (pattern.match(value))
+      return true;
+    result.error =
+        (Twine("Invalid ") + flag + " value: " + value + " (expected " +
+         expected + ").")
+            .str();
+    return false;
+  };
+  if (!validateCoverRegex(globalFilterTimeoutSeconds, Regex("^[0-9]+$"),
+                          "--formal-global-propagate-timeout-seconds",
+                          "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(globalFilterLECTimeoutSeconds, Regex("^[0-9]+$"),
+                          "--formal-global-propagate-lec-timeout-seconds",
+                          "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(globalFilterBMCTimeoutSeconds, Regex("^[0-9]+$"),
+                          "--formal-global-propagate-bmc-timeout-seconds",
+                          "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(globalFilterBMCBound, Regex("^[1-9][0-9]*$"),
+                          "--formal-global-propagate-bmc-bound",
+                          "positive integer"))
+    return result;
+  if (!validateCoverRegex(globalFilterBMCIgnoreAssertsUntil, Regex("^[0-9]+$"),
+                          "--formal-global-propagate-bmc-ignore-asserts-until",
+                          "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(bmcOrigCacheMaxEntries, Regex("^[0-9]+$"),
+                          "--bmc-orig-cache-max-entries", "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(bmcOrigCacheMaxBytes, Regex("^[0-9]+$"),
+                          "--bmc-orig-cache-max-bytes", "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(bmcOrigCacheMaxAgeSeconds, Regex("^[0-9]+$"),
+                          "--bmc-orig-cache-max-age-seconds", "0-9 integer"))
+    return result;
+  if (!validateCoverRegex(bmcOrigCacheEvictionPolicy,
+                          Regex("^(lru|fifo|cost-lru)$"),
+                          "--bmc-orig-cache-eviction-policy",
+                          "lru|fifo|cost-lru"))
+    return result;
 
   result.ok = true;
   return result;
