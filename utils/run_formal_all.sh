@@ -6577,11 +6577,16 @@ with path.open(encoding="utf-8") as f:
         parts = line.split("\t")
         if len(parts) < 7:
             continue
+        impl = normalize(parts[1].strip())
         status = normalize(parts[0].strip())
         diag = normalize(parts[3].strip())
         result = normalize(parts[4].strip())
         counters = parts[5].strip()
         rows += 1
+        counts[f"xprop_impl_{impl}_cases"] += 1
+        counts[f"xprop_impl_{impl}_status_{status}"] += 1
+        counts[f"xprop_impl_{impl}_diag_{diag}"] += 1
+        counts[f"xprop_impl_{impl}_result_{result}"] += 1
         counts[f"xprop_status_{status}"] += 1
         counts[f"xprop_diag_{diag}"] += 1
         counts[f"xprop_result_{result}"] += 1
@@ -6596,6 +6601,7 @@ with path.open(encoding="utf-8") as f:
                     val = int(raw_val)
                 except ValueError:
                     continue
+                counts[f"xprop_impl_{impl}_counter_{key}"] += val
                 counts[f"xprop_counter_{key}"] += val
 
 if rows <= 0:

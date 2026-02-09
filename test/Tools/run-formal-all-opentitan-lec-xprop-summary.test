@@ -11,6 +11,6 @@
 //
 // SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
 // SUM: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
-// SUM: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1
+// SUM: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1{{.*}}xprop_impl_aes_sbox_canright_counter_input_unknown_extracts=7
 // LECXPROP: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY{{[[:space:]]+}}NEQ{{[[:space:]]+}}input-unknown-extracts=5
 // STRICTXPROP: FAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}XPROP_ONLY{{[[:space:]]+}}NEQ{{[[:space:]]+}}input-unknown-extracts=7

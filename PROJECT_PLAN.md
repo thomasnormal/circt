@@ -288,13 +288,18 @@ See CHANGELOG.md on recent progress.
       `opentitan-lec-strict-xprop-summary.tsv`.
 37. `run_formal_all.sh` now aggregates OpenTitan LEC XPROP counters directly
     into lane summaries (`summary.tsv` / baseline result field), including:
-    `xprop_cases`, `xprop_diag_*`, `xprop_result_*`, `xprop_status_*`, and
-    `xprop_counter_*` key/value totals.
+    `xprop_cases`, `xprop_diag_*`, `xprop_result_*`, `xprop_status_*`,
+    `xprop_counter_*`, plus per-implementation keys
+    `xprop_impl_<impl>_{cases,status_*,diag_*,result_*,counter_*}`.
 38. Strict-gate now supports regression gating on strict OpenTitan LEC XPROP
     counters via repeatable
     `--fail-on-new-opentitan-lec-strict-xprop-counter <key>` against baseline
     windows, enabling long-term 4-state parity trend enforcement beyond coarse
     fail-count tracking.
+39. Strict OpenTitan LEC counter gating now supports per-implementation drift
+    tracking (for example
+    `xprop_impl_aes_sbox_canright_counter_input_unknown_extracts`) so parity
+    regressions can be attributed and gated at implementation granularity.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
