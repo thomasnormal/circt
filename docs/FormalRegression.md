@@ -115,6 +115,8 @@ Execution controls:
   byte footprint (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-age-seconds <n>`: cap differential-BMC
   original-design cache entry age (`0` disables limit, default `0`).
+- `--bmc-orig-cache-eviction-policy lru|fifo`: eviction mode for
+  count/byte bounded differential-BMC original cache (`lru` default).
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes. Supports concrete Yosys modes
@@ -233,6 +235,8 @@ Generated artifacts (default under `./mutation-cover-results`):
     cache publication (`disabled|read_only|written|write_error`).
   - `bmc_orig_cache_max_entries` / `bmc_orig_cache_max_bytes` /
     `bmc_orig_cache_max_age_seconds`: configured cache limits.
+  - `bmc_orig_cache_eviction_policy`: configured count/byte cache eviction
+    policy (`lru` or `fifo`).
   - `bmc_orig_cache_entries` / `bmc_orig_cache_bytes`: post-run local cache
     footprint.
   - `bmc_orig_cache_pruned_entries` / `bmc_orig_cache_pruned_bytes`: local
@@ -335,6 +339,8 @@ Execution controls:
   `run_mutation_cover.sh --bmc-orig-cache-max-bytes`.
 - `--default-bmc-orig-cache-max-age-seconds <n>`: default
   `run_mutation_cover.sh --bmc-orig-cache-max-age-seconds`.
+- `--default-bmc-orig-cache-eviction-policy lru|fifo`: default
+  `run_mutation_cover.sh --bmc-orig-cache-eviction-policy`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -344,7 +350,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]
 ```
 
 Notes:
@@ -411,6 +417,8 @@ Notes:
   `--default-bmc-orig-cache-max-bytes` for a specific lane.
 - `bmc_orig_cache_max_age_seconds` (optional) overrides
   `--default-bmc-orig-cache-max-age-seconds` for a specific lane.
+- `bmc_orig_cache_eviction_policy` (optional) overrides
+  `--default-bmc-orig-cache-eviction-policy` for a specific lane.
 - `global_propagate_cmd` is mutually exclusive with built-in global filter
   modes.
 - `global_propagate_circt_chain` requires both

@@ -25,6 +25,7 @@
 // CHECK: --default-bmc-orig-cache-max-entries
 // CHECK: --default-bmc-orig-cache-max-bytes
 // CHECK: --default-bmc-orig-cache-max-age-seconds
+// CHECK: --default-bmc-orig-cache-eviction-policy
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs

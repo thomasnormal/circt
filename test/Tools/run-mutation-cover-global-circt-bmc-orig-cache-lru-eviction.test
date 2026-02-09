@@ -1,0 +1,60 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_EQ\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\n{\n  echo \"// design: $design\"\n  echo \"// spec: $spec\"\n} > \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ndesign=\"${@: -1}\"\nif [[ \"$design\" == \"$ORIG_PATH\" ]]; then\n  count_file=\"$COUNTS_DIR/orig.count\"\nelse\n  count_file=\"$COUNTS_DIR/mut.count\"\nfi\ncount=0\nif [[ -f \"$count_file\" ]]; then\n  count=\"$(cat \"$count_file\")\"\nfi\ncount=$((count + 1))\necho \"$count\" > \"$count_file\"\necho \"BMC_RESULT=UNSAT\"\n' > %t/fake-circt-bmc.sh
+// RUN: chmod +x %t/fake-circt-bmc.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+//
+// RUN: env ORIG_PATH=%t/design.il COUNTS_DIR=%t %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-global-propagate-circt-bmc %t/fake-circt-bmc.sh \
+// RUN:   --bmc-orig-cache-eviction-policy lru \
+// RUN:   --jobs 1 \
+// RUN:   --work-dir %t/out
+//
+// RUN: cache_meta="$(ls %t/out/.global_bmc_orig_cache/*.orig.meta | head -n1)" && cache_base="${cache_meta%.orig.meta}" && echo "$cache_base" > %t/cache_base.txt
+// RUN: cache_base="$(cat %t/cache_base.txt)" && touch -d '2000-01-01 UTC' "${cache_base}.orig.log" "${cache_base}.orig.meta" && printf '946684800000000000\n' > "${cache_base}.orig.atime"
+// RUN: printf 'stale\n' > %t/out/.global_bmc_orig_cache/stale.orig.log
+// RUN: printf '0\tunsat\n' > %t/out/.global_bmc_orig_cache/stale.orig.meta
+// RUN: printf '978307200000000000\n' > %t/out/.global_bmc_orig_cache/stale.orig.atime
+// RUN: touch -d '2001-01-01 UTC' %t/out/.global_bmc_orig_cache/stale.orig.log %t/out/.global_bmc_orig_cache/stale.orig.meta
+//
+// RUN: env ORIG_PATH=%t/design.il COUNTS_DIR=%t %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-global-propagate-circt-bmc %t/fake-circt-bmc.sh \
+// RUN:   --bmc-orig-cache-max-entries 2 \
+// RUN:   --bmc-orig-cache-eviction-policy lru \
+// RUN:   --jobs 1 \
+// RUN:   --work-dir %t/out
+//
+// RUN: env ORIG_PATH=%t/design.il COUNTS_DIR=%t %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-global-propagate-circt-bmc %t/fake-circt-bmc.sh \
+// RUN:   --bmc-orig-cache-max-entries 1 \
+// RUN:   --bmc-orig-cache-eviction-policy lru \
+// RUN:   --jobs 1 \
+// RUN:   --work-dir %t/out
+//
+// RUN: test "$(cat %t/orig.count)" = "1"
+// RUN: test "$(cat %t/mut.count)" = "3"
+// RUN: test -f "$(cat %t/cache_base.txt).orig.meta"
+// RUN: test ! -e %t/out/.global_bmc_orig_cache/stale.orig.meta
+// RUN: FileCheck %s --check-prefix=METRICS < %t/out/metrics.tsv
+//
+// METRICS: bmc_orig_cache_hit_mutants{{.*}}1
+// METRICS: bmc_orig_cache_miss_mutants{{.*}}0
+// METRICS: bmc_orig_cache_eviction_policy{{.*}}lru
+// METRICS: bmc_orig_cache_pruned_entries{{.*}}1
