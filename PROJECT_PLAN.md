@@ -18146,27 +18146,16 @@ ninja -C build circt-verilog
     readability and maintainability.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
-### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
-- Completed the Ed25519 revocation-control chain for lane-state and signer
-  keyring modes:
-  - CRL freshness gating
-  - OCSP status + freshness + next-update gating
-  - OCSP response SHA pinning
-  - responder identity/certificate pinning + EKU + AKI/SKI linkage
-  - explicit OCSP issuer certificate selection.
-- Completed refresh metadata trust-policy tightening:
-  - minimum certificate-chain depth policies
-  - TLS peer-in-chain linkage policies
-  - CA cert-in-chain membership policies for CRL/OCSP refresh metadata.
-- Completed refresh-policy profile rollout and signer-trust hardening:
-  - shared/per-artifact profile defaults
-  - signed profile-registry support
-  - deterministic precedence and config-hash compatibility behavior.
-- Planning impact:
-  - Lane-state refresh and resume trust is now materially stricter and more
-    deterministic for 24/7 distributed execution.
-  - Remaining execution-level details and validation command logs are tracked in
-    `CHANGELOG.md`.
+### Iteration 732
+- Added schema-version-gated arithmetic compatibility profiles for route-context
+  schema defaults:
+  - `int_arithmetic_compat_profiles`
+  - `int_arithmetic_compat_ref`
+- Planner impact:
+  - enables explicit arithmetic-default migration policy by schema version.
+  - supports compatibility-profile imports so arithmetic policy can be shared
+    across schemas while remaining version-gated.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
 ### Recent Lane-State Hardening (See CHANGELOG)
 - Iterations 698-718 completed the CRL/OCSP refresh control plane:

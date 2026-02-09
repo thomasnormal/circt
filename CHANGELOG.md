@@ -36921,3 +36921,69 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No schema-version migration policy exists yet for arithmetic-default behavior
   changes.
 - OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
+
+## Iteration 732 - February 9, 2026
+
+### Yosys SVA Arithmetic Compatibility Profiles
+
+- Added schema-version-gated arithmetic compatibility profiles in
+  `utils/run_yosys_sva_circt_bmc.sh`:
+  - `int_arithmetic_compat_profiles`
+  - `int_arithmetic_compat_ref`
+- Compatibility profiles define:
+  - `schema_versions` (allowed schema versions)
+  - `int_arithmetic` (effective default arithmetic for those versions)
+- Added strict resolution and conflict diagnostics:
+  - unknown compatibility profile references
+  - schema-version incompatibility for selected profile
+  - conflict checks with explicit `int_arithmetic` and `int_arithmetic_ref`
+- Extended import payload support so imported modules can provide
+  `int_arithmetic_compat_profiles`.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive case: schema default selected via `int_arithmetic_compat_ref`
+      and validated against `schema_versions`
+    - negative case: unknown `int_arithmetic_compat_ref`
+    - negative case: incompatible schema-version/profile pairing
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Compatibility profiles currently apply at schema default scope; no clause- or
+  expression-local compatibility profile reference exists.
+- The compatibility profile mechanism validates schema version membership but
+  does not yet provide auto-migration tooling between schema versions.
+- OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
