@@ -3,10 +3,10 @@
 # mode: compile-only | xfail | skip
 
 # UVM testbench tests: stream_unpack interpreter issue (process 3)
-uvm_agent_active	pass	UVM testbench: stream_unpack interpretOperation failure
+uvm_agent_active	xfail	UVM testbench: needs resource_db + virtual interface clock
 uvm_agent_env	xfail	UVM testbench: stream_unpack interpretOperation failure
 uvm_agent_passive	xfail	UVM testbench: stream_unpack interpretOperation failure
-uvm_driver_sequencer_env	pass	UVM testbench: stream_unpack interpretOperation failure
+uvm_driver_sequencer_env	xfail	UVM testbench: needs resource_db + sequencer interface
 uvm_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation failure
 uvm_scoreboard_env	xfail	UVM testbench: stream_unpack interpretOperation failure
 uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: stream_unpack interpretOperation failure
