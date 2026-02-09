@@ -32932,6 +32932,62 @@ CIRCT/slang correctly enforces LRM restrictions.
   policy).
 - Resume granularity remains lane-level (no per-test replay).
 
+## Iteration 684 - February 9, 2026
+
+### Lane-State Ed25519 Keyring Trust-Store Mode
+
+- Added Ed25519 keyring-based trust-store support in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-keyring-tsv <file>`
+  - `--lane-state-manifest-ed25519-keyring-sha256 <sha256>`
+- Keyring semantics mirror lane-state HMAC keyring policy:
+  - key resolution by `--lane-state-manifest-ed25519-key-id`
+  - optional `not_before`/`not_after` key windows
+  - `active|revoked` status handling
+  - optional per-key public-key SHA256 pin
+  - optional full keyring content SHA256 pin
+- Added Ed25519 mode validation hardening:
+  - public-key file mode and keyring mode are mutually exclusive
+  - keyring mode requires private key and key-id
+  - reordered validations so dependency diagnostics fire before readability
+    checks
+- Manifest verification/enforcement updates:
+  - verify path now uses resolved effective Ed25519 public key (file or keyring)
+  - key-window enforcement now applies to Ed25519 keyring mode during both
+    emission and verification
+- Lane-state config hash now includes:
+  - `lane_state_ed25519_public_key_mode`
+  - `lane_state_ed25519_keyring_sha256`
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive Ed25519 keyring seed/resume
+    - negative keyring-no-private / keyring-no-id / keyring-sha-mismatch
+    - negative Ed25519 key-window rejection
+  - `docs/FormalRegression.md`
+    - documented Ed25519 keyring flags and trust-store schema
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External Ed25519 keyring smoke:
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-ed25519-keyring-smoke-<ts>/out-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --lane-state-tsv /tmp/formal-all-ed25519-keyring-smoke-<ts>/lane-state.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file /tmp/formal-all-ed25519-keyring-smoke-<ts>/ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /tmp/formal-all-ed25519-keyring-smoke-<ts>/ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <computed> --lane-state-manifest-ed25519-key-id smoke-ed25519-1 --include-lane-regex '^sv-tests/BMC$'`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - same command with `--resume-from-lane-state`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+
+### Remaining Limitations
+
+- Trust policy is keyring-based but still raw-key only (no certificate-chain or
+  external trust-anchor integration).
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 682 - February 9, 2026
 
 ### Lane-State Key-Window Enforcement (Keyring Mode)
