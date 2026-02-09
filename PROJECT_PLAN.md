@@ -162,17 +162,16 @@ See CHANGELOG.md on recent progress.
    `--with-opentitan-e2e`, with case-level failure export to
    `opentitan-e2e-results.txt` for expected-failure case tracking.
 3. All command-level validation and run evidence remain in `CHANGELOG.md`.
+4. `VERILOG i2c` and `VERILOG spi_device` singleton-array parse failures are
+   closed (LLHD singleton index normalization in MooreToCore).
 
 #### Current Open Non-Smoke Gaps (from latest E2E run)
 1. `SIM i2c`: wall-clock timeout (non-convergent end-to-end run).
 2. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram` index handling.
-3. `VERILOG spi_device`: `llhd.sig.array_get` index-width mismatch for
-   single-element arrays in `tlul_adapter_sram` (`i1` index vs expected
-   `clog2(1)=0`).
-4. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` module resolution.
-5. `VERILOG dma` and `VERILOG keymgr_dpe`: target-matrix mismatch (`Unknown
+3. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` module resolution.
+4. `VERILOG dma` and `VERILOG keymgr_dpe`: target-matrix mismatch (`Unknown
    target`) between parity plan and parse runner support.
-6. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
+5. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
 
 #### Closure Workflow
 1. Keep one issue per failing lane target with owner, reproducer, and expected
