@@ -1208,6 +1208,31 @@ private:
   /// IEEE 1800-2017 §18.13: Each class instance has its own RNG state.
   std::map<uint64_t, std::mt19937> perObjectRng;
 
+  /// UVM phase objection handles. Maps phase pointer → MooreObjectionHandle.
+  /// Used by intercepted get_objection/raise_objection/drop_objection to
+  /// bypass the interpreted get_objection() which fails on get_name() vtable
+  /// dispatch during objection object creation.
+  std::map<uint64_t, int64_t> phaseObjectionHandles;
+
+  /// Per-process mapping of execute_phase's task phase address.
+  /// When execute_phase is intercepted for a task phase, the phase address
+  /// is stored for the current process. When the outer sim.fork join creates
+  /// a child, the mapping is propagated. The child's join_any handler uses
+  /// it for objection polling.
+  std::map<ProcessId, uint64_t> executePhaseBlockingPhaseMap;
+
+  /// Maps task phase address → ProcessId of the master_phase_process child.
+  /// Used by the join_any polling to check if the traversal is still running.
+  std::map<uint64_t, ProcessId> masterPhaseProcessChild;
+
+  /// Per-process yield counter for execute_phase objection polling grace period.
+  std::map<ProcessId, int> executePhaseYieldCounts;
+
+  /// The phase address currently being executed by the phase hopper.
+  /// Set when execute_phase is entered, used by raise/drop_objection
+  /// interceptors to associate objections with the correct phase.
+  uint64_t currentExecutingPhaseAddr = 0;
+
   /// Get or create the per-object RNG for the given object address.
   /// If no RNG exists yet, creates one seeded with the object address.
   std::mt19937 &getObjectRng(uint64_t objAddr) {

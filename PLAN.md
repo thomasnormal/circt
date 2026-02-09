@@ -6,23 +6,27 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 206/206 | 100% |
+| circt-sim unit tests | 210/210 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
 | sv-tests simulation | 696/696 eligible pass+xfail | 100% |
-| sv-tests xfail (runtime gaps) | ~35 | See breakdown below |
+| sv-tests xfail (runtime gaps) | ~54 | See breakdown below |
 | sv-tests compile-only | 73 | Class-only + SVA UVM |
-| AVIPs passing | 9/9 | APB, AHB, UART, I2S, I3C, SPI, AXI4, AXI4Lite, JTAG |
+| AVIPs (hvl_top only) | 6/9 available | APB, AHB, UART, SPI, AXI4, JTAG reach run_phase → UVM_FATAL at BFM get() |
+| AVIPs with transactions | 0/9 | **Blocked**: BFM gap — no hdl_top simulated → no bus transactions, 0% coverage |
 | sv-tests BMC | 26/26 | 100% (Codex) |
 | sv-tests LEC | 23/23 | 100% (Codex) |
 | Coverage collection | Working | Parametric `with function sample()` fixed |
 
 ### Recent Fixes (This Session)
 
-1. **Constraint extraction improvements**: zext/sext lookup, compound range decomposition, constraint inheritance, VariableOp support for static blocks
-2. **Per-object RNG state**: `__moore_class_srandom(objPtr, seed)` with std::mt19937 per object address
-3. **Virtual interface clock propagation**: ContinuousAssignOp at module level → llhd.process for signal watching
-4. **Distribution constraint extraction**: `traceToPropertyName()` replaces BlockArgument-based lookup
-5. **Parametric covergroup sampling**: Fix 0% coverage - evaluate per-coverpoint expressions with bound formal parameters
+1. **Runtime vtable override in direct call_indirect path**: Fixed `exec_task` dispatching base class `run_phase` instead of derived class override; all three call_indirect paths now check self object's runtime vtable at byte offset 4
+2. **UVM phase sequencing**: Per-process phase map (`executePhaseBlockingPhaseMap`), `master_phase_process` fork detection, join_any objection polling with master child alive tracking
+3. **Constraint extraction improvements**: zext/sext lookup, compound range decomposition, constraint inheritance, VariableOp support for static blocks
+4. **Per-object RNG state**: `__moore_class_srandom(objPtr, seed)` with std::mt19937 per object address
+5. **Virtual interface clock propagation**: ContinuousAssignOp at module level → llhd.process for signal watching
+6. **Distribution constraint extraction**: `traceToPropertyName()` replaces BlockArgument-based lookup
+7. **Parametric covergroup sampling**: Fix 0% coverage - evaluate per-coverpoint expressions with bound formal parameters
+8. **Debug output cleanup**: Removed all 29 debug `llvm::errs()` traces from interpreter
 
 ### xfail Breakdown (~35 tests remaining)
 
@@ -71,25 +75,35 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 - ✅ `srandom(seed)` method → `__moore_class_srandom` in ImportVerilog + interpreter
 - ✅ Pending seed bridging for legacy `@srandom_NNNN` stubs
 
-**Next Tasks**:
-1. **`get_randstate()` / `set_randstate()`** - Save/restore RNG state as string (2 tests)
-2. **Thread stability** - Fork contexts get isolated RNG state (3 tests)
-3. **Manual seed in `randomize(seed)`** - Override RNG for one call (2 tests)
+**Recently Completed** (cont.):
+- ✅ `get_randstate()` / `set_randstate()` - Save/restore RNG state as string
+- ✅ ImportVerilog: `__moore_class_get_randstate(objPtr)` / `__moore_class_set_randstate(objPtr, stateStruct)`
+- ✅ Interpreter: Serialize/deserialize `std::mt19937` state via `ostringstream`/`istringstream`
+- ✅ Test: `random-get-set-randstate.sv` validates round-trip state preservation
 
-### Track 3: Coverage Collection (**ACTIVE**)
+**Next Tasks**:
+1. **Thread stability** - Fork contexts get isolated RNG state (3 tests)
+2. **Manual seed in `randomize(seed)`** - Override RNG for one call (2 tests)
+
+### Track 3: Coverage Collection (**BLOCKED on Track 5**)
 **Goal**: Get coverage working end-to-end for all AVIPs.
+**Status**: Coverage infrastructure works (130+ runtime functions), but no AVIP transactions
+flow to trigger sampling. Blocked on dual-top simulation (Track 5).
 
 **Recently Completed**:
 - ✅ Parametric covergroup `with function sample()` fix (was causing 0% coverage)
 - ✅ Coverage reporting framework (`__moore_coverage_report()`)
 - ✅ Coverpoint expression evaluation with formal parameter binding
+- ✅ Coverpoint `iff` guard evaluation (conditional branch in MooreToCore)
+- ✅ Per-object RNG (`get_randstate`/`set_randstate`)
 
-**Next Tasks**:
-1. **Recompile AVIPs** with coverage fix to verify non-zero hits
-2. **Coverpoint `iff` guard evaluation** - Currently stored as metadata string only
-3. **Automatic sampling triggers** - `@(posedge clk)` event-driven sampling
-4. **Wildcard bin matching** - Pattern matching for `wildcard bins`
-5. **Cross coverage verification** - Validate cross bins hit counting
+**Next Tasks** (after Track 5 unblocks):
+1. **Automatic sampling triggers** - `@(posedge clk)` event-driven sampling
+2. **Coverage start()/stop()** - Lower to `set_sample_enabled()` runtime calls
+3. **Wildcard bin matching** - X/Z pattern matching in `checkIgnoreBinsInternal`
+4. **Default bins** - `bins others = default` catch-all
+5. **Transition bin execution** - State machine tracking in runtime
+6. **Verify coverage vs Xcelium reference** - Compare APB 21-30% baseline
 
 ### Track 4: UVM Testbench Fixes (**ACTIVE**)
 **Goal**: Fix remaining UVM test failures.
@@ -105,23 +119,55 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 3. **SVA concurrent assertions** - Runtime eval for `assert property` (17 compile-only tests)
 4. **Process await/kill** - `process::await()` and `process::kill()` (sv-tests timeouts)
 
+### Track 5: Dual-Top Simulation (**P0 BLOCKER**)
+**Goal**: Simulate both `hvl_top` and `hdl_top` together so BFMs are available.
+
+**Root cause**: All 9 AVIPs use proxy-BFM split architecture. Driver/monitor proxies
+in `hvl_top` call `uvm_config_db::get(virtual apb_master_driver_bfm)` to get BFM handles
+from `hdl_top`. Without `hdl_top`, these `get()` calls fail with UVM_FATAL at time 0.
+No transactions flow, no scoreboard comparisons happen, coverage is always 0%.
+
+**What works now** (after vtable override fix):
+- UVM phases run correctly: build → connect → **run_phase dispatches to derived class**
+- `apb_base_test::run_phase`, `apb_master_driver_proxy::run_phase` etc. all execute
+- Correct UVM_FATAL: "cannot get() apb_master_drv_bfm_h" — expected without hdl_top
+- Phase sequencing: per-process map, master_phase_process detection, join_any polling
+- All 6 available AVIPs (.mlir) reach run_phase and exit cleanly (exit 0)
+
+**Multi-`--top` infrastructure already exists** in circt-sim:
+- `cl::list<std::string> topModules` accepts multiple `--top` flags
+- `SimulationContext::initialize()` loops through all tops, builds simulation model for each
+- All tops share the same `LLHDProcessInterpreter` (same scheduler, same config_db)
+- Config_db uses global key-value store → handles cross-module automatically
+
+**Tasks**:
+1. **Compile APB AVIP with both tops**: `circt-verilog -f apb_compile.f hdl_top.sv hvl_top.sv`
+2. **Test dual-top simulation**: `circt-sim combined.mlir --top hvl_top --top hdl_top`
+3. **Validate BFM exchange**: hdl_top `initial` sets virtual interface → hvl_top `build_phase` gets it
+4. **Verify transactions**: Check sim time > 0, UVM_FATAL count = 0, coverage > 0%
+5. **Repeat for all 9 AVIPs**
+
+**Xcelium reference** (APB `apb_8b_write_test`): 21-30% coverage, real bus transactions,
+0 UVM errors, 130ns sim time.
+
 ## Priority Matrix
 
 | Priority | Track | Next Task | Impact |
 |----------|-------|-----------|--------|
-| P0 | Track 3 | Recompile AVIPs with coverage fix | 9 AVIPs get real coverage |
+| P0 | Track 5 | Dual-top AVIP compilation + simulation | ALL AVIP coverage testing blocked without this |
 | P0 | Track 1 | Inline constraint extraction | Unblocks 4 tests |
-| P1 | Track 2 | get/set_randstate | Unblocks 2 tests |
+| P1 | Track 3 | Automatic sampling (`@(posedge clk)`) | AVIP implicit coverage |
+| P1 | Track 3 | Coverage start()/stop() | Dynamic coverage control |
 | P1 | Track 4 | Virtual interface DUT clock | Unblocks 6 UVM tests |
 | P2 | Track 1 | Infeasible constraint detection | Unblocks 2 tests |
-| P2 | Track 3 | Coverpoint iff evaluation | AVIP coverage accuracy |
+| P2 | Track 3 | Wildcard/default bins | Full bin support |
 | P3 | Track 4 | SVA concurrent assertions | 17 compile-only tests |
 
 ## Testing Targets
 
 | Suite | Command | Expected |
 |-------|---------|----------|
-| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 206+ pass |
+| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 210+ pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
 | sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh ~/sv-tests` | 0 fail, 0 timeout |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |

@@ -58,7 +58,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 206 | 206 | 0 | All pass; constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
+| circt-sim | 210 | 210 | 0 | All pass; runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -72,11 +72,11 @@ to commercial simulators like Cadence Xcelium.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | **UVM Core** | | |
-| UVM init / phases | WORKS | `uvm_root`, build/connect/run phases |
+| UVM init / phases | WORKS | `uvm_root`, build/connect/run phases; per-process phase map, master_phase_process detection, join_any objection polling |
 | UVM factory | WORKS | `create_object_by_type`, class registration |
 | UVM report server | WORKS | Severity actions, report messages |
 | `$cast` / RTTI | WORKS | Parent table, type hierarchy checking |
-| VTable dispatch | WORKS | Inherited methods, virtual calls across class hierarchy |
+| VTable dispatch | WORKS | Inherited methods, virtual calls across class hierarchy; runtime vtable override in all 3 call_indirect paths (X-fallback, direct, static) |
 | `process::self()` | WORKS | Intercepted for both old and new compilations |
 | **Data Structures** | | |
 | Associative arrays | WORKS | Auto-create on null, integer and string keys |
@@ -117,17 +117,35 @@ to commercial simulators like Cadence Xcelium.
 
 ### AVIP Simulation Status
 
-| AVIP | HvlTop | HdlTop | Combined | Notes |
-|------|--------|--------|----------|-------|
-| APB | Runs | Runs | Runs | `apb_base_test` completes; exit code 0 |
-| AHB | Runs | Runs | Runs | `AhbBaseTest` completes; exit code 0 |
-| UART | Runs | Runs | Runs | `UartBaseTest` completes; exit code 0 |
-| I2S | Runs | Runs | Runs | `I2sBaseTest` completes; exit code 0 |
-| I3C | Runs | Runs | Runs | `i3c_base_test` completes; exit code 0 |
-| SPI | Runs | Runs | Runs | `SpiBaseTest` completes; exit code 0 |
-| AXI4 | Runs | Runs | Runs | `axi4_base_test` completes; exit code 0 |
-| AXI4Lite | Runs | Runs | Runs | `Axi4LiteBaseTest` completes; exit code 0 |
-| JTAG | Runs | Runs | Runs | `HvlTop` completes; exit code 0 |
+All 9 AVIPs use a proxy-BFM split architecture where `hvl_top` (UVM test/env/agents)
+communicates with `hdl_top` (clock/reset/BFM interfaces) via `uvm_config_db` virtual
+interface handles. Currently, **no real bus transactions flow** because driver proxies
+cannot obtain BFM handles without `hdl_top` being simulated alongside `hvl_top`.
+
+Xcelium reference: APB `apb_8b_write_test` achieves 21-30% coverage with real SETUP/ACCESS
+bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, 0ns sim time,
+UVM_FATAL at BFM lookup.
+
+Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared config_db).
+**Blocker**: Need to compile both tops together and validate BFM handle exchange works.
+
+| AVIP | HvlTop | HdlTop | Combined | Status | Notes |
+|------|--------|--------|----------|--------|-------|
+| APB | Reaches run_phase | Compiles | Not tested | BFM Gap | Vtable dispatch works; `run_phase` dispatches to `apb_base_test`; UVM_FATAL at BFM `get()` |
+| AHB | Reaches run_phase | Compiles | Not tested | BFM Gap | Same — derived run_phase executes, fails at BFM lookup |
+| UART | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
+| I2S | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
+| I3C | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
+| SPI | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
+| AXI4 | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
+| AXI4Lite | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
+| JTAG | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
+
+**Road to full AVIP parity**:
+1. Compile both `hdl_top.sv` + `hvl_top.sv` together via `circt-verilog`
+2. Simulate with `circt-sim combined.mlir --top hvl_top --top hdl_top`
+3. Validate BFM handles flow through config_db (hdl_top sets, hvl_top gets)
+4. Compare coverage numbers vs Xcelium reference outputs
 
 ## Key Fixes History
 
@@ -201,3 +219,6 @@ to commercial simulators like Cadence Xcelium.
 | Per-object RNG state | `__moore_class_srandom(objPtr, seed)` in ImportVerilog; `std::mt19937` per object address in interpreter (IEEE 1800-2017 §18.13) |
 | Virtual interface clock propagation | `ContinuousAssignOp` at module level creates `llhd.process` to watch source signals and continuously update interface memory |
 | Parametric covergroup sample() | Fix 0% coverage: evaluate per-coverpoint expressions with `visitSymbolReferences()` to collect actual FormalArgument symbol pointers for name-based binding |
+| Runtime vtable override (direct path) | All 3 `call_indirect` paths (X-fallback, direct, static) now check self object's runtime vtable pointer at byte offset 4; resolves derived class method from correct vtable slot |
+| UVM phase sequencing | Per-process `executePhaseBlockingPhaseMap`, `master_phase_process` fork detection by name, join_any objection polling with `masterPhaseProcessChild` alive tracking; `wait_for_self_and_siblings_to_drop` native implementation |
+| Debug output cleanup | Removed 29 debug `llvm::errs()` traces ([EXEC-PHASE], [OBJECTION-DBG], [CI-DISPATCH], [VTABLE-DBG], [SIM-FORK], [DYN-CAST], etc.) |
