@@ -4220,21 +4220,55 @@ def parse_int_expression(
         "div_trunc_zero",
         "mod_floor",
         "mod_trunc_zero",
+        "div_ref",
+        "mod_ref",
     }:
-        if not isinstance(payload, list) or len(payload) != 2:
-            fail(
-                f"error: invalid {field_name}.{op}: expected [lhs, rhs] operands"
+        lhs_index = 0
+        rhs_index = 1
+        preset = None
+        if op in {"div_ref", "mod_ref"}:
+            if not isinstance(payload, list) or len(payload) != 3:
+                fail(
+                    f"error: invalid {field_name}.{op}: expected [int_arithmetic_ref, lhs, rhs] operands"
+                )
+            int_arithmetic_ref = payload[0]
+            if (
+                not isinstance(int_arithmetic_ref, str)
+                or not int_arithmetic_ref.strip()
+            ):
+                fail(
+                    f"error: invalid {field_name}.{op}[0]: expected non-empty string int_arithmetic_ref"
+                )
+            validate_context_key_name(
+                int_arithmetic_ref,
+                f"{field_name}.{op}[0]",
             )
+            if not int_arithmetic_presets:
+                fail(
+                    f"error: invalid {field_name}.{op}[0]: int_arithmetic_presets are not configured"
+                )
+            preset = int_arithmetic_presets.get(int_arithmetic_ref)
+            if preset is None:
+                fail(
+                    f"error: invalid {field_name}.{op}[0]: unknown int arithmetic preset '{int_arithmetic_ref}'"
+                )
+            lhs_index = 1
+            rhs_index = 2
+        else:
+            if not isinstance(payload, list) or len(payload) != 2:
+                fail(
+                    f"error: invalid {field_name}.{op}: expected [lhs, rhs] operands"
+                )
         lhs_expr = parse_int_expression(
-            payload[0],
-            f"{field_name}.{op}[0]",
+            payload[lhs_index],
+            f"{field_name}.{op}[{lhs_index}]",
             budget,
             int_arithmetic_presets,
             depth + 1,
         )
         rhs_expr = parse_int_expression(
-            payload[1],
-            f"{field_name}.{op}[1]",
+            payload[rhs_index],
+            f"{field_name}.{op}[{rhs_index}]",
             budget,
             int_arithmetic_presets,
             depth + 1,
@@ -4249,6 +4283,10 @@ def parse_int_expression(
             return ("div_with_mode", "trunc_zero", lhs_expr, rhs_expr)
         if op == "mod_floor":
             return ("mod_with_mode", "floor", lhs_expr, rhs_expr)
+        if op == "div_ref":
+            return ("div_with_mode", preset["div_mode"], lhs_expr, rhs_expr)
+        if op == "mod_ref":
+            return ("mod_with_mode", preset["mod_mode"], lhs_expr, rhs_expr)
         return ("mod_with_mode", "trunc_zero", lhs_expr, rhs_expr)
     if op == "with_int_arithmetic":
         if not isinstance(payload, list) or len(payload) != 2:

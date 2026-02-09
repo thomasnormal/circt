@@ -18135,6 +18135,17 @@ ninja -C build circt-verilog
     mechanisms for more maintainable policy migration.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 731
+- Added preset-ref shorthand operators for division/modulus expressions:
+  - `div_ref([int_arithmetic_ref, lhs, rhs])`
+  - `mod_ref([int_arithmetic_ref, lhs, rhs])`
+- Planner impact:
+  - reduces expression verbosity versus `with_int_arithmetic_ref` for the most
+    common div/mod migration patterns.
+  - keeps arithmetic policy centralized in schema presets while improving
+    readability and maintainability.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
