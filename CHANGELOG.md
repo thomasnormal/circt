@@ -34472,8 +34472,60 @@ CIRCT/slang correctly enforces LRM restrictions.
   - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --resume-from-lane-state`:
     - PASS
   - run outputs:
-    - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-seed`
-    - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-resume`
+    - `/tmp/formal-all-ed25519-ocsp-responder-sweep-20260209-020439/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-responder-sweep-20260209-020439/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode remains pinned-response-file based (no live responder URL mode).
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
+## Iteration 694 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Responder Certificate Pinning
+
+- Added responder-certificate policy controls in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-ocsp-responder-cert-file`
+  - `--lane-state-manifest-ed25519-ocsp-responder-cert-sha256`
+- New option semantics:
+  - responder cert file requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - responder cert SHA pin requires responder cert file
+  - responder cert is chain-verified against `--lane-state-manifest-ed25519-ca-file`
+  - OCSP verification now uses responder-cert-bound verification args when
+    configured.
+- Lane-state trust-contract updates:
+  - responder cert SHA now contributes to lane-state config hash material
+    (`lane_state_ed25519_ocsp_responder_cert_sha256`).
+  - Ed25519 lane-state manifests now include
+    `ed25519_ocsp_responder_cert_sha256` when configured.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for responder cert options
+    - positive responder cert pin + SHA pin case
+    - negative responder cert SHA mismatch case
+  - `docs/FormalRegression.md`
+    - documented responder cert pin and SHA pin options
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, strict OCSP + responder-id +
+  responder-cert pin policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --lane-state-manifest-ed25519-ocsp-responder-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 ... --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --lane-state-manifest-ed25519-ocsp-responder-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 ... --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-responder-cert-sweep-20260209-021231/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-responder-cert-sweep-20260209-021231/out-resume`
 
 ### Remaining Limitations
 
