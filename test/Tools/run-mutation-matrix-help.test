@@ -20,6 +20,7 @@
 // CHECK: --default-formal-global-propagate-assume-known-inputs
 // CHECK: --default-formal-global-propagate-accept-xprop-only
 // CHECK: --default-formal-global-propagate-circt-bmc
+// CHECK: --default-formal-global-propagate-circt-chain
 // CHECK: --default-formal-global-propagate-bmc-ignore-asserts-until
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode

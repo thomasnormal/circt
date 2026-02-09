@@ -147,6 +147,12 @@ Execution controls:
   This mode compares BMC outcomes between original and mutant:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
+- Built-in chained circt-lec/circt-bmc global filter:
+  - `--formal-global-propagate-circt-chain lec-then-bmc`
+  - requires both `--formal-global-propagate-circt-lec` and
+    `--formal-global-propagate-circt-bmc` options.
+  This mode uses LEC first and falls back to differential BMC when LEC returns
+  `UNKNOWN` or an error.
 
 `tests.tsv` format (tab-separated):
 
@@ -234,6 +240,9 @@ Execution controls:
 - `--default-formal-global-propagate-circt-bmc <path>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc` for lanes
   without a lane-specific circt-bmc global filter path.
+- `--default-formal-global-propagate-circt-chain <mode>`: default
+  `run_mutation_cover.sh --formal-global-propagate-circt-chain` for lanes
+  without a lane-specific chain mode.
 - `--default-formal-global-propagate-circt-bmc-args <args>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc-args` for lanes
   without lane-specific bmc args.
@@ -258,7 +267,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]
 ```
 
 Notes:
@@ -301,6 +310,8 @@ Notes:
   `--formal-global-propagate-accept-xprop-only`.
 - `global_propagate_circt_bmc` (optional) overrides
   `--default-formal-global-propagate-circt-bmc` for a specific lane.
+- `global_propagate_circt_chain` (optional) overrides
+  `--default-formal-global-propagate-circt-chain` for a specific lane.
 - `global_propagate_bmc_args` (optional) overrides
   `--default-formal-global-propagate-circt-bmc-args` for a specific lane.
 - `global_propagate_bmc_bound` (optional) overrides
