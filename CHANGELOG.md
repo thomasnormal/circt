@@ -32866,8 +32866,53 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 ### Remaining Limitations
 
-- Keyring metadata fields `not_before` / `not_after` are currently parsed but
-  not enforced against manifest timestamps.
+- Lane-state signatures remain HMAC-only; no asymmetric signer trust-chain
+  support yet.
+- Resume granularity remains lane-level (no per-test replay).
+
+## Iteration 682 - February 9, 2026
+
+### Lane-State Key-Window Enforcement (Keyring Mode)
+
+- Extended lane-state keyring handling in `utils/run_formal_all.sh` with
+  key-window validation and enforcement:
+  - strict date format validation for keyring `not_before` / `not_after`
+    (`YYYY-MM-DD`)
+  - reject malformed dates and `not_before > not_after`
+  - enforce active-key window against manifest `generated_at_utc` on:
+    - manifest emission
+    - manifest verification during resume/merge
+- Added key-window metadata plumbing from keyring resolver to manifest
+  signer/validator paths.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative invalid keyring date format (`not_before`)
+    - negative out-of-window key on signed lane-state generation
+    - negative out-of-window key on signed lane-state resume verification
+  - `docs/FormalRegression.md`
+    - documented `not_before` / `not_after` enforcement semantics
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep with keyring mode:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-window-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-window-smoke.tsv --reset-lane-state --lane-state-hmac-keyring-tsv /tmp/formal-lane-state-ring.tsv --lane-state-hmac-keyring-sha256 <computed> --lane-state-hmac-key-id ci-lane-key-a`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, filtered `avip/*`)
+  - Resume replay:
+    - same command with `--resume-from-lane-state`:
+      - PASS (all lanes resumed)
+
+### Remaining Limitations
+
 - Lane-state signatures remain HMAC-only; no asymmetric signer trust-chain
   support yet.
 - Resume granularity remains lane-level (no per-test replay).

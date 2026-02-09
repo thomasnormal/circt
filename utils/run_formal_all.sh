@@ -182,6 +182,8 @@ LANE_STATE_HMAC_KEYRING_TSV=""
 LANE_STATE_HMAC_KEYRING_SHA256=""
 LANE_STATE_HMAC_KEY_ID=""
 LANE_STATE_HMAC_EFFECTIVE_KEY_FILE=""
+LANE_STATE_HMAC_KEY_NOT_BEFORE=""
+LANE_STATE_HMAC_KEY_NOT_AFTER=""
 LANE_STATE_HMAC_MODE="none"
 LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED=""
 INCLUDE_LANE_REGEX=""
@@ -534,6 +536,7 @@ if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
     LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
     python3 - <<'PY'
 import hashlib
+from datetime import datetime
 import os
 import re
 import sys
@@ -553,6 +556,26 @@ if expected_sha and actual_sha != expected_sha:
   raise SystemExit(1)
 
 rows = {}
+
+def parse_date(value: str, field: str) -> str:
+  if not value:
+    return ""
+  if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+    print(
+        f"invalid lane state HMAC keyring {field}: expected YYYY-MM-DD",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  try:
+    datetime.strptime(value, "%Y-%m-%d")
+  except ValueError:
+    print(
+        f"invalid lane state HMAC keyring {field}: invalid calendar date",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  return value
+
 for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), start=1):
   line = raw_line.strip()
   if not line or line.startswith("#"):
@@ -606,6 +629,14 @@ for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), s
         file=sys.stderr,
     )
     raise SystemExit(1)
+  not_before = parse_date(not_before, f"row {keyring_path}:{line_no} not_before")
+  not_after = parse_date(not_after, f"row {keyring_path}:{line_no} not_after")
+  if not_before and not_after and not_before > not_after:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: not_before is after not_after",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
   rows[key_id] = (key_file_path, not_before, not_after, status, key_sha)
 
 if target_key_id not in rows:
@@ -615,7 +646,7 @@ if target_key_id not in rows:
   )
   raise SystemExit(1)
 
-key_file_path, _, _, status, key_sha = rows[target_key_id]
+key_file_path, not_before, not_after, status, key_sha = rows[target_key_id]
 if status == "revoked":
   print(
       f"lane state HMAC key_id '{target_key_id}' is revoked in keyring {keyring_path}",
@@ -643,14 +674,18 @@ if key_sha:
 
 print(str(key_path))
 print(actual_sha)
+print(not_before)
+print(not_after)
 PY
   )
-  if [[ "${#lane_state_keyring_resolved[@]}" -ne 2 ]]; then
+  if [[ "${#lane_state_keyring_resolved[@]}" -ne 4 ]]; then
     echo "internal error: failed to resolve lane state HMAC keyring" >&2
     exit 1
   fi
   LANE_STATE_HMAC_EFFECTIVE_KEY_FILE="${lane_state_keyring_resolved[0]}"
   LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED="${lane_state_keyring_resolved[1]}"
+  LANE_STATE_HMAC_KEY_NOT_BEFORE="${lane_state_keyring_resolved[2]}"
+  LANE_STATE_HMAC_KEY_NOT_AFTER="${lane_state_keyring_resolved[3]}"
   LANE_STATE_HMAC_MODE="keyring"
 elif [[ -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then
   LANE_STATE_HMAC_EFFECTIVE_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE"
@@ -911,6 +946,8 @@ lane_state_emit_manifest() {
   LANE_STATE_SHA256="$lane_state_sha" \
   LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" \
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
+  LANE_STATE_HMAC_KEY_NOT_BEFORE="$LANE_STATE_HMAC_KEY_NOT_BEFORE" \
+  LANE_STATE_HMAC_KEY_NOT_AFTER="$LANE_STATE_HMAC_KEY_NOT_AFTER" \
   python3 - <<'PY'
 import hashlib
 import hmac
@@ -919,9 +956,38 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+def parse_window_date(value: str, field: str):
+  if not value:
+    return None
+  try:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+  except ValueError:
+    print(f"invalid lane state HMAC {field}: expected YYYY-MM-DD", file=os.sys.stderr)
+    raise SystemExit(1)
+
+generated_dt = datetime.now(timezone.utc)
+generated_at = generated_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+generated_date = generated_dt.date()
+key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
+key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
+window_start = parse_window_date(key_not_before, "not_before")
+window_end = parse_window_date(key_not_after, "not_after")
+if window_start and generated_date < window_start:
+  print(
+      f"lane state HMAC key_id '{os.environ.get('LANE_STATE_HMAC_KEY_ID', '')}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+if window_end and generated_date > window_end:
+  print(
+      f"lane state HMAC key_id '{os.environ.get('LANE_STATE_HMAC_KEY_ID', '')}' not active at generated_at_utc {generated_at} (window {key_not_before or '-'}..{key_not_after})",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+
 payload = {
     "schema_version": 1,
-    "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "generated_at_utc": generated_at,
     "lane_state_file": os.environ["LANE_STATE_FILE"],
     "lane_state_sha256": os.environ["LANE_STATE_SHA256"],
 }
@@ -957,6 +1023,8 @@ lane_state_verify_manifest() {
   LANE_STATE_SHA256="$lane_state_sha" \
   LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" \
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
+  LANE_STATE_HMAC_KEY_NOT_BEFORE="$LANE_STATE_HMAC_KEY_NOT_BEFORE" \
+  LANE_STATE_HMAC_KEY_NOT_AFTER="$LANE_STATE_HMAC_KEY_NOT_AFTER" \
   SOURCE_LABEL="$source_label" \
   python3 - <<'PY'
 import hashlib
@@ -964,6 +1032,7 @@ import hmac
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
 source = os.environ["SOURCE_LABEL"]
@@ -971,6 +1040,17 @@ manifest_path = Path(os.environ["LANE_STATE_MANIFEST_PATH"])
 expected_sha = os.environ["LANE_STATE_SHA256"]
 expected_file = os.environ["LANE_STATE_FILE"]
 expected_key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
+key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
+key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
+
+def parse_window_date(value: str, field: str):
+  if not value:
+    return None
+  try:
+    return datetime.strptime(value, "%Y-%m-%d").date()
+  except ValueError:
+    print(f"invalid lane state HMAC {field}: expected YYYY-MM-DD", file=os.sys.stderr)
+    raise SystemExit(1)
 
 try:
   payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1012,6 +1092,21 @@ if manifest_sha != expected_sha:
 generated_at = payload.get("generated_at_utc")
 if not isinstance(generated_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at):
   print(f"invalid lane-state manifest for {source}: generated_at_utc must be UTC RFC3339 timestamp", file=os.sys.stderr)
+  raise SystemExit(1)
+generated_date = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").date()
+window_start = parse_window_date(key_not_before, "not_before")
+window_end = parse_window_date(key_not_after, "not_after")
+if window_start and generated_date < window_start:
+  print(
+      f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
+      file=os.sys.stderr,
+  )
+  raise SystemExit(1)
+if window_end and generated_date > window_end:
+  print(
+      f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before or '-'}..{key_not_after})",
+      file=os.sys.stderr,
+  )
   raise SystemExit(1)
 
 signature = payload.get("signature_hmac_sha256")
