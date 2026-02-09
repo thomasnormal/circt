@@ -15,6 +15,7 @@
 // CHECK: --default-mutations-profiles
 // CHECK: --default-mutations-cfg
 // CHECK: --default-mutations-select
+// CHECK: --default-mutations-yosys
 // CHECK: --default-formal-global-propagate-cmd
 // CHECK: --default-formal-global-propagate-timeout-seconds
 // CHECK: --default-formal-global-propagate-lec-timeout-seconds

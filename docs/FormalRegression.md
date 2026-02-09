@@ -213,6 +213,7 @@ certitude_run \
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
+  --default-mutations-yosys yosys \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto
@@ -295,6 +296,8 @@ Execution controls:
     natively (`--default-formal-global-propagate-circt-lec`,
     `--default-formal-global-propagate-circt-bmc`,
     `--default-formal-global-propagate-circt-chain`) before script dispatch.
+  - default generated-mutation Yosys option is now pre-resolved natively:
+    `--default-mutations-yosys`.
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.
@@ -580,6 +583,8 @@ Execution controls:
   `run_mutation_cover.sh --mutations-cfg` for generated-mutation lanes.
 - `--default-mutations-select <csv>`: default
   `run_mutation_cover.sh --mutations-select` for generated-mutation lanes.
+- `--default-mutations-yosys <path>`: default
+  `run_mutation_cover.sh --mutations-yosys` for generated-mutation lanes.
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.
@@ -677,6 +682,8 @@ Notes:
   a generated-mutation lane.
 - `mutations_mode_counts` (optional) overrides
   `--default-mutations-mode-counts` for a generated-mutation lane.
+- `mutations_yosys` (optional) overrides `--default-mutations-yosys` for a
+  generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides
   `--default-formal-global-propagate-cmd` for a specific lane.
 - `global_propagate_timeout_seconds` (optional) overrides

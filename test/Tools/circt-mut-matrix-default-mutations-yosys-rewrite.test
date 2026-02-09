@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t/prefix/bin %t/prefix/share/circt/utils
+// RUN: cp "$(command -v circt-mut)" %t/prefix/bin/circt-mut
+// RUN: chmod +x %t/prefix/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n' > %t/prefix/bin/yosys
+// RUN: chmod +x %t/prefix/bin/yosys
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/prefix/share/circt/utils/run_mutation_matrix.sh
+// RUN: chmod +x %t/prefix/share/circt/utils/run_mutation_matrix.sh
+// RUN: PATH="%t/prefix/bin:/usr/bin:/bin" %t/prefix/bin/circt-mut matrix --default-mutations-yosys yosys > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: ARG:--default-mutations-yosys
+// CHECK-NEXT: ARG:[[YOSYS:.*prefix/bin/yosys]]
