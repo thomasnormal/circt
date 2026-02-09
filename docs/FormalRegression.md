@@ -91,6 +91,13 @@ Execution controls:
   repeated formal pre-qualification work.
 - `--reuse-summary-file <path>`: reuse prior `summary.tsv` `detected_by_test`
   as per-mutant test-order hints to reduce detection reruns.
+- `--reuse-compat-mode off|warn|strict`:
+  - `off`: skip compatibility checks for reuse files
+  - `warn` (default): verify sidecars when present, disable reuse on mismatch,
+    and allow legacy reuse files without sidecars
+  - `strict`: require valid compatible sidecars for reuse inputs
+- `--reuse-manifest-file <path>`: write run compatibility manifest
+  (default `<work-dir>/reuse_manifest.json`)
 
 `tests.tsv` format (tab-separated):
 
@@ -114,6 +121,10 @@ Generated artifacts (default under `./mutation-cover-results`):
 - hint metrics:
   - `hinted_mutants`: mutants with a usable prior `detected_by_test` hint
   - `hint_hits`: hinted mutants detected by the hinted test
+- reuse compatibility sidecars:
+  - `<summary.tsv>.manifest.json`
+  - `<pair_qualification.tsv>.manifest.json`
+  These capture the compatibility hash used for future guarded reuse.
 
 Gate behavior:
 - `--coverage-threshold <pct>`: fails with exit code `2` when detected/relevant falls below threshold.
@@ -138,6 +149,8 @@ Execution controls:
 - `--default-reuse-summary-file <path>`: default
   `run_mutation_cover.sh --reuse-summary-file` for lanes that do not set a
   lane-specific summary hint file.
+- `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
+  policy for each lane's `run_mutation_cover.sh` invocation.
 - `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).
 
 Lane TSV schema (tab-separated):

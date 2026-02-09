@@ -25,6 +25,8 @@ Optional:
   --improvement-file FILE    Improvement-mode summary TSV (default: <work-dir>/improvement.tsv)
   --reuse-pair-file FILE     Reuse activation/propagation from prior pair_qualification.tsv
   --reuse-summary-file FILE  Reuse prior summary.tsv detected_by_test as test-order hints
+  --reuse-compat-mode MODE   Reuse compatibility policy: off|warn|strict (default: warn)
+  --reuse-manifest-file FILE Write run compatibility manifest (default: <work-dir>/reuse_manifest.json)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -72,6 +74,8 @@ SUMMARY_JSON_FILE=""
 IMPROVEMENT_FILE=""
 REUSE_PAIR_FILE=""
 REUSE_SUMMARY_FILE=""
+REUSE_COMPAT_MODE="warn"
+REUSE_MANIFEST_FILE=""
 CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
@@ -102,6 +106,8 @@ while [[ $# -gt 0 ]]; do
     --improvement-file) IMPROVEMENT_FILE="$2"; shift 2 ;;
     --reuse-pair-file) REUSE_PAIR_FILE="$2"; shift 2 ;;
     --reuse-summary-file) REUSE_SUMMARY_FILE="$2"; shift 2 ;;
+    --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
+    --reuse-manifest-file) REUSE_MANIFEST_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -145,6 +151,10 @@ if [[ -n "$REUSE_PAIR_FILE" && ! -f "$REUSE_PAIR_FILE" ]]; then
 fi
 if [[ -n "$REUSE_SUMMARY_FILE" && ! -f "$REUSE_SUMMARY_FILE" ]]; then
   echo "Reuse summary file not found: $REUSE_SUMMARY_FILE" >&2
+  exit 1
+fi
+if [[ ! "$REUSE_COMPAT_MODE" =~ ^(off|warn|strict)$ ]]; then
+  echo "Invalid --reuse-compat-mode value: $REUSE_COMPAT_MODE (expected off|warn|strict)." >&2
   exit 1
 fi
 if [[ ! -x "$CREATE_MUTATED_SCRIPT" ]]; then
@@ -191,6 +201,7 @@ RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
 METRICS_FILE="${METRICS_FILE:-${WORK_DIR}/metrics.tsv}"
 SUMMARY_JSON_FILE="${SUMMARY_JSON_FILE:-${WORK_DIR}/summary.json}"
 IMPROVEMENT_FILE="${IMPROVEMENT_FILE:-${WORK_DIR}/improvement.tsv}"
+REUSE_MANIFEST_FILE="${REUSE_MANIFEST_FILE:-${WORK_DIR}/reuse_manifest.json}"
 
 if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
   MUTATIONS_FILE="${WORK_DIR}/generated_mutations.txt"
@@ -222,6 +233,15 @@ declare -A REUSE_PROPAGATION
 declare -A REUSE_ACTIVATE_EXIT
 declare -A REUSE_PROPAGATE_EXIT
 declare -A REUSE_DETECTED_TEST
+
+REUSE_COMPAT_HASH=""
+DESIGN_FILE_HASH=""
+TESTS_MANIFEST_HASH=""
+MUTATIONS_SET_HASH=""
+CREATE_MUTATED_SCRIPT_HASH=""
+FORMAL_ACTIVATE_CMD_HASH=""
+FORMAL_PROPAGATE_CMD_HASH=""
+REUSE_COMPAT_SCHEMA_VERSION=1
 
 declare -a MUTATION_IDS
 declare -a MUTATION_SPECS
@@ -356,6 +376,146 @@ load_reuse_summary() {
     fi
     REUSE_DETECTED_TEST["$mutation_id"]="$detected_by_test"
   done < "$REUSE_SUMMARY_FILE"
+}
+
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | awk '{print $NF}'
+    return
+  fi
+  echo "No SHA-256 hashing tool found (sha256sum/shasum/openssl)." >&2
+  exit 1
+}
+
+hash_string() {
+  local value="$1"
+  printf "%s" "$value" | hash_stdin
+}
+
+hash_file() {
+  local file="$1"
+  hash_stdin < "$file"
+}
+
+json_escape() {
+  printf "%s" "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+build_reuse_compat_hash() {
+  local i=""
+  local compat_payload=""
+
+  DESIGN_FILE_HASH="$(hash_file "$DESIGN")"
+  TESTS_MANIFEST_HASH="$(hash_file "$TESTS_MANIFEST")"
+  CREATE_MUTATED_SCRIPT_HASH="$(hash_file "$CREATE_MUTATED_SCRIPT")"
+  FORMAL_ACTIVATE_CMD_HASH="$(hash_string "$FORMAL_ACTIVATE_CMD")"
+  FORMAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_PROPAGATE_CMD")"
+
+  MUTATIONS_SET_HASH="$(
+    for i in "${!MUTATION_IDS[@]}"; do
+      printf "%s\t%s\n" "${MUTATION_IDS[$i]}" "${MUTATION_SPECS[$i]}"
+    done | hash_stdin
+  )"
+
+  compat_payload="$(
+    cat <<EOF
+schema_version=${REUSE_COMPAT_SCHEMA_VERSION}
+design_hash=${DESIGN_FILE_HASH}
+tests_manifest_hash=${TESTS_MANIFEST_HASH}
+mutations_set_hash=${MUTATIONS_SET_HASH}
+mutant_format=${MUTANT_FORMAT}
+create_mutated_script_hash=${CREATE_MUTATED_SCRIPT_HASH}
+formal_activate_cmd_hash=${FORMAL_ACTIVATE_CMD_HASH}
+formal_propagate_cmd_hash=${FORMAL_PROPAGATE_CMD_HASH}
+EOF
+  )"
+  REUSE_COMPAT_HASH="$(hash_string "$compat_payload")"
+}
+
+extract_manifest_compat_hash() {
+  local manifest_file="$1"
+  grep -o '"compat_hash"[[:space:]]*:[[:space:]]*"[^"]*"' "$manifest_file" | \
+    head -n1 | sed 's/.*"compat_hash"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+validate_reuse_file_compat() {
+  local label="$1"
+  local reuse_file="$2"
+  local manifest_file="${reuse_file}.manifest.json"
+  local manifest_hash=""
+  local reason=""
+
+  if [[ "$REUSE_COMPAT_MODE" == "off" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$manifest_file" ]]; then
+    if [[ "$REUSE_COMPAT_MODE" == "strict" ]]; then
+      reason="missing sidecar manifest (${manifest_file})"
+    else
+      echo "Warning: Reuse ${label} file has no sidecar manifest (${manifest_file}); proceeding without compatibility proof." >&2
+      return 0
+    fi
+  fi
+
+  if [[ -z "$reason" ]]; then
+    manifest_hash="$(extract_manifest_compat_hash "$manifest_file")"
+    if [[ -z "$manifest_hash" ]]; then
+      reason="manifest missing compat_hash (${manifest_file})"
+    elif [[ "$manifest_hash" != "$REUSE_COMPAT_HASH" ]]; then
+      reason="compat_hash mismatch (${manifest_hash} != ${REUSE_COMPAT_HASH})"
+    fi
+  fi
+
+  if [[ -z "$reason" ]]; then
+    return 0
+  fi
+
+  if [[ "$REUSE_COMPAT_MODE" == "strict" ]]; then
+    echo "Reuse ${label} file compatibility check failed: ${reason}" >&2
+    return 1
+  fi
+
+  echo "Warning: Reuse ${label} file compatibility check failed: ${reason}. Disabling reuse for ${reuse_file}." >&2
+  return 2
+}
+
+write_reuse_manifest() {
+  local out_file="$1"
+  local artifact_type="$2"
+  local now_utc=""
+  local out_dir=""
+
+  now_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  out_dir="$(dirname "$out_file")"
+  mkdir -p "$out_dir"
+  cat > "$out_file" <<EOF
+{
+  "schema_version": ${REUSE_COMPAT_SCHEMA_VERSION},
+  "artifact_type": "$(json_escape "$artifact_type")",
+  "generated_at_utc": "${now_utc}",
+  "compat_hash": "${REUSE_COMPAT_HASH}",
+  "design_file": "$(json_escape "$DESIGN")",
+  "design_file_sha256": "${DESIGN_FILE_HASH}",
+  "tests_manifest": "$(json_escape "$TESTS_MANIFEST")",
+  "tests_manifest_sha256": "${TESTS_MANIFEST_HASH}",
+  "mutation_count": ${#MUTATION_IDS[@]},
+  "mutations_set_sha256": "${MUTATIONS_SET_HASH}",
+  "mutant_format": "${MUTANT_FORMAT}",
+  "create_mutated_script": "$(json_escape "$CREATE_MUTATED_SCRIPT")",
+  "create_mutated_script_sha256": "${CREATE_MUTATED_SCRIPT_HASH}",
+  "formal_activate_cmd_sha256": "${FORMAL_ACTIVATE_CMD_HASH}",
+  "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}"
+}
+EOF
 }
 
 run_command() {
@@ -656,13 +816,34 @@ process_mutation() {
 }
 
 load_tests_manifest
-load_reuse_pairs
-load_reuse_summary
 load_mutations
 if [[ "${#MUTATION_IDS[@]}" -eq 0 ]]; then
   echo "No usable mutations loaded from: $MUTATIONS_FILE" >&2
   exit 1
 fi
+build_reuse_compat_hash
+if [[ -n "$REUSE_PAIR_FILE" ]]; then
+  rc=0
+  validate_reuse_file_compat "pair" "$REUSE_PAIR_FILE" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) exit 1 ;;
+    2) REUSE_PAIR_FILE="" ;;
+    *) exit 1 ;;
+  esac
+fi
+if [[ -n "$REUSE_SUMMARY_FILE" ]]; then
+  rc=0
+  validate_reuse_file_compat "summary" "$REUSE_SUMMARY_FILE" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) exit 1 ;;
+    2) REUSE_SUMMARY_FILE="" ;;
+    *) exit 1 ;;
+  esac
+fi
+load_reuse_pairs
+load_reuse_summary
 
 if [[ "$SKIP_BASELINE" -eq 0 ]]; then
   baseline_dir="${WORK_DIR}/baseline"
@@ -866,6 +1047,9 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "fail_on_errors": $FAIL_ON_ERRORS
 }
 EOF
+write_reuse_manifest "$REUSE_MANIFEST_FILE" "run"
+write_reuse_manifest "${PAIR_FILE}.manifest.json" "pair_qualification"
+write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
 
 echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
@@ -875,5 +1059,6 @@ echo "Results: ${RESULTS_FILE}"
 echo "Metrics: ${METRICS_FILE}"
 echo "Summary JSON: ${SUMMARY_JSON_FILE}"
 echo "Improvement: ${IMPROVEMENT_FILE}"
+echo "Reuse manifest: ${REUSE_MANIFEST_FILE}"
 
 exit "$exit_code"

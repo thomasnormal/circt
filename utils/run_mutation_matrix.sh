@@ -20,6 +20,8 @@ Optional:
                             Default --reuse-pair-file for lanes that do not set reuse_pair_file
   --default-reuse-summary-file FILE
                             Default --reuse-summary-file for lanes that do not set reuse_summary_file
+  --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
+                            (off|warn|strict, default: warn)
   --lane-jobs N             Number of concurrent lanes (default: 1)
   --stop-on-fail            Stop at first failed lane (requires --lane-jobs=1)
   -h, --help                Show help
@@ -39,6 +41,7 @@ CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
+REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
 STOP_ON_FAIL=0
 
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
+    --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -85,6 +89,10 @@ if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
 fi
 if [[ -n "$DEFAULT_REUSE_SUMMARY_FILE" && ! -f "$DEFAULT_REUSE_SUMMARY_FILE" ]]; then
   echo "Default reuse summary file not found: $DEFAULT_REUSE_SUMMARY_FILE" >&2
+  exit 1
+fi
+if [[ ! "$REUSE_COMPAT_MODE" =~ ^(off|warn|strict)$ ]]; then
+  echo "Invalid --reuse-compat-mode value: $REUSE_COMPAT_MODE (expected off|warn|strict)." >&2
   exit 1
 fi
 if [[ "$STOP_ON_FAIL" -eq 1 && "$LANE_JOBS" -gt 1 ]]; then
@@ -168,6 +176,7 @@ run_lane() {
     --metrics-file "$lane_metrics"
     --summary-json-file "$lane_json"
     --jobs "$JOBS_PER_LANE"
+    --reuse-compat-mode "$REUSE_COMPAT_MODE"
   )
 
   if [[ "${MUTATIONS_FILE[$i]}" != "-" ]]; then

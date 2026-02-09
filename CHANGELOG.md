@@ -1,5 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 735 - February 9, 2026
+
+### Mutation Matrix Reuse-Compatibility Policy Pass-Through
+
+- Extended `utils/run_mutation_matrix.sh` with:
+  - `--reuse-compat-mode off|warn|strict`
+    - passed through to each lane's `run_mutation_cover.sh` invocation.
+- This enables deterministic strict gating in matrix mode when reuse sidecar
+  manifests are incompatible or missing (per configured policy).
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-matrix-reuse-compat.test`
+    - validates strict-mode matrix lane failure on reuse compat mismatch.
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--reuse-compat-mode` option
+  - `docs/FormalRegression.md`
+    - documents matrix-level reuse-compat policy control
+  - `PROJECT_PLAN.md`
+    - CI lane integration note updated with compat-policy pass-through.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - strict-mode matrix run with mismatched reuse sidecar:
+    - lane status `FAIL` with nonzero exit and expected compatibility error.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-reuse-compat --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
+## Iteration 734 - February 9, 2026
+
+### Mutation Reuse Compatibility Guards
+
+- Extended `utils/run_mutation_cover.sh` with compatibility-policy controls:
+  - `--reuse-compat-mode off|warn|strict` (default: `warn`)
+  - `--reuse-manifest-file <path>` for explicit run-manifest output.
+- Added compatibility-hash sidecar generation for produced reuse artifacts:
+  - `<summary.tsv>.manifest.json`
+  - `<pair_qualification.tsv>.manifest.json`
+- Compatibility hash now binds key reuse-sensitive inputs:
+  - design contents
+  - tests manifest contents
+  - loaded mutation set (`id + spec`)
+  - mutant format
+  - create-mutated script contents
+  - formal activation/propagation command strings
+- Guard behavior:
+  - `warn`: allow legacy reuse files without sidecars, but disable reuse on
+    sidecar mismatch and continue with warnings
+  - `strict`: fail fast on missing/incompatible sidecars.
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-cover-reuse-compat.test`
+    - validates warn-mode fallback on mismatch and strict-mode fail-fast.
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--reuse-compat-mode` and `--reuse-manifest-file`
+  - `docs/FormalRegression.md`
+    - documented reuse policy modes and sidecar manifests
+  - `PROJECT_PLAN.md`
+    - marked reuse compatibility policy as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation:
+  - warn mode with mismatched sidecars: PASS (reuse disabled, run continues)
+  - strict mode with mismatched sidecars: PASS (fails fast)
+  - legacy reuse file without sidecar in warn mode: PASS (warning + reuse kept).
+
 ## Iteration 733 - February 9, 2026
 
 ### Mutation Matrix Summary-Hint Integration

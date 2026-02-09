@@ -8,6 +8,8 @@
 // CHECK: --fail-on-undetected
 // CHECK: --reuse-pair-file
 // CHECK: --reuse-summary-file
+// CHECK: --reuse-compat-mode
+// CHECK: --reuse-manifest-file
 // CHECK: --jobs
 // CHECK: --resume
 // CHECK: --generate-mutations
