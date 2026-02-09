@@ -478,12 +478,26 @@ def emit_if_bool(scope: dict, scope_name: str, key: str, out_key: str):
     raise SystemExit(1)
   print(f"{out_key}\t{1 if value else 0}")
 
+def emit_if_nonneg_int(scope: dict, scope_name: str, key: str, out_key: str):
+  if key not in scope:
+    return
+  value = scope[key]
+  if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.{scope_name}.{key}: expected non-negative integer",
+      file=sys.stderr,
+    )
+    raise SystemExit(1)
+  print(f"{out_key}\t{value}")
+
 unknown_profile_keys = sorted(
   set(profile.keys()) - {
       "auto_uri_policy",
       "auto_uri_allowed_schemes",
       "refresh_metadata_require_ca_cert_in_cert_chain",
       "refresh_metadata_require_tls_peer_in_cert_chain",
+      "refresh_metadata_max_age_secs",
+      "refresh_metadata_max_future_skew_secs",
       "crl",
       "ocsp",
   }
@@ -509,6 +523,18 @@ emit_if_bool(
     "refresh_metadata_require_tls_peer_in_cert_chain",
     "shared_refresh_metadata_require_tls_peer_in_cert_chain",
 )
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_metadata_max_age_secs",
+    "shared_refresh_metadata_max_age_secs",
+)
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_metadata_max_future_skew_secs",
+    "shared_refresh_metadata_max_future_skew_secs",
+)
 
 for artifact in ("crl", "ocsp"):
   section = profile.get(artifact)
@@ -527,6 +553,8 @@ for artifact in ("crl", "ocsp"):
           "auto_uri_allowed_schemes",
           "refresh_metadata_require_ca_cert_in_cert_chain",
           "refresh_metadata_require_tls_peer_in_cert_chain",
+          "refresh_metadata_max_age_secs",
+          "refresh_metadata_max_future_skew_secs",
       }
   )
   if unknown_section_keys:
@@ -548,6 +576,18 @@ for artifact in ("crl", "ocsp"):
       f"profiles.{profile_name}.{artifact}",
       "refresh_metadata_require_tls_peer_in_cert_chain",
       f"{artifact}_refresh_metadata_require_tls_peer_in_cert_chain",
+  )
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_metadata_max_age_secs",
+      f"{artifact}_refresh_metadata_max_age_secs",
+  )
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_metadata_max_future_skew_secs",
+      f"{artifact}_refresh_metadata_max_future_skew_secs",
   )
 PY
 }
@@ -2228,6 +2268,10 @@ PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
+PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS=""
+PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS_SET=0
+PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
+PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=0
 PROFILE_CRL_AUTO_URI_POLICY=""
 PROFILE_CRL_AUTO_URI_POLICY_SET=0
 PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES=""
@@ -2236,6 +2280,10 @@ PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
+PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS=""
+PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS_SET=0
+PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
+PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=0
 PROFILE_OCSP_AUTO_URI_POLICY=""
 PROFILE_OCSP_AUTO_URI_POLICY_SET=0
 PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES=""
@@ -2244,6 +2292,10 @@ PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=0
+PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS=""
+PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS_SET=0
+PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
+PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=0
 
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
   profile_policy_rows="$(
@@ -2270,6 +2322,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
           ;;
+        shared_refresh_metadata_max_age_secs)
+          PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS="$profile_value"
+          PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS_SET=1
+          ;;
+        shared_refresh_metadata_max_future_skew_secs)
+          PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$profile_value"
+          PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=1
+          ;;
         crl_auto_uri_policy)
           PROFILE_CRL_AUTO_URI_POLICY="$profile_value"
           PROFILE_CRL_AUTO_URI_POLICY_SET=1
@@ -2286,6 +2346,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
           ;;
+        crl_refresh_metadata_max_age_secs)
+          PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS="$profile_value"
+          PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS_SET=1
+          ;;
+        crl_refresh_metadata_max_future_skew_secs)
+          PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$profile_value"
+          PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=1
+          ;;
         ocsp_auto_uri_policy)
           PROFILE_OCSP_AUTO_URI_POLICY="$profile_value"
           PROFILE_OCSP_AUTO_URI_POLICY_SET=1
@@ -2301,6 +2369,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         ocsp_refresh_metadata_require_tls_peer_in_cert_chain)
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$profile_value"
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET=1
+          ;;
+        ocsp_refresh_metadata_max_age_secs)
+          PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS="$profile_value"
+          PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS_SET=1
+          ;;
+        ocsp_refresh_metadata_max_future_skew_secs)
+          PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$profile_value"
+          PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET=1
           ;;
         *)
           echo "internal error: unknown refresh policy profile field '$profile_key'" >&2
@@ -2397,6 +2473,34 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CE
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
   elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN_SET" == "1" ]]; then
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS="$PROFILE_CRL_REFRESH_METADATA_MAX_AGE_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS="$PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS="$PROFILE_OCSP_REFRESH_METADATA_MAX_AGE_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS="$PROFILE_SHARED_REFRESH_METADATA_MAX_AGE_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$PROFILE_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$PROFILE_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$PROFILE_SHARED_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
   fi
 fi
 if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then

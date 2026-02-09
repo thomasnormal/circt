@@ -18013,6 +18013,18 @@ ninja -C build circt-verilog
     tightening for 24/7 distributed closures.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 724
+- Extended refresh policy profiles to carry metadata freshness-window defaults:
+  - shared and per-artifact profile keys now support:
+    - `refresh_metadata_max_age_secs`
+    - `refresh_metadata_max_future_skew_secs`
+- Planner impact:
+  - Enables centralized, auditable rollout of refresh staleness policy via
+    signed/hashed profile registries instead of lane-local flag wiring.
+  - Preserves explicit per-artifact CLI overrides while allowing policy-default
+    tightening across continuous 24/7 closure runs.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
