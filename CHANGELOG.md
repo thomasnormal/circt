@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 733 - February 9, 2026
+
+### Mutation Matrix Summary-Hint Integration
+
+- Extended `utils/run_mutation_matrix.sh` with summary-hint passthrough:
+  - new lane TSV optional column: `reuse_summary_file`
+  - new CLI option: `--default-reuse-summary-file <path>`
+    - applies `run_mutation_cover.sh --reuse-summary-file` to lanes without an
+      explicit lane-level summary hint file.
+- Lane validation now treats missing configured summary hint files as lane
+  configuration errors (`CONFIG_ERROR`), preserving deterministic aggregation.
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-matrix-hints.test`
+    - validates matrix lane hint passthrough and early hinted detection.
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-reuse-summary-file` option
+  - `docs/FormalRegression.md`
+    - documented lane/global summary-hint controls
+  - `PROJECT_PLAN.md`
+    - CI lane integration status updated with summary-hint passthrough.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - matrix lane with `reuse_summary_file`:
+    - lane PASS with hinted pair note (`hinted_run_detection`)
+    - non-hinted test execution skipped for that mutant: PASS.
+
 ## Iteration 732 - February 9, 2026
 
 ### Mutation Detection-Order Hint Reuse

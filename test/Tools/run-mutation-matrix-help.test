@@ -5,5 +5,6 @@
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
 // CHECK: --default-reuse-pair-file
+// CHECK: --default-reuse-summary-file
 // CHECK: --lane-jobs
 // CHECK: --stop-on-fail

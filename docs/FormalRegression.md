@@ -135,12 +135,15 @@ Execution controls:
 - `--default-reuse-pair-file <path>`: default
   `run_mutation_cover.sh --reuse-pair-file` for lanes that do not set a
   lane-specific reuse file.
+- `--default-reuse-summary-file <path>`: default
+  `run_mutation_cover.sh --reuse-summary-file` for lanes that do not set a
+  lane-specific summary hint file.
 - `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).
 
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]
 ```
 
 Notes:
@@ -150,6 +153,8 @@ Notes:
   `generate_count` (plus optional top/seed/yosys columns).
 - `reuse_pair_file` (optional) overrides `--default-reuse-pair-file` for a
   specific lane.
+- `reuse_summary_file` (optional) overrides
+  `--default-reuse-summary-file` for a specific lane.
 
 Shard/route a run to selected lane IDs:
 
