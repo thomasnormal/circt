@@ -92,6 +92,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-mani
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia --lane-state-manifest-ed25519-refresh-policy-profiles-json /secrets/lane-state-refresh-policies.json --lane-state-manifest-ed25519-refresh-policy-profile prod_strict --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia --lane-state-manifest-ed25519-refresh-policy-profiles-json /secrets/lane-state-refresh-policies.json --lane-state-manifest-ed25519-refresh-policy-profile prod_strict --lane-state-manifest-ed25519-refresh-policy-profiles-sha256 <sha256> --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia --lane-state-manifest-ed25519-refresh-policy-profiles-json /secrets/lane-state-refresh-policies.json --lane-state-manifest-ed25519-refresh-policy-profile prod_strict --lane-state-manifest-ed25519-refresh-policy-profiles-sha256 <sha256> --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json /secrets/lane-state-refresh-policies.manifest.json --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file /secrets/lane-state-refresh-policy-manifest-ed25519-public.pem --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id profile-key-1 --lane-state-manifest-ed25519-key-id ci-ed25519-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia --lane-state-manifest-ed25519-refresh-policy-profiles-json /secrets/lane-state-refresh-policies.json --lane-state-manifest-ed25519-refresh-policy-profile prod_strict --lane-state-manifest-ed25519-refresh-policy-profiles-sha256 <sha256> --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json /secrets/lane-state-refresh-policies.manifest.json --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv /secrets/lane-state-refresh-policy-signers.tsv --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-sha256 <sha256> --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id profile-key-1 --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -160,7 +161,10 @@ Lane-state semantics:
   - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json`
     enables signed profile-registry manifest verification.
     - Requires
-      `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`.
+      `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`
+      or
+      `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv`.
+    - Public-key-file and keyring modes are mutually exclusive.
     - Manifest schema is strict with `schema_version: 1`, `profiles_sha256`,
       `signature_mode: "ed25519"`, optional `generated_at_utc`, optional
       `key_id`, and `signature_ed25519_base64`.
@@ -168,6 +172,15 @@ Lane-state semantics:
       `signature_ed25519_base64` (sorted keys, compact separators).
     - Manifest `profiles_sha256` must match the effective profile-registry
       content hash.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv`
+    resolves signer key material from a keyring TSV by manifest `key_id`.
+    - row format:
+      `<key_id>\t<public_key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+    - optional status values: `active` or `revoked`
+    - optional validity window fields use `YYYY-MM-DD` and are checked against
+      manifest `generated_at_utc` when present.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-sha256`
+    optionally pins exact signer-keyring content hash.
   - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
     optionally pins the expected manifest signer `key_id`.
   - `--lane-state-manifest-ed25519-refresh-auto-uri-policy` sets a shared
