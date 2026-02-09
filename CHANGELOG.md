@@ -32754,6 +32754,66 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 700 - February 9, 2026
+
+### Lane-State Refresh Timeout/Jitter Controls
+
+- Extended Ed25519 refresh hooks in `utils/run_formal_all.sh` with timeout and
+  jitter policy:
+  - `--lane-state-manifest-ed25519-crl-refresh-timeout-secs <n>`
+  - `--lane-state-manifest-ed25519-crl-refresh-jitter-secs <n>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs <n>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs <n>`
+- Hook execution behavior:
+  - timeout is enforced per refresh attempt
+  - timeout events are retryable under configured retries
+  - jitter adds randomized `0..N` seconds on each retry sleep
+- Resume safety:
+  - timeout/jitter policy now contributes to lane-state config hash material,
+    preventing unsafe seed/resume policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for timeout/jitter options without refresh
+      command
+    - positive OCSP timeout-then-retry path using
+      `--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs 1`
+    - stabilized OCSP refresh timing assertions by using deterministic
+      stale-vs-fresh margins (`sleep 3`, `ocsp-max-age-secs 2`) in refresh paths
+  - `docs/FormalRegression.md`
+    - added timeout/jitter CLI examples and policy semantics for CRL/OCSP
+      refresh hooks
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep with retry/delay/timeout/jitter enabled:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh ... --with-opentitan ... --with-avip ... --lane-state-manifest-ed25519-crl-refresh-timeout-secs 1 --lane-state-manifest-ed25519-crl-refresh-jitter-secs 0 --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs 1 --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs 0 --reset-lane-state`:
+    - PASS
+    - sv-tests BMC/LEC: 1/1 PASS each (filtered; skips 1027)
+    - verilator-verification BMC/LEC: 1/1 PASS each (filtered; skips 16)
+    - yosys/tests/sva BMC/LEC: 1/1 PASS each
+    - OpenTitan LEC: 1/1 PASS
+    - AVIP compile: 9/9 PASS
+  - same command with `--resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-timeout-seed`
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-timeout-resume`
+
+### Remaining Limitations
+
+- Refresh hooks remain command-string driven; no native AIA/CDP fetch engine
+  with schema-validated policy yet.
+- Refresh artifacts are not yet coupled to signed fetch-provenance attestations.
+
 ## Iteration 699 - February 9, 2026
 
 ### Lane-State Refresh Retry/Backoff Controls
