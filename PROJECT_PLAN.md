@@ -234,6 +234,10 @@ See CHANGELOG.md on recent progress.
 26. Strict OpenTitan LEC lane now supports first-class unknown-source dump
     control via `run_formal_all.sh --opentitan-lec-strict-dump-unknown-sources`
     (wired to `LEC_DUMP_UNKNOWN_SOURCES=1` in the strict lane harness).
+27. OpenTitan E2E LEC mode is now selectable from `run_formal_all.sh`:
+    `--opentitan-e2e-lec-x-optimistic` or
+    `--opentitan-e2e-lec-strict-x` (mutually exclusive), enabling strict
+    parity audits through the canonical E2E control plane.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
@@ -255,6 +259,11 @@ See CHANGELOG.md on recent progress.
 24. Generated mutation-list caching now uses per-key process locking in
     `generate_mutations_yosys.sh`, preventing duplicate `yosys mutate -list`
     synthesis across concurrent matrix lanes targeting the same cache key.
+25. Generated mutation cache lock-contention telemetry is now exported through
+    generator/cover/matrix artifacts
+    (`generated_mutations_cache_lock_wait_ns`,
+    `generated_mutations_cache_lock_contended`) and surfaced in matrix
+    `results.tsv` for lane-level cache hotspot diagnosis.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for

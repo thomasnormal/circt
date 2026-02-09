@@ -371,6 +371,10 @@ Options:
                          OpenTitan E2E LEC implementation regex filter
   --opentitan-e2e-include-masked
                          Include masked OpenTitan E2E LEC implementations
+  --opentitan-e2e-lec-x-optimistic
+                         Force OpenTitan E2E LEC to x-optimistic mode
+  --opentitan-e2e-lec-strict-x
+                         Force OpenTitan E2E LEC to strict non-optimistic mode
   --circt-verilog PATH   Path to circt-verilog (default: <repo>/build/bin/circt-verilog)
   --circt-verilog-avip PATH
                          Path override for AVIP runs (default: --circt-verilog value)
@@ -1793,6 +1797,8 @@ OPENTITAN_E2E_VERILOG_TARGETS=""
 OPENTITAN_E2E_SIM_TIMEOUT=""
 OPENTITAN_E2E_IMPL_FILTER=""
 OPENTITAN_E2E_INCLUDE_MASKED=0
+OPENTITAN_E2E_LEC_X_MODE="xopt"
+OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=0
 BMC_RUN_SMTLIB=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
@@ -1838,6 +1844,14 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_E2E_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-e2e-include-masked)
       OPENTITAN_E2E_INCLUDE_MASKED=1; shift ;;
+    --opentitan-e2e-lec-x-optimistic)
+      OPENTITAN_E2E_LEC_X_MODE="xopt"
+      OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=$((OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT + 1))
+      shift ;;
+    --opentitan-e2e-lec-strict-x)
+      OPENTITAN_E2E_LEC_X_MODE="strict"
+      OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=$((OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT + 1))
+      shift ;;
     --circt-verilog)
       CIRCT_VERILOG_BIN="$2"; shift 2 ;;
     --circt-verilog-avip)
@@ -3684,6 +3698,10 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_XPASS=1
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
+fi
+if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
+  echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
+  exit 1
 fi
 if [[ -z "$JSON_SUMMARY_FILE" ]]; then
   JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
@@ -6811,8 +6829,12 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
       --opentitan-root "$OPENTITAN_DIR"
       --out-dir "$OUT_DIR/opentitan-formal-e2e"
       --results-file "$opentitan_e2e_results_tsv"
-      --lec-x-optimistic
     )
+    if [[ "$OPENTITAN_E2E_LEC_X_MODE" == "strict" ]]; then
+      opentitan_e2e_cmd+=(--lec-strict-x)
+    else
+      opentitan_e2e_cmd+=(--lec-x-optimistic)
+    fi
     if [[ -n "$OPENTITAN_E2E_SIM_TARGETS" ]]; then
       opentitan_e2e_cmd+=(--sim-targets "$OPENTITAN_E2E_SIM_TARGETS")
     fi

@@ -1,0 +1,18 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN_E2E=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\nstrict_x=0\nxopt=0\nresults_file=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --lec-strict-x) strict_x=1; shift ;;\n    --lec-x-optimistic) xopt=1; shift ;;\n    --results-file) results_file=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nif [[ \"$strict_x\" != \"1\" ]]; then\n  echo \"missing_lec_strict_x\"\n  exit 8\nfi\nif [[ \"$xopt\" != \"0\" ]]; then\n  echo \"unexpected_lec_x_optimistic\"\n  exit 7\nfi\nif [[ -z \"$results_file\" ]]; then\n  echo \"missing_results_file\"\n  exit 6\nfi\nmkdir -p \"$(dirname \"$results_file\")\"\nprintf \"kind\\ttarget\\tstatus\\tdetail\\tartifact\\n\" > \"$results_file\"\nprintf \"LEC\\taes_sbox_canright\\tPASS\\tstrict\\t%t/log-canright.log\\n\" >> \"$results_file\"\necho \"OpenTitan E2E summary: pass=1 fail=0\"\necho \"STRICT_E2E_LEC_MODE_OK\"\n' > %t/utils/run_opentitan_formal_e2e.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_formal_e2e.sh %t/fake-circt-verilog %t/fake-circt-verilog-opentitan
+//
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-strict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --opentitan %t/opentitan --circt-verilog %t/fake-circt-verilog --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/E2E$' --opentitan-e2e-lec-strict-x
+// RUN: FileCheck %s --check-prefix=E2ESUM < %t/out-strict/summary.tsv
+// RUN: FileCheck %s --check-prefix=E2ELOG < %t/out-strict/opentitan-e2e.log
+//
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-conflict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --opentitan %t/opentitan --circt-verilog %t/fake-circt-verilog --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex "^opentitan/E2E$" --opentitan-e2e-lec-x-optimistic --opentitan-e2e-lec-strict-x' 2>&1 | FileCheck %s --check-prefix=CONFLICT
+//
+// E2ESUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// E2ESUM: opentitan{{[[:space:]]+}}E2E{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
+// E2ELOG: STRICT_E2E_LEC_MODE_OK
+// CONFLICT: Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x.
