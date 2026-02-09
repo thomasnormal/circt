@@ -86,6 +86,17 @@ if [[ ! "$CTRL_WIDTH" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+READ_CMD=""
+case "$DESIGN_FILE" in
+  *.il) READ_CMD="read_rtlil $DESIGN_FILE" ;;
+  *.sv) READ_CMD="read_verilog -sv $DESIGN_FILE" ;;
+  *.v) READ_CMD="read_verilog $DESIGN_FILE" ;;
+  *)
+    echo "Unsupported design extension in '$DESIGN_FILE' (expected .il/.v/.sv)." >&2
+    exit 1
+    ;;
+esac
+
 WRITE_CMD=""
 case "$OUTPUT_FILE" in
   *.v) WRITE_CMD="write_verilog -norename $OUTPUT_FILE" ;;
@@ -104,7 +115,7 @@ fi
 have_mutation=0
 have_more_than_one=0
 {
-  echo "read_rtlil $DESIGN_FILE"
+  echo "$READ_CMD"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" ]] && continue
     idx="${line%% *}"
