@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/ot %t/bin
+// RUN: printf '#!/bin/sh\necho "fake sim $1"\nexit 0\n' > %t/bin/fake-sim.sh
+// RUN: chmod +x %t/bin/fake-sim.sh
+// RUN: printf '#!/bin/sh\necho "fake verilog $1"\nexit 0\n' > %t/bin/fake-verilog.sh
+// RUN: chmod +x %t/bin/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nif os.environ.get(\"LEC_SMOKE_ONLY\") != \"0\":\n  print(\"bad LEC_SMOKE_ONLY\", file=sys.stderr)\n  sys.exit(5)\nexpect_x = os.environ.get(\"EXPECT_XOPT\", \"\")\nif expect_x and os.environ.get(\"LEC_X_OPTIMISTIC\", \"\") != expect_x:\n  print(\"bad LEC_X_OPTIMISTIC\", file=sys.stderr)\n  sys.exit(7)\nexpect_assume = os.environ.get(\"EXPECT_ASSUME\", \"\")\nif expect_assume and os.environ.get(\"LEC_ASSUME_KNOWN_INPUTS\", \"\") != expect_assume:\n  print(\"bad LEC_ASSUME_KNOWN_INPUTS\", file=sys.stderr)\n  sys.exit(8)\nout = \"\"\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == \"--results-file\" and i + 1 < len(args):\n    out = args[i + 1]\nif not out:\n  print(\"missing --results-file\", file=sys.stderr)\n  sys.exit(6)\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n  f.write(\"PASS\\timpl_ok\\t/work/ok\\topentitan\\tLEC\\n\")\nprint(\"fake lec done\")\n' > %t/bin/fake-lec.py
+// RUN: chmod +x %t/bin/fake-lec.py
+//
+// RUN: EXPECT_XOPT=1 EXPECT_ASSUME=1 %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out-xopt --skip-sim --skip-verilog --lec-x-optimistic --lec-assume-known-inputs --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh --lec-script %t/bin/fake-lec.py 2>&1 | FileCheck %s --check-prefix=PASS
+// RUN: EXPECT_XOPT=0 %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out-strict --skip-sim --skip-verilog --lec-strict-x --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh --lec-script %t/bin/fake-lec.py 2>&1 | FileCheck %s --check-prefix=PASS
+// RUN: not %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out-conflict --skip-sim --skip-verilog --lec-x-optimistic --lec-strict-x --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh --lec-script %t/bin/fake-lec.py 2>&1 | FileCheck %s --check-prefix=CONFLICT
+//
+// PASS: OpenTitan E2E summary: pass=1 fail=0
+// CONFLICT: Use only one of --lec-x-optimistic or --lec-strict-x.

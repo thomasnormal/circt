@@ -19,6 +19,10 @@ Options:
   --impl-filter REGEX      Regex filter for OpenTitan AES S-Box LEC implementations
   --include-masked         Include masked AES S-Box implementations in LEC
   --allow-xprop-only       Accept XPROP_ONLY LEC rows (otherwise they fail parity)
+  --lec-assume-known-inputs
+                           Run LEC with known-input assumptions enabled
+  --lec-x-optimistic       Force optimistic X equivalence in LEC
+  --lec-strict-x           Force strict (non-optimistic) X equivalence in LEC
   --skip-sim               Skip OpenTitan sim lane
   --skip-verilog           Skip OpenTitan parse lane
   --skip-lec               Skip OpenTitan LEC lane
@@ -40,6 +44,9 @@ SIM_TIMEOUT=180
 IMPL_FILTER=""
 INCLUDE_MASKED=0
 ALLOW_XPROP_ONLY=0
+LEC_ASSUME_KNOWN_INPUTS=0
+LEC_X_OPTIMISTIC_MODE="auto"
+LEC_X_MODE_FLAG_COUNT=0
 RUN_SIM=1
 RUN_VERILOG=1
 RUN_LEC=1
@@ -59,6 +66,9 @@ while [[ $# -gt 0 ]]; do
     --impl-filter) IMPL_FILTER="$2"; shift 2 ;;
     --include-masked) INCLUDE_MASKED=1; shift ;;
     --allow-xprop-only) ALLOW_XPROP_ONLY=1; shift ;;
+    --lec-assume-known-inputs) LEC_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --lec-x-optimistic) LEC_X_OPTIMISTIC_MODE="on"; LEC_X_MODE_FLAG_COUNT=$((LEC_X_MODE_FLAG_COUNT + 1)); shift ;;
+    --lec-strict-x) LEC_X_OPTIMISTIC_MODE="off"; LEC_X_MODE_FLAG_COUNT=$((LEC_X_MODE_FLAG_COUNT + 1)); shift ;;
     --skip-sim) RUN_SIM=0; shift ;;
     --skip-verilog) RUN_VERILOG=0; shift ;;
     --skip-lec) RUN_LEC=0; shift ;;
@@ -69,6 +79,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+if [[ "$LEC_X_OPTIMISTIC_MODE" != "auto" ]] && [[ "$LEC_X_OPTIMISTIC_MODE" != "on" ]] && [[ "$LEC_X_OPTIMISTIC_MODE" != "off" ]]; then
+  echo "Invalid LEC X mode: $LEC_X_OPTIMISTIC_MODE" >&2
+  exit 1
+fi
+if [[ "$LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
+  echo "Use only one of --lec-x-optimistic or --lec-strict-x." >&2
+  exit 1
+fi
 
 if [[ ! -d "$OPENTITAN_ROOT" ]]; then
   echo "OpenTitan root not found: $OPENTITAN_ROOT" >&2
@@ -161,7 +180,16 @@ if [[ "$RUN_LEC" == "1" ]]; then
   if [[ "$INCLUDE_MASKED" == "1" ]]; then
     lec_cmd+=(--include-masked)
   fi
-  if env CIRCT_VERILOG="$CIRCT_VERILOG" LEC_SMOKE_ONLY=0 "${lec_cmd[@]}" > "$lec_log" 2>&1; then
+  lec_env=(CIRCT_VERILOG="$CIRCT_VERILOG" LEC_SMOKE_ONLY=0)
+  if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+    lec_env+=(LEC_ASSUME_KNOWN_INPUTS=1)
+  fi
+  if [[ "$LEC_X_OPTIMISTIC_MODE" == "on" ]]; then
+    lec_env+=(LEC_X_OPTIMISTIC=1)
+  elif [[ "$LEC_X_OPTIMISTIC_MODE" == "off" ]]; then
+    lec_env+=(LEC_X_OPTIMISTIC=0)
+  fi
+  if env "${lec_env[@]}" "${lec_cmd[@]}" > "$lec_log" 2>&1; then
     :
   fi
   if [[ ! -f "$lec_results" ]]; then
@@ -198,4 +226,3 @@ echo "Results: $RESULTS_FILE"
 if [[ "$failures" -ne 0 ]]; then
   exit 1
 fi
-

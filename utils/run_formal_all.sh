@@ -6782,6 +6782,7 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
       --opentitan-root "$OPENTITAN_DIR"
       --out-dir "$OUT_DIR/opentitan-formal-e2e"
       --results-file "$opentitan_e2e_results_tsv"
+      --lec-x-optimistic
     )
     if [[ -n "$OPENTITAN_E2E_SIM_TARGETS" ]]; then
       opentitan_e2e_cmd+=(--sim-targets "$OPENTITAN_E2E_SIM_TARGETS")
@@ -6797,6 +6798,9 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
     fi
     if [[ "$OPENTITAN_E2E_INCLUDE_MASKED" == "1" ]]; then
       opentitan_e2e_cmd+=(--include-masked)
+    fi
+    if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      opentitan_e2e_cmd+=(--lec-assume-known-inputs)
     fi
     if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
       opentitan_e2e_cmd+=(--allow-xprop-only)
