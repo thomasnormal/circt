@@ -3621,12 +3621,93 @@ struct RvalueExprVisitor : public ExprVisitor {
           }
         } else {
           // Explicit sample arguments (parametric covergroup with
-          // `with function sample(...)`)
-          for (const auto *arg : expr.arguments()) {
-            Value argVal = context.convertRvalueExpression(*arg);
-            if (!argVal)
-              return {};
-            sampleArgs.push_back(argVal);
+          // `with function sample(...)`). IEEE 1800-2017 §19.8.1.
+          // We must evaluate each coverpoint expression with the sample
+          // method's formal parameters bound to the actual arguments.
+          const auto &cgBody =
+              parentSym.as<slang::ast::CovergroupBodySymbol>();
+
+          // Find the sample SubroutineSymbol to get formal parameters.
+          const slang::ast::SubroutineSymbol *sampleMethod = nullptr;
+          for (const auto &member : cgBody.members()) {
+            if (auto *sub =
+                    member.as_if<slang::ast::SubroutineSymbol>()) {
+              if (sub->name == "sample") {
+                sampleMethod = sub;
+                break;
+              }
+            }
+          }
+
+          if (sampleMethod) {
+            auto formals = sampleMethod->getArguments();
+
+            // Convert actual argument values.
+            SmallVector<Value> actualValues;
+            for (const auto *arg : expr.arguments()) {
+              Value argVal = context.convertRvalueExpression(*arg);
+              if (!argVal)
+                return {};
+              actualValues.push_back(argVal);
+            }
+
+            // Collect all FormalArgumentSymbol references from coverpoint
+            // expressions. We need to bind the ACTUAL symbol pointers that
+            // the expressions reference (which may differ from the
+            // subroutine's getArguments() copies due to copyArg()).
+            llvm::DenseMap<llvm::StringRef,
+                           const slang::ast::ValueSymbol *>
+                formalsByName;
+            for (const auto &member : cgBody.members()) {
+              if (auto *cp =
+                      member.as_if<slang::ast::CoverpointSymbol>()) {
+                cp->getCoverageExpr().visitSymbolReferences(
+                    [&](const slang::ast::Expression &,
+                        const slang::ast::Symbol &sym) {
+                      if (sym.kind ==
+                          slang::ast::SymbolKind::FormalArgument)
+                        formalsByName[sym.name] =
+                            static_cast<const slang::ast::ValueSymbol *>(
+                                &sym);
+                    });
+              }
+            }
+
+            // Create a scope and bind each formal parameter to its
+            // actual argument value, using name matching to handle
+            // symbol pointer differences between copies.
+            Context::ValueSymbolScope sampleScope(context.valueSymbols);
+            for (size_t i = 0;
+                 i < formals.size() && i < actualValues.size(); ++i) {
+              // Bind the subroutine's formal (for direct references).
+              context.valueSymbols.insert(formals[i], actualValues[i]);
+              // Also bind the expression's actual symbol reference
+              // (may be a different pointer for the same formal).
+              auto it = formalsByName.find(formals[i]->name);
+              if (it != formalsByName.end() &&
+                  it->second != formals[i])
+                context.valueSymbols.insert(it->second, actualValues[i]);
+            }
+
+            // Now evaluate each coverpoint expression in this scope.
+            for (const auto &member : cgBody.members()) {
+              if (auto *cp =
+                      member.as_if<slang::ast::CoverpointSymbol>()) {
+                Value val =
+                    context.convertRvalueExpression(cp->getCoverageExpr());
+                if (!val)
+                  return {};
+                sampleArgs.push_back(val);
+              }
+            }
+          } else {
+            // Fallback: no sample method found, pass raw args.
+            for (const auto *arg : expr.arguments()) {
+              Value argVal = context.convertRvalueExpression(*arg);
+              if (!argVal)
+                return {};
+              sampleArgs.push_back(argVal);
+            }
           }
         }
         moore::CovergroupSampleOp::create(builder, loc, covergroupInstance,
