@@ -1,0 +1,11 @@
+// RUN: circt-mut generate --help | FileCheck %s
+
+// CHECK: usage: circt-mut generate [options]
+// CHECK: --design
+// CHECK: --out
+// CHECK: --mode
+// CHECK: --mode-count
+// CHECK: --profile
+// CHECK: --cfg
+// CHECK: --select
+// CHECK: --cache-dir

@@ -95,7 +95,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Content-addressed reuse cache | **DONE** | 0 | Added `--reuse-cache-dir` + cache read/read-write modes keyed by compat hash |
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Multi-mode mutation mix generation | **DONE** | 0 | Added `--mutations-modes` / `--modes` to combine arithmetic/control mutation modes deterministically |
-| - Native mutation CLI frontend (`circt-mut`) | IN_PROGRESS | — | Added initial `circt-mut` tool with `cover|matrix|generate` subcommands that dispatch to existing mutation scripts; default mutation materialization no longer depends on `~/mcy/scripts/create_mutated.sh` (now uses in-repo `utils/create_mutated_yosys.sh`); mutation scripts are now installed to `<prefix>/share/circt/utils` for install-tree `circt-mut` usability; built-in global filters now auto-resolve `circt-lec`/`circt-bmc` from in-repo `build/bin`, install-tree sibling `bin`, then `PATH`; migration of shell logic into C++ subcommands is pending |
+| - Native mutation CLI frontend (`circt-mut`) | IN_PROGRESS | — | Added initial `circt-mut` tool with `cover|matrix|generate` subcommands; target architecture is now MCY/Certitude-style campaign UX (`init`/project config + `run`/`report`-grade flows) with staged migration of script logic into native C++ subcommands; native `circt-mut generate` core path now executes Yosys mutation-list generation directly (mode/profile/mode-count/cfg/select/top-up dedup), with script fallback for unsupported options (currently `--cache-dir`) during migration; default mutation materialization no longer depends on `~/mcy/scripts/create_mutated.sh` (now uses in-repo `utils/create_mutated_yosys.sh`); mutation scripts are installed to `<prefix>/share/circt/utils` for compatibility during migration; built-in global filters auto-resolve `circt-lec`/`circt-bmc` from in-repo `build/bin`, install-tree sibling `bin`, then `PATH`; next steps: native generate cache parity, then native `cover` global-filter orchestration, then native `matrix` lane scheduler/gates |
 | - Native mutation operator expansion (arithmetic/control-depth) | IN_PROGRESS | — | Added mutate profile presets (`--mutations-profiles`), weighted mode allocations (`--mutations-mode-counts`), deterministic mode-family expansion (`arith/control/balanced/all` -> `inv/const0/const1/cnot0/cnot1`), plus `-cfg`/select controls (`--mutations-cfg`, `--mutations-select`) across generator/cover/matrix; deeper operator families still pending |
 | - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode/profile/mode-count/cfg/select controls, default/lane global formal propagation filters, full default/lane circt-lec global filter controls (`args`, `c1/c2`, `z3`, `assume-known-inputs`, `accept-xprop-only`), default/lane circt-bmc global filter controls (including `ignore_asserts_until`), and default/lane chained LEC/BMC global filtering (`--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`) with chain telemetry metrics (`chain_lec_unknown_fallbacks`, `chain_bmc_resolved_not_propagated_mutants`, `chain_bmc_resolved_propagated_mutants`, `chain_bmc_unknown_fallbacks`, `chain_lec_resolved_not_propagated_mutants`, `chain_lec_resolved_propagated_mutants`, `chain_lec_error_fallbacks`, `chain_bmc_error_fallbacks`, `chain_consensus_not_propagated_mutants`, `chain_consensus_disagreement_mutants`, `chain_consensus_error_mutants`, `chain_auto_parallel_mutants`, `chain_auto_short_circuit_mutants`) and conservative single-engine-error fallback (never prune on sole non-propagation evidence when the peer engine errors); added per-mutant global formal timeout controls (`--formal-global-propagate-timeout-seconds`) plus per-engine overrides (`--formal-global-propagate-lec-timeout-seconds`, `--formal-global-propagate-bmc-timeout-seconds`) with matrix default/lane overrides and timeout telemetry (`global_filter_timeout_mutants`, `global_filter_lec_timeout_mutants`, `global_filter_bmc_timeout_mutants`) plus runtime telemetry (`global_filter_lec_runtime_ns`, `global_filter_bmc_runtime_ns`, `global_filter_cmd_runtime_ns`, `global_filter_lec_runs`, `global_filter_bmc_runs`, `global_filter_cmd_runs`); added built-in differential BMC original-design cache reuse (`.global_bmc_orig_cache`) with `bmc_orig_cache_hit_mutants`/`bmc_orig_cache_miss_mutants` and runtime telemetry (`bmc_orig_cache_saved_runtime_ns`/`bmc_orig_cache_miss_runtime_ns`), bounded cache controls (`--bmc-orig-cache-max-entries`, `--bmc-orig-cache-max-bytes`, `--bmc-orig-cache-max-age-seconds`), configurable count/byte eviction policy (`--bmc-orig-cache-eviction-policy lru|fifo|cost-lru`), age-aware pruning telemetry (`bmc_orig_cache_pruned_age_entries`/`bmc_orig_cache_pruned_age_bytes`, including persisted-cache variants), and cross-run cache publication status (`bmc_orig_cache_write_status`) via `--reuse-cache-dir/global_bmc_orig_cache`; generated mutation-list cache telemetry now exported in cover/matrix metrics (`generated_mutations_cache_status`, `generated_mutations_cache_hit`, `generated_mutations_cache_miss`); added matrix default/lane cache-limit pass-through controls (`--default-bmc-orig-cache-max-entries`, `--default-bmc-orig-cache-max-bytes`, `--default-bmc-orig-cache-max-age-seconds`, `--default-bmc-orig-cache-eviction-policy`, lane TSV overrides), strict gate pass-through controls (`--skip-baseline`, `--fail-on-undetected`, `--fail-on-errors`) plus per-lane overrides (`skip_baseline`, `fail_on_undetected`, `fail_on_errors`) with explicit boolean validation (`1|0|true|false|yes|no|-`), gate-summary export (`--gate-summary-file`, default `<out-dir>/gate_summary.tsv`), plus lane selection filters (`--include-lane-regex`, `--exclude-lane-regex`) for targeted CI slicing; BMC orig-cache key now includes original-design SHA-256 to prevent stale reuse when design content changes at the same path; added compatibility-guarded global filter reuse from prior `pair_qualification.tsv` (`test_id=-`) with `reused_global_filters` metric; built-in global filters now conservatively treat formal `UNKNOWN` as propagated (not pruned); full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
@@ -184,9 +184,9 @@ See CHANGELOG.md on recent progress.
    response wait when `a_ready` never handshakes.
 9. Latest canonical OpenTitan dual-lane run via `run_formal_all.sh`
    (`^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$`) reports:
-   - `E2E`: `pass=11 fail=1` (`SIM:i2c` timeout)
+   - `E2E`: `pass=12 fail=0`
    - `E2E_STRICT`: `pass=12 fail=0`
-   - `E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=1` (`SIM:i2c`)
+   - `E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=0`
 10. Strict non-optimistic OpenTitan LEC closure is now in place:
     `opentitan/LEC_STRICT` runs `LEC_X_OPTIMISTIC=0` without
     `aes_sbox_canright#XPROP_ONLY` by default (known-input assumptions in the
@@ -216,6 +216,8 @@ See CHANGELOG.md on recent progress.
     (`--lec-x-optimistic`, `--lec-strict-x`, `--lec-assume-known-inputs`);
     `run_formal_all.sh` pins OpenTitan E2E to x-optimistic mode and forwards
     `--lec-assume-known-inputs` into the E2E lane.
+17. OpenTitan E2E no longer supports `--allow-xprop-only`; `XPROP_ONLY` rows
+    are hard failures in parity runs.
 17. OpenTitan LEC artifact paths are now deterministic in both formal-all and
     OpenTitan E2E harnesses (`opentitan-lec-work`, `opentitan-lec-strict-work`,
     `opentitan-formal-e2e/lec-workdir`) for stable case-level gating/triage.
@@ -337,10 +339,10 @@ See CHANGELOG.md on recent progress.
     `results.tsv` for lane-level cache hotspot diagnosis.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
-1. OpenTitan non-strict E2E still has an intermittent `SIM:i2c` timeout, which
-   appears in mode-diff as `strict_only_pass=1` when it reproduces.
-2. Need deterministic stabilization for `SIM:i2c` convergence and a dedicated
-   regression lane that continuously gates the timeout signature.
+1. No currently reproducing OpenTitan non-smoke parity gaps in canonical
+   dual-lane runs (`E2E`, `E2E_STRICT`, and mode-diff all clean).
+2. Keep strict-gate drift checks enabled so any future reintroduction of
+   timeout/X-prop deltas trips immediately.
 
 #### Closure Workflow
 1. Keep one issue per failing lane target with owner, reproducer, and expected

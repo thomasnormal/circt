@@ -271,6 +271,11 @@ Execution controls:
   `<reuse-cache-dir>/generated_mutations`.
 - `--reuse-cache-mode off|read|read-write`: cache read/write policy
   (default `read-write` when cache dir is provided).
+- `circt-mut generate` migration note:
+  - core mutation generation now runs natively in `circt-mut` for standard
+    generation options (mode/profile/mode-count/cfg/select/top-up).
+  - `--cache-dir` currently routes through compatibility script backend
+    (`generate_mutations_yosys.sh`) until native cache parity is completed.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
