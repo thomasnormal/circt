@@ -86,6 +86,9 @@ Execution controls:
 - `--jobs <N>`: run per-mutant execution with up to `N` local workers.
 - `--resume`: reuse existing per-mutant artifacts in `<work-dir>/mutations/*`
   and rebuild global reports without re-running completed mutants.
+- `--reuse-pair-file <path>`: reuse prior `pair_qualification.tsv`
+  activation/propagation rows so iterative testbench-improvement runs can skip
+  repeated formal pre-qualification work.
 
 `tests.tsv` format (tab-separated):
 

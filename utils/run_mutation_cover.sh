@@ -23,6 +23,7 @@ Optional:
   --metrics-file FILE        Metric-mode summary TSV (default: <work-dir>/metrics.tsv)
   --summary-json-file FILE   Machine-readable summary JSON (default: <work-dir>/summary.json)
   --improvement-file FILE    Improvement-mode summary TSV (default: <work-dir>/improvement.tsv)
+  --reuse-pair-file FILE     Reuse activation/propagation from prior pair_qualification.tsv
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -68,6 +69,7 @@ RESULTS_FILE=""
 METRICS_FILE=""
 SUMMARY_JSON_FILE=""
 IMPROVEMENT_FILE=""
+REUSE_PAIR_FILE=""
 CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
@@ -96,6 +98,7 @@ while [[ $# -gt 0 ]]; do
     --metrics-file) METRICS_FILE="$2"; shift 2 ;;
     --summary-json-file) SUMMARY_JSON_FILE="$2"; shift 2 ;;
     --improvement-file) IMPROVEMENT_FILE="$2"; shift 2 ;;
+    --reuse-pair-file) REUSE_PAIR_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -131,6 +134,10 @@ if [[ ! -f "$DESIGN" ]]; then
 fi
 if [[ ! -f "$TESTS_MANIFEST" ]]; then
   echo "Tests manifest not found: $TESTS_MANIFEST" >&2
+  exit 1
+fi
+if [[ -n "$REUSE_PAIR_FILE" && ! -f "$REUSE_PAIR_FILE" ]]; then
+  echo "Reuse pair file not found: $REUSE_PAIR_FILE" >&2
   exit 1
 fi
 if [[ ! -x "$CREATE_MUTATED_SCRIPT" ]]; then
@@ -203,6 +210,10 @@ declare -A TEST_RESULT_FILE
 declare -A TEST_KILL_PATTERN
 declare -A TEST_SURVIVE_PATTERN
 declare -a TEST_ORDER
+declare -A REUSE_ACTIVATION
+declare -A REUSE_PROPAGATION
+declare -A REUSE_ACTIVATE_EXIT
+declare -A REUSE_PROPAGATE_EXIT
 
 declare -a MUTATION_IDS
 declare -a MUTATION_SPECS
@@ -263,6 +274,47 @@ load_mutations() {
     MUTATION_SPECS+=("$mutation_spec")
     count=$((count + 1))
   done < "$MUTATIONS_FILE"
+}
+
+load_reuse_pairs() {
+  local line=""
+  local mutation_id=""
+  local test_id=""
+  local activation=""
+  local propagation=""
+  local activate_exit=""
+  local propagate_exit=""
+  local key=""
+
+  if [[ -z "$REUSE_PAIR_FILE" ]]; then
+    return
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+    IFS=$'\t' read -r mutation_id test_id activation propagation activate_exit propagate_exit _ <<< "$line"
+    if [[ -z "$mutation_id" || -z "$test_id" ]]; then
+      continue
+    fi
+    if [[ "$activation" != "activated" && "$activation" != "not_activated" ]]; then
+      continue
+    fi
+    case "$propagation" in
+      -|not_propagated|propagated) ;;
+      *) continue ;;
+    esac
+    if [[ "$activation" == "not_activated" ]]; then
+      propagation="-"
+      propagate_exit="-1"
+    fi
+    key="${mutation_id}"$'\t'"${test_id}"
+    REUSE_ACTIVATION["$key"]="$activation"
+    REUSE_PROPAGATION["$key"]="$propagation"
+    REUSE_ACTIVATE_EXIT["$key"]="${activate_exit:--1}"
+    REUSE_PROPAGATE_EXIT["$key"]="${propagate_exit:--1}"
+  done < "$REUSE_PAIR_FILE"
 }
 
 run_command() {
@@ -389,6 +441,7 @@ process_mutation() {
   local propagated_any=0
   local detected_by_test="-"
   local relevant_pairs=0
+  local reused_pairs=0
   local mutant_class="not_activated"
   local mutation_errors=0
   local create_rc=0
@@ -402,6 +455,9 @@ process_mutation() {
   local test_exit=""
   local result_file=""
   local test_note=""
+  local reuse_key=""
+  local reuse_hit=0
+  local run_note="run_detection"
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
 
@@ -417,7 +473,10 @@ process_mutation() {
     mutant_class="not_activated+error"
     printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$mutation_id" "$mutant_class" "0" "-" "$mutant_design" "$mutation_spec" > "$summary_local"
-    printf "errors\t%s\n" "$mutation_errors" > "$meta_local"
+    {
+      printf "errors\t%s\n" "$mutation_errors"
+      printf "reused_pairs\t0\n"
+    } > "$meta_local"
     return 0
   fi
 
@@ -432,8 +491,22 @@ process_mutation() {
     export TEST_ID="$test_id"
     test_dir="${mutation_dir}/${test_id}"
     mkdir -p "$test_dir"
+    reuse_key="${mutation_id}"$'\t'"${test_id}"
+    reuse_hit=0
+    run_note="run_detection"
 
-    read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
+    if [[ -n "$REUSE_PAIR_FILE" && -n "${REUSE_ACTIVATION[$reuse_key]+x}" ]]; then
+      activate_state="${REUSE_ACTIVATION[$reuse_key]}"
+      activate_rc="${REUSE_ACTIVATE_EXIT[$reuse_key]}"
+      propagate_state="${REUSE_PROPAGATION[$reuse_key]}"
+      propagate_rc="${REUSE_PROPAGATE_EXIT[$reuse_key]}"
+      reuse_hit=1
+      reused_pairs=$((reused_pairs + 1))
+      run_note="cached_run_detection"
+    else
+      read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
+    fi
+
     if [[ "$activate_state" == "error" ]]; then
       mutation_errors=$((mutation_errors + 1))
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -442,28 +515,38 @@ process_mutation() {
     fi
     if [[ "$activate_state" == "not_activated" ]]; then
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" "skipped_no_activation" >> "$pair_local"
+        "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" \
+        "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_activation" || printf "skipped_no_activation")" >> "$pair_local"
       continue
     fi
 
     activated_any=1
-    read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
+    if [[ "$reuse_hit" -eq 0 ]]; then
+      read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
+    fi
     if [[ "$propagate_state" == "error" ]]; then
       mutation_errors=$((mutation_errors + 1))
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "propagation_error" >> "$pair_local"
       continue
     fi
+    if [[ "$propagate_state" != "not_propagated" && "$propagate_state" != "propagated" ]]; then
+      mutation_errors=$((mutation_errors + 1))
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "invalid_propagation_state" >> "$pair_local"
+      continue
+    fi
     if [[ "$propagate_state" == "not_propagated" ]]; then
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" "skipped_no_propagation" >> "$pair_local"
+        "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" \
+        "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_propagation" || printf "skipped_no_propagation")" >> "$pair_local"
       continue
     fi
 
     propagated_any=1
     relevant_pairs=$((relevant_pairs + 1))
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "run_detection" >> "$pair_local"
+      "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "$run_note" >> "$pair_local"
 
     read -r test_result test_exit result_file test_note < <(run_test_and_classify "$test_dir" "$test_id" "$test_dir/test.log")
     printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -495,10 +578,14 @@ process_mutation() {
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$mutation_id" "$mutant_class" "$relevant_pairs" "$detected_by_test" "$mutant_design" "$mutation_spec" > "$summary_local"
-  printf "errors\t%s\n" "$mutation_errors" > "$meta_local"
+  {
+    printf "errors\t%s\n" "$mutation_errors"
+    printf "reused_pairs\t%s\n" "$reused_pairs"
+  } > "$meta_local"
 }
 
 load_tests_manifest
+load_reuse_pairs
 load_mutations
 if [[ "${#MUTATION_IDS[@]}" -eq 0 ]]; then
   echo "No usable mutations loaded from: $MUTATIONS_FILE" >&2
@@ -565,6 +652,7 @@ count_not_activated=0
 count_not_propagated=0
 count_detected=0
 count_propagated_not_detected=0
+count_reused_pairs=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -604,6 +692,15 @@ for i in "${!MUTATION_IDS[@]}"; do
   else
     errors=$((errors + 1))
   fi
+
+  local_reused=0
+  if [[ -f "$meta_local" ]]; then
+    local_reused="$(awk -F$'\t' '$1=="reused_pairs"{print $2}' "$meta_local" | head -n1)"
+    local_reused="${local_reused:-0}"
+  fi
+  if [[ "$local_reused" =~ ^[0-9]+$ ]]; then
+    count_reused_pairs=$((count_reused_pairs + local_reused))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -620,6 +717,7 @@ fi
   printf "propagated_not_detected_mutants\t%s\n" "$count_propagated_not_detected"
   printf "not_propagated_mutants\t%s\n" "$count_not_propagated"
   printf "not_activated_mutants\t%s\n" "$count_not_activated"
+  printf "reused_pairs\t%s\n" "$count_reused_pairs"
   printf "errors\t%s\n" "$errors"
   printf "mutation_coverage_percent\t%s\n" "$coverage_pct"
 } > "$METRICS_FILE"
@@ -663,6 +761,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "propagated_not_detected_mutants": $count_propagated_not_detected,
   "not_propagated_mutants": $count_not_propagated,
   "not_activated_mutants": $count_not_activated,
+  "reused_pairs": $count_reused_pairs,
   "errors": $errors,
   "mutation_coverage_percent": $coverage_pct,
   "coverage_threshold_percent": $threshold_json,
@@ -672,7 +771,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
