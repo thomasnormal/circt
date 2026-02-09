@@ -211,6 +211,8 @@ Execution controls:
   `run_mutation_cover.sh --formal-global-propagate-bmc-z3`.
 - `--default-formal-global-propagate-bmc-assume-known-inputs`: default
   `run_mutation_cover.sh --formal-global-propagate-bmc-assume-known-inputs`.
+- `--default-formal-global-propagate-bmc-ignore-asserts-until <n>`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-ignore-asserts-until`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -220,7 +222,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]
 ```
 
 Notes:
@@ -253,6 +255,9 @@ Notes:
 - `global_propagate_bmc_assume_known_inputs` (optional truthy flag:
   `1|true|yes`) enables
   `--formal-global-propagate-bmc-assume-known-inputs`.
+- `global_propagate_bmc_ignore_asserts_until` (optional) overrides
+  `--default-formal-global-propagate-bmc-ignore-asserts-until` for a specific
+  lane.
 - `global_propagate_cmd`, `global_propagate_circt_lec`, and
   `global_propagate_circt_bmc` are mutually exclusive within a lane.
 

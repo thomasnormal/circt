@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -50,6 +50,10 @@ Optional:
                             Enable default
                             --formal-global-propagate-bmc-assume-known-inputs
                             for lanes using circt-bmc global filtering
+  --default-formal-global-propagate-bmc-ignore-asserts-until N
+                            Default --formal-global-propagate-bmc-ignore-asserts-until
+                            for lanes without lane-specific
+                            global_propagate_bmc_ignore_asserts_until
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
@@ -82,6 +86,7 @@ DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_MODULE=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=0
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_Z3=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=0
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
@@ -106,6 +111,7 @@ while [[ $# -gt 0 ]]; do
     --default-formal-global-propagate-bmc-run-smtlib) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=1; shift ;;
     --default-formal-global-propagate-bmc-z3) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_Z3="$2"; shift 2 ;;
     --default-formal-global-propagate-bmc-assume-known-inputs) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --default-formal-global-propagate-bmc-ignore-asserts-until) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL="$2"; shift 2 ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
@@ -138,6 +144,10 @@ if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --default-formal-global-propagate-bmc-bound value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --default-formal-global-propagate-bmc-ignore-asserts-until value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
@@ -183,6 +193,7 @@ declare -a GLOBAL_PROPAGATE_BMC_MODULE
 declare -a GLOBAL_PROPAGATE_BMC_RUN_SMTLIB
 declare -a GLOBAL_PROPAGATE_BMC_Z3
 declare -a GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS
+declare -a GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -191,7 +202,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -221,6 +232,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   GLOBAL_PROPAGATE_BMC_RUN_SMTLIB+=("${global_propagate_bmc_run_smtlib:--}")
   GLOBAL_PROPAGATE_BMC_Z3+=("${global_propagate_bmc_z3:--}")
   GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS+=("${global_propagate_bmc_assume_known_inputs:--}")
+  GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL+=("${global_propagate_bmc_ignore_asserts_until:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -252,6 +264,7 @@ run_lane() {
   local lane_global_propagate_bmc_run_smtlib=""
   local lane_global_propagate_bmc_z3=""
   local lane_global_propagate_bmc_assume_known_inputs=""
+  local lane_global_propagate_bmc_ignore_asserts_until=""
 
   mkdir -p "$lane_dir"
 
@@ -411,6 +424,20 @@ run_lane() {
   fi
   if [[ "$lane_global_propagate_bmc_assume_known_inputs" == "1" || "$lane_global_propagate_bmc_assume_known_inputs" == "true" || "$lane_global_propagate_bmc_assume_known_inputs" == "yes" ]]; then
     cmd+=(--formal-global-propagate-bmc-assume-known-inputs)
+  fi
+
+  lane_global_propagate_bmc_ignore_asserts_until="${GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL[$i]}"
+  if [[ "$lane_global_propagate_bmc_ignore_asserts_until" == "-" || -z "$lane_global_propagate_bmc_ignore_asserts_until" ]]; then
+    lane_global_propagate_bmc_ignore_asserts_until="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_ignore_asserts_until" ]]; then
+    if ! [[ "$lane_global_propagate_bmc_ignore_asserts_until" =~ ^[0-9]+$ ]]; then
+      gate="CONFIG_ERROR"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      return 0
+    fi
+    cmd+=(--formal-global-propagate-bmc-ignore-asserts-until "$lane_global_propagate_bmc_ignore_asserts_until")
   fi
 
   if [[ -n "${THRESHOLD[$i]}" && "${THRESHOLD[$i]}" != "-" ]]; then
