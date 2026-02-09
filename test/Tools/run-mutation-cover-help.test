@@ -11,6 +11,8 @@
 // CHECK-DAG: --reuse-manifest-file
 // CHECK-DAG: --reuse-cache-dir
 // CHECK-DAG: --reuse-cache-mode
+// CHECK-DAG: --bmc-orig-cache-max-entries
+// CHECK-DAG: --bmc-orig-cache-max-bytes
 // CHECK-DAG: --jobs
 // CHECK-DAG: --resume
 // CHECK-DAG: --generate-mutations
