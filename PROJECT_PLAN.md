@@ -18353,6 +18353,12 @@ ninja -C build circt-verilog
   - OCSP: `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia`
   - Auto modes are metadata-gated, mutually exclusive with cmd/explicit URI,
     and included in lane-state config-hash policy material.
+- Iteration 709 adds explicit auto-discovered URI selection policy controls:
+  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`
+  - policy modes: `first` (default), `last`, `require_single`
+  - strict dependency on corresponding auto-URI mode, plus config-hash
+    binding for deterministic resume behavior.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18366,9 +18372,9 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Extend cert-driven AIA/CDP auto-discovery with explicit URI selection
-    policy (single vs priority list) and failure diagnostics for multi-URI
-    certificates.
+  - Add policy profiles so production runs can centrally enforce
+    `require_single`/`last` defaults instead of relying on per-invocation CLI
+    selection.
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active

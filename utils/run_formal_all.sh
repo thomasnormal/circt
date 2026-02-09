@@ -127,6 +127,9 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp
                          Resolve CRL refresh URI from selected key certificate
                          CRL Distribution Points (keyring mode)
+  --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy MODE
+                         URI selection policy for cert CDP auto mode:
+                         first | last | require_single
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -173,6 +176,9 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia
                          Resolve OCSP refresh URI from selected key certificate
                          Authority Information Access (keyring mode)
+  --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy MODE
+                         URI selection policy for cert AIA auto mode:
+                         first | last | require_single
   --lane-state-manifest-ed25519-ocsp-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-ocsp-refresh-cmd or
@@ -330,6 +336,8 @@ LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=0
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="first"
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -346,6 +354,8 @@ LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA=0
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="first"
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
@@ -535,6 +545,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=1; shift ;;
+    --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -567,6 +579,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA=1; shift ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-delay-secs)
@@ -772,6 +786,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" && -z "$LANE_STATE_MANIF
   echo "--lane-state-manifest-ed25519-crl-refresh-uri requires --lane-state-manifest-ed25519-crl-file" >&2
   exit 1
 fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP" != "1" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy requires --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp" >&2
+  exit 1
+fi
+if [[ ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
+  exit 1
+fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp requires --lane-state-manifest-ed25519-crl-file" >&2
   exit 1
@@ -914,6 +936,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANI
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-refresh-uri requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" != "1" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy requires --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia" >&2
+  exit 1
+fi
+if [[ ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
   exit 1
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -1714,7 +1744,8 @@ lane_state_ed25519_resolve_refresh_uri_from_cert_extension() {
   local keyring_tsv="$1"
   local key_id="$2"
   local selector="$3"
-  python3 - "$keyring_tsv" "$key_id" "$selector" <<'PY'
+  local selection_policy="$4"
+  python3 - "$keyring_tsv" "$key_id" "$selector" "$selection_policy" <<'PY'
 import re
 import subprocess
 import sys
@@ -1723,9 +1754,13 @@ from pathlib import Path
 keyring_path = Path(sys.argv[1])
 target_key_id = sys.argv[2].strip()
 selector = sys.argv[3].strip()
+selection_policy = sys.argv[4].strip()
 
 if selector not in {"crl_cdp", "ocsp_aia"}:
   print(f"invalid selector '{selector}'", file=sys.stderr)
+  raise SystemExit(1)
+if selection_policy not in {"first", "last", "require_single"}:
+  print(f"invalid selection policy '{selection_policy}'", file=sys.stderr)
   raise SystemExit(1)
 
 if selector == "crl_cdp":
@@ -1831,13 +1866,27 @@ if not uri_candidates:
   )
   raise SystemExit(1)
 
-refresh_uri = uri_candidates[0].strip()
-if not re.fullmatch(r"(file|http|https)://.+", refresh_uri):
+usable_uri_candidates = [
+    candidate.strip()
+    for candidate in uri_candidates
+    if re.fullmatch(r"(file|http|https)://.+", candidate.strip())
+]
+if not usable_uri_candidates:
   print(
-      f"lane state Ed25519 certificate {ext_label} URI for key_id '{target_key_id}' has unsupported scheme: {refresh_uri}",
+      f"lane state Ed25519 certificate {ext_label} has no supported file/http/https URI for key_id '{target_key_id}'",
       file=sys.stderr,
   )
   raise SystemExit(1)
+if selection_policy == "require_single" and len(usable_uri_candidates) != 1:
+  print(
+      f"lane state Ed25519 certificate {ext_label} has {len(usable_uri_candidates)} usable URIs for key_id '{target_key_id}' while --auto-uri-policy=require_single",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if selection_policy == "last":
+  refresh_uri = usable_uri_candidates[-1]
+else:
+  refresh_uri = usable_uri_candidates[0]
 
 print(refresh_uri)
 PY
@@ -2046,7 +2095,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
         lane_state_ed25519_resolve_refresh_uri_from_cert_extension \
           "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
           "$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
-          "crl_cdp"
+          "crl_cdp" \
+          "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY"
       )"
     fi
     if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" == "1" ]]; then
@@ -2054,7 +2104,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
         lane_state_ed25519_resolve_refresh_uri_from_cert_extension \
           "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
           "$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
-          "ocsp_aia"
+          "ocsp_aia" \
+          "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY"
       )"
     fi
     LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
@@ -3004,6 +3055,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD"
     printf "lane_state_ed25519_crl_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI"
     printf "lane_state_ed25519_crl_refresh_auto_uri_from_cert_cdp=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP"
+    printf "lane_state_ed25519_crl_refresh_auto_uri_policy=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
@@ -3020,6 +3072,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
     printf "lane_state_ed25519_ocsp_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI"
     printf "lane_state_ed25519_ocsp_refresh_auto_uri_from_cert_aia=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA"
+    printf "lane_state_ed25519_ocsp_refresh_auto_uri_policy=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
     printf "lane_state_ed25519_ocsp_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"

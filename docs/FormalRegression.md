@@ -139,6 +139,11 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp` resolves
   the CRL refresh URI from the selected key certificate
   `CRL Distribution Points` extension (keyring mode).
+  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy` controls URI
+    selection when multiple usable CDP URIs exist:
+    - `first` (default)
+    - `last`
+    - `require_single` (fail when more than one usable URI is present)
   - Auto-URI mode requires
     `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
   - Auto-URI mode is mutually exclusive with
@@ -184,6 +189,11 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia` resolves
   the OCSP refresh URI from the selected key certificate
   `Authority Information Access` extension (keyring mode).
+  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy` controls URI
+    selection when multiple usable AIA OCSP URIs exist:
+    - `first` (default)
+    - `last`
+    - `require_single` (fail when more than one usable URI is present)
   - Auto-URI mode requires
     `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
   - Auto-URI mode is mutually exclusive with
