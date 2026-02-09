@@ -331,12 +331,17 @@ while IFS= read -r -d '' sv; do
   # Classify result
   # Exit code 137 = SIGKILL (timeout); 124 = timeout exit
   if [[ "$sim_exit" -eq 137 || "$sim_exit" -eq 124 ]]; then
-    result="TIMEOUT"
-    timeout_count=$((timeout_count + 1))
-    error=$((error + 1))
+    if [[ "$expect" == "xfail" ]]; then
+      result="XFAIL"
+      xfail=$((xfail + 1))
+    else
+      result="TIMEOUT"
+      timeout_count=$((timeout_count + 1))
+      error=$((error + 1))
+    fi
   elif [[ "$sim_exit" -eq 0 ]]; then
     # Simulation completed successfully
-    if [[ "$should_fail" == "1" ]]; then
+    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
       # Expected to fail but passed
       result="XPASS"
       xpass=$((xpass + 1))
@@ -346,8 +351,8 @@ while IFS= read -r -d '' sv; do
     fi
   else
     # Non-zero exit
-    if [[ "$should_fail" == "1" ]]; then
-      # Expected failure
+    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
+      # Expected failure (from test metadata or expect file)
       result="XFAIL"
       xfail=$((xfail + 1))
     else
