@@ -32,6 +32,14 @@
 - Manual command-level validation:
   - generated-lane matrix scenario: PASS (`pass=1 fail=0`, expected generated
     mutation file present).
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-continue --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `verilator-verification` BMC/LEC: 1/1 PASS each
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each
+    - OpenTitan LEC: 1/1 PASS
+    - AVIP compile lanes: 9/9 PASS
+    - `sv-tests` lanes filtered to zero selected tests in this smoke configuration.
 
 ## Iteration 727 - February 9, 2026
 
