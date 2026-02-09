@@ -32856,6 +32856,14 @@ CIRCT/slang correctly enforces LRM restrictions.
     - 1/1 PASS
   - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
     - 5/5 PASS
+- Filtered external sweep (seed + resume, CRL-enabled lane-state policy):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-crl-file ... --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-crl-file ... --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-crl-sweep-20260209-012910/out-seed`
+    - `/tmp/formal-all-ed25519-crl-sweep-20260209-012910/out-resume`
 - Integrated filtered sweep with keyring + SHA pin:
   - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-keyring-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-keyring-smoke.tsv --reset-lane-state --lane-state-hmac-keyring-tsv /tmp/formal-lane-state-ring.tsv --lane-state-hmac-keyring-sha256 <computed> --lane-state-hmac-key-id ci-lane-key-a`:
     - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
@@ -34149,6 +34157,48 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Lane-state inspection is row-level; no built-in per-test case coverage diff.
 - Lane-state files still have no signed provenance chain.
 - Harness resume remains lane-level (no intra-lane test replay).
+
+## Iteration 687 - February 9, 2026
+
+### Lane-State Ed25519 Certificate Revocation Checks
+
+- Added `--lane-state-manifest-ed25519-crl-file` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-keyring-tsv`
+  - requires `--lane-state-manifest-ed25519-ca-file`
+  - verifies selected keyring certificate with CRL enforcement via
+    `openssl verify -crl_check -CRLfile ...`
+- Lane-state trust-contract updates:
+  - resolved CRL SHA256 now contributes to lane-state config hash material
+  - Ed25519 lane-state manifests now include optional `ed25519_crl_sha256`
+  - resume/merge manifest verification now validates `ed25519_crl_sha256`
+    against expected policy.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative CLI dependency checks for CRL mode (missing keyring / missing CA)
+    - positive CRL-backed keyring manifest seed case
+    - negative revoked-certificate CRL rejection case
+  - `docs/FormalRegression.md`
+    - documented CRL option in lane-state Ed25519 examples and semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+
+### Remaining Limitations
+
+- Revocation policy currently supports explicit CRL files only (no OCSP).
+- No CRL freshness/nextUpdate enforcement policy yet.
+- Resume remains lane-level (no per-test replay).
 
 ## Iteration 679 - February 8, 2026
 
