@@ -32754,6 +32754,65 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 702 - February 9, 2026
+
+### Lane-State Refresh Source-Metadata Sidecars
+
+- Extended Ed25519 refresh policy in `utils/run_formal_all.sh` with optional
+  source-metadata sidecar inputs:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-file <file>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file <file>`
+- Sidecar semantics:
+  - each sidecar must contain a JSON object
+  - sidecar options require their corresponding refresh command options
+  - refresh commands receive `LANE_STATE_MANIFEST_ED25519_REFRESH_METADATA_FILE`
+    in the environment for deterministic producer wiring
+- Signed provenance integration:
+  - per-attempt provenance rows now include `source_metadata_sha256`
+  - provenance payload can include `source_metadata` and
+    `source_metadata_sha256` at artifact scope
+  - sidecar metadata is covered by existing lane-state manifest signatures
+    (HMAC/Ed25519) and resume verification.
+- Resume safety:
+  - metadata-file policy paths now contribute to lane-state config hash.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for CRL/OCSP metadata-file options without
+      refresh command
+    - positive CRL/OCSP manifest checks for signed source metadata fields
+    - existing retry/timeout provenance checks remain green
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP refresh metadata sidecar options and semantics
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external seed/resume sweep with metadata sidecars enabled:
+  - seed:
+    - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh ... --lane-state-tsv /tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/lane-state-metadata.tsv --reset-lane-state ... --lane-state-manifest-ed25519-crl-refresh-metadata-file /tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/refresh-crl.metadata.json --lane-state-manifest-ed25519-ocsp-refresh-metadata-file /tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/refresh-ocsp.metadata.json ...`
+    - PASS
+  - resume:
+    - same command with `--resume-from-lane-state`
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-metadata-seed`
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-metadata-resume`
+
+### Remaining Limitations
+
+- Sidecar schema is currently free-form JSON object; no strict versioned
+  required-field contract yet.
+- Native AIA/CDP fetch implementation and chain-attested transport metadata are
+  still pending.
+
 ## Iteration 701 - February 9, 2026
 
 ### Lane-State Signed Refresh Provenance

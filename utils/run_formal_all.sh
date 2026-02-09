@@ -131,6 +131,10 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-jitter-secs N
                          Additional random delay per retry attempt
                          (0..N seconds) for CRL refresh
+  --lane-state-manifest-ed25519-crl-refresh-metadata-file FILE
+                         Optional JSON object file emitted/updated by CRL
+                         refresh command and embedded in signed refresh
+                         provenance
   --lane-state-manifest-ed25519-ocsp-response-file FILE
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
@@ -148,6 +152,10 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs N
                          Additional random delay per retry attempt
                          (0..N seconds) for OCSP refresh
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-file FILE
+                         Optional JSON object file emitted/updated by OCSP
+                         refresh command and embedded in signed refresh
+                         provenance
   --lane-state-manifest-ed25519-ocsp-response-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-ocsp-response-file
@@ -274,12 +282,14 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_FILE=""
@@ -461,6 +471,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-jitter-secs)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-file)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-cmd)
@@ -473,6 +485,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-file)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-responder-cert-file)
@@ -666,6 +680,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && -z "$LANE_STA
   echo "--lane-state-manifest-ed25519-crl-refresh-jitter-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-file requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-retries: expected non-negative integer" >&2
   exit 1
@@ -708,6 +726,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && -z "$LANE_S
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-file requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
@@ -948,11 +970,15 @@ lane_state_ed25519_build_refresh_provenance_json() {
   local attempt_count="$3"
   local outcome="$4"
   local attempts_tsv="$5"
+  local source_metadata_json="$6"
+  local source_metadata_sha256="$7"
   REFRESH_ARTIFACT_KIND="$artifact_kind" \
   REFRESH_MAX_ATTEMPTS="$max_attempts" \
   REFRESH_ATTEMPT_COUNT="$attempt_count" \
   REFRESH_OUTCOME="$outcome" \
   REFRESH_ATTEMPTS_TSV="$attempts_tsv" \
+  REFRESH_SOURCE_METADATA_JSON="$source_metadata_json" \
+  REFRESH_SOURCE_METADATA_SHA256="$source_metadata_sha256" \
   python3 - <<'PY'
 import json
 import os
@@ -963,10 +989,11 @@ for line in raw_rows.splitlines():
   if not line.strip():
     continue
   fields = line.split("\t")
-  if len(fields) != 7:
+  if len(fields) != 8:
     print("invalid refresh provenance row shape", file=os.sys.stderr)
     raise SystemExit(1)
   artifact_sha = fields[6].strip()
+  source_metadata_sha = fields[7].strip()
   attempt_rows.append(
       {
           "attempt": int(fields[0]),
@@ -976,6 +1003,7 @@ for line in raw_rows.splitlines():
           "timed_out": fields[4] == "1",
           "artifact_readable": fields[5] == "1",
           "artifact_sha256": artifact_sha if artifact_sha else None,
+          "source_metadata_sha256": source_metadata_sha if source_metadata_sha else None,
       }
   )
 
@@ -987,7 +1015,47 @@ payload = {
     "outcome": os.environ["REFRESH_OUTCOME"],
     "attempts": attempt_rows,
 }
+source_metadata_sha = os.environ.get("REFRESH_SOURCE_METADATA_SHA256", "").strip()
+if source_metadata_sha:
+  payload["source_metadata_sha256"] = source_metadata_sha
+source_metadata_json = os.environ.get("REFRESH_SOURCE_METADATA_JSON", "").strip()
+if source_metadata_json:
+  try:
+    parsed_source_metadata = json.loads(source_metadata_json)
+  except Exception as ex:
+    print(f"invalid refresh source metadata payload: {ex}", file=os.sys.stderr)
+    raise SystemExit(1)
+  if not isinstance(parsed_source_metadata, dict):
+    print("invalid refresh source metadata payload: expected JSON object", file=os.sys.stderr)
+    raise SystemExit(1)
+  payload["source_metadata"] = parsed_source_metadata
 print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+PY
+}
+
+lane_state_ed25519_read_refresh_source_metadata_json() {
+  local metadata_file="$1"
+  python3 - "$metadata_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+metadata_path = Path(sys.argv[1])
+try:
+  parsed = json.loads(metadata_path.read_text(encoding="utf-8"))
+except Exception as ex:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': {ex}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if not isinstance(parsed, dict):
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': expected JSON object",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+print(json.dumps(parsed, sort_keys=True, separators=(",", ":")))
 PY
 }
 
@@ -1001,6 +1069,7 @@ run_lane_state_ed25519_refresh_hook() {
   local refresh_timeout_secs="$7"
   local refresh_jitter_secs="$8"
   local provenance_var_name="$9"
+  local refresh_metadata_file="${10}"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -1014,6 +1083,10 @@ run_lane_state_ed25519_refresh_hook() {
   local timed_out=0
   local artifact_readable=0
   local artifact_sha256=""
+  local source_metadata_sha256=""
+  local source_metadata_json=""
+  local final_source_metadata_sha256=""
+  local final_source_metadata_json=""
   local outcome="success"
   local attempts_tsv=""
   local attempt_count=0
@@ -1026,12 +1099,15 @@ run_lane_state_ed25519_refresh_hook() {
     timed_out=0
     artifact_readable=0
     artifact_sha256=""
+    source_metadata_sha256=""
+    source_metadata_json=""
     if (( timeout_secs > 0 )); then
       if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
          LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
          LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
          LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
          LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
+         LANE_STATE_MANIFEST_ED25519_REFRESH_METADATA_FILE="$refresh_metadata_file" \
          python3 - "$refresh_cmd" "$timeout_secs" <<'PY'
 import subprocess
 import sys
@@ -1059,6 +1135,7 @@ PY
          LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
          LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
          LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
+         LANE_STATE_MANIFEST_ED25519_REFRESH_METADATA_FILE="$refresh_metadata_file" \
          bash -lc "$refresh_cmd"; then
         cmd_rc=0
       else
@@ -1073,9 +1150,37 @@ PY
       if [[ -r "$artifact_file" ]]; then
         artifact_readable=1
         artifact_sha256="$(sha256sum "$artifact_file" | awk '{print $1}')"
+        if [[ -n "$refresh_metadata_file" ]]; then
+          if [[ ! -r "$refresh_metadata_file" ]]; then
+            outcome="metadata_unreadable"
+            echo "lane state Ed25519 ${artifact_name} refresh metadata file not readable after refresh attempt ${attempt}/${max_attempts}: $refresh_metadata_file" >&2
+            attempt_count="$attempt"
+            attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\t'"${source_metadata_sha256}"$'\n'
+            if (( attempt >= max_attempts )); then
+              provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv" "$final_source_metadata_json" "$final_source_metadata_sha256")"
+              if [[ -n "$provenance_json" ]]; then
+                printf -v "$provenance_var_name" '%s' "$provenance_json"
+              fi
+              exit 1
+            fi
+            sleep_secs="$delay_secs"
+            if (( jitter_secs > 0 )); then
+              sleep_secs=$((sleep_secs + (RANDOM % (jitter_secs + 1))))
+            fi
+            if (( sleep_secs > 0 )); then
+              sleep "$sleep_secs"
+            fi
+            attempt=$((attempt + 1))
+            continue
+          fi
+          source_metadata_sha256="$(sha256sum "$refresh_metadata_file" | awk '{print $1}')"
+          source_metadata_json="$(lane_state_ed25519_read_refresh_source_metadata_json "$refresh_metadata_file")"
+          final_source_metadata_sha256="$source_metadata_sha256"
+          final_source_metadata_json="$source_metadata_json"
+        fi
         attempt_count="$attempt"
-        attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\n'
-        provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv")"
+        attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\t'"${source_metadata_sha256}"$'\n'
+        provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv" "$final_source_metadata_json" "$final_source_metadata_sha256")"
         if [[ -n "$provenance_json" ]]; then
           printf -v "$provenance_var_name" '%s' "$provenance_json"
         fi
@@ -1091,9 +1196,9 @@ PY
       echo "lane state Ed25519 ${artifact_name} refresh command failed on attempt ${attempt}/${max_attempts}: $refresh_cmd" >&2
     fi
     attempt_count="$attempt"
-    attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\n'
+    attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\t'"${source_metadata_sha256}"$'\n'
     if (( attempt >= max_attempts )); then
-      provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv")"
+      provenance_json="$(lane_state_ed25519_build_refresh_provenance_json "$artifact_kind" "$max_attempts" "$attempt_count" "$outcome" "$attempts_tsv" "$final_source_metadata_json" "$final_source_metadata_sha256")"
       if [[ -n "$provenance_json" ]]; then
         printf -v "$provenance_var_name" '%s' "$provenance_json"
       fi
@@ -1127,7 +1232,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" \
-      "LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON"
+      "LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE"
     run_lane_state_ed25519_refresh_hook \
       "ocsp" \
       "OCSP response" \
@@ -1137,7 +1243,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" \
-      "LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON"
+      "LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -2047,12 +2154,14 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
     printf "lane_state_ed25519_crl_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS"
+    printf "lane_state_ed25519_crl_refresh_metadata_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
     printf "lane_state_ed25519_ocsp_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"
     printf "lane_state_ed25519_ocsp_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE"
     printf "lane_state_ed25519_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_issuer_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"

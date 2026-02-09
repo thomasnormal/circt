@@ -18331,6 +18331,8 @@ ninja -C build circt-verilog
   timeout/jitter controls for Ed25519 CRL/OCSP verification flows.
 - Iteration 701 adds signed CRL/OCSP refresh provenance emission in lane-state
   manifests for post-run auditability of refresh attempt behavior.
+- Iteration 702 adds optional JSON source-metadata sidecars for CRL/OCSP refresh
+  hooks and signs those source metadata objects inside refresh provenance.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18346,8 +18348,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Bind external source metadata (AIA/CDP URL, transport status, cert chain)
-    into signed refresh provenance for stronger supply-chain attestations.
+  - Standardize and enforce a versioned source-metadata schema (URL, transport
+    status, TLS/issuer chain fields) for refresh provenance sidecars.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
