@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 806 - February 9, 2026
+
+### `circt-mut` Native Migration: `generate --cache-dir` Parity
+
+1. Completed native `--cache-dir` support for `circt-mut generate` in
+   `tools/circt-mut/circt-mut.cpp`:
+   - content-addressed cache keying over design/options using SHA-256
+   - cache hit fast-path before and after lock acquisition
+   - cache publish on miss with `generation_runtime_ns` metadata sidecar
+   - lock wait/contended telemetry and stale-lock eviction policy
+2. Preserved migration safety:
+   - unknown/unsupported future generate options still fall back to
+     `generate_mutations_yosys.sh`.
+   - `cover`/`matrix` behavior remains unchanged.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-generate-cache-native.test`
+- Updated:
+  - `test/Tools/circt-mut-forward-generate-cache-fallback.test`
+    - now verifies fallback-on-unknown-option behavior.
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-generate*.test`: PASS (17/17)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation*.test`: PASS (99/99)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-native-cache --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 805 - February 9, 2026
 
 ### OpenTitan LEC/E2E Simplification After Strict 4-State Closure

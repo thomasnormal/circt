@@ -198,8 +198,9 @@ ninja -C build circt-mut circt-bmc circt-lec circt-verilog
 Preferred frontend: `circt-mut` (subcommands: `cover`, `matrix`, `generate`).
 Legacy script entrypoints under `utils/` remain supported for compatibility.
 `circt-mut generate` now has a native execution path for core generation
-options; unsupported options (currently `--cache-dir`) automatically fall back
-to the script backend during migration.
+options, including native generated-mutation caching via `--cache-dir`.
+Unsupported future options still fall back to the script backend during
+migration.
 
 Run a single mutation campaign:
 
