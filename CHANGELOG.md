@@ -434,6 +434,79 @@
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 798 - February 9, 2026
+
+### OpenTitan LEC Artifact Hardening: Machine-Readable XPROP Summaries
+
+1. Extended `utils/run_opentitan_circt_lec.py` to emit optional XPROP summary
+   rows via:
+   - `OUT_XPROP_SUMMARY` (env)
+   - `--xprop-summary-file` (CLI override)
+2. Added XPROP parser/export logic for per-implementation diagnostics:
+   - captures `status` (`XFAIL`/`FAIL`)
+   - `diag` (`XPROP_ONLY`)
+   - `LEC_RESULT` (`NEQ`/`UNKNOWN`)
+   - parsed `summary: key=value` counters (when present)
+   - stable log directory path.
+3. Wired canonical formal orchestrator integration in `utils/run_formal_all.sh`:
+   - OpenTitan default LEC lane now writes
+     `opentitan-lec-xprop-summary.tsv`
+   - OpenTitan strict LEC lane now writes
+     `opentitan-lec-strict-xprop-summary.tsv`
+   - both artifacts are initialized deterministically per run.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-xprop-summary.test`
+    - verifies `OUT_XPROP_SUMMARY` export with parsed summary counters in
+      accepted XPROP flow.
+  - `test/Tools/run-formal-all-opentitan-lec-xprop-summary.test`
+    - verifies `run_formal_all.sh` sets lane-specific `OUT_XPROP_SUMMARY`
+      outputs for both `opentitan/LEC` and `opentitan/LEC_STRICT`.
+
+### Validation
+
+- Script sanity:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit (focused OpenTitan LEC/formal-all bundle):
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-xprop-fail-detail.test test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-opentitan-lec-strict.test`:
+    - 7/7 PASS
+- OpenTitan direct LEC:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OUT_XPROP_SUMMARY=/tmp/opentitan-lec-xprop-default-20260209.tsv python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_X_OPTIMISTIC=0 OUT_XPROP_SUMMARY=/tmp/opentitan-lec-xprop-strict-20260209.tsv python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` FAIL (`XPROP_ONLY`) with strict-lane XPROP row output
+- OpenTitan formal-all LEC lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-xprop-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$|^opentitan/LEC_STRICT$'`:
+    - `LEC`: `total=1 pass=1 fail=0`
+    - `LEC_STRICT`: `total=1 pass=0 fail=1`
+    - strict XPROP artifact present in
+      `opentitan-lec-strict-xprop-summary.tsv`.
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan targeted E2E spot-check:
+  - `utils/run_opentitan_formal_e2e.sh --sim-targets usbdev --verilog-targets usbdev,dma,keymgr_dpe --out-dir /tmp/opentitan-e2e-lec-xprop-artifacts-20260209`:
+    - summary: `pass=5 fail=0`
+- Canonical OpenTitan E2E dual-lane:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-both-post-xprop-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$|^opentitan/E2E_STRICT$'`:
+    - `E2E`: `total=12 pass=12 fail=0`
+    - `E2E_STRICT`: `total=12 pass=11 fail=1`
+    - `E2E_MODE_DIFF`: `strict_only_fail=1 strict_only_pass=0 status_diff=0 missing_in_e2e=0 missing_in_e2e_strict=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
 - `E2E_MODE_DIFF` strict gate still treats missing-case classes
   (`missing_in_e2e`, `missing_in_e2e_strict`) as telemetry-only.
 

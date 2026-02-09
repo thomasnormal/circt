@@ -279,6 +279,13 @@ See CHANGELOG.md on recent progress.
     drift for `circt-verilog`/`circt-sim` (attempts `chmod +x` before run),
     preventing transient OpenTitan E2E SIM failures from local file-mode
     skew while keeping explicit failure on non-recoverable tool state.
+36. OpenTitan LEC lanes now emit machine-readable X-prop diagnostics:
+    - `utils/run_opentitan_circt_lec.py` supports `OUT_XPROP_SUMMARY` /
+      `--xprop-summary-file` and writes per-implementation XPROP rows
+      (`status`, `diag`, `LEC_RESULT`, parsed counter summary, log path).
+    - `run_formal_all.sh` now provisions dedicated artifacts for both lanes:
+      `opentitan-lec-xprop-summary.tsv` and
+      `opentitan-lec-strict-xprop-summary.tsv`.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
