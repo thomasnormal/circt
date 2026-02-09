@@ -121,9 +121,13 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-cmd CMD
                          Optional command run before keyring verification to
                          refresh --lane-state-manifest-ed25519-crl-file
+  --lane-state-manifest-ed25519-crl-refresh-uri URI
+                         Optional built-in fetch URI (file/http/https) used to
+                         refresh --lane-state-manifest-ed25519-crl-file
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
-                         --lane-state-manifest-ed25519-crl-refresh-cmd
+                         --lane-state-manifest-ed25519-crl-refresh-cmd or
+                         --lane-state-manifest-ed25519-crl-refresh-uri
   --lane-state-manifest-ed25519-crl-refresh-delay-secs N
                          Delay between CRL refresh retries in seconds
   --lane-state-manifest-ed25519-crl-refresh-timeout-secs N
@@ -159,9 +163,13 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-cmd CMD
                          Optional command run before keyring verification to
                          refresh --lane-state-manifest-ed25519-ocsp-response-file
+  --lane-state-manifest-ed25519-ocsp-refresh-uri URI
+                         Optional built-in fetch URI (file/http/https) used to
+                         refresh --lane-state-manifest-ed25519-ocsp-response-file
   --lane-state-manifest-ed25519-ocsp-refresh-retries N
                          Retry count for
-                         --lane-state-manifest-ed25519-ocsp-refresh-cmd
+                         --lane-state-manifest-ed25519-ocsp-refresh-cmd or
+                         --lane-state-manifest-ed25519-ocsp-refresh-uri
   --lane-state-manifest-ed25519-ocsp-refresh-delay-secs N
                          Delay between OCSP refresh retries in seconds
   --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs N
@@ -312,6 +320,7 @@ LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CA_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -326,6 +335,7 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
@@ -511,6 +521,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-cmd)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-uri)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -539,6 +551,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-cmd)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-uri)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-delay-secs)
@@ -740,24 +754,40 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIF
   echo "--lane-state-manifest-ed25519-crl-refresh-cmd requires --lane-state-manifest-ed25519-crl-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-crl-refresh-retries requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-uri requires --lane-state-manifest-ed25519-crl-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-crl-refresh-delay-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-cmd and --lane-state-manifest-ed25519-crl-refresh-uri are mutually exclusive" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-crl-refresh-timeout-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-uri requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-crl-refresh-jitter-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-retries requires --lane-state-manifest-ed25519-crl-refresh-cmd or --lane-state-manifest-ed25519-crl-refresh-uri" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-file requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-delay-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd or --lane-state-manifest-ed25519-crl-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-timeout-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd or --lane-state-manifest-ed25519-crl-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-jitter-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd or --lane-state-manifest-ed25519-crl-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-file requires --lane-state-manifest-ed25519-crl-refresh-cmd or --lane-state-manifest-ed25519-crl-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" =~ ^(file|http|https)://.+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-uri: expected URI with file://, http://, or https:// scheme" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
@@ -850,24 +880,40 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANI
   echo "--lane-state-manifest-ed25519-ocsp-refresh-cmd requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-ocsp-refresh-retries requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-uri requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-ocsp-refresh-delay-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-cmd and --lane-state-manifest-ed25519-ocsp-refresh-uri are mutually exclusive" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-uri requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-retries requires --lane-state-manifest-ed25519-ocsp-refresh-cmd or --lane-state-manifest-ed25519-ocsp-refresh-uri" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
-  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-file requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-delay-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd or --lane-state-manifest-ed25519-ocsp-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd or --lane-state-manifest-ed25519-ocsp-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd or --lane-state-manifest-ed25519-ocsp-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-file requires --lane-state-manifest-ed25519-ocsp-refresh-cmd or --lane-state-manifest-ed25519-ocsp-refresh-uri" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" =~ ^(file|http|https)://.+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-uri: expected URI with file://, http://, or https:// scheme" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
@@ -1493,24 +1539,146 @@ print(json.dumps(parsed, sort_keys=True, separators=(",", ":")))
 PY
 }
 
+lane_state_ed25519_fetch_refresh_uri_artifact() {
+  local refresh_uri="$1"
+  local artifact_file="$2"
+  local refresh_metadata_file="$3"
+  local timeout_secs="$4"
+  python3 - "$refresh_uri" "$artifact_file" "$refresh_metadata_file" "$timeout_secs" <<'PY'
+import hashlib
+import json
+import socket
+import ssl
+import sys
+import tempfile
+import urllib.parse
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+refresh_uri = sys.argv[1]
+artifact_path = Path(sys.argv[2])
+metadata_path_text = sys.argv[3].strip()
+timeout_secs_text = sys.argv[4].strip()
+timeout_secs = int(timeout_secs_text) if timeout_secs_text else 0
+timeout_value = timeout_secs if timeout_secs > 0 else None
+
+metadata_path = Path(metadata_path_text) if metadata_path_text else None
+parsed_uri = urllib.parse.urlparse(refresh_uri)
+scheme = parsed_uri.scheme.lower()
+if scheme not in {"file", "http", "https"}:
+  print(f"unsupported refresh URI scheme '{scheme}'", file=sys.stderr)
+  raise SystemExit(1)
+
+metadata = {
+    "schema_version": 1,
+    "source": "built_in_fetch",
+    "transport": scheme,
+    "uri": refresh_uri,
+    "fetched_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "status": "unknown",
+}
+if metadata_path is not None:
+  metadata_path.parent.mkdir(parents=True, exist_ok=True)
+
+def write_metadata() -> None:
+  if metadata_path is not None:
+    metadata_path.write_text(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+def write_artifact(data: bytes) -> None:
+  artifact_path.parent.mkdir(parents=True, exist_ok=True)
+  with tempfile.NamedTemporaryFile(
+      mode="wb",
+      delete=False,
+      dir=str(artifact_path.parent),
+      prefix=f"{artifact_path.name}.tmp.",
+  ) as tmp_handle:
+    tmp_handle.write(data)
+    tmp_name = tmp_handle.name
+  Path(tmp_name).replace(artifact_path)
+
+try:
+  if scheme == "file":
+    local_path = Path(urllib.request.url2pathname(parsed_uri.path))
+    if not str(local_path):
+      raise ValueError("file URI must include path")
+    payload = local_path.read_bytes()
+    write_artifact(payload)
+    metadata["status"] = "ok"
+  else:
+    request = urllib.request.Request(refresh_uri, headers={"User-Agent": "run_formal_all.sh"})
+    with urllib.request.urlopen(request, timeout=timeout_value) as response:
+      payload = response.read()
+      status = int(response.getcode() or 0)
+      metadata["http_status"] = status
+      if scheme == "https":
+        tls_peer_sha = None
+        raw = getattr(response, "fp", None)
+        raw = getattr(raw, "raw", None)
+        sock = getattr(raw, "_sock", None)
+        if isinstance(sock, ssl.SSLSocket):
+          cert_der = sock.getpeercert(binary_form=True)
+          if cert_der:
+            tls_peer_sha = hashlib.sha256(cert_der).hexdigest()
+        if tls_peer_sha is None:
+          host = parsed_uri.hostname
+          port = parsed_uri.port or 443
+          if host:
+            cert_pem = ssl.get_server_certificate((host, port))
+            cert_der = ssl.PEM_cert_to_DER_cert(cert_pem)
+            tls_peer_sha = hashlib.sha256(cert_der).hexdigest()
+        if tls_peer_sha is not None:
+          metadata["tls_peer_sha256"] = tls_peer_sha
+          metadata["cert_chain_sha256"] = [tls_peer_sha]
+      write_artifact(payload)
+      metadata["status"] = "ok" if 200 <= status < 400 else "error"
+except urllib.error.HTTPError as ex:
+  metadata["status"] = "error"
+  metadata["http_status"] = int(ex.code)
+  metadata["error"] = str(ex)
+  write_metadata()
+  raise SystemExit(124 if isinstance(ex.reason, socket.timeout) else 1)
+except (urllib.error.URLError, TimeoutError, socket.timeout) as ex:
+  metadata["status"] = "error"
+  metadata["error"] = str(ex)
+  write_metadata()
+  timed_out = isinstance(ex, (TimeoutError, socket.timeout))
+  if isinstance(ex, urllib.error.URLError):
+    timed_out = isinstance(ex.reason, socket.timeout)
+  raise SystemExit(124 if timed_out else 1)
+except Exception as ex:
+  metadata["status"] = "error"
+  metadata["error"] = str(ex)
+  write_metadata()
+  raise SystemExit(1)
+
+write_metadata()
+PY
+}
+
 run_lane_state_ed25519_refresh_hook() {
   local artifact_kind="$1"
   local artifact_name="$2"
   local refresh_cmd="$3"
-  local artifact_file="$4"
-  local refresh_retries="$5"
-  local refresh_delay_secs="$6"
-  local refresh_timeout_secs="$7"
-  local refresh_jitter_secs="$8"
-  local provenance_var_name="$9"
-  local refresh_metadata_file="${10}"
-  local metadata_require_transport="${11}"
-  local metadata_require_status="${12}"
-  local metadata_require_uri_regex="${13}"
-  local metadata_require_tls_peer_sha256="${14}"
-  local metadata_require_cert_chain_sha256="${15}"
-  local metadata_max_age_secs="${16}"
-  local metadata_max_future_skew_secs="${17}"
+  local refresh_uri="$4"
+  local artifact_file="$5"
+  local refresh_retries="$6"
+  local refresh_delay_secs="$7"
+  local refresh_timeout_secs="$8"
+  local refresh_jitter_secs="$9"
+  local provenance_var_name="${10}"
+  local refresh_metadata_file="${11}"
+  local metadata_require_transport="${12}"
+  local metadata_require_status="${13}"
+  local metadata_require_uri_regex="${14}"
+  local metadata_require_tls_peer_sha256="${15}"
+  local metadata_require_cert_chain_sha256="${16}"
+  local metadata_max_age_secs="${17}"
+  local metadata_max_future_skew_secs="${18}"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -1532,7 +1700,7 @@ run_lane_state_ed25519_refresh_hook() {
   local attempts_tsv=""
   local attempt_count=0
   local provenance_json=""
-  if [[ -z "$refresh_cmd" ]]; then
+  if [[ -z "$refresh_cmd" && -z "$refresh_uri" ]]; then
     return
   fi
   while (( attempt <= max_attempts )); do
@@ -1542,7 +1710,17 @@ run_lane_state_ed25519_refresh_hook() {
     artifact_sha256=""
     source_metadata_sha256=""
     source_metadata_json=""
-    if (( timeout_secs > 0 )); then
+    if [[ -n "$refresh_uri" ]]; then
+      if lane_state_ed25519_fetch_refresh_uri_artifact \
+        "$refresh_uri" \
+        "$artifact_file" \
+        "$refresh_metadata_file" \
+        "$timeout_secs"; then
+        cmd_rc=0
+      else
+        cmd_rc=$?
+      fi
+    elif (( timeout_secs > 0 )); then
       if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
          LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
          LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
@@ -1641,10 +1819,18 @@ PY
       echo "lane state Ed25519 ${artifact_name} file not readable after refresh attempt ${attempt}/${max_attempts}: $artifact_file" >&2
     elif [[ "$cmd_rc" == "124" ]]; then
       outcome="timeout"
-      echo "lane state Ed25519 ${artifact_name} refresh command timed out on attempt ${attempt}/${max_attempts} (timeout=${timeout_secs}s): $refresh_cmd" >&2
+      if [[ -n "$refresh_uri" ]]; then
+        echo "lane state Ed25519 ${artifact_name} refresh URI timed out on attempt ${attempt}/${max_attempts} (timeout=${timeout_secs}s): $refresh_uri" >&2
+      else
+        echo "lane state Ed25519 ${artifact_name} refresh command timed out on attempt ${attempt}/${max_attempts} (timeout=${timeout_secs}s): $refresh_cmd" >&2
+      fi
     else
       outcome="cmd_failed"
-      echo "lane state Ed25519 ${artifact_name} refresh command failed on attempt ${attempt}/${max_attempts}: $refresh_cmd" >&2
+      if [[ -n "$refresh_uri" ]]; then
+        echo "lane state Ed25519 ${artifact_name} refresh URI failed on attempt ${attempt}/${max_attempts}: $refresh_uri" >&2
+      else
+        echo "lane state Ed25519 ${artifact_name} refresh command failed on attempt ${attempt}/${max_attempts}: $refresh_cmd" >&2
+      fi
     fi
     attempt_count="$attempt"
     attempts_tsv+="${attempt}"$'\t'"${attempt_started_utc}"$'\t'"${attempt_ended_utc}"$'\t'"${cmd_rc}"$'\t'"${timed_out}"$'\t'"${artifact_readable}"$'\t'"${artifact_sha256}"$'\t'"${source_metadata_sha256}"$'\n'
@@ -1678,6 +1864,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "crl" \
       "CRL" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" \
@@ -1696,6 +1883,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "ocsp" \
       "OCSP response" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" \
@@ -2615,6 +2803,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ca_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CA_SHA256"
     printf "lane_state_ed25519_crl_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_SHA256"
     printf "lane_state_ed25519_crl_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD"
+    printf "lane_state_ed25519_crl_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
@@ -2629,6 +2818,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_metadata_max_future_skew_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
+    printf "lane_state_ed25519_ocsp_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
     printf "lane_state_ed25519_ocsp_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"

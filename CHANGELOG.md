@@ -32754,6 +32754,84 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 707 - February 9, 2026
+
+### Lane-State Built-In CRL/OCSP Refresh URI Mode
+
+- Added built-in URI refresh mode to `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-uri`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-uri`
+  - supported schemes: `file://`, `http://`, `https://`
+- Added CLI and policy hardening for refresh mode selection:
+  - `*-refresh-cmd` and `*-refresh-uri` are now mutually exclusive per artifact.
+  - `*-refresh-uri` requires corresponding artifact file options.
+  - URI mode requires `*-refresh-metadata-file` so fetched provenance is signed.
+  - retry/delay/timeout/jitter controls now apply to command or URI mode.
+- Added built-in fetch execution path with per-attempt provenance integration:
+  - fetches artifact bytes and writes target files atomically.
+  - emits/updates metadata JSON sidecar (`schema_version=1`, `source=built_in_fetch`)
+    and reuses existing metadata policy enforcement.
+  - preserves retry/timeout behavior and records URI-mode outcomes in refresh
+    provenance.
+- Added lane-state config-hash inputs for URI mode:
+  - `lane_state_ed25519_crl_refresh_uri`
+  - `lane_state_ed25519_ocsp_refresh_uri`
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - new URI dependency checks (CRL/OCSP URI requires artifact file)
+    - updated dependency diagnostics where retry/time/jitter/metadata now accept
+      command or URI mode
+    - positive CRL URI refresh provenance case (`source=built_in_fetch`)
+    - positive OCSP URI refresh provenance case (`source=built_in_fetch`)
+    - negative URI metadata-missing case
+    - negative command/URI mode-conflict cases
+  - `docs/FormalRegression.md`
+    - documented URI mode semantics, required metadata sidecars, and command/URI
+      mutual exclusivity.
+  - `PROJECT_PLAN.md`
+    - added concise Iteration 707 roadmap impact under Recent Lane-State
+      Hardening.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- URI mode currently accepts explicit URIs only; it does not yet discover AIA/CDP
+  distribution points from certificates.
+- HTTPS sidecar evidence is still producer-side metadata; built-in fetch does not
+  yet produce full certificate-chain attestation beyond peer-certificate digest.
+
 ## Iteration 706 - February 9, 2026
 
 ### Lane-State Refresh Metadata Transport-Aware Evidence Requirements
