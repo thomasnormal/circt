@@ -18219,6 +18219,16 @@ ninja -C build circt-verilog
     accepting the wrong-but-trusted cert.
   - Enables project-specific signer naming policy for distributed 24/7 closure.
 
+### Iteration 687
+- Added certificate revocation checks for Ed25519 lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-crl-file` (requires
+    `--lane-state-manifest-ed25519-ca-file`)
+  - CRL hash now binds into lane-state config/manifest verification contracts.
+- Planning impact:
+  - Closes a major PKI lifecycle gap by rejecting revoked signer certificates in
+    resume/reset paths.
+  - Hardens 24/7 distributed checkpoint trust against stale or compromised certs.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
