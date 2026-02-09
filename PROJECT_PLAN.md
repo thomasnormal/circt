@@ -198,11 +198,18 @@ See CHANGELOG.md on recent progress.
     count/byte eviction policy
     (`--bmc-orig-cache-eviction-policy lru|fifo|cost-lru`)
     with matrix default/lane pass-through and runtime telemetry
-    (`bmc_orig_cache_saved_runtime_ns`, `bmc_orig_cache_miss_runtime_ns`).
+    (`bmc_orig_cache_saved_runtime_ns`, `bmc_orig_cache_miss_runtime_ns`);
+    built-in global-filter UNKNOWN telemetry is exported as
+    `global_filter_lec_unknown_mutants` and
+    `global_filter_bmc_unknown_mutants`.
 15. Mutation matrix now supports lane ID include/exclude regex selectors
     (`--include-lane-regex`, `--exclude-lane-regex`) for targeted CI slices;
     no-global-filter mutation lanes no longer trip missing
     `global_propagate.log` parsing in mutation cover.
+16. OpenTitan E2E now exposes explicit LEC X-semantic controls
+    (`--lec-x-optimistic`, `--lec-strict-x`, `--lec-assume-known-inputs`);
+    `run_formal_all.sh` pins OpenTitan E2E to x-optimistic mode and forwards
+    `--lec-assume-known-inputs` into the E2E lane.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for

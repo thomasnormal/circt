@@ -89,6 +89,110 @@ utils/run_mutation_cover.sh \
   --mutations-seed 1
 ```
 
+## Workflow Comparison: CIRCT vs MCY vs Certitude
+
+The commands below provide practical mapping between this harness, MCY, and a
+Certitude-style commercial flow.
+
+1. Single campaign
+
+`run_mutation_cover.sh`:
+
+```bash
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --tests-manifest /path/to/tests.tsv \
+  --formal-global-propagate-circt-chain auto \
+  --formal-global-propagate-circt-lec /path/to/circt-lec \
+  --formal-global-propagate-circt-bmc /path/to/circt-bmc \
+  --work-dir /tmp/mutation-cover
+```
+
+Equivalent MCY flow:
+
+```bash
+cd /path/to/mcy_project
+mcy init
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic; exact CLI depends on deployment):
+
+```bash
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -fault_model rtl_mutation \
+  -out /tmp/certitude-run
+```
+
+2. Increase mutation volume / refresh generated set
+
+`run_mutation_cover.sh`:
+
+```bash
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --tests-manifest /path/to/tests.tsv \
+  --generate-mutations 1000 \
+  --mutations-modes arith,control \
+  --mutations-yosys yosys \
+  --mutations-seed 1
+```
+
+Equivalent MCY flow (`size 1000` in `config.mcy`):
+
+```bash
+cd /path/to/mcy_project
+mcy reset
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```bash
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -num_faults 1000 \
+  -fault_scope arith,control \
+  -out /tmp/certitude-run
+```
+
+3. Matrix/lane orchestration
+
+`run_mutation_matrix.sh`:
+
+```bash
+utils/run_mutation_matrix.sh \
+  --lanes-tsv /path/to/lanes.tsv \
+  --out-dir /tmp/mutation-matrix \
+  --default-formal-global-propagate-circt-lec /path/to/circt-lec \
+  --default-formal-global-propagate-circt-bmc /path/to/circt-bmc \
+  --default-formal-global-propagate-circt-chain auto
+```
+
+Equivalent MCY flow (one MCY project per lane):
+
+```bash
+for lane_dir in /path/to/lanes/*; do
+  (
+    cd "$lane_dir"
+    mcy init
+    mcy run -j8
+  )
+done
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```bash
+for lane in lane_svtests lane_verilator; do
+  certitude_run -config "/path/to/${lane}.cfg" -out "/tmp/${lane}"
+done
+```
+
 Execution controls:
 - `--jobs <N>`: run per-mutant execution with up to `N` local workers.
 - `--resume`: reuse existing per-mutant artifacts in `<work-dir>/mutations/*`
@@ -215,6 +319,10 @@ Generated artifacts (default under `./mutation-cover-results`):
   - `reused_global_filters`: reused per-mutant global filter outcomes from
     prior `pair_qualification.tsv` rows (`test_id=-`).
 - chain-filter telemetry metrics:
+  - `global_filter_lec_unknown_mutants`: count of mutants where built-in
+    global filtering observed LEC `UNKNOWN`.
+  - `global_filter_bmc_unknown_mutants`: count of mutants where built-in
+    global filtering observed BMC `UNKNOWN`.
   - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
@@ -1010,6 +1118,14 @@ utils/run_formal_all.sh --with-opentitan --opentitan ~/opentitan --circt-verilog
 
 These are not formal checks but are tracked here to keep external testing
 cadence consistent with the project plan.
+
+OpenTitan E2E LEC-mode controls:
+
+```bash
+utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --lec-x-optimistic
+utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --lec-strict-x
+utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --lec-assume-known-inputs
+```
 
 ## Outputs
 

@@ -24,4 +24,6 @@
 // SUMMARY: 1{{.*}}propagated_not_detected
 
 // METRICS: global_filtered_not_propagated_mutants{{.*}}0
+// METRICS: global_filter_lec_unknown_mutants{{.*}}0
+// METRICS: global_filter_bmc_unknown_mutants{{.*}}1
 // METRICS: errors{{.*}}0

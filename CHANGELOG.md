@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 766 - February 9, 2026
+
+### Mutation Global Filter UNKNOWN Telemetry
+
+- Extended `utils/run_mutation_cover.sh` to export explicit aggregate counters
+  for inconclusive built-in formal global filtering:
+  - `global_filter_lec_unknown_mutants`
+  - `global_filter_bmc_unknown_mutants`
+- UNKNOWN counters are tracked for direct LEC/BMC global filters and chained
+  LEC/BMC modes.
+- UNKNOWN markers are propagated through global-filter reuse via
+  `pair_qualification.tsv` note fields to keep reused metrics consistent.
+- Added the UNKNOWN counters to:
+  - per-mutation metadata accumulation
+  - `metrics.tsv`
+  - `summary.json`
+  - CLI summary output.
+
+### Tests and Documentation
+
+- Updated:
+  - `README.md` (added mutation-tool quickstart with MCY and
+    Certitude-style command comparisons)
+  - `test/Tools/run-mutation-cover-global-circt-lec-unknown.test`
+  - `test/Tools/run-mutation-cover-global-circt-bmc-unknown.test`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (45/45)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-unknown-telemetry --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 765 - February 9, 2026
 
 ### Mutation BMC Cost-Aware Eviction and Runtime Telemetry
@@ -39459,3 +39502,55 @@ CIRCT/slang correctly enforces LRM restrictions.
 - `SIM i2c` timeout remains open in non-smoke OpenTitan E2E.
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state LEC for
   `aes_sbox_canright` still reports `XPROP_ONLY`.
+
+## Iteration 738 - February 9, 2026
+
+### OpenTitan E2E LEC Mode Controls and Formal-All Pass-Through
+
+1. Added explicit OpenTitan E2E LEC mode controls in
+   `utils/run_opentitan_formal_e2e.sh`:
+   - `--lec-x-optimistic`
+   - `--lec-strict-x`
+   - `--lec-assume-known-inputs`
+   - with validation rejecting conflicting X-mode flags.
+2. Wired `utils/run_formal_all.sh` OpenTitan E2E lane to:
+   - pin E2E LEC mode explicitly with `--lec-x-optimistic`
+   - forward `--lec-assume-known-inputs` to OpenTitan E2E when
+     `run_formal_all.sh --lec-assume-known-inputs` is set.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-formal-e2e-lec-modes.test`
+    - verifies `--lec-x-optimistic`/`--lec-strict-x` env wiring
+    - verifies `--lec-assume-known-inputs` env wiring
+    - verifies conflicting X-mode flags fail with a clear diagnostic.
+- Updated:
+  - `test/Tools/run-formal-all-opentitan-e2e.test`
+    - verifies OpenTitan E2E invocation from `run_formal_all.sh` carries
+      `--lec-x-optimistic`
+    - verifies `--lec-assume-known-inputs` pass-through.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_opentitan_formal_e2e.sh`: PASS
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-formal-e2e.test test/Tools/run-opentitan-formal-e2e-lec-modes.test test/Tools/run-formal-all-opentitan-e2e.test`:
+    - 3/3 PASS
+- OpenTitan direct LEC-mode checks:
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --impl-filter canright --lec-strict-x --out-dir /tmp/opentitan-e2e-lec-strict-x-followup`:
+    - summary: `pass=0 fail=1` (expected strict `XPROP_ONLY` failure)
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --impl-filter canright --lec-x-optimistic --out-dir /tmp/opentitan-e2e-lec-xopt-followup`:
+    - summary: `pass=1 fail=0`
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --impl-filter canright --lec-x-optimistic --lec-assume-known-inputs --out-dir /tmp/opentitan-e2e-lec-xopt-assume-followup`:
+    - summary: `pass=1 fail=0`
+- OpenTitan canonical E2E lane:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-baseline-now --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.

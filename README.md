@@ -184,6 +184,176 @@ Consult the [Getting Started](docs/GettingStarted.md) page for detailed informat
 
 Consult the [Python Bindings](docs/PythonBindings.md) page if you are mainly interested in using CIRCT from a Python prompt or script.
 
+### Mutation Tools (Cover + Matrix)
+
+This fork includes mutation tooling for certitude-style fault classification
+using formal pre-qualification (BMC/LEC) and dynamic tests.
+
+Build the tools:
+
+```sh
+ninja -C build circt-bmc circt-lec circt-verilog
+```
+
+Run a single mutation campaign with `utils/run_mutation_cover.sh`:
+
+```sh
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --tests-manifest /path/to/tests.tsv \
+  --formal-global-propagate-circt-chain auto \
+  --formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
+  --formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --work-dir /tmp/mutation-cover
+```
+
+Use auto-generated mutations instead of a prebuilt list:
+
+```sh
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --tests-manifest /path/to/tests.tsv \
+  --generate-mutations 1000 \
+  --mutations-yosys yosys \
+  --mutations-modes arith,control \
+  --mutations-seed 1
+```
+
+Run multiple lanes with `utils/run_mutation_matrix.sh`:
+
+```sh
+utils/run_mutation_matrix.sh \
+  --lanes-tsv /path/to/lanes.tsv \
+  --out-dir /tmp/mutation-matrix \
+  --create-mutated-script ~/mcy/scripts/create_mutated.sh \
+  --default-formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
+  --default-formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --default-formal-global-propagate-circt-chain auto \
+  --include-lane-regex '^sv-tests|^verilator' \
+  --exclude-lane-regex 'slow'
+```
+
+Command mapping by workflow:
+
+1. Single mutation campaign
+
+`run_mutation_cover.sh`:
+
+```sh
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --tests-manifest /path/to/tests.tsv \
+  --formal-global-propagate-circt-chain auto \
+  --formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
+  --formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --work-dir /tmp/mutation-cover
+```
+
+Equivalent `mcy` flow:
+
+```sh
+cd /path/to/mcy_project
+mcy init
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic; actual command names/flags vary by release/site integration):
+
+```sh
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -fault_model rtl_mutation \
+  -out /tmp/certitude-run
+```
+
+2. Increase generated mutation count
+
+`run_mutation_cover.sh`:
+
+```sh
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --tests-manifest /path/to/tests.tsv \
+  --generate-mutations 1000 \
+  --mutations-yosys yosys \
+  --mutations-modes arith,control \
+  --mutations-seed 1
+```
+
+Equivalent `mcy` flow (set `size 1000` in `config.mcy`, then regenerate tasks):
+
+```sh
+cd /path/to/mcy_project
+mcy reset
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```sh
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -num_faults 1000 \
+  -fault_scope arith,control \
+  -out /tmp/certitude-run
+```
+
+3. Multi-lane/CI orchestration
+
+`run_mutation_matrix.sh`:
+
+```sh
+utils/run_mutation_matrix.sh \
+  --lanes-tsv /path/to/lanes.tsv \
+  --out-dir /tmp/mutation-matrix \
+  --create-mutated-script ~/mcy/scripts/create_mutated.sh \
+  --default-formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
+  --default-formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --default-formal-global-propagate-circt-chain auto \
+  --include-lane-regex '^sv-tests|^verilator' \
+  --exclude-lane-regex 'slow'
+```
+
+Equivalent `mcy` flow (one project directory per lane, orchestrated by shell/CI):
+
+```sh
+for lane_dir in /path/to/lanes/*; do
+  (
+    cd "$lane_dir"
+    mcy init
+    mcy run -j8
+  )
+done
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```sh
+for lane in lane_svtests lane_verilator; do
+  certitude_run -config "/path/to/${lane}.cfg" -out "/tmp/${lane}"
+done
+```
+
+Core input formats:
+- `tests.tsv`:
+  `test_id<TAB>run_cmd<TAB>result_file<TAB>kill_regex<TAB>survive_regex`
+- `mutations.txt`:
+  `mutation_id<space>mutate_spec`
+- `lanes.tsv`:
+  first columns are
+  `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`
+
+Outputs are written under `--work-dir` / `--out-dir` and include
+`summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and
+`summary.json`.
+
+For full option reference, global-filter modes, cache/reuse controls, and the
+complete lane TSV schema, see `docs/FormalRegression.md`.
+
 ### Submodules
 
 CIRCT contains LLVM as a git submodule.
