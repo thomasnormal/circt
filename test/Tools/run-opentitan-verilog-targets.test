@@ -1,0 +1,21 @@
+// RUN: FileCheck %s < %S/../../utils/run_opentitan_circt_verilog.sh
+
+// CHECK: usbdev)
+// CHECK: echo "$PRIM_RTL/prim_diff_decode.sv"
+// CHECK-NEXT: echo "$PRIM_RTL/prim_sec_anchor_buf.sv"
+// CHECK-NEXT: echo "$PRIM_RTL/prim_sec_anchor_flop.sv"
+// CHECK-NEXT: echo "$PRIM_RTL/prim_alert_sender.sv"
+
+// CHECK: dma)
+// CHECK: echo "$DMA_RTL/dma_reg_pkg.sv"
+// CHECK: echo "$DMA_RTL/dma_pkg.sv"
+// CHECK: echo "$DMA_RTL/dma_reg_top.sv"
+// CHECK: echo "$DMA_RTL/dma.sv"
+
+// CHECK: keymgr_dpe)
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe_pkg.sv"
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe_reg_pkg.sv"
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe_reg_top.sv"
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe_ctrl.sv"
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe_op_state_ctrl.sv"
+// CHECK: echo "$KEYMGR_DPE_RTL/keymgr_dpe.sv"
