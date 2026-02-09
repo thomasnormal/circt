@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.v
+// RUN: not circt-mut generate --design %t/design.v --out %t/mutations.txt --yosys does-not-exist-yosys > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+//
+// CHECK: circt-mut generate: unable to resolve --yosys executable: does-not-exist-yosys

@@ -320,6 +320,11 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         return result;
       continue;
     }
+    if (arg == "--mutations-yosys" || arg.starts_with("--mutations-yosys=")) {
+      if (!resolveWithRequiredValue("--mutations-yosys"))
+        return result;
+      continue;
+    }
     if (arg == "--formal-global-propagate-cmd" ||
         arg.starts_with("--formal-global-propagate-cmd="))
       hasGlobalFilterCmd = true;
@@ -983,6 +988,13 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     errs() << "circt-mut generate: design file not found: " << opts.design << "\n";
     return 1;
   }
+  auto yosysResolved = resolveToolPath(opts.yosys);
+  if (!yosysResolved) {
+    errs() << "circt-mut generate: unable to resolve --yosys executable: "
+           << opts.yosys << "\n";
+    return 1;
+  }
+  std::string yosysExec = *yosysResolved;
 
   SmallVector<std::string, 8> profileModes;
   SmallVector<std::string, 8> profileCfgs;
@@ -1152,10 +1164,6 @@ static int runNativeGenerate(const GenerateOptions &opts) {
       return 1;
     }
 
-    std::string yosysResolved = opts.yosys;
-    if (ErrorOr<std::string> foundYosys = sys::findProgramByName(opts.yosys))
-      yosysResolved = *foundYosys;
-
     SmallVector<std::string, 16> cfgEntries;
     for (const auto &cfg : finalCfgList)
       cfgEntries.push_back((Twine(cfg.first) + "=" + cfg.second).str());
@@ -1173,7 +1181,7 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     cachePayloadOS << "top=" << opts.top << "\n";
     cachePayloadOS << "count=" << opts.count << "\n";
     cachePayloadOS << "seed=" << opts.seed << "\n";
-    cachePayloadOS << "yosys_bin=" << yosysResolved << "\n";
+    cachePayloadOS << "yosys_bin=" << yosysExec << "\n";
     cachePayloadOS << "modes=" << modePayload;
     cachePayloadOS << "mode_counts=" << modeCountPayload;
     cachePayloadOS << "profiles=" << profilePayload;
@@ -1363,13 +1371,13 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     std::string scriptPath = std::string(scriptFile.str());
     std::string logPath = std::string(logFile.str());
     SmallVector<StringRef, 8> yosysArgs;
-    yosysArgs.push_back(opts.yosys);
+    yosysArgs.push_back(yosysExec);
     yosysArgs.push_back("-ql");
     yosysArgs.push_back(logPath);
     yosysArgs.push_back(scriptPath);
 
     std::string errMsg;
-    int rc = sys::ExecuteAndWait(opts.yosys, yosysArgs, /*Env=*/std::nullopt,
+    int rc = sys::ExecuteAndWait(yosysExec, yosysArgs, /*Env=*/std::nullopt,
                                  /*Redirects=*/{}, /*SecondsToWait=*/0,
                                  /*MemoryLimit=*/0, &errMsg);
     if (!errMsg.empty())
