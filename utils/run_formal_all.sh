@@ -1037,7 +1037,9 @@ lane_state_ed25519_read_refresh_source_metadata_json() {
   local metadata_file="$1"
   python3 - "$metadata_file" <<'PY'
 import json
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
@@ -1055,6 +1057,130 @@ if not isinstance(parsed, dict):
       file=sys.stderr,
   )
   raise SystemExit(1)
+
+unknown_keys = sorted(
+    set(parsed.keys())
+    - {
+        "schema_version",
+        "source",
+        "transport",
+        "uri",
+        "fetched_at_utc",
+        "status",
+        "http_status",
+        "tls_peer_sha256",
+        "cert_chain_sha256",
+        "error",
+    }
+)
+if unknown_keys:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': unknown key '{unknown_keys[0]}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+schema_version = parsed.get("schema_version")
+if schema_version != 1:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': schema_version must be 1",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+source = parsed.get("source")
+if not isinstance(source, str) or not source.strip():
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': source must be non-empty string",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+transport = parsed.get("transport")
+if transport not in {"file", "http", "https", "other"}:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': transport must be one of file,http,https,other",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+uri = parsed.get("uri")
+if not isinstance(uri, str) or not uri.strip():
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': uri must be non-empty string",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+fetched_at_utc = parsed.get("fetched_at_utc")
+if (
+    not isinstance(fetched_at_utc, str)
+    or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", fetched_at_utc)
+):
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': fetched_at_utc must be UTC RFC3339 timestamp",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+try:
+  datetime.strptime(fetched_at_utc, "%Y-%m-%dT%H:%M:%SZ")
+except ValueError:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': fetched_at_utc must be valid UTC RFC3339 timestamp",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+status = parsed.get("status")
+if status not in {"ok", "error", "stale", "unknown"}:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': status must be one of ok,error,stale,unknown",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+http_status = parsed.get("http_status")
+if http_status is not None:
+  if not isinstance(http_status, int) or http_status < 100 or http_status > 599:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': http_status must be integer in [100,599]",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+tls_peer_sha256 = parsed.get("tls_peer_sha256")
+if tls_peer_sha256 is not None:
+  if not isinstance(tls_peer_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", tls_peer_sha256):
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': tls_peer_sha256 must be 64 lowercase hex chars",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+cert_chain_sha256 = parsed.get("cert_chain_sha256")
+if cert_chain_sha256 is not None:
+  if not isinstance(cert_chain_sha256, list):
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': cert_chain_sha256 must be array of 64 lowercase hex strings",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  for idx, digest in enumerate(cert_chain_sha256):
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+      print(
+          f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': cert_chain_sha256[{idx}] must be 64 lowercase hex chars",
+          file=sys.stderr,
+      )
+      raise SystemExit(1)
+
+error_text = parsed.get("error")
+if error_text is not None and not isinstance(error_text, str):
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': error must be string",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
 print(json.dumps(parsed, sort_keys=True, separators=(",", ":")))
 PY
 }

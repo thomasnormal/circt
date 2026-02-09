@@ -32754,6 +32754,77 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 703 - February 9, 2026
+
+### Lane-State Refresh Metadata Schema Enforcement
+
+- Tightened Ed25519 CRL/OCSP refresh metadata sidecars in
+  `utils/run_formal_all.sh` to require a strict schema contract.
+- Sidecar schema requirements:
+  - required keys and values:
+    - `schema_version: 1`
+    - non-empty `source`
+    - `transport` in `file|http|https|other`
+    - non-empty `uri`
+    - UTC RFC3339 `fetched_at_utc`
+    - `status` in `ok|error|stale|unknown`
+  - optional keys validated when present:
+    - `http_status` in `[100,599]`
+    - `tls_peer_sha256` as 64 lowercase hex
+    - `cert_chain_sha256` as array of 64 lowercase hex digests
+    - `error` as string
+  - unknown keys are rejected.
+- Invalid sidecars now fail fast with field-specific diagnostics before signed
+  manifest emission.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - CRL/OCSP metadata fixtures now use schema v1 payloads
+    - added negative coverage for bad metadata schema version
+    - aligned OCSP metadata transport expectation with fixture semantics
+  - `docs/FormalRegression.md`
+    - documented strict metadata schema requirements and refresh hook metadata
+      env wiring.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Metadata schema validation is now strict, but transport/chain claims remain
+  producer-asserted (no built-in TLS/cert-chain attestation enforcement yet).
+- Native AIA/CDP fetch implementation and chain-attested transport metadata are
+  still pending.
+
 ## Iteration 702 - February 9, 2026
 
 ### Lane-State Refresh Source-Metadata Sidecars
