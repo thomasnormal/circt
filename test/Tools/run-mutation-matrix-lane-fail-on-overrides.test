@@ -1,0 +1,30 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M1\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp \"$design\" \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+//
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/fake-test-undetected.sh
+// RUN: chmod +x %t/fake-test-undetected.sh
+// RUN: printf 'tu\tbash %t/fake-test-undetected.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests-undetected.tsv
+//
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-test-errors.sh
+// RUN: chmod +x %t/fake-test-errors.sh
+// RUN: printf 'te\tbash %t/fake-test-errors.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests-errors.tsv
+//
+// RUN: bash -lc 'mkrow(){ id="$1"; tests="$2"; skip="$3"; failu="$4"; faile="$5"; row="$id\t%t/design.il\t%t/mutations.txt\t$tests\t-\t-\t-"; for _ in $(seq 1 32); do row="${row}\t-"; done; row="${row}\t${skip}\t${failu}\t${faile}"; printf "%b\n" "$row"; }; { mkrow lane_undet_pass %t/tests-undetected.tsv - 0 -; mkrow lane_undet_fail %t/tests-undetected.tsv - 1 -; mkrow lane_err_pass %t/tests-errors.tsv 1 - 0; mkrow lane_err_fail %t/tests-errors.tsv 1 - 1; } > %t/lanes.tsv'
+//
+// RUN: not %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes.tsv \
+// RUN:   --out-dir %t/out \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+//
+// LOG: Mutation matrix summary: pass=2 fail=2
+//
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code
+// RESULTS: lane_undet_pass{{.*}}PASS{{.*}}0
+// RESULTS: lane_undet_fail{{.*}}FAIL{{.*}}3
+// RESULTS: lane_err_pass{{.*}}PASS{{.*}}0
+// RESULTS: lane_err_fail{{.*}}FAIL{{.*}}1

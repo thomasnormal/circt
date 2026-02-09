@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 784 - February 9, 2026
+
+### Mutation Matrix: Per-Lane Strict Gate Overrides
+
+1. Extended `utils/run_mutation_matrix.sh` lane TSV schema with optional
+   strict-gate override columns:
+   - `skip_baseline`
+   - `fail_on_undetected`
+   - `fail_on_errors`
+2. Added lane-level override resolution for strict gates:
+   - each lane resolves against matrix defaults from
+     `--skip-baseline`, `--fail-on-undetected`, `--fail-on-errors`
+   - accepted values: `1|0|true|false|yes|no|-`
+   - invalid values are rejected as per-lane `CONFIG_ERROR` (deterministic
+     lane failure without running cover flow)
+3. This enables mixed CI matrices where only selected lanes enforce strict
+   mutation gate policies while others remain exploratory.
+
+### Tests and Docs
+
+- Added:
+  - `test/Tools/run-mutation-matrix-lane-skip-baseline-override.test`
+  - `test/Tools/run-mutation-matrix-lane-fail-on-overrides.test`
+  - `test/Tools/run-mutation-matrix-lane-gate-invalid-value.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-matrix-lane-skip-baseline-override.test test/Tools/run-mutation-matrix-lane-fail-on-overrides.test test/Tools/run-mutation-matrix-lane-gate-invalid-value.test test/Tools/run-mutation-matrix-skip-baseline-fail-on-undetected.test test/Tools/run-mutation-matrix-fail-on-errors.test`: PASS (6/6)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-create-mutated-yosys*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (76/76)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-lane-gate-overrides --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 783 - February 9, 2026
 
 ### FormalAll: OpenTitan E2E Mode-Diff Strict-Fail Gate
