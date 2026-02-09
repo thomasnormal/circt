@@ -4218,6 +4218,35 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
             depth + 1,
         )
         return (op, lhs_expr, rhs_expr)
+    if op == "with_int_arithmetic":
+        if not isinstance(payload, list) or len(payload) != 2:
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic: expected [int_arithmetic, expr]"
+            )
+        int_arithmetic_override = payload[0]
+        if (
+            not isinstance(int_arithmetic_override, dict)
+            or not int_arithmetic_override
+        ):
+            fail(
+                f"error: invalid {field_name}.with_int_arithmetic[0]: expected non-empty object"
+            )
+        parsed_int_arithmetic = parse_context_int_arithmetic(
+            int_arithmetic_override,
+            f"{field_name}.with_int_arithmetic[0]",
+        )
+        nested_expr = parse_int_expression(
+            payload[1],
+            f"{field_name}.with_int_arithmetic[1]",
+            budget,
+            depth + 1,
+        )
+        return (
+            "with_int_arithmetic",
+            parsed_int_arithmetic["div_mode"],
+            parsed_int_arithmetic["mod_mode"],
+            nested_expr,
+        )
     fail(
         f"error: invalid {field_name}: unknown int expression operator '{op}'"
     )
@@ -4239,6 +4268,15 @@ def evaluate_int_expression(expr, context, int_arithmetic=None):
         if value is None:
             return None
         return -value
+    if kind == "with_int_arithmetic":
+        return evaluate_int_expression(
+            expr[3],
+            context,
+            {
+                "div_mode": expr[1],
+                "mod_mode": expr[2],
+            },
+        )
     if kind in {"add", "sub", "mul", "min", "max"}:
         operands = []
         for operand in expr[1]:
@@ -4288,6 +4326,17 @@ def format_int_expression(expr):
         return expr[1]
     if kind == "neg":
         return f"(-{format_int_expression(expr[1])})"
+    if kind == "with_int_arithmetic":
+        return (
+            "with_int_arithmetic("
+            + "div_mode="
+            + expr[1]
+            + ",mod_mode="
+            + expr[2]
+            + ";"
+            + format_int_expression(expr[3])
+            + ")"
+        )
     if kind == "add":
         return "(" + "+".join(format_int_expression(operand) for operand in expr[1]) + ")"
     if kind == "sub":
@@ -4314,6 +4363,9 @@ def collect_int_expression_keys(expr, out_keys):
         return
     if kind == "neg":
         collect_int_expression_keys(expr[1], out_keys)
+        return
+    if kind == "with_int_arithmetic":
+        collect_int_expression_keys(expr[3], out_keys)
         return
     if kind in {"add", "sub", "mul", "min", "max"}:
         for operand in expr[1]:

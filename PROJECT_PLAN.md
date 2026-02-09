@@ -18070,6 +18070,20 @@ ninja -C build circt-verilog
     stronger metadata integrity policy.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 728
+- Added per-expression arithmetic override support for route-context integer
+  expressions:
+  - new int-expression operator:
+    `with_int_arithmetic([int_arithmetic, expr])`
+  - supports expression-local `div_mode` / `mod_mode` without changing clause
+    or schema defaults.
+- Planner impact:
+  - closes the per-expression arithmetic control gap left by schema/clause-only
+    precedence.
+  - enables finer-grained migration when mixing legacy floor semantics with
+    targeted truncation behavior.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
