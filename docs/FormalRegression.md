@@ -139,6 +139,12 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp` resolves
   the CRL refresh URI from the selected key certificate
   `CRL Distribution Points` extension (keyring mode).
+  - `--lane-state-manifest-ed25519-refresh-auto-uri-policy` sets a shared
+    default policy for both CRL and OCSP auto-URI modes.
+    - Specific flags
+      (`--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`,
+      `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`)
+      override the shared default.
   - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy` controls URI
     selection when multiple usable CDP URIs exist:
     - `first` (default)

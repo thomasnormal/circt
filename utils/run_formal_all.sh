@@ -130,6 +130,10 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy MODE
                          URI selection policy for cert CDP auto mode:
                          first | last | require_single
+  --lane-state-manifest-ed25519-refresh-auto-uri-policy MODE
+                         Shared default URI selection policy for cert-driven
+                         CRL/OCSP auto modes (specific per-artifact flags
+                         override this): first | last | require_single
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -338,6 +342,8 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="first"
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -547,6 +553,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=1; shift ;;
     --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-auto-uri-policy)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -727,6 +735,18 @@ fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
   echo "--resume-from-lane-state and --reset-lane-state are mutually exclusive" >&2
   exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" && ! "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
+  fi
+  if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
+  fi
 fi
 if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then
   echo "lane state file not readable: $LANE_STATE_TSV" >&2
