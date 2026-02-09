@@ -6955,12 +6955,14 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
     if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
       opentitan_strict_args+=(--include-masked)
     fi
-    opentitan_strict_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
-      LEC_X_OPTIMISTIC=0
+    opentitan_strict_env=(LEC_X_OPTIMISTIC=0
       LEC_MODE_LABEL=LEC_STRICT
       OUT="$opentitan_strict_case_results"
       OUT_XPROP_SUMMARY="$opentitan_strict_xprop_summary"
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
+    if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+      opentitan_strict_env+=(LEC_ASSUME_KNOWN_INPUTS=1)
+    fi
     if [[ "$OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES" == "1" ]]; then
       opentitan_strict_env+=(LEC_DUMP_UNKNOWN_SOURCES=1)
     fi

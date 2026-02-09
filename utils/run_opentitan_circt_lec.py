@@ -177,6 +177,14 @@ def main() -> int:
     # default to avoid classifying known-input-equivalent implementations as
     # strict XPROP-only failures.
     lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "1") == "1"
+    # OpenTitan strict-X runs default to known-input assumptions to avoid
+    # spurious XPROP_ONLY deltas driven solely by unconstrained symbolic inputs.
+    # Explicit LEC_ASSUME_KNOWN_INPUTS still takes precedence.
+    lec_assume_known_inputs_env = os.environ.get("LEC_ASSUME_KNOWN_INPUTS", "")
+    if lec_assume_known_inputs_env:
+        lec_assume_known_inputs = lec_assume_known_inputs_env == "1"
+    else:
+        lec_assume_known_inputs = not lec_x_optimistic
     lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "1") == "1"
     lec_dump_unknown_sources = (
         os.environ.get("LEC_DUMP_UNKNOWN_SOURCES", "0") == "1"
@@ -201,6 +209,8 @@ def main() -> int:
 
     if lec_x_optimistic and "--x-optimistic" not in circt_lec_args:
         circt_lec_args.append("--x-optimistic")
+    if lec_assume_known_inputs and "--assume-known-inputs" not in circt_lec_args:
+        circt_lec_args.append("--assume-known-inputs")
     if lec_diagnose_xprop and "--diagnose-xprop" not in circt_lec_args:
         # Safe to pass even for non-solver modes; it is only acted on under
         # --run-smtlib.
