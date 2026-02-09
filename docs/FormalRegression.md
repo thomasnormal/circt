@@ -86,6 +86,9 @@ utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opent
 
 `opentitan/E2E_STRICT` emits case-level rows in
 `<out-dir>/opentitan-e2e-strict-results.txt` for expected-failure case gates.
+When both lanes run, formal-all also emits a normalized mode-diff artifact:
+`<out-dir>/opentitan-e2e-mode-diff.tsv` and fail-like cases in
+`<out-dir>/opentitan-e2e-mode-diff-results.txt` (`mode=E2E_MODE_DIFF`).
 
 ## Mutation Coverage Harness (Certitude-Style Classification)
 

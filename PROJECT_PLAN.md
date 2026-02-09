@@ -243,6 +243,11 @@ See CHANGELOG.md on recent progress.
     alongside `opentitan/E2E` and exports case-level rows to
     `opentitan-e2e-strict-results.txt` for expected-failure and strict-gate
     case tracking.
+29. When both OpenTitan E2E lanes are enabled, `run_formal_all.sh` now emits
+    a normalized mode-diff artifact (`opentitan-e2e-mode-diff.tsv`) and
+    fail-like case export (`opentitan-e2e-mode-diff-results.txt`,
+    `mode=E2E_MODE_DIFF`) so strict-only behavioral drift is directly trackable
+    through existing expected-failure and strict-gate flows.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
