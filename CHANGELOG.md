@@ -1,5 +1,81 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 808 - February 9, 2026
+
+### `circt-mut cover` Native Global-Filter Tool Resolution
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with native `cover` argument
+   preprocessing for built-in global-filter tool options:
+   - `--formal-global-propagate-circt-lec`
+   - `--formal-global-propagate-circt-bmc`
+2. Added native resolution/rewrite behavior before shell-script dispatch:
+   - bare forms (no explicit path) are treated as `auto`
+   - `auto` and explicit values are resolved to concrete executables
+   - rewritten arguments are forwarded as explicit paths to
+     `run_mutation_cover.sh`
+3. Resolution policy mirrors existing script behavior for long-term migration
+   safety:
+   - install-tree sibling `bin/` (when applicable)
+   - `PATH`
+   - repo `build/bin` fallback
+4. Added fail-fast behavior in `circt-mut` when required built-in filter tools
+   cannot be resolved, preventing late shell-script failures.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-cover-global-circt-tools-auto.test`
+  - `test/Tools/circt-mut-cover-global-circt-tools-missing.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `ninja -C build circt-verilog`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-cover-tool-resolution --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
+## Iteration 807 - February 9, 2026
+
+### BMC Semantic-Closure Baseline Sweep
+
+1. Ran a full non-filtered formal baseline sweep for BMC semantic-closure
+   classification:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semclosure-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT|E2E|E2E_STRICT|E2E_MODE_DIFF)$'`
+2. Result summary:
+   - `sv-tests/BMC`: `total=26 pass=26 fail=0 error=0` (`bmc_timeout_cases=0`, `bmc_unknown_cases=0`)
+   - `verilator-verification/BMC`: `total=17 pass=17 fail=0 error=0` (`bmc_timeout_cases=0`, `bmc_unknown_cases=0`)
+   - `yosys/tests/sva/BMC`: `total=14 pass=12 fail=0 error=0 skip=2`
+   - `opentitan/LEC`: `total=1 pass=1 fail=0`
+   - `opentitan/LEC_STRICT`: `total=1 pass=1 fail=0`
+   - `opentitan/E2E`: `total=12 pass=12 fail=0`
+   - `opentitan/E2E_STRICT`: `total=12 pass=12 fail=0`
+   - `opentitan/E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=0 status_diff=0`
+3. Semantic-bucket classification over fail-like case rows (`FAIL|ERROR|XFAIL|XPASS|UNKNOWN|TIMEOUT`) for:
+   - `disable iff` timing/enable semantics
+   - local variable lifetime/sampling
+   - multi-clock sequence/event semantics
+   - 4-state `X`/`Z` consistency
+   produced `0` fail-like rows in all buckets.
+4. Coverage-gap inventory for next semantic-closure expansion (not currently in
+   the 26-case sv-tests BMC full set):
+   - `16.13--sequence-multiclock-uvm`
+   - `16.15--property-iff-uvm`
+   - `16.15--property-iff-uvm-fail`
+   - `16.10--property-local-var-uvm`
+   - `16.10--sequence-local-var-uvm`
+   - `16.11--sequence-subroutine-uvm`
+
 ## Iteration 806 - February 9, 2026
 
 ### `circt-mut` Native Migration: `generate --cache-dir` Parity

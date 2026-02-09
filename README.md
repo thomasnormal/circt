@@ -220,6 +220,10 @@ global filters:
 - then from `PATH`
 - then from `./build/bin` in this CIRCT checkout
 - you can still override with explicit paths.
+`circt-mut cover` now performs this built-in-tool resolution natively and
+rewrites bare `--formal-global-propagate-circt-lec` /
+`--formal-global-propagate-circt-bmc` to explicit executables before dispatch,
+so unresolved toolchains fail fast with a direct CLI diagnostic.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified

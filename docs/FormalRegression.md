@@ -277,6 +277,12 @@ Execution controls:
   - generated-mutation caching (`--cache-dir`) is now supported in the native
     generate path with compatibility telemetry (`Mutation cache status`,
     `saved_runtime_ns`, lock wait/contended counters).
+- `circt-mut cover` migration note:
+  - built-in global-filter tool options (`--formal-global-propagate-circt-lec`
+    / `--formal-global-propagate-circt-bmc`) are now pre-resolved natively,
+    including bare `auto` forms, before script dispatch.
+  - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
+    instead of deferred shell-script setup failures.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
