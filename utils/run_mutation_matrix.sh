@@ -20,6 +20,7 @@ Optional:
                             Default --reuse-pair-file for lanes that do not set reuse_pair_file
   --default-reuse-summary-file FILE
                             Default --reuse-summary-file for lanes that do not set reuse_summary_file
+  --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
   --lane-jobs N             Number of concurrent lanes (default: 1)
@@ -41,6 +42,7 @@ CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
+REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
 STOP_ON_FAIL=0
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
+    --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
@@ -178,6 +181,9 @@ run_lane() {
     --jobs "$JOBS_PER_LANE"
     --reuse-compat-mode "$REUSE_COMPAT_MODE"
   )
+  if [[ -n "$REUSE_CACHE_DIR" ]]; then
+    cmd+=(--reuse-cache-dir "$REUSE_CACHE_DIR")
+  fi
 
   if [[ "${MUTATIONS_FILE[$i]}" != "-" ]]; then
     cmd+=(--mutations-file "${MUTATIONS_FILE[$i]}")

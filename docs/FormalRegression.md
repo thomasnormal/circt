@@ -98,6 +98,10 @@ Execution controls:
   - `strict`: require valid compatible sidecars for reuse inputs
 - `--reuse-manifest-file <path>`: write run compatibility manifest
   (default `<work-dir>/reuse_manifest.json`)
+- `--reuse-cache-dir <path>`: content-addressed compatibility cache root for
+  automatic reuse discovery/publish.
+- `--reuse-cache-mode off|read|read-write`: cache read/write policy
+  (default `read-write` when cache dir is provided).
 
 `tests.tsv` format (tab-separated):
 
@@ -125,6 +129,10 @@ Generated artifacts (default under `./mutation-cover-results`):
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
   These capture the compatibility hash used for future guarded reuse.
+- cache entry layout (when `--reuse-cache-dir` is enabled):
+  - `<cache>/<compat_hash>/summary.tsv`
+  - `<cache>/<compat_hash>/pair_qualification.tsv`
+  - corresponding `*.manifest.json` sidecars
 
 Gate behavior:
 - `--coverage-threshold <pct>`: fails with exit code `2` when detected/relevant falls below threshold.
@@ -149,6 +157,8 @@ Execution controls:
 - `--default-reuse-summary-file <path>`: default
   `run_mutation_cover.sh --reuse-summary-file` for lanes that do not set a
   lane-specific summary hint file.
+- `--reuse-cache-dir <path>`: pass-through
+  `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
   policy for each lane's `run_mutation_cover.sh` invocation.
 - `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).

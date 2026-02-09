@@ -6,6 +6,7 @@
 // CHECK: --jobs-per-lane
 // CHECK: --default-reuse-pair-file
 // CHECK: --default-reuse-summary-file
+// CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs
 // CHECK: --stop-on-fail

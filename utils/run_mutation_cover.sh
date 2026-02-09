@@ -27,6 +27,8 @@ Optional:
   --reuse-summary-file FILE  Reuse prior summary.tsv detected_by_test as test-order hints
   --reuse-compat-mode MODE   Reuse compatibility policy: off|warn|strict (default: warn)
   --reuse-manifest-file FILE Write run compatibility manifest (default: <work-dir>/reuse_manifest.json)
+  --reuse-cache-dir DIR      Compatibility-hash cache root for auto reuse artifacts
+  --reuse-cache-mode MODE    Cache policy: off|read|read-write (default: read-write)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -76,6 +78,8 @@ REUSE_PAIR_FILE=""
 REUSE_SUMMARY_FILE=""
 REUSE_COMPAT_MODE="warn"
 REUSE_MANIFEST_FILE=""
+REUSE_CACHE_DIR=""
+REUSE_CACHE_MODE="read-write"
 CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
@@ -108,6 +112,8 @@ while [[ $# -gt 0 ]]; do
     --reuse-summary-file) REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --reuse-manifest-file) REUSE_MANIFEST_FILE="$2"; shift 2 ;;
+    --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
+    --reuse-cache-mode) REUSE_CACHE_MODE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -157,6 +163,13 @@ if [[ ! "$REUSE_COMPAT_MODE" =~ ^(off|warn|strict)$ ]]; then
   echo "Invalid --reuse-compat-mode value: $REUSE_COMPAT_MODE (expected off|warn|strict)." >&2
   exit 1
 fi
+if [[ ! "$REUSE_CACHE_MODE" =~ ^(off|read|read-write)$ ]]; then
+  echo "Invalid --reuse-cache-mode value: $REUSE_CACHE_MODE (expected off|read|read-write)." >&2
+  exit 1
+fi
+if [[ -z "$REUSE_CACHE_DIR" ]]; then
+  REUSE_CACHE_MODE="off"
+fi
 if [[ ! -x "$CREATE_MUTATED_SCRIPT" ]]; then
   echo "Mutant creation script is not executable: $CREATE_MUTATED_SCRIPT" >&2
   exit 1
@@ -202,6 +215,9 @@ METRICS_FILE="${METRICS_FILE:-${WORK_DIR}/metrics.tsv}"
 SUMMARY_JSON_FILE="${SUMMARY_JSON_FILE:-${WORK_DIR}/summary.json}"
 IMPROVEMENT_FILE="${IMPROVEMENT_FILE:-${WORK_DIR}/improvement.tsv}"
 REUSE_MANIFEST_FILE="${REUSE_MANIFEST_FILE:-${WORK_DIR}/reuse_manifest.json}"
+if [[ "$REUSE_CACHE_MODE" != "off" ]]; then
+  mkdir -p "$REUSE_CACHE_DIR"
+fi
 
 if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
   MUTATIONS_FILE="${WORK_DIR}/generated_mutations.txt"
@@ -242,6 +258,10 @@ CREATE_MUTATED_SCRIPT_HASH=""
 FORMAL_ACTIVATE_CMD_HASH=""
 FORMAL_PROPAGATE_CMD_HASH=""
 REUSE_COMPAT_SCHEMA_VERSION=1
+REUSE_CACHE_ENTRY_DIR=""
+REUSE_PAIR_SOURCE="none"
+REUSE_SUMMARY_SOURCE="none"
+REUSE_CACHE_WRITE_STATUS="disabled"
 
 declare -a MUTATION_IDS
 declare -a MUTATION_SPECS
@@ -516,6 +536,63 @@ write_reuse_manifest() {
   "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}"
 }
 EOF
+}
+
+resolve_cache_reuse_inputs() {
+  local cache_pair_file=""
+  local cache_summary_file=""
+
+  REUSE_PAIR_SOURCE="$([[ -n "$REUSE_PAIR_FILE" ]] && printf "explicit" || printf "none")"
+  REUSE_SUMMARY_SOURCE="$([[ -n "$REUSE_SUMMARY_FILE" ]] && printf "explicit" || printf "none")"
+  REUSE_CACHE_ENTRY_DIR=""
+  if [[ "$REUSE_CACHE_MODE" == "off" ]]; then
+    return
+  fi
+
+  REUSE_CACHE_ENTRY_DIR="${REUSE_CACHE_DIR}/${REUSE_COMPAT_HASH}"
+  cache_pair_file="${REUSE_CACHE_ENTRY_DIR}/pair_qualification.tsv"
+  cache_summary_file="${REUSE_CACHE_ENTRY_DIR}/summary.tsv"
+
+  if [[ -z "$REUSE_PAIR_FILE" && -f "$cache_pair_file" ]]; then
+    REUSE_PAIR_FILE="$cache_pair_file"
+    REUSE_PAIR_SOURCE="cache"
+  fi
+
+  if [[ -z "$REUSE_SUMMARY_FILE" && -f "$cache_summary_file" ]]; then
+    REUSE_SUMMARY_FILE="$cache_summary_file"
+    REUSE_SUMMARY_SOURCE="cache"
+  fi
+}
+
+cache_copy_file() {
+  local src="$1"
+  local dst="$2"
+  local tmp="${dst}.tmp.$$"
+
+  cp "$src" "$tmp"
+  mv "$tmp" "$dst"
+}
+
+publish_reuse_cache() {
+  if [[ "$REUSE_CACHE_MODE" == "off" ]]; then
+    REUSE_CACHE_WRITE_STATUS="disabled"
+    return 0
+  fi
+  if [[ "$REUSE_CACHE_MODE" == "read" ]]; then
+    REUSE_CACHE_WRITE_STATUS="read_only"
+    return 0
+  fi
+  if [[ "$errors" -gt 0 ]]; then
+    REUSE_CACHE_WRITE_STATUS="skipped_errors"
+    return 0
+  fi
+  mkdir -p "$REUSE_CACHE_ENTRY_DIR"
+  cache_copy_file "$PAIR_FILE" "${REUSE_CACHE_ENTRY_DIR}/pair_qualification.tsv"
+  cache_copy_file "${PAIR_FILE}.manifest.json" "${REUSE_CACHE_ENTRY_DIR}/pair_qualification.tsv.manifest.json"
+  cache_copy_file "$SUMMARY_FILE" "${REUSE_CACHE_ENTRY_DIR}/summary.tsv"
+  cache_copy_file "${SUMMARY_FILE}.manifest.json" "${REUSE_CACHE_ENTRY_DIR}/summary.tsv.manifest.json"
+  cache_copy_file "$REUSE_MANIFEST_FILE" "${REUSE_CACHE_ENTRY_DIR}/reuse_manifest.json"
+  REUSE_CACHE_WRITE_STATUS="written"
 }
 
 run_command() {
@@ -822,13 +899,17 @@ if [[ "${#MUTATION_IDS[@]}" -eq 0 ]]; then
   exit 1
 fi
 build_reuse_compat_hash
+resolve_cache_reuse_inputs
 if [[ -n "$REUSE_PAIR_FILE" ]]; then
   rc=0
   validate_reuse_file_compat "pair" "$REUSE_PAIR_FILE" || rc=$?
   case "$rc" in
     0) ;;
     1) exit 1 ;;
-    2) REUSE_PAIR_FILE="" ;;
+    2)
+      REUSE_PAIR_FILE=""
+      REUSE_PAIR_SOURCE="none"
+      ;;
     *) exit 1 ;;
   esac
 fi
@@ -838,7 +919,10 @@ if [[ -n "$REUSE_SUMMARY_FILE" ]]; then
   case "$rc" in
     0) ;;
     1) exit 1 ;;
-    2) REUSE_SUMMARY_FILE="" ;;
+    2)
+      REUSE_SUMMARY_FILE=""
+      REUSE_SUMMARY_SOURCE="none"
+      ;;
     *) exit 1 ;;
   esac
 fi
@@ -983,21 +1067,6 @@ if [[ "$count_relevant" -gt 0 ]]; then
 fi
 
 {
-  printf "metric\tvalue\n"
-  printf "total_mutants\t%s\n" "$total_mutants"
-  printf "relevant_mutants\t%s\n" "$count_relevant"
-  printf "detected_mutants\t%s\n" "$count_detected"
-  printf "propagated_not_detected_mutants\t%s\n" "$count_propagated_not_detected"
-  printf "not_propagated_mutants\t%s\n" "$count_not_propagated"
-  printf "not_activated_mutants\t%s\n" "$count_not_activated"
-  printf "reused_pairs\t%s\n" "$count_reused_pairs"
-  printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
-  printf "hint_hits\t%s\n" "$count_hint_hits"
-  printf "errors\t%s\n" "$errors"
-  printf "mutation_coverage_percent\t%s\n" "$coverage_pct"
-} > "$METRICS_FILE"
-
-{
   printf "bucket\tcount\taction\n"
   printf "not_activated\t%s\tstrengthen_stimulus\n" "$count_not_activated"
   printf "not_propagated\t%s\timprove_observability_or_outputs\n" "$count_not_propagated"
@@ -1028,6 +1097,53 @@ threshold_json="null"
 if [[ -n "$COVERAGE_THRESHOLD" ]]; then
   threshold_json="$COVERAGE_THRESHOLD"
 fi
+
+if [[ "$REUSE_CACHE_MODE" == "off" ]]; then
+  REUSE_CACHE_WRITE_STATUS="disabled"
+elif [[ "$REUSE_CACHE_MODE" == "read" ]]; then
+  REUSE_CACHE_WRITE_STATUS="read_only"
+elif [[ "$errors" -gt 0 ]]; then
+  REUSE_CACHE_WRITE_STATUS="skipped_errors"
+else
+  REUSE_CACHE_WRITE_STATUS="pending_write"
+fi
+
+write_reuse_manifest "$REUSE_MANIFEST_FILE" "run"
+write_reuse_manifest "${PAIR_FILE}.manifest.json" "pair_qualification"
+write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
+
+if [[ "$REUSE_CACHE_WRITE_STATUS" == "pending_write" ]]; then
+  if ! publish_reuse_cache; then
+    REUSE_CACHE_WRITE_STATUS="write_error"
+  fi
+fi
+if [[ "$REUSE_CACHE_WRITE_STATUS" == "write_error" ]]; then
+  errors=$((errors + 1))
+  if [[ "$FAIL_ON_ERRORS" -eq 1 ]]; then
+    gate_status="FAIL_ERRORS"
+    exit_code=1
+  fi
+fi
+
+{
+  printf "metric\tvalue\n"
+  printf "total_mutants\t%s\n" "$total_mutants"
+  printf "relevant_mutants\t%s\n" "$count_relevant"
+  printf "detected_mutants\t%s\n" "$count_detected"
+  printf "propagated_not_detected_mutants\t%s\n" "$count_propagated_not_detected"
+  printf "not_propagated_mutants\t%s\n" "$count_not_propagated"
+  printf "not_activated_mutants\t%s\n" "$count_not_activated"
+  printf "reused_pairs\t%s\n" "$count_reused_pairs"
+  printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
+  printf "hint_hits\t%s\n" "$count_hint_hits"
+  printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
+  printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
+  printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
+  printf "reuse_cache_write_status\t%s\n" "$REUSE_CACHE_WRITE_STATUS"
+  printf "errors\t%s\n" "$errors"
+  printf "mutation_coverage_percent\t%s\n" "$coverage_pct"
+} > "$METRICS_FILE"
+
 cat > "$SUMMARY_JSON_FILE" <<EOF
 {
   "total_mutants": $total_mutants,
@@ -1039,6 +1155,12 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "reused_pairs": $count_reused_pairs,
   "hinted_mutants": $count_hinted_mutants,
   "hint_hits": $count_hint_hits,
+  "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
+  "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
+  "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
+  "reuse_cache_write_status": "$(json_escape "$REUSE_CACHE_WRITE_STATUS")",
+  "reuse_cache_dir": "$(json_escape "$REUSE_CACHE_DIR")",
+  "reuse_cache_entry_dir": "$(json_escape "$REUSE_CACHE_ENTRY_DIR")",
   "errors": $errors,
   "mutation_coverage_percent": $coverage_pct,
   "coverage_threshold_percent": $threshold_json,
@@ -1047,9 +1169,6 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "fail_on_errors": $FAIL_ON_ERRORS
 }
 EOF
-write_reuse_manifest "$REUSE_MANIFEST_FILE" "run"
-write_reuse_manifest "${PAIR_FILE}.manifest.json" "pair_qualification"
-write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
 
 echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
@@ -1060,5 +1179,12 @@ echo "Metrics: ${METRICS_FILE}"
 echo "Summary JSON: ${SUMMARY_JSON_FILE}"
 echo "Improvement: ${IMPROVEMENT_FILE}"
 echo "Reuse manifest: ${REUSE_MANIFEST_FILE}"
+echo "Reuse pair source: ${REUSE_PAIR_SOURCE}"
+echo "Reuse summary source: ${REUSE_SUMMARY_SOURCE}"
+echo "Reuse cache mode: ${REUSE_CACHE_MODE}"
+echo "Reuse cache write status: ${REUSE_CACHE_WRITE_STATUS}"
+if [[ "$REUSE_CACHE_MODE" != "off" ]]; then
+  echo "Reuse cache entry: ${REUSE_CACHE_ENTRY_DIR}"
+fi
 
 exit "$exit_code"

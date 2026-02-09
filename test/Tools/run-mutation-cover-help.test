@@ -10,6 +10,8 @@
 // CHECK: --reuse-summary-file
 // CHECK: --reuse-compat-mode
 // CHECK: --reuse-manifest-file
+// CHECK: --reuse-cache-dir
+// CHECK: --reuse-cache-mode
 // CHECK: --jobs
 // CHECK: --resume
 // CHECK: --generate-mutations
