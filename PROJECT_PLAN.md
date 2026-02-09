@@ -210,6 +210,12 @@ See CHANGELOG.md on recent progress.
     (`--lec-x-optimistic`, `--lec-strict-x`, `--lec-assume-known-inputs`);
     `run_formal_all.sh` pins OpenTitan E2E to x-optimistic mode and forwards
     `--lec-assume-known-inputs` into the E2E lane.
+17. OpenTitan LEC artifact paths are now deterministic in both formal-all and
+    OpenTitan E2E harnesses (`opentitan-lec-work`, `opentitan-lec-strict-work`,
+    `opentitan-formal-e2e/lec-workdir`) for stable case-level gating/triage.
+18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
+    discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
+    set to `auto`, including chained and matrix default flows.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for

@@ -1,0 +1,29 @@
+// RUN: rm -rf %t && mkdir -p %t %t/bin
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DIFF\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\n{\n  echo \"// design: $design\"\n  echo \"// spec: $spec\"\n} > \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"LEC_RESULT=UNKNOWN\"\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-lec
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ndesign=\"${@: -1}\"\nif grep -q \"spec: M_DIFF\" \"$design\"; then\n  echo \"BMC_RESULT=SAT\"\nelse\n  echo \"BMC_RESULT=UNSAT\"\nfi\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+//
+// RUN: PATH="%t/bin:$PATH" %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-global-propagate-circt-chain lec-then-bmc \
+// RUN:   --work-dir %t/out
+//
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=METRICS < %t/out/metrics.tsv
+//
+// SUMMARY: mutation_id{{.*}}classification
+// SUMMARY: 1{{.*}}propagated_not_detected
+//
+// METRICS: chain_lec_unknown_fallbacks{{.*}}1
+// METRICS: errors{{.*}}0

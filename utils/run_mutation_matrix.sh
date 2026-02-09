@@ -35,9 +35,11 @@ Optional:
   --default-formal-global-propagate-cmd CMD
                             Default --formal-global-propagate-cmd for lanes
                             without lane-specific global_propagate_cmd
-  --default-formal-global-propagate-circt-lec PATH
+  --default-formal-global-propagate-circt-lec [PATH]
                             Default --formal-global-propagate-circt-lec for
-                            lanes without lane-specific global_propagate_circt_lec
+                            lanes without lane-specific global_propagate_circt_lec.
+                            If PATH is omitted or set to 'auto', discovery uses
+                            run_mutation_cover.sh defaults.
   --default-formal-global-propagate-circt-lec-args ARGS
                             Default --formal-global-propagate-circt-lec-args
                             for lanes without lane-specific
@@ -59,9 +61,11 @@ Optional:
                             Enable default
                             --formal-global-propagate-accept-xprop-only
                             for lanes using circt-lec global filtering
-  --default-formal-global-propagate-circt-bmc PATH
+  --default-formal-global-propagate-circt-bmc [PATH]
                             Default --formal-global-propagate-circt-bmc for
-                            lanes without lane-specific global_propagate_circt_bmc
+                            lanes without lane-specific global_propagate_circt_bmc.
+                            If PATH is omitted or set to 'auto', discovery uses
+                            run_mutation_cover.sh defaults.
   --default-formal-global-propagate-circt-chain MODE
                             Default --formal-global-propagate-circt-chain for
                             lanes without lane-specific global_propagate_circt_chain
@@ -179,14 +183,30 @@ while [[ $# -gt 0 ]]; do
     --default-mutations-cfg) DEFAULT_MUTATIONS_CFG="$2"; shift 2 ;;
     --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
-    --default-formal-global-propagate-circt-lec) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
+    --default-formal-global-propagate-circt-lec)
+      if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
+        DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"
+        shift 2
+      else
+        DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="auto"
+        shift
+      fi
+      ;;
     --default-formal-global-propagate-circt-lec-args) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS="$2"; shift 2 ;;
     --default-formal-global-propagate-c1) DEFAULT_FORMAL_GLOBAL_PROPAGATE_C1="$2"; shift 2 ;;
     --default-formal-global-propagate-c2) DEFAULT_FORMAL_GLOBAL_PROPAGATE_C2="$2"; shift 2 ;;
     --default-formal-global-propagate-z3) DEFAULT_FORMAL_GLOBAL_PROPAGATE_Z3="$2"; shift 2 ;;
     --default-formal-global-propagate-assume-known-inputs) DEFAULT_FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=1; shift ;;
     --default-formal-global-propagate-accept-xprop-only) DEFAULT_FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=1; shift ;;
-    --default-formal-global-propagate-circt-bmc) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"; shift 2 ;;
+    --default-formal-global-propagate-circt-bmc)
+      if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
+        DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"
+        shift 2
+      else
+        DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="auto"
+        shift
+      fi
+      ;;
     --default-formal-global-propagate-circt-chain) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN="$2"; shift 2 ;;
     --default-formal-global-propagate-circt-bmc-args) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS="$2"; shift 2 ;;
     --default-formal-global-propagate-bmc-bound) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND="$2"; shift 2 ;;

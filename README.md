@@ -203,10 +203,14 @@ utils/run_mutation_cover.sh \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
   --formal-global-propagate-circt-chain auto \
-  --formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
-  --formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
   --work-dir /tmp/mutation-cover
 ```
+
+`circt-lec` / `circt-bmc` discovery is automatic when you enable built-in
+global filters:
+- first from `PATH`
+- then from `./build/bin` in this CIRCT checkout
+- you can still override with explicit paths.
 
 Use auto-generated mutations instead of a prebuilt list:
 
@@ -246,8 +250,6 @@ utils/run_mutation_cover.sh \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
   --formal-global-propagate-circt-chain auto \
-  --formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
-  --formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
   --work-dir /tmp/mutation-cover
 ```
 
@@ -311,8 +313,8 @@ utils/run_mutation_matrix.sh \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --create-mutated-script ~/mcy/scripts/create_mutated.sh \
-  --default-formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
-  --default-formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --default-formal-global-propagate-circt-lec \
+  --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
   --include-lane-regex '^sv-tests|^verilator' \
   --exclude-lane-regex 'slow'
