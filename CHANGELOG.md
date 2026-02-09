@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 800 - February 9, 2026
+
+### OpenTitan LEC: Per-Implementation XPROP Telemetry and Gating
+
+1. Extended `utils/run_formal_all.sh` XPROP summary aggregation to emit
+   per-implementation counters in lane summaries:
+   - `xprop_impl_<impl>_cases`
+   - `xprop_impl_<impl>_status_*`
+   - `xprop_impl_<impl>_diag_*`
+   - `xprop_impl_<impl>_result_*`
+   - `xprop_impl_<impl>_counter_*`
+2. This enables implementation-granular strict-gate usage via existing flag:
+   - `--fail-on-new-opentitan-lec-strict-xprop-counter <key>`
+   - example key:
+     `xprop_impl_aes_sbox_canright_counter_input_unknown_extracts`.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-opentitan-lec-xprop-summary.test`
+    - now verifies strict lane summary includes per-impl XPROP counter key.
+  - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test`
+    - now gates on per-impl strict LEC XPROP key instead of aggregate-only key.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit (focused):
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-formal-all-help.test test/Tools/run-opentitan-lec-xprop-summary.test`:
+    - 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-fail.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-status-diff.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-pass.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e-strict.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`:
+    - 7/7 PASS
+- OpenTitan LEC lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-xprop-impl-counter-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$|^opentitan/LEC_STRICT$'`:
+    - `LEC`: `total=1 pass=1 fail=0`
+    - `LEC_STRICT`: `total=1 pass=0 fail=1`
+    - strict summary includes
+      `xprop_impl_aes_sbox_canright_*` counters.
+- Strict-gate rehearsal on stable baseline:
+  - baseline seed:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-xprop-gate-baseline-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$|^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-all-opentitan-lec-xprop-gate-baseline-20260209.tsv --update-baselines`:
+      - PASS
+  - gate rerun:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-xprop-gate-check-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$|^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-all-opentitan-lec-xprop-gate-baseline-20260209.tsv --fail-on-new-opentitan-lec-strict-xprop-counter xprop_cases`:
+      - PASS (stable counter)
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan targeted E2E spot check:
+  - `utils/run_opentitan_formal_e2e.sh --sim-targets usbdev --verilog-targets usbdev,dma,keymgr_dpe --out-dir /tmp/opentitan-e2e-xprop-impl-counter-20260209`:
+    - summary: `pass=5 fail=0`
+
 ## Iteration 799 - February 9, 2026
 
 ### OpenTitan LEC Strict-Gate: XPROP Counter Regression Controls
