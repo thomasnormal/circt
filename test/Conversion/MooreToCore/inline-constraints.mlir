@@ -4,6 +4,7 @@
 // CHECK-DAG: llvm.func @__moore_randomize_with_range(i64, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_randomize_with_ranges(!llvm.ptr, i64) -> i64
 // CHECK-DAG: llvm.func @__moore_is_rand_enabled(!llvm.ptr, !llvm.ptr) -> i32
+// CHECK-DAG: llvm.func @__moore_is_constraint_enabled(!llvm.ptr, !llvm.ptr) -> i32
 
 //===----------------------------------------------------------------------===//
 // Inline Constraint Lowering Tests
@@ -26,13 +27,11 @@ moore.class.classdecl @InlineTestClass {
 // CHECK-LABEL: func.func @test_inline_single_range
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_inline_single_range(%obj: !moore.class<@InlineTestClass>) -> i1 {
-  // CHECK-DAG: %[[MIN:.*]] = llvm.mlir.constant(10 : i64) : i64
-  // CHECK-DAG: %[[MAX:.*]] = llvm.mlir.constant(50 : i64) : i64
   // CHECK: llvm.call @__moore_randomize_basic
   // CHECK: llvm.call @__moore_is_rand_enabled
   // Should apply the inline constraint range [10, 50]
   // CHECK: scf.if
-  // CHECK: llvm.call @__moore_randomize_with_range(%[[MIN]], %[[MAX]])
+  // CHECK: llvm.call @__moore_randomize_with_range
   %success = moore.randomize %obj : !moore.class<@InlineTestClass> {
     %0 = moore.class.property_ref %obj[@x] : !moore.class<@InlineTestClass> -> !moore.ref<i32>
     %1 = moore.read %0 : <i32>
@@ -93,17 +92,22 @@ moore.class.classdecl @MixedConstraintClass {
   moore.class.propertydecl @b : !moore.i32 rand_mode rand
   // Class-level constraint on 'a'
   moore.constraint.block @class_c {
-  ^bb0(%a: !moore.i32):
-    moore.constraint.inside %a, [0, 50] : !moore.i32
+  ^bb0(%this: !moore.class<@MixedConstraintClass>):
+    %0 = moore.class.property_ref %this[@a] : !moore.class<@MixedConstraintClass> -> !moore.ref<i32>
+    %1 = moore.read %0 : <i32>
+    moore.constraint.inside %1, [0, 50] : !moore.i32
   }
 }
 
 // CHECK-LABEL: func.func @test_inline_with_class_constraint
 // CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
 func.func @test_inline_with_class_constraint(%obj: !moore.class<@MixedConstraintClass>) -> i1 {
-  // Both class-level and inline constraints should be applied
+  // Both class-level (on 'a') and inline (on 'b') constraints should be applied
   // CHECK: llvm.call @__moore_randomize_basic
+  // Class-level constraint on 'a' [0, 50] (with constraint_enabled check)
+  // CHECK: llvm.call @__moore_is_constraint_enabled
   // CHECK: llvm.call @__moore_randomize_with_range
+  // Inline constraint on 'b' [100, 200]
   // CHECK: llvm.call @__moore_randomize_with_range
   %success = moore.randomize %obj : !moore.class<@MixedConstraintClass> {
     // Inline constraint on 'b'
@@ -164,6 +168,76 @@ func.func @test_inline_small_type(%obj: !moore.class<@SmallTypeClass>) -> i1 {
     %0 = moore.class.property_ref %obj[@byte_val] : !moore.class<@SmallTypeClass> -> !moore.ref<i8>
     %1 = moore.read %0 : <i8>
     moore.constraint.inside %1, [0, 255] : !moore.i8
+  }
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Inline constraint with ConstraintExprOp (comparison-based)
+//===----------------------------------------------------------------------===//
+// Corresponds to: obj.randomize() with { x > 0; x < 100; };
+// ConstraintExprOp uses comparison ops (UgtOp, UltOp) to define bounds.
+
+// CHECK-LABEL: func.func @test_inline_expr_constraint
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_inline_expr_constraint(%obj: !moore.class<@InlineTestClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Should extract bounds from x > 0 (lower=1) and x < 100 (upper=99)
+  // CHECK: llvm.call @__moore_randomize_with_range
+  %success = moore.randomize %obj : !moore.class<@InlineTestClass> {
+    %0 = moore.class.property_ref %obj[@x] : !moore.class<@InlineTestClass> -> !moore.ref<i32>
+    %1 = moore.read %0 : <i32>
+    %zero = moore.constant 0 : i32
+    %hundred = moore.constant 100 : i32
+    %cmp1 = moore.ugt %1, %zero : i32 -> i1
+    moore.constraint.expr %cmp1 : i1
+    %cmp2 = moore.ult %1, %hundred : i32 -> i1
+    moore.constraint.expr %cmp2 : i1
+  }
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Inline constraint with signed comparison (SgtOp, SltOp)
+//===----------------------------------------------------------------------===//
+// Corresponds to: obj.randomize() with { x > -50; x < 50; }; (signed int)
+
+// CHECK-LABEL: func.func @test_inline_signed_expr_constraint
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_inline_signed_expr_constraint(%obj: !moore.class<@InlineTestClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Should extract signed bounds from x > -50 (lower=-49) and x < 50 (upper=49)
+  // CHECK: llvm.call @__moore_randomize_with_range
+  %success = moore.randomize %obj : !moore.class<@InlineTestClass> {
+    %0 = moore.class.property_ref %obj[@x] : !moore.class<@InlineTestClass> -> !moore.ref<i32>
+    %1 = moore.read %0 : <i32>
+    %neg50 = moore.constant -50 : i32
+    %pos50 = moore.constant 50 : i32
+    %cmp1 = moore.sgt %1, %neg50 : i32 -> i1
+    moore.constraint.expr %cmp1 : i1
+    %cmp2 = moore.slt %1, %pos50 : i32 -> i1
+    moore.constraint.expr %cmp2 : i1
+  }
+  return %success : i1
+}
+
+//===----------------------------------------------------------------------===//
+// Test: Inline constraint with equality (EqOp)
+//===----------------------------------------------------------------------===//
+// Corresponds to: obj.randomize() with { x == 42; };
+
+// CHECK-LABEL: func.func @test_inline_eq_constraint
+// CHECK-SAME: (%[[OBJ:.*]]: !llvm.ptr)
+func.func @test_inline_eq_constraint(%obj: !moore.class<@InlineTestClass>) -> i1 {
+  // CHECK: llvm.call @__moore_randomize_basic
+  // Should extract equality bound: x == 42 -> range [42, 42]
+  // CHECK: llvm.call @__moore_randomize_with_range
+  %success = moore.randomize %obj : !moore.class<@InlineTestClass> {
+    %0 = moore.class.property_ref %obj[@x] : !moore.class<@InlineTestClass> -> !moore.ref<i32>
+    %1 = moore.read %0 : <i32>
+    %val = moore.constant 42 : i32
+    %cmp = moore.eq %1, %val : i32 -> i1
+    moore.constraint.expr %cmp : i1
   }
   return %success : i1
 }

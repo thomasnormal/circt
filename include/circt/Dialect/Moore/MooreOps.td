@@ -4017,7 +4017,8 @@ def CovergroupInstOp : MooreOp<"covergroup.inst"> {
   let assemblyFormat = [{ $covergroup attr-dict `:` type($result) }];
 }
 
-def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
+def CovergroupSampleOp : MooreOp<"covergroup.sample",
+    [AttrSizedOperandSegments]> {
   let summary = "Sample a covergroup";
   let description = [{
     Triggers sampling of a covergroup instance. Each coverpoint in the
@@ -4026,9 +4027,19 @@ def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
     The values operand provides the values to sample for each coverpoint
     in the order they are declared in the covergroup.
 
+    The optional iff_conditions operand provides per-coverpoint guard
+    conditions. When present, the iff condition at index i corresponds to
+    the coverpoint value at index i. A coverpoint is only sampled when
+    its iff condition is nonzero (or when no iff condition is provided).
+
     Example:
     ```mlir
     moore.covergroup.sample %cg_inst(%val1, %val2) : !moore.covergroup<@cg>(!moore.l8, !moore.l4)
+    ```
+
+    Example with iff conditions:
+    ```mlir
+    moore.covergroup.sample %cg_inst(%val1, %val2) iff(%cond1, %cond2) : !moore.covergroup<@cg>(!moore.l8, !moore.l4) iff(!moore.i1, !moore.i1)
     ```
 
     This corresponds to SystemVerilog `cg_inst.sample(args)` or implicit
@@ -4036,9 +4047,13 @@ def CovergroupSampleOp : MooreOp<"covergroup.sample"> {
 
     See IEEE 1800-2017 Section 19.8 "Covergroup methods".
   }];
-  let arguments = (ins CovergroupHandleType:$covergroup, Variadic<AnyType>:$values);
+  let arguments = (ins CovergroupHandleType:$covergroup,
+                       Variadic<AnyType>:$values,
+                       Variadic<AnyType>:$iff_conditions);
   let assemblyFormat = [{
-    $covergroup `(` $values `)` attr-dict `:` type($covergroup) `(` type($values) `)`
+    $covergroup `(` $values `)` (`iff` `(` $iff_conditions^ `)`)? attr-dict
+    `:` type($covergroup) `(` type($values) `)`
+    (`iff` `(` type($iff_conditions)^ `)`)?
   }];
 }
 
