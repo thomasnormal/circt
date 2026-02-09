@@ -358,6 +358,9 @@ Options:
                          Regex filter for OpenTitan LEC implementations
   --opentitan-lec-include-masked
                          Include masked OpenTitan LEC implementations
+  --opentitan-lec-strict-dump-unknown-sources
+                         Enable strict OpenTitan LEC unknown-source dumping
+                         (`--dump-unknown-sources`) for X-prop triage
   --opentitan-e2e-sim-targets LIST
                          Comma-separated OpenTitan E2E sim targets
   --opentitan-e2e-verilog-targets LIST
@@ -1784,6 +1787,7 @@ WITH_OPENTITAN_E2E=0
 WITH_AVIP=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
+OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=0
 OPENTITAN_E2E_SIM_TARGETS=""
 OPENTITAN_E2E_VERILOG_TARGETS=""
 OPENTITAN_E2E_SIM_TIMEOUT=""
@@ -1822,6 +1826,8 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
       OPENTITAN_LEC_INCLUDE_MASKED=1; shift ;;
+    --opentitan-lec-strict-dump-unknown-sources)
+      OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES=1; shift ;;
     --opentitan-e2e-sim-targets)
       OPENTITAN_E2E_SIM_TARGETS="$2"; shift 2 ;;
     --opentitan-e2e-verilog-targets)
@@ -6734,6 +6740,9 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
       LEC_MODE_LABEL=LEC_STRICT
       OUT="$opentitan_strict_case_results"
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
+    if [[ "$OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES" == "1" ]]; then
+      opentitan_strict_env+=(LEC_DUMP_UNKNOWN_SOURCES=1)
+    fi
     run_suite opentitan-lec-strict \
       env "${opentitan_strict_env[@]}" \
       utils/run_opentitan_circt_lec.py --workdir "$opentitan_strict_workdir" "${opentitan_strict_args[@]}" || true

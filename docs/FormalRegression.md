@@ -29,6 +29,12 @@ Run strict OpenTitan LEC audit (non-optimistic X semantics):
 utils/run_formal_all.sh --with-opentitan-lec-strict --opentitan ~/opentitan --include-lane-regex '^opentitan/LEC_STRICT$'
 ```
 
+Enable strict-lane unknown-source dumps for X-prop triage:
+
+```bash
+utils/run_formal_all.sh --with-opentitan-lec-strict --opentitan ~/opentitan --opentitan-lec-strict-dump-unknown-sources --include-lane-regex '^opentitan/LEC_STRICT$'
+```
+
 Update baselines (updates `utils/formal-baselines.tsv` and the baseline table
 in `PROJECT_PLAN.md`):
 

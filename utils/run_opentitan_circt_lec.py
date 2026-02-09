@@ -152,6 +152,9 @@ def main() -> int:
     # strict XPROP-only failures.
     lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "1") == "1"
     lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "1") == "1"
+    lec_dump_unknown_sources = (
+        os.environ.get("LEC_DUMP_UNKNOWN_SOURCES", "0") == "1"
+    )
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
@@ -176,6 +179,13 @@ def main() -> int:
         # Safe to pass even for non-solver modes; it is only acted on under
         # --run-smtlib.
         circt_lec_args.append("--diagnose-xprop")
+    if (
+        lec_dump_unknown_sources
+        and not lec_smoke_only
+        and lec_run_smtlib
+        and "--dump-unknown-sources" not in circt_lec_args
+    ):
+        circt_lec_args.append("--dump-unknown-sources")
 
     def write_valid_op_wrapper(out_path: Path, wrapper_name: str, inner_name: str) -> None:
         out_path.write_text(
