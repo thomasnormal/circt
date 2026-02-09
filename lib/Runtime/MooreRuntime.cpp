@@ -1018,6 +1018,51 @@ extern "C" void *__moore_assoc_get_ref(void *array, void *key,
   }
 }
 
+/// Deep-copy an associative array.
+/// Creates a new AssocArrayHeader with the same type and a full copy of
+/// the underlying map data.  Returns nullptr if the source is null.
+extern "C" void *__moore_assoc_copy(void *src) {
+  if (!src)
+    return nullptr;
+  auto *srcHeader = static_cast<AssocArrayHeader *>(src);
+  auto *dstHeader = new AssocArrayHeader;
+  dstHeader->type = srcHeader->type;
+  if (srcHeader->type == AssocArrayType_StringKey) {
+    auto *srcArr = static_cast<StringKeyAssocArray *>(srcHeader->array);
+    auto *dstArr = new StringKeyAssocArray;
+    dstArr->valueSize = srcArr->valueSize;
+    dstArr->data = srcArr->data; // deep copy of std::map
+    dstHeader->array = dstArr;
+  } else {
+    auto *srcArr = static_cast<IntKeyAssocArray *>(srcHeader->array);
+    auto *dstArr = new IntKeyAssocArray;
+    dstArr->keySize = srcArr->keySize;
+    dstArr->valueSize = srcArr->valueSize;
+    dstArr->data = srcArr->data; // deep copy of std::map
+    dstHeader->array = dstArr;
+  }
+  return dstHeader;
+}
+
+/// Deep-copy all entries from one associative array into another (in-place).
+/// Clears the destination first, then copies all entries from the source.
+/// Both arrays must already exist and have the same key/value types.
+extern "C" void __moore_assoc_copy_into(void *dst, void *src) {
+  if (!dst || !src)
+    return;
+  auto *dstHeader = static_cast<AssocArrayHeader *>(dst);
+  auto *srcHeader = static_cast<AssocArrayHeader *>(src);
+  if (dstHeader->type == AssocArrayType_StringKey) {
+    auto *dstArr = static_cast<StringKeyAssocArray *>(dstHeader->array);
+    auto *srcArr = static_cast<StringKeyAssocArray *>(srcHeader->array);
+    dstArr->data = srcArr->data; // deep copy of std::map
+  } else {
+    auto *dstArr = static_cast<IntKeyAssocArray *>(dstHeader->array);
+    auto *srcArr = static_cast<IntKeyAssocArray *>(srcHeader->array);
+    dstArr->data = srcArr->data; // deep copy of std::map
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // String Operations
 //===----------------------------------------------------------------------===//

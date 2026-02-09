@@ -3801,9 +3801,30 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     // body's restart point. Only save on the FIRST overwrite (when
     // waitConditionSavedBlock is null). On subsequent polls (when the condition
     // is still false), the saved position is already correct.
+    //
+    // IMPORTANT: When call stack frames are present, state.currentBlock may
+    // have been overwritten by interpretFuncBody (which sets it to a
+    // function-body block when detecting state.waiting). In that case, we
+    // must derive the process-body position from the outermost call stack
+    // frame's call site — the operation in the process body that started
+    // the whole call chain.
     if (!state.waitConditionSavedBlock) {
-      state.waitConditionSavedBlock = state.currentBlock;
-      state.waitConditionSavedOp = state.currentOp;
+      if (!state.callStack.empty()) {
+        // Outermost frame is at the back. Its callOp is the call_indirect
+        // in the process body. The process should resume AFTER that op.
+        auto &outermostFrame = state.callStack.back();
+        if (outermostFrame.callOp) {
+          state.waitConditionSavedBlock = outermostFrame.callOp->getBlock();
+          state.waitConditionSavedOp =
+              std::next(outermostFrame.callOp->getIterator());
+        } else {
+          state.waitConditionSavedBlock = state.currentBlock;
+          state.waitConditionSavedOp = state.currentOp;
+        }
+      } else {
+        state.waitConditionSavedBlock = state.currentBlock;
+        state.waitConditionSavedOp = state.currentOp;
+      }
     }
 
     // Set the current block and operation to the restart point
@@ -3841,18 +3862,45 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
                << "  Process has " << state.callStack.size()
                << " saved call stack frame(s), resuming from innermost\n");
 
-    // Process call stack frames from innermost to outermost
-    // Each frame represents a function that was interrupted by a wait
+    // Process call stack frames from INNERMOST to OUTERMOST.
+    // Frames are stored [innermost, ..., outermost] in the vector (deepest
+    // callee pushed first, each caller pushed after).  We pop from FRONT
+    // (innermost first).
+    //
+    // Example: process_phase → sync_phase → wait_for_state suspends.
+    // callStack = [wait_for_state, sync_phase, process_phase]
+    //   1. Resume wait_for_state (innermost): condition true → returns results
+    //   2. Set results on wait_for_state's callOp (call_indirect in sync_phase)
+    //   3. Resume sync_phase: continues checking predecessors → completes
+    //   4. Set results on sync_phase's callOp (call_indirect in process_phase)
+    //   5. Resume process_phase: continues from after sync_phase → start→...
+    //
+    // This ensures nested functions complete before their callers continue,
+    // which is critical for sync_phase to finish predecessor checking before
+    // process_phase proceeds to start_phase.
+    //
+    // Save the outermost frame's call site for process-body position
+    // restoration after all frames complete.  The outermost frame's callOp
+    // is the call_indirect/call in the process body that originally started
+    // the function call chain.  After all frames return, we resume from the
+    // operation AFTER that call.
+    Operation *outermostCallOp = state.callStack.back().callOp;
     while (!state.callStack.empty()) {
-      CallStackFrame frame = std::move(state.callStack.back());
-      state.callStack.pop_back();
+      CallStackFrame frame = std::move(state.callStack.front());
+      state.callStack.erase(state.callStack.begin());
+
+      // Track how many old (outer) frames remain before resuming.
+      // If the function re-suspends, new frames are pushed to the back.
+      // We need to distinguish old outer frames from new inner frames.
+      size_t oldFrameCount = state.callStack.size();
 
       llvm::StringRef frameName =
           frame.isLLVM() ? frame.llvmFuncOp.getName()
                          : frame.funcOp.getName();
       LLVM_DEBUG(llvm::dbgs()
                  << "    Resuming " << (frame.isLLVM() ? "LLVM " : "")
-                 << "function '" << frameName << "'\n");
+                 << "function '" << frameName << "' (remaining old frames: "
+                 << oldFrameCount << ")\n");
 
       // Resume the function from its saved position
       llvm::SmallVector<InterpretedValue, 4> results;
@@ -3880,7 +3928,31 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       if (state.waiting) {
         LLVM_DEBUG(llvm::dbgs()
                    << "    Function '" << frameName
-                   << "' suspended again during resume\n");
+                   << "' suspended again during resume, "
+                   << "callStack size=" << state.callStack.size()
+                   << " (old outer: " << oldFrameCount << ")\n");
+
+        // The function re-suspended.  New frames were pushed to the back
+        // of callStack.  Old outer frames are still at the front (indices
+        // 0..oldFrameCount-1).  The new inner frames are at the back
+        // (indices oldFrameCount..).
+        //
+        // For next resume, we need innermost-first ordering:
+        //   [new_inner_frames..., old_outer_frames...]
+        // Currently the stack is:
+        //   [old_outer_frames..., new_inner_frames...]
+        // Rotate so new inner frames come first.
+        if (oldFrameCount > 0 && state.callStack.size() > oldFrameCount) {
+          std::rotate(state.callStack.begin(),
+                      state.callStack.begin() + oldFrameCount,
+                      state.callStack.end());
+          LLVM_DEBUG(llvm::dbgs()
+                     << "    Rotated stack: moved " << oldFrameCount
+                     << " old frames after "
+                     << (state.callStack.size() - oldFrameCount)
+                     << " new frames\n");
+        }
+
         // Schedule pending delay if any before returning
         if (state.pendingDelayFs > 0) {
           SimTime currentTime = scheduler.getCurrentTime();
@@ -3920,25 +3992,57 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
       LLVM_DEBUG(llvm::dbgs()
                  << "    Function '" << frameName
-                 << "' completed, continuing\n");
+                 << "' completed, continuing to next frame\n");
+
+      // If the completed frame's execution added new frames (from a
+      // different call path than the original suspension), those new
+      // frames belong to the completed function's call chain and are
+      // now stale (the function already returned past them).  Remove
+      // any frames that were added during this iteration.
+      if (state.callStack.size() > oldFrameCount) {
+        size_t newFrames = state.callStack.size() - oldFrameCount;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "    Removing " << newFrames
+                   << " stale frames added by completed function\n");
+        // New frames are at the back (pushed during execution)
+        state.callStack.resize(oldFrameCount);
+      }
     }
 
-    // All call stack frames processed — the function completed successfully.
-    // Restore the process body's block/op so the main execution loop continues
-    // from the operation AFTER the function call (e.g., the sim.fork after
-    // the get() call_indirect in the daemon loop). Without this, the process
-    // would try to execute function body ops as process body ops.
+    // All call stack frames processed — restore process body position.
+    //
+    // When functions are called from the process body's main loop (via
+    // call_indirect, func.call, etc.) and they suspend, interpretFuncBody
+    // overwrites state.currentBlock/currentOp with function-body positions.
+    // After all frames complete, we MUST restore the process body position
+    // so the main loop continues from the right place.
+    //
+    // Two sources for the correct position:
+    // 1. waitConditionSavedBlock (set during wait_condition handling above)
+    // 2. outermostCallOp (the call in the process body that started the chain)
+    //
+    // Use waitConditionSavedBlock if available (it was saved before the
+    // restart block override). Otherwise, derive from outermostCallOp.
     if (state.waitConditionSavedBlock) {
       state.currentBlock = state.waitConditionSavedBlock;
       state.currentOp = state.waitConditionSavedOp;
       state.waitConditionSavedBlock = nullptr;
+    } else if (outermostCallOp) {
+      // Derive from the outermost frame's call operation in the process body.
+      // Resume at the operation AFTER the call.
+      state.currentBlock = outermostCallOp->getBlock();
+      state.currentOp = std::next(outermostCallOp->getIterator());
     }
+    // Clear any leftover wait_condition state.
+    state.waitConditionRestartBlock = nullptr;
+
     LLVM_DEBUG(llvm::dbgs()
                << "  Call stack frames exhausted, continuing process\n");
   }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executing process "
                           << procId << "\n");
+
 
   // Execute operations until we suspend or halt
   constexpr size_t kAbortCheckInterval = 1000;
@@ -4056,8 +4160,6 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
   // Check if we've reached the end of the block
   if (state.currentOp == state.currentBlock->end()) {
     // Shouldn't happen - blocks should end with terminators
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Warning: Reached end of block without terminator\n");
     return false;
   }
 
@@ -12596,7 +12698,6 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       bool shouldKeepPolling = (count > 0) ||
                                (count <= 0 && masterChildAlive) ||
                                (count <= 0 && yieldCount < 10);
-
       if (shouldKeepPolling) {
         ++yieldCount;
         if (count > 0)
@@ -18533,6 +18634,32 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_delete(0x"
                                 << llvm::format_hex(arrayAddr, 16) << ")\n");
+      }
+      return success();
+    }
+
+    // ---- __moore_assoc_copy_into ----
+    // Signature: (dst: ptr, src: ptr) -> void
+    // Deep-copies all entries from src into dst (in-place).
+    if (calleeName == "__moore_assoc_copy_into") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t dstAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t srcAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        constexpr uint64_t kNativeHeapThreshold = 0x10000000000ULL;
+        bool dstValid = dstAddr != 0 &&
+            (validAssocArrayAddresses.contains(dstAddr) ||
+             dstAddr >= kNativeHeapThreshold);
+        bool srcValid = srcAddr != 0 &&
+            (validAssocArrayAddresses.contains(srcAddr) ||
+             srcAddr >= kNativeHeapThreshold);
+        if (dstValid && srcValid) {
+          void *dstPtr = reinterpret_cast<void *>(dstAddr);
+          void *srcPtr = reinterpret_cast<void *>(srcAddr);
+          __moore_assoc_copy_into(dstPtr, srcPtr);
+        }
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_copy_into(dst=0x"
+                                << llvm::format_hex(dstAddr, 16) << ", src=0x"
+                                << llvm::format_hex(srcAddr, 16) << ")\n");
       }
       return success();
     }

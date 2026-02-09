@@ -290,6 +290,18 @@ int32_t __moore_assoc_exists(void *array, void *key);
 /// @return Pointer to the value storage
 void *__moore_assoc_get_ref(void *array, void *key, int32_t value_size);
 
+/// Deep-copy an associative array.
+/// Creates a new array header with a full copy of all entries.
+/// @param src Pointer to the source associative array
+/// @return Pointer to the new associative array (caller owns), or nullptr
+void *__moore_assoc_copy(void *src);
+
+/// Deep-copy all entries from one associative array into another (in-place).
+/// Clears the destination first, then copies all entries from the source.
+/// @param dst Pointer to the destination associative array
+/// @param src Pointer to the source associative array
+void __moore_assoc_copy_into(void *dst, void *src);
+
 //===----------------------------------------------------------------------===//
 // String Operations
 //===----------------------------------------------------------------------===//

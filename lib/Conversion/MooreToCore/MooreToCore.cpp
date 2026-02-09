@@ -12326,14 +12326,17 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
               // The probe result (an HW value type) is used as the observe
               // operand. The interpreter traces back through probe ops to
               // find the underlying signals for sensitivity.
-              observedValues.push_back(probeOp.getResult());
+              // Skip probes that produce non-HW types (e.g. !llvm.ptr from
+              // interface ref signals) since llhd.wait cannot observe them.
+              if (hw::isHWValueType(probeOp.getResult().getType()))
+                observedValues.push_back(probeOp.getResult());
             } else {
               for (Value operand : defOp->getOperands())
                 worklist.push_back(operand);
             }
           }
 
-          if (!probeOps.empty()) {
+          if (!observedValues.empty()) {
             // Create an llhd.process that watches the source signals and
             // continuously updates the interface memory.
             auto processOp =
@@ -12416,6 +12419,32 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       // For 4-state hw.struct<value, unknown>, decompose and rebuild as llvm.struct
       Value storeVal = convertValueToLLVMType(adaptor.getSrc(), op.getLoc(),
                                               rewriter);
+
+      // For associative array whole-assignment (aa1 = aa2), SystemVerilog
+      // semantics require a deep copy of the map contents.  Without this,
+      // both variables share the same underlying map and a .delete() on one
+      // corrupts the other.  This is critical for UVM phase graph construction
+      // where uvm_phase::add() copies and then deletes predecessor maps.
+      //
+      // Both src and dst are opaque pointers to AssocArrayHeader structs.
+      // We call __moore_assoc_copy_into(dst, src) to deep-copy the map
+      // entries in-place rather than replacing the pointer.
+      auto srcMooreType = op.getSrc().getType();
+      if (isa<AssocArrayType, WildcardAssocArrayType>(srcMooreType)) {
+        auto mod = op->template getParentOfType<ModuleOp>();
+        auto ptrTy = LLVM::LLVMPointerType::get(op.getContext());
+        auto voidTy = LLVM::LLVMVoidType::get(op.getContext());
+        auto copyFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy});
+        auto copyFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                             "__moore_assoc_copy_into",
+                                             copyFnTy);
+        LLVM::CallOp::create(rewriter, loc, copyFn,
+                             ValueRange{llvmPtrDst, storeVal});
+        rewriter.eraseOp(op);
+        return success();
+      }
+
       LLVM::StoreOp::create(rewriter, op.getLoc(), storeVal, llvmPtrDst);
       rewriter.eraseOp(op);
       return success();

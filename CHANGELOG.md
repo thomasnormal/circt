@@ -1,5 +1,90 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 774 - February 9, 2026
+
+### Associative Array Deep Copy (UVM Phase Livelock Fix)
+
+- **Root cause**: SystemVerilog `aa1 = aa2` for associative arrays was compiled
+  to a shallow pointer copy in MLIR (`llvm.store ptr, ptr`). Both variables
+  shared the same underlying map. When `.delete()` was called on one, it
+  corrupted the other.
+- **Impact**: This was the root cause of the **UVM phase livelock**. In
+  `uvm_phase::add()`, the phase graph construction copies predecessor maps
+  between phase nodes (`begin_node.m_predecessors = with_phase.m_predecessors`)
+  then calls `before_phase.m_predecessors.delete()`. The shallow copy meant the
+  delete corrupted all copied references, leaving phase nodes with empty
+  predecessor maps that could never transition to DONE.
+- **Fix**: Three-part implementation:
+  1. `lib/Runtime/MooreRuntime.cpp`: Added `__moore_assoc_copy_into(dst, src)`
+     (in-place deep copy) and `__moore_assoc_copy(src)` (allocating copy)
+  2. `lib/Conversion/MooreToCore/MooreToCore.cpp`: `AssignOpConversion` detects
+     `AssocArrayType`/`WildcardAssocArrayType` and emits `__moore_assoc_copy_into`
+     instead of `llvm.store`
+  3. `tools/circt-sim/LLHDProcessInterpreter.cpp`: Added interpreter handler for
+     `__moore_assoc_copy_into` callee dispatch
+
+### Call Stack Restoration Fix
+
+- Fixed three bugs in function call stack restoration after process suspension:
+  1. Innermost-first frame processing (was outermost-first)
+  2. `waitConditionSavedBlock` derivation from outermost frame's callOp
+  3. `outermostCallOp` fallback for non-wait_condition suspensions
+- Enables APB AVIP dual-top simulation to advance past 349ns without crash
+
+### Debug Cleanup
+
+- Removed all `[PH-TRACE]` phase lifecycle debug logging from interpreter
+- Removed all `[DBG-]` debug logging from prior session
+
+### Tests and Validation
+
+- New test: `test/Tools/circt-sim/assoc-array-deep-copy.sv` — verifies deep copy
+  semantics (assign, delete source, verify target retains entries)
+- circt-sim: **211/211 pass** (100%)
+- AVIPs: **9/9 pass** (all reach full phase lifecycle: build→run→report)
+
+## Iteration 773 - February 9, 2026
+
+### Generated-Mutation Cache Lock Contention Telemetry
+
+- Extended `utils/generate_mutations_yosys.sh` locking instrumentation with:
+  - `Mutation cache lock_wait_ns: <n>`
+  - `Mutation cache lock_contended: <0|1>`
+- Extended `utils/run_mutation_cover.sh` to parse and export:
+  - `generated_mutations_cache_lock_wait_ns`
+  - `generated_mutations_cache_lock_contended`
+  in `metrics.tsv`, `summary.json`, and terminal summary output.
+- Extended `utils/run_mutation_matrix.sh` lane status/results schema with:
+  - `generated_mutations_cache_lock_wait_ns`
+  - `generated_mutations_cache_lock_contended`
+  and matrix aggregate summary fields:
+  - `lock_wait_ns`
+  - `lock_contended_lanes`
+- This makes cache-key contention measurable at lane and matrix levels for
+  CI performance triage and scheduler planning.
+
+### Tests and Documentation
+
+- Updated tests:
+  - `test/Tools/run-mutation-generate-cache.test`
+  - `test/Tools/run-mutation-cover-generate-cache.test`
+  - `test/Tools/run-mutation-matrix-generate-cache.test`
+  - `test/Tools/run-mutation-matrix-generate-cache-parallel.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate-cache.test test/Tools/run-mutation-matrix-generate-cache-parallel.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (65/65)
+
 ## Iteration 772 - February 9, 2026
 
 ### Generated-Mutation Cache Locking for Parallel Matrix Lanes
