@@ -151,6 +151,14 @@ Options:
   --lane-state-manifest-ed25519-refresh-policy-profiles-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-refresh-policy-profiles-json
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json FILE
+                         Optional signed manifest for refresh policy profiles
+                         integrity metadata
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file FILE
+                         Ed25519 public key used to verify
+                         --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id ID
+                         Optional expected key_id for profile manifest signer
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -435,6 +443,160 @@ for artifact in ("crl", "ocsp"):
 PY
 }
 
+verify_refresh_policy_profiles_manifest() {
+  local manifest_json="$1"
+  local expected_profiles_sha="$2"
+  local public_key_file="$3"
+  local expected_key_id="$4"
+  python3 - "$manifest_json" "$expected_profiles_sha" "$public_key_file" "$expected_key_id" <<'PY'
+import base64
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+expected_profiles_sha = sys.argv[2].strip()
+public_key_file = Path(sys.argv[3])
+expected_key_id = sys.argv[4].strip()
+
+try:
+  payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+except Exception as ex:
+  print(
+      f"invalid refresh policy profiles manifest: unable to parse '{manifest_path}' ({ex})",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+if not isinstance(payload, dict):
+  print("invalid refresh policy profiles manifest: expected JSON object", file=sys.stderr)
+  raise SystemExit(1)
+
+unknown_keys = sorted(
+    set(payload.keys())
+    - {
+        "schema_version",
+        "generated_at_utc",
+        "profiles_sha256",
+        "signature_mode",
+        "key_id",
+        "signature_ed25519_base64",
+    }
+)
+if unknown_keys:
+  print(
+      f"invalid refresh policy profiles manifest: unknown key '{unknown_keys[0]}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+if payload.get("schema_version") != 1:
+  print("invalid refresh policy profiles manifest: schema_version must be 1", file=sys.stderr)
+  raise SystemExit(1)
+
+generated_at = payload.get("generated_at_utc")
+if generated_at is not None:
+  if not isinstance(generated_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at):
+    print(
+        "invalid refresh policy profiles manifest: generated_at_utc must be UTC RFC3339 timestamp",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+profiles_sha256 = payload.get("profiles_sha256")
+if not isinstance(profiles_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", profiles_sha256):
+  print("invalid refresh policy profiles manifest: profiles_sha256 must be 64 hex chars", file=sys.stderr)
+  raise SystemExit(1)
+if profiles_sha256 != expected_profiles_sha:
+  print(
+      f"invalid refresh policy profiles manifest: profiles_sha256 mismatch (expected {expected_profiles_sha}, found {profiles_sha256})",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+signature_mode = payload.get("signature_mode")
+if signature_mode != "ed25519":
+  print(
+      f"invalid refresh policy profiles manifest: signature_mode mismatch (expected ed25519, found {signature_mode})",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+manifest_key_id = payload.get("key_id", "")
+if manifest_key_id and (not isinstance(manifest_key_id, str) or not manifest_key_id.strip()):
+  print("invalid refresh policy profiles manifest: key_id must be non-empty string", file=sys.stderr)
+  raise SystemExit(1)
+manifest_key_id = manifest_key_id.strip() if isinstance(manifest_key_id, str) else ""
+if expected_key_id and manifest_key_id != expected_key_id:
+  print(
+      f"invalid refresh policy profiles manifest: key_id mismatch (expected '{expected_key_id}', found '{manifest_key_id}')",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+signature_b64 = payload.get("signature_ed25519_base64")
+if not isinstance(signature_b64, str) or not signature_b64.strip():
+  print(
+      "invalid refresh policy profiles manifest: signature_ed25519_base64 must be non-empty string",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+try:
+  signature_bytes = base64.b64decode(signature_b64, validate=True)
+except Exception:
+  print(
+      "invalid refresh policy profiles manifest: signature_ed25519_base64 must be valid base64",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+sig_payload = dict(payload)
+del sig_payload["signature_ed25519_base64"]
+canonical_payload = json.dumps(sig_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+with tempfile.NamedTemporaryFile(delete=False) as payload_file:
+  payload_file.write(canonical_payload)
+  payload_path = payload_file.name
+with tempfile.NamedTemporaryFile(delete=False) as signature_file:
+  signature_file.write(signature_bytes)
+  signature_path = signature_file.name
+try:
+  verify_result = subprocess.run(
+      [
+          "openssl",
+          "pkeyutl",
+          "-verify",
+          "-pubin",
+          "-inkey",
+          str(public_key_file),
+          "-sigfile",
+          signature_path,
+          "-rawin",
+          "-in",
+          payload_path,
+      ],
+      check=False,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+  )
+finally:
+  Path(payload_path).unlink(missing_ok=True)
+  Path(signature_path).unlink(missing_ok=True)
+
+if verify_result.returncode != 0:
+  stderr = verify_result.stderr.decode("utf-8", errors="replace").strip()
+  stdout = verify_result.stdout.decode("utf-8", errors="replace").strip()
+  detail = stderr or stdout or "openssl verify failed"
+  print(f"invalid refresh policy profiles manifest: signature verification failed ({detail})", file=sys.stderr)
+  raise SystemExit(1)
+
+print(f"manifest_key_id\t{manifest_key_id}")
+PY
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
@@ -520,6 +682,9 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -572,6 +737,9 @@ LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID_RESOLVED=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON=""
 LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
@@ -744,6 +912,12 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-policy-profiles-sha256)
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -964,6 +1138,18 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256" && ! "$LA
   echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-sha256: expected 64 hex chars" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json requires --lane-state-manifest-ed25519-refresh-policy-profiles-json" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
   echo "refresh policy profiles JSON not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" >&2
   exit 1
@@ -978,6 +1164,49 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
   fi
 else
   LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED=""
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]; then
+  echo "refresh policy profiles manifest JSON not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" ]]; then
+  echo "refresh policy profiles manifest public key not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" >&2
+  exit 1
+fi
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID_RESOLVED=""
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]; then
+  LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_SHA256_RESOLVED="$(
+    sha256sum "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" | awk '{print $1}'
+  )"
+  LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_SHA256="$(
+    sha256sum "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" | awk '{print $1}'
+  )"
+  profile_manifest_rows="$(
+    verify_refresh_policy_profiles_manifest \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED" \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID"
+  )" || exit 1
+  if [[ -n "$profile_manifest_rows" ]]; then
+    while IFS=$'\t' read -r manifest_field manifest_value; do
+      case "$manifest_field" in
+        manifest_key_id)
+          LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID_RESOLVED="$manifest_value"
+          ;;
+        *)
+          echo "internal error: unknown refresh policy profiles manifest field '$manifest_field'" >&2
+          exit 1
+          ;;
+      esac
+    done <<< "$profile_manifest_rows"
+  fi
 fi
 
 PROFILE_SHARED_AUTO_URI_POLICY=""
@@ -3461,6 +3690,10 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_auto_uri_allowed_schemes=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
     printf "lane_state_ed25519_refresh_policy_profile=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE"
     printf "lane_state_ed25519_refresh_policy_profiles_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_SHA256_RESOLVED"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_SHA256_RESOLVED"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_public_key_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_SHA256"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_key_id=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID_RESOLVED"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_expected_key_id=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
