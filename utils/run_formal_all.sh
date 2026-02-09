@@ -26,6 +26,8 @@ Options:
   --fail-on-new-xpass    Fail when xpass count increases vs baseline
   --fail-on-passrate-regression
                          Fail when pass-rate decreases vs baseline
+  --fail-on-new-failure-cases
+                         Fail when fail-like case IDs increase vs baseline
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1613,6 +1615,7 @@ BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
+FAIL_ON_NEW_FAILURE_CASES=0
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
@@ -1861,6 +1864,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_XPASS=1; shift ;;
     --fail-on-passrate-regression)
       FAIL_ON_PASSRATE_REGRESSION=1; shift ;;
+    --fail-on-new-failure-cases)
+      FAIL_ON_NEW_FAILURE_CASES=1; shift ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
@@ -3672,6 +3677,7 @@ fi
 if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_XPASS=1
   FAIL_ON_PASSRATE_REGRESSION=1
+  FAIL_ON_NEW_FAILURE_CASES=1
 fi
 if [[ -z "$JSON_SUMMARY_FILE" ]]; then
   JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
@@ -7752,7 +7758,15 @@ with unexpected_path.open("w", newline="") as f:
   )
   writer.writeheader()
   for row in unexpected_observed:
-    writer.writerow(row)
+    writer.writerow(
+        {
+            "suite": row.get("suite", ""),
+            "mode": row.get("mode", ""),
+            "status": row.get("status", ""),
+            "base": row.get("base", ""),
+            "path": row.get("path", ""),
+        }
+    )
 
 expired_rows = [row for row in expected_summary_rows if row["expired"] == "yes"]
 unmatched_rows = [row for row in expected_summary_rows if row["matched_count"] == 0]
@@ -8244,6 +8258,90 @@ def parse_result_summary(summary: str):
         parsed[match.group(1)] = int(match.group(2))
     return parsed
 
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+
+def extract_diag_tag(path: str) -> str:
+    if "#" not in path:
+        return ""
+    candidate = path.rsplit("#", 1)[1].strip()
+    if re.fullmatch(r"[A-Z0-9_]+", candidate):
+        return candidate
+    return ""
+
+def compose_case_id(base: str, path: str) -> str:
+    diag = extract_diag_tag(path)
+    if base and diag:
+        return f"{base}#{diag}"
+    if base:
+        return base
+    if path:
+        return path
+    return "__aggregate__"
+
+def collect_failure_cases(out_dir: Path, summary_rows):
+    result_sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+        ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
+        ("", "", out_dir / "avip-results.txt"),
+    ]
+    detailed_pairs_observed = set()
+    cases = {}
+    for default_suite, default_mode, path in result_sources:
+        if not path.exists():
+            continue
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status not in fail_like_statuses:
+                    continue
+                suite = parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+                mode = parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+                if not suite or not mode:
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                key = (suite, mode)
+                detailed_pairs_observed.add(key)
+                cases.setdefault(key, set()).add(compose_case_id(base, file_path))
+    for row in summary_rows:
+        suite = row.get("suite", "")
+        mode = row.get("mode", "")
+        if not suite or not mode:
+            continue
+        key = (suite, mode)
+        if key in detailed_pairs_observed:
+            continue
+        try:
+            fail = int(row.get("fail", "0"))
+        except Exception:
+            fail = 0
+        try:
+            error = int(row.get("error", "0"))
+        except Exception:
+            error = 0
+        try:
+            xfail = int(row.get("xfail", "0"))
+        except Exception:
+            xfail = 0
+        try:
+            xpass = int(row.get("xpass", "0"))
+        except Exception:
+            xpass = 0
+        if fail > 0 or error > 0 or xfail > 0 or xpass > 0:
+            cases.setdefault(key, set()).add("__aggregate__")
+    return {key: ";".join(sorted(values)) for key, values in cases.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -8267,6 +8365,8 @@ def compute_pass_rate(total: int, passed: int, xfail: int, skipped: int) -> floa
     if eligible <= 0:
         return 0.0
     return ((passed + xfail) * 100.0) / eligible
+
+failure_cases = collect_failure_cases(out_dir, rows)
 
 baseline = {}
 if baseline_path.exists():
@@ -8298,6 +8398,7 @@ if baseline_path.exists():
                 'skip': str(skip),
                 'pass_rate': pass_rate,
                 'result': row.get('result', ''),
+                'failure_cases': row.get('failure_cases', ''),
             }
 
 for row in rows:
@@ -8323,6 +8424,7 @@ for row in rows:
         'skip': str(skip),
         'pass_rate': f"{pass_rate:.3f}",
         'result': row['summary'],
+        'failure_cases': failure_cases.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -8342,6 +8444,7 @@ with baseline_path.open('w', newline='') as f:
             'skip',
             'pass_rate',
             'result',
+            'failure_cases',
         ],
         delimiter='\t',
     )
@@ -8394,12 +8497,13 @@ if plan_path.exists():
 PY
 fi
 
-if [[ "$FAIL_ON_NEW_XPASS" == "1" || "$FAIL_ON_PASSRATE_REGRESSION" == "1" ]]; then
+if [[ "$FAIL_ON_NEW_XPASS" == "1" || "$FAIL_ON_PASSRATE_REGRESSION" == "1" || "$FAIL_ON_NEW_FAILURE_CASES" == "1" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
   BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
   FAIL_ON_NEW_XPASS="$FAIL_ON_NEW_XPASS" \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
+  FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -8438,12 +8542,81 @@ def pass_rate(row):
         return 0.0
     return ((passed + xfail) * 100.0) / eligible
 
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+
+def extract_diag_tag(path: str) -> str:
+    if "#" not in path:
+        return ""
+    candidate = path.rsplit("#", 1)[1].strip()
+    if re.fullmatch(r"[A-Z0-9_]+", candidate):
+        return candidate
+    return ""
+
+def compose_case_id(base: str, path: str) -> str:
+    diag = extract_diag_tag(path)
+    if base and diag:
+        return f"{base}#{diag}"
+    if base:
+        return base
+    if path:
+        return path
+    return "__aggregate__"
+
+def collect_failure_cases(out_dir: Path, summary_rows):
+    result_sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-results.txt"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
+        ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
+        ("", "", out_dir / "avip-results.txt"),
+    ]
+    detailed_pairs_observed = set()
+    cases = {}
+    for default_suite, default_mode, path in result_sources:
+        if not path.exists():
+            continue
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                status = parts[0].strip().upper() if parts else ""
+                if status not in fail_like_statuses:
+                    continue
+                suite = parts[3].strip() if len(parts) > 3 and parts[3].strip() else default_suite
+                mode = parts[4].strip() if len(parts) > 4 and parts[4].strip() else default_mode
+                if not suite or not mode:
+                    continue
+                base = parts[1].strip() if len(parts) > 1 else ""
+                file_path = parts[2].strip() if len(parts) > 2 else ""
+                key = (suite, mode)
+                detailed_pairs_observed.add(key)
+                cases.setdefault(key, set()).add(compose_case_id(base, file_path))
+    for key, row in summary_rows.items():
+        if key in detailed_pairs_observed:
+            continue
+        fail = int(row.get("fail", "0"))
+        error = int(row.get("error", "0"))
+        xfail = int(row.get("xfail", "0"))
+        xpass = int(row.get("xpass", "0"))
+        if fail > 0 or error > 0 or xfail > 0 or xpass > 0:
+            cases.setdefault(key, set()).add("__aggregate__")
+    return cases
+
 summary = {}
 with summary_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
     for row in reader:
         key = (row["suite"], row["mode"])
         summary[key] = row
+
+current_failure_cases = collect_failure_cases(Path(os.environ["OUT_DIR"]), summary)
 
 history = {}
 with baseline_path.open() as f:
@@ -8458,6 +8631,7 @@ with baseline_path.open() as f:
 
 fail_on_new_xpass = os.environ.get("FAIL_ON_NEW_XPASS", "0") == "1"
 fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0") == "1"
+fail_on_new_failure_cases = os.environ.get("FAIL_ON_NEW_FAILURE_CASES", "0") == "1"
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
@@ -8529,6 +8703,27 @@ for key, current_row in summary.items():
         gate_errors.append(
             f"{suite} {mode}: xpass increased ({baseline_xpass} -> {current_xpass}, window={baseline_window})"
         )
+    if fail_on_new_failure_cases:
+        baseline_cases_raw = [row.get("failure_cases") for row in compare_rows]
+        # Legacy baseline rows may not carry case telemetry; skip this check there.
+        if any(raw is not None for raw in baseline_cases_raw):
+            baseline_case_set = set()
+            for raw in baseline_cases_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_case_set.add(token)
+            current_case_set = current_failure_cases.get(key, set())
+            new_cases = sorted(current_case_set - baseline_case_set)
+            if new_cases:
+                sample = ", ".join(new_cases[:3])
+                if len(new_cases) > 3:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new failure cases observed (baseline={len(baseline_case_set)} current={len(current_case_set)}, window={baseline_window}): {sample}"
+                )
     if fail_on_passrate_regression:
         baseline_rate = max(
             pass_rate(

@@ -48,6 +48,12 @@ Enable strict baseline-aware quality gates:
 utils/run_formal_all.sh --strict-gate
 ```
 
+`--strict-gate` now enforces:
+- fail/error non-regression
+- xpass non-regression
+- pass-rate non-regression
+- fail-like case-ID non-regression (`failure_cases` baseline telemetry)
+
 Use a trailing baseline window for trend-aware strict gates:
 
 ```bash
@@ -969,6 +975,7 @@ Fail only on specific gate classes:
 ```bash
 utils/run_formal_all.sh --fail-on-new-xpass
 utils/run_formal_all.sh --fail-on-passrate-regression
+utils/run_formal_all.sh --fail-on-new-failure-cases
 ```
 
 Gate on known expected-failure budgets per suite/mode:
@@ -1184,7 +1191,9 @@ JSON summary schema:
 Baselines:
 
 - `utils/formal-baselines.tsv` (latest baselines per suite/mode)
-  - columns: `date suite mode total pass fail xfail xpass error skip pass_rate result`
+  - columns: `date suite mode total pass fail xfail xpass error skip pass_rate result failure_cases`
+  - legacy baseline files without `failure_cases` remain accepted; case-ID
+    strict-gate checks are skipped for those legacy rows.
 - `PROJECT_PLAN.md` baseline table (updated when `--update-baselines` is used)
 
 Expected-failure budget file:

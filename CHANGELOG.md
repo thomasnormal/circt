@@ -39911,3 +39911,65 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 771 - February 9, 2026
+
+### Strict-Gate Case Drift Detection for LEC/BMC
+
+1. Extended `utils/run_formal_all.sh` strict-gate controls with:
+   - `--fail-on-new-failure-cases`
+   - enabled by default under `--strict-gate`.
+2. Strict-gate now compares fail-like case IDs against baseline history
+   (`failure_cases`) so it can catch semantic/diagnostic drift even when
+   aggregate fail/error counts are unchanged.
+3. Baseline update flow (`--update-baselines`) now records fail-like case IDs in
+   `utils/formal-baselines.tsv` as a new `failure_cases` column
+   (stable `base#DIAG` when available, `__aggregate__` fallback otherwise).
+4. Legacy baseline compatibility is preserved:
+   - if baseline rows do not include `failure_cases`, case-ID strict-gate checks
+     are skipped for those rows.
+5. Tech-debt fix in expected-failure-case export:
+   - sanitized `unexpected-failure-cases.tsv` writes to fixed columns only,
+     preventing `csv.DictWriter` extra-field failures when diagnostic metadata is
+     present.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-strict-gate-failure-cases.test`
+    - verifies baseline captures `failure_cases`
+    - verifies strict-gate fails on new diagnostic-class case IDs with unchanged
+      fail counts
+    - verifies legacy baseline files (without `failure_cases`) remain accepted.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-failure-cases.test test/Tools/run-formal-all-baselines.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-strict-gate.test`:
+    - 5/5 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-opentitan-lec.test`:
+    - 4/4 PASS
+- OpenTitan strict-lane gate check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-strict-casegate-base --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-all-strict-casegate-baseline-20260209.tsv --update-baselines`:
+    - summary: `total=1 pass=0 fail=1`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-strict-casegate-rerun --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-all-strict-casegate-baseline-20260209.tsv --strict-gate`:
+    - summary: `total=1 pass=0 fail=1` (strict-gate PASS, no case drift)
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan LEC E2E lane:
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --out-dir /tmp/opentitan-e2e-lec-default-20260209`:
+    - summary: `pass=1 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
