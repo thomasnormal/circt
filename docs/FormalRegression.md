@@ -76,6 +76,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-mani
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-cert-subject-regex 'CN=lane-state-ed25519' --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-key-id ci-ed25519-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -121,6 +122,8 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-ocsp-response-file` enables OCSP revocation
   checks against a pinned DER response (`openssl ocsp -respin`) and requires
   `--lane-state-manifest-ed25519-ca-file`.
+- `--lane-state-manifest-ed25519-ocsp-max-age-secs` bounds OCSP response age
+  from `This Update` (default when OCSP mode is enabled: 604800 seconds).
 - `--lane-state-manifest-ed25519-cert-subject-regex` enforces certificate
   identity constraints for selected keyring entries.
 - `--lane-state-manifest-ed25519-key-id` pins manifest `ed25519_key_id`.
