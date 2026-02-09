@@ -17,12 +17,15 @@
 // RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=HITS
 // RUN: awk -F'\t' 'NR>1 && $9=="hit"{c++} END{print c+0}' %t/out/results.tsv | FileCheck %s --check-prefix=HITLANES
 // RUN: awk -F'\t' 'NR>1 && $9=="miss"{c++} END{print c+0}' %t/out/results.tsv | FileCheck %s --check-prefix=MISSLANES
+// RUN: awk -F'\t' 'NR>1 && $14=="1"{c++} END{print c+0}' %t/out/results.tsv | FileCheck %s --check-prefix=LOCKCONTENDED
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
 
 // LOG: Mutation matrix summary: pass=2 fail=0
+// LOG: Mutation matrix generated-mutation cache: {{.*}}lock_contended_lanes=1
 // HITS: 1
 // HITLANES: 1
 // MISSLANES: 1
-// RESULTS: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns
+// LOCKCONTENDED: 1
+// RESULTS: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns{{.*}}generated_mutations_cache_lock_contended
 // RESULTS: lane_a{{.*}}PASS{{.*}}
 // RESULTS: lane_b{{.*}}PASS{{.*}}

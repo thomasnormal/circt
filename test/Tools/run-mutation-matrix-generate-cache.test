@@ -27,9 +27,13 @@
 // METRICSA: generated_mutations_cache_hit{{.*}}0
 // METRICSA: generated_mutations_cache_status{{.*}}miss
 // METRICSA: generated_mutations_cache_saved_runtime_ns{{.*}}0
+// METRICSA: generated_mutations_cache_lock_wait_ns{{.*}}{{[0-9]+}}
+// METRICSA: generated_mutations_cache_lock_contended{{.*}}0
 // METRICSB: generated_mutations_cache_hit{{.*}}1
 // METRICSB: generated_mutations_cache_status{{.*}}hit
 // METRICSB: generated_mutations_cache_saved_runtime_ns{{.*}}{{[0-9]+}}
+// METRICSB: generated_mutations_cache_lock_wait_ns{{.*}}{{[0-9]+}}
+// METRICSB: generated_mutations_cache_lock_contended{{.*}}0
 // RESULTSA: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns
 // RESULTSA: lane_gen{{.*}}miss{{.*}}0{{.*}}1{{.*}}0
 // RESULTSB: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns

@@ -368,6 +368,8 @@ instead of duplicating `yosys mutate -list` work.
 - `generated_mutations_cache_miss`
 - `generated_mutations_runtime_ns`
 - `generated_mutations_cache_saved_runtime_ns`
+- `generated_mutations_cache_lock_wait_ns`
+- `generated_mutations_cache_lock_contended`
 
 For full option reference, global-filter modes, cache/reuse controls, and the
 complete lane TSV schema, see `docs/FormalRegression.md`.
