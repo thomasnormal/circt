@@ -18342,14 +18342,29 @@ ninja -C build circt-verilog
   - Keeps strict determinism: profile-derived controls remain part of lane-state
     config-hash compatibility checks.
 
+### Iteration 713
+- Added profile-registry integrity pinning for Ed25519 refresh auto-URI
+  profiles:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-sha256`
+  - optional SHA256 pin checked against
+    `--lane-state-manifest-ed25519-refresh-policy-profiles-json`.
+- Lane-state compatibility hashing now records:
+  - selected refresh profile name
+  - resolved profile-registry SHA256
+- Planning impact:
+  - Hardens profile-registry supply chain in distributed formal farms.
+  - Ensures resume/merge rejects runs that drift in selected profile or profile
+    registry content.
+
 ### Recent Lane-State Hardening (See CHANGELOG)
-- Iterations 698-712 completed the CRL/OCSP refresh control plane:
+- Iterations 698-713 completed the CRL/OCSP refresh control plane:
   - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
     timeout, and jitter controls.
   - signed refresh provenance + strict schema-versioned metadata contracts and
     trust-policy gates (transport/status/URI/TLS/freshness).
   - cert-driven auto-discovery controls with explicit policy/scheme precedence,
-    including shared/per-artifact defaults and profile-based rollout.
+    including shared/per-artifact defaults, profile-based rollout, and optional
+    profile-registry SHA256 pinning.
 - Detailed implementation, diagnostics, and validation evidence is tracked in
   `CHANGELOG.md`.
 
