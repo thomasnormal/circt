@@ -19,5 +19,11 @@
 // CHECK: --mutations-yosys
 // CHECK: --formal-global-propagate-cmd
 // CHECK: --formal-global-propagate-circt-lec
+// CHECK: --formal-global-propagate-circt-lec-args
+// CHECK: --formal-global-propagate-c1
+// CHECK: --formal-global-propagate-c2
+// CHECK: --formal-global-propagate-z3
+// CHECK: --formal-global-propagate-assume-known-inputs
+// CHECK: --formal-global-propagate-accept-xprop-only
 // CHECK: --formal-global-propagate-circt-bmc
 // CHECK: --formal-global-propagate-bmc-ignore-asserts-until
