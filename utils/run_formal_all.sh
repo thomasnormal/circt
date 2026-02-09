@@ -28,6 +28,10 @@ Options:
                          Fail when pass-rate decreases vs baseline
   --fail-on-new-failure-cases
                          Fail when fail-like case IDs increase vs baseline
+  --fail-on-new-bmc-timeout-cases
+                         Fail when BMC timeout-case count increases vs baseline
+  --fail-on-new-bmc-unknown-cases
+                         Fail when BMC unknown-case count increases vs baseline
   --fail-on-new-e2e-mode-diff-strict-only-fail
                          Fail when OpenTitan E2E mode-diff strict_only_fail
                          count increases vs baseline
@@ -1644,6 +1648,8 @@ BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
+FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
+FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
@@ -1916,6 +1922,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_PASSRATE_REGRESSION=1; shift ;;
     --fail-on-new-failure-cases)
       FAIL_ON_NEW_FAILURE_CASES=1; shift ;;
+    --fail-on-new-bmc-timeout-cases)
+      FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
+    --fail-on-new-bmc-unknown-cases)
+      FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-e2e-mode-diff-strict-only-fail)
       FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
     --fail-on-new-e2e-mode-diff-status-diff)
@@ -3743,6 +3753,8 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_XPASS=1
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
+  FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
+  FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
@@ -6614,6 +6626,38 @@ print(" ".join(parts))
 PY
 }
 
+summarize_bmc_case_file() {
+  local case_file="$1"
+  if [[ ! -s "$case_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_CASE_FILE="$case_file" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_CASE_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+timeout_cases = 0
+unknown_cases = 0
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        status = line.split("\t", 1)[0].strip().upper()
+        if status == "TIMEOUT":
+            timeout_cases += 1
+        elif status == "UNKNOWN":
+            unknown_cases += 1
+
+print(f"bmc_timeout_cases={timeout_cases} bmc_unknown_cases={unknown_cases}")
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -6670,7 +6714,12 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       xpass=$(extract_kv "$line" xpass)
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
-      record_result "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+      summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        summary="${summary} ${bmc_case_summary}"
+      fi
+      record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -6718,7 +6767,12 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       xpass=$(extract_kv "$line" xpass)
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
-      record_result "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip"
+      summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/verilator-bmc-results.txt")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        summary="${summary} ${bmc_case_summary}"
+      fi
+      record_result_with_summary "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -7039,7 +7093,7 @@ rows = []
 total = 0
 passed = 0
 failed = 0
-fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 with results_path.open() as f:
   reader = csv.DictReader(f, delimiter="\t")
   for row in reader:
@@ -7859,7 +7913,7 @@ def sample_rows(rows):
     return []
   return rows[:max_sample_rows]
 
-fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 
 def extract_diag_tag(path: str) -> str:
@@ -8433,7 +8487,7 @@ if out_path.exists():
           "reason": row.get("reason", ""),
       }
 
-fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 
 def extract_diag_tag(path: str) -> str:
@@ -8676,7 +8730,7 @@ def parse_result_summary(summary: str):
         parsed[match.group(1)] = int(match.group(2))
     return parsed
 
-fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 def extract_diag_tag(path: str) -> str:
     if "#" not in path:
@@ -8920,6 +8974,8 @@ fi
 if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_PASSRATE_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" == "1" || \
@@ -8932,6 +8988,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_XPASS="$FAIL_ON_NEW_XPASS" \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
+  FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
+  FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
@@ -8976,7 +9034,7 @@ def pass_rate(row):
         return 0.0
     return ((passed + xfail) * 100.0) / eligible
 
-fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 def extract_diag_tag(path: str) -> str:
     if "#" not in path:
@@ -9068,6 +9126,12 @@ with baseline_path.open() as f:
 fail_on_new_xpass = os.environ.get("FAIL_ON_NEW_XPASS", "0") == "1"
 fail_on_passrate_regression = os.environ.get("FAIL_ON_PASSRATE_REGRESSION", "0") == "1"
 fail_on_new_failure_cases = os.environ.get("FAIL_ON_NEW_FAILURE_CASES", "0") == "1"
+fail_on_new_bmc_timeout_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_TIMEOUT_CASES", "0") == "1"
+)
+fail_on_new_bmc_unknown_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
+)
 fail_on_new_e2e_mode_diff_strict_only_fail = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL", "0") == "1"
 )
@@ -9180,6 +9244,32 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new failure cases observed (baseline={len(baseline_case_set)} current={len(current_case_set)}, window={baseline_window}): {sample}"
                 )
+    if mode == "BMC":
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        if fail_on_new_bmc_timeout_cases:
+            baseline_timeout_values = []
+            for counts in parsed_counts:
+                if "bmc_timeout_cases" in counts:
+                    baseline_timeout_values.append(int(counts["bmc_timeout_cases"]))
+            if baseline_timeout_values:
+                baseline_timeout = min(baseline_timeout_values)
+                current_timeout = int(current_counts.get("bmc_timeout_cases", 0))
+                if current_timeout > baseline_timeout:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_timeout_cases increased ({baseline_timeout} -> {current_timeout}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_unknown_cases:
+            baseline_unknown_values = []
+            for counts in parsed_counts:
+                if "bmc_unknown_cases" in counts:
+                    baseline_unknown_values.append(int(counts["bmc_unknown_cases"]))
+            if baseline_unknown_values:
+                baseline_unknown = min(baseline_unknown_values)
+                current_unknown = int(current_counts.get("bmc_unknown_cases", 0))
+                if current_unknown > baseline_unknown:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_unknown_cases increased ({baseline_unknown} -> {current_unknown}, window={baseline_window})"
+                    )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))
         if fail_on_new_e2e_mode_diff_strict_only_fail:

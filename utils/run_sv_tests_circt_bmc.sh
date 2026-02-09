@@ -85,6 +85,8 @@ fail=0
 xfail=0
 xpass=0
 error=0
+unknown=0
+timeout=0
 skip=0
 total=0
 
@@ -351,13 +353,19 @@ while IFS= read -r -d '' sv; do
   fi
 
   if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
-    if [[ "$bmc_status" -eq 0 ]]; then
+    if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
+      result="TIMEOUT"
+    elif [[ "$bmc_status" -eq 0 ]]; then
       result="PASS"
     else
       result="ERROR"
     fi
   else
-    if [[ "$check_mode" == "cover" ]]; then
+    if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
+      result="TIMEOUT"
+    elif grep -q "BMC_RESULT=UNKNOWN" <<<"$out"; then
+      result="UNKNOWN"
+    elif [[ "$check_mode" == "cover" ]]; then
       if grep -q "BMC_RESULT=SAT" <<<"$out"; then
         result="PASS"
       elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
@@ -403,6 +411,14 @@ while IFS= read -r -d '' sv; do
     case "$result" in
       PASS) pass=$((pass + 1)) ;;
       FAIL) fail=$((fail + 1)) ;;
+      UNKNOWN)
+        unknown=$((unknown + 1))
+        error=$((error + 1))
+        ;;
+      TIMEOUT)
+        timeout=$((timeout + 1))
+        error=$((error + 1))
+        ;;
       *) error=$((error + 1)) ;;
     esac
   elif [[ "$should_fail" == "1" ]]; then
@@ -417,6 +433,14 @@ while IFS= read -r -d '' sv; do
     case "$result" in
       PASS) pass=$((pass + 1)) ;;
       FAIL) fail=$((fail + 1)) ;;
+      UNKNOWN)
+        unknown=$((unknown + 1))
+        error=$((error + 1))
+        ;;
+      TIMEOUT)
+        timeout=$((timeout + 1))
+        error=$((error + 1))
+        ;;
       *) error=$((error + 1)) ;;
     esac
   fi
@@ -434,5 +458,5 @@ done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
 
 sort "$results_tmp" > "$OUT"
 
-echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip"
+echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
 echo "results: $OUT"
