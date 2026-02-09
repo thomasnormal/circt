@@ -48,7 +48,11 @@
 // METRICSA: generated_mutations_cache_hit{{.*}}0
 // METRICSA: generated_mutations_cache_miss{{.*}}1
 // METRICSA: generated_mutations_cache_status{{.*}}miss
+// METRICSA: generated_mutations_runtime_ns{{.*}}{{[0-9]+}}
+// METRICSA: generated_mutations_cache_saved_runtime_ns{{.*}}0
 // METRICSB: generated_mutations_enabled{{.*}}1
 // METRICSB: generated_mutations_cache_hit{{.*}}1
 // METRICSB: generated_mutations_cache_miss{{.*}}0
 // METRICSB: generated_mutations_cache_status{{.*}}hit
+// METRICSB: generated_mutations_runtime_ns{{.*}}{{[0-9]+}}
+// METRICSB: generated_mutations_cache_saved_runtime_ns{{.*}}{{[0-9]+}}

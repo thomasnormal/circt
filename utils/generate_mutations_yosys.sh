@@ -133,6 +133,42 @@ hash_string() {
   printf "%s" "$s" | hash_stdin
 }
 
+normalize_epoch_ns() {
+  local raw="${1:-0}"
+  if [[ ! "$raw" =~ ^[0-9]+$ ]]; then
+    raw=0
+  fi
+  if [[ "$raw" -lt 1000000000000 ]]; then
+    raw=$((raw * 1000000000))
+  fi
+  printf "%s\n" "$raw"
+}
+
+current_epoch_ns() {
+  local now_raw=""
+  now_raw="$(date +%s%N 2>/dev/null || true)"
+  if [[ ! "$now_raw" =~ ^[0-9]+$ ]]; then
+    now_raw="$(python3 -c 'import time; print(time.time_ns())' 2>/dev/null || true)"
+  fi
+  if [[ ! "$now_raw" =~ ^[0-9]+$ ]]; then
+    now_raw="$(date +%s 2>/dev/null || printf "0")"
+  fi
+  normalize_epoch_ns "$now_raw"
+}
+
+elapsed_ns_since() {
+  local start_ns="${1:-0}"
+  local end_ns=0
+  local delta=0
+  end_ns="$(current_epoch_ns)"
+  if [[ "$start_ns" =~ ^[0-9]+$ ]] && [[ "$end_ns" =~ ^[0-9]+$ ]] && [[ "$end_ns" -ge "$start_ns" ]]; then
+    delta=$((end_ns - start_ns))
+  fi
+  printf "%s\n" "$delta"
+}
+
+SCRIPT_START_NS="$(current_epoch_ns)"
+
 yosys_resolved="$(command -v "$YOSYS_BIN" 2>/dev/null || printf "%s" "$YOSYS_BIN")"
 if [[ -n "$MODES_CSV" ]]; then
   IFS=',' read -r -a modes_from_csv <<< "$MODES_CSV"
@@ -380,9 +416,20 @@ EOF
   cache_key="$(hash_string "$cache_payload")"
   cache_file="${CACHE_DIR}/${cache_key}.mutations.txt"
   if [[ -s "$cache_file" ]]; then
+    cache_saved_runtime_ns=0
+    cache_meta_file="${cache_file}.meta"
+    if [[ -f "$cache_meta_file" ]]; then
+      cache_saved_runtime_ns="$(awk -F$'\t' '$1=="generation_runtime_ns"{print $2}' "$cache_meta_file" | head -n1)"
+      cache_saved_runtime_ns="${cache_saved_runtime_ns:-0}"
+      if [[ ! "$cache_saved_runtime_ns" =~ ^[0-9]+$ ]]; then
+        cache_saved_runtime_ns=0
+      fi
+    fi
     cp "$cache_file" "$OUT_FILE"
     echo "Generated mutations: $(wc -l < "$OUT_FILE") (cache hit)"
     echo "Mutation file: $OUT_FILE"
+    echo "Mutation generation runtime_ns: $(elapsed_ns_since "$SCRIPT_START_NS")"
+    echo "Mutation cache saved_runtime_ns: $cache_saved_runtime_ns"
     echo "Mutation cache status: hit"
     echo "Mutation cache file: $cache_file"
     exit 0
@@ -529,12 +576,20 @@ fi
 
 if [[ -n "$cache_file" && -n "$cache_key" ]]; then
   cache_tmp="${cache_file}.tmp.$$"
+  cache_meta_tmp="${cache_file}.meta.tmp.$$"
+  cache_meta_file="${cache_file}.meta"
   cp "$OUT_FILE" "$cache_tmp"
+  generation_runtime_ns="$(elapsed_ns_since "$SCRIPT_START_NS")"
+  printf "generation_runtime_ns\t%s\n" "$generation_runtime_ns" > "$cache_meta_tmp"
   mv "$cache_tmp" "$cache_file"
+  mv "$cache_meta_tmp" "$cache_meta_file"
 fi
 
+generation_runtime_ns="${generation_runtime_ns:-$(elapsed_ns_since "$SCRIPT_START_NS")}"
 echo "Generated mutations: $(wc -l < "$OUT_FILE")"
 echo "Mutation file: $OUT_FILE"
+echo "Mutation generation runtime_ns: $generation_runtime_ns"
+echo "Mutation cache saved_runtime_ns: 0"
 if [[ -n "$cache_file" ]]; then
   echo "Mutation cache status: miss"
   echo "Mutation cache file: $cache_file"

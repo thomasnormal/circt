@@ -345,6 +345,10 @@ Generated artifacts (default under `./mutation-cover-results`):
     enabled but required fresh synthesis (`1`/`0`).
   - `generated_mutations_cache_status`: generated-mutation cache result
     (`hit`, `miss`, or `disabled`).
+  - `generated_mutations_runtime_ns`: wall-clock runtime for built-in mutation
+    generation in this run.
+  - `generated_mutations_cache_saved_runtime_ns`: estimated runtime avoided by
+    cache reuse (from cached generation metadata, `0` on miss/disabled).
   - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
@@ -409,6 +413,12 @@ Run multiple mutation lanes from a single TSV:
 
 ```bash
 utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutation-matrix
+```
+
+Matrix `results.tsv` columns:
+
+```text
+lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns
 ```
 
 Execution controls:

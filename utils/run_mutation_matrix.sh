@@ -497,6 +497,17 @@ run_lane() {
   local lane_bmc_orig_cache_max_bytes=""
   local lane_bmc_orig_cache_max_age_seconds=""
   local lane_bmc_orig_cache_eviction_policy=""
+  local lane_generated_mutations_cache_status="disabled"
+  local lane_generated_mutations_cache_hit="0"
+  local lane_generated_mutations_cache_miss="0"
+  local lane_generated_mutations_cache_saved_runtime_ns="0"
+
+  lane_write_status() {
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" \
+      "$lane_generated_mutations_cache_status" "$lane_generated_mutations_cache_hit" \
+      "$lane_generated_mutations_cache_miss" "$lane_generated_mutations_cache_saved_runtime_ns" > "$lane_status_file"
+  }
 
   mkdir -p "$lane_dir"
 
@@ -520,8 +531,7 @@ run_lane() {
     cmd+=(--generate-mutations "${GENERATE_COUNT[$i]}")
   else
     gate="CONFIG_ERROR"
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+    lane_write_status
     return 0
   fi
 
@@ -532,8 +542,7 @@ run_lane() {
   if [[ -n "$lane_reuse_pair_file" ]]; then
     if [[ ! -f "$lane_reuse_pair_file" ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--reuse-pair-file "$lane_reuse_pair_file")
@@ -546,8 +555,7 @@ run_lane() {
   if [[ -n "$lane_reuse_summary_file" ]]; then
     if [[ ! -f "$lane_reuse_summary_file" ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--reuse-summary-file "$lane_reuse_summary_file")
@@ -696,8 +704,7 @@ run_lane() {
   if [[ -n "$lane_global_propagate_bmc_bound" ]]; then
     if ! [[ "$lane_global_propagate_bmc_bound" =~ ^[1-9][0-9]*$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--formal-global-propagate-bmc-bound "$lane_global_propagate_bmc_bound")
@@ -742,8 +749,7 @@ run_lane() {
   if [[ -n "$lane_global_propagate_bmc_ignore_asserts_until" ]]; then
     if ! [[ "$lane_global_propagate_bmc_ignore_asserts_until" =~ ^[0-9]+$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--formal-global-propagate-bmc-ignore-asserts-until "$lane_global_propagate_bmc_ignore_asserts_until")
@@ -756,8 +762,7 @@ run_lane() {
   if [[ -n "$lane_bmc_orig_cache_max_entries" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_entries" =~ ^[0-9]+$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-entries "$lane_bmc_orig_cache_max_entries")
@@ -770,8 +775,7 @@ run_lane() {
   if [[ -n "$lane_bmc_orig_cache_max_bytes" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_bytes" =~ ^[0-9]+$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-bytes "$lane_bmc_orig_cache_max_bytes")
@@ -784,8 +788,7 @@ run_lane() {
   if [[ -n "$lane_bmc_orig_cache_max_age_seconds" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_age_seconds" =~ ^[0-9]+$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-age-seconds "$lane_bmc_orig_cache_max_age_seconds")
@@ -798,8 +801,7 @@ run_lane() {
   if [[ -n "$lane_bmc_orig_cache_eviction_policy" ]]; then
     if ! [[ "$lane_bmc_orig_cache_eviction_policy" =~ ^(lru|fifo|cost-lru)$ ]]; then
       gate="CONFIG_ERROR"
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      lane_write_status
       return 0
     fi
     cmd+=(--bmc-orig-cache-eviction-policy "$lane_bmc_orig_cache_eviction_policy")
@@ -818,6 +820,23 @@ run_lane() {
   if [[ -f "$lane_metrics" ]]; then
     cov_v="$(awk -F$'\t' '$1=="mutation_coverage_percent"{print $2}' "$lane_metrics" | head -n1)"
     [[ -n "$cov_v" ]] && coverage="$cov_v"
+    lane_generated_mutations_cache_status="$(awk -F$'\t' '$1=="generated_mutations_cache_status"{print $2}' "$lane_metrics" | head -n1)"
+    lane_generated_mutations_cache_status="${lane_generated_mutations_cache_status:-disabled}"
+    lane_generated_mutations_cache_hit="$(awk -F$'\t' '$1=="generated_mutations_cache_hit"{print $2}' "$lane_metrics" | head -n1)"
+    lane_generated_mutations_cache_hit="${lane_generated_mutations_cache_hit:-0}"
+    if [[ ! "$lane_generated_mutations_cache_hit" =~ ^[0-9]+$ ]]; then
+      lane_generated_mutations_cache_hit=0
+    fi
+    lane_generated_mutations_cache_miss="$(awk -F$'\t' '$1=="generated_mutations_cache_miss"{print $2}' "$lane_metrics" | head -n1)"
+    lane_generated_mutations_cache_miss="${lane_generated_mutations_cache_miss:-0}"
+    if [[ ! "$lane_generated_mutations_cache_miss" =~ ^[0-9]+$ ]]; then
+      lane_generated_mutations_cache_miss=0
+    fi
+    lane_generated_mutations_cache_saved_runtime_ns="$(awk -F$'\t' '$1=="generated_mutations_cache_saved_runtime_ns"{print $2}' "$lane_metrics" | head -n1)"
+    lane_generated_mutations_cache_saved_runtime_ns="${lane_generated_mutations_cache_saved_runtime_ns:-0}"
+    if [[ ! "$lane_generated_mutations_cache_saved_runtime_ns" =~ ^[0-9]+$ ]]; then
+      lane_generated_mutations_cache_saved_runtime_ns=0
+    fi
   fi
   if [[ -f "$lane_log" ]]; then
     gate_v="$(awk -F': ' '/^Gate status:/{print $2}' "$lane_log" | tail -n1)"
@@ -827,8 +846,7 @@ run_lane() {
     lane_status="PASS"
   fi
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+  lane_write_status
 }
 
 if [[ "$LANE_JOBS" -le 1 ]]; then
@@ -860,15 +878,18 @@ else
   done
 fi
 
-printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\n" > "$RESULTS_FILE"
+printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\n" > "$RESULTS_FILE"
 failures="$parse_failures"
 passes=0
+generated_cache_hit_lanes=0
+generated_cache_miss_lanes=0
+generated_cache_saved_runtime_ns=0
 
 for i in "${EXECUTED_INDICES[@]}"; do
   lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
   if [[ ! -f "$lane_status_file" ]]; then
     failures=$((failures + 1))
-    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\n" \
+    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
     continue
@@ -880,9 +901,25 @@ for i in "${EXECUTED_INDICES[@]}"; do
   else
     failures=$((failures + 1))
   fi
+  lane_cache_hit="$(awk -F$'\t' 'NR==1{print $10}' "$lane_status_file")"
+  lane_cache_miss="$(awk -F$'\t' 'NR==1{print $11}' "$lane_status_file")"
+  lane_cache_saved_runtime_ns="$(awk -F$'\t' 'NR==1{print $12}' "$lane_status_file")"
+  lane_cache_hit="${lane_cache_hit:-0}"
+  lane_cache_miss="${lane_cache_miss:-0}"
+  lane_cache_saved_runtime_ns="${lane_cache_saved_runtime_ns:-0}"
+  if [[ "$lane_cache_hit" =~ ^[0-9]+$ ]]; then
+    generated_cache_hit_lanes=$((generated_cache_hit_lanes + lane_cache_hit))
+  fi
+  if [[ "$lane_cache_miss" =~ ^[0-9]+$ ]]; then
+    generated_cache_miss_lanes=$((generated_cache_miss_lanes + lane_cache_miss))
+  fi
+  if [[ "$lane_cache_saved_runtime_ns" =~ ^[0-9]+$ ]]; then
+    generated_cache_saved_runtime_ns=$((generated_cache_saved_runtime_ns + lane_cache_saved_runtime_ns))
+  fi
 done
 
 echo "Mutation matrix summary: pass=${passes} fail=${failures}"
+echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns}"
 echo "Results: $RESULTS_FILE"
 if [[ "$failures" -ne 0 ]]; then
   exit 1

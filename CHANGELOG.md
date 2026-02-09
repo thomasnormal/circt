@@ -42,6 +42,14 @@
 - Lit:
   - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate-cache.test test/Tools/run-mutation-matrix.test`: PASS (4/4)
   - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test`: PASS (38/38)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-matrix-cache-telemetry-rerun --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
 
 ## Iteration 770 - February 9, 2026
 
