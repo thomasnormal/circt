@@ -158,8 +158,9 @@ See CHANGELOG.md on recent progress.
 #### Current Open Non-Smoke Gaps (from latest E2E run)
 1. `SIM i2c`: wall-clock timeout (non-convergent end-to-end run).
 2. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram` index handling.
-3. `VERILOG i2c` and `VERILOG spi_device`: `moore.builtin.readmemh`
-   region-isolation verifier failure.
+3. `VERILOG spi_device`: `llhd.sig.array_get` index-width mismatch for
+   single-element arrays in `tlul_adapter_sram` (`i1` index vs expected
+   `clog2(1)=0`).
 4. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` module resolution.
 5. `VERILOG dma` and `VERILOG keymgr_dpe`: target-matrix mismatch (`Unknown
    target`) between parity plan and parse runner support.

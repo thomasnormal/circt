@@ -2643,6 +2643,9 @@ struct StmtVisitor {
       }
       if (!mem)
         return failure();
+      // Ensure task/function-local readmem calls capture outer memory refs so
+      // generated func.func bodies remain IsolatedFromAbove.
+      context.captureRef(mem);
       moore::ReadMemBBIOp::create(builder, loc, filename, mem);
       return true;
     }
@@ -2677,6 +2680,9 @@ struct StmtVisitor {
       }
       if (!mem)
         return failure();
+      // Ensure task/function-local readmem calls capture outer memory refs so
+      // generated func.func bodies remain IsolatedFromAbove.
+      context.captureRef(mem);
       moore::ReadMemHBIOp::create(builder, loc, filename, mem);
       return true;
     }
