@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'lane\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' > %t/lanes.tsv
+//
+// RUN: not %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-include --include-lane-regex '[' 2>&1 | FileCheck %s --check-prefix=BADINCLUDE
+// RUN: not %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-exclude --exclude-lane-regex '[' 2>&1 | FileCheck %s --check-prefix=BADEXCLUDE
+//
+// BADINCLUDE: Invalid --include-lane-regex value:
+// BADEXCLUDE: Invalid --exclude-lane-regex value:

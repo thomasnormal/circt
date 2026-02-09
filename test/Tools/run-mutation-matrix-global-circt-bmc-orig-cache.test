@@ -30,3 +30,5 @@
 //
 // METRICS: bmc_orig_cache_hit_mutants{{.*}}1
 // METRICS: bmc_orig_cache_miss_mutants{{.*}}1
+// METRICS: bmc_orig_cache_saved_runtime_ns{{.*}}{{[1-9][0-9]*}}
+// METRICS: bmc_orig_cache_miss_runtime_ns{{.*}}{{[1-9][0-9]*}}

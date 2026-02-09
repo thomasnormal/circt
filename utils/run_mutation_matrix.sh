@@ -101,10 +101,17 @@ Optional:
   --default-bmc-orig-cache-eviction-policy MODE
                             Default --bmc-orig-cache-eviction-policy for
                             lanes without lane-specific
-                            bmc_orig_cache_eviction_policy (lru|fifo)
+                            bmc_orig_cache_eviction_policy
+                            (lru|fifo|cost-lru)
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
+  --include-lane-regex REGEX
+                            Execute only lane_ids matching any provided ERE
+                            (repeatable)
+  --exclude-lane-regex REGEX
+                            Exclude lane_ids matching any provided ERE
+                            (repeatable, applied after include filters)
   --lane-jobs N             Number of concurrent lanes (default: 1)
   --stop-on-fail            Stop at first failed lane (requires --lane-jobs=1)
   -h, --help                Show help
@@ -152,6 +159,8 @@ DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS=""
 DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
+INCLUDE_LANE_REGEX=()
+EXCLUDE_LANE_REGEX=()
 LANE_JOBS=1
 STOP_ON_FAIL=0
 
@@ -192,6 +201,8 @@ while [[ $# -gt 0 ]]; do
     --default-bmc-orig-cache-eviction-policy) DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY="$2"; shift 2 ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
+    --include-lane-regex) INCLUDE_LANE_REGEX+=("$2"); shift 2 ;;
+    --exclude-lane-regex) EXCLUDE_LANE_REGEX+=("$2"); shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -240,8 +251,8 @@ if [[ -n "$DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS" ]] && ! [[ "$DEFAULT_BMC_ORIG
   echo "Invalid --default-bmc-orig-cache-max-age-seconds value: $DEFAULT_BMC_ORIG_CACHE_MAX_AGE_SECONDS" >&2
   exit 1
 fi
-if [[ -n "$DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY" ]] && ! [[ "$DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY" =~ ^(lru|fifo)$ ]]; then
-  echo "Invalid --default-bmc-orig-cache-eviction-policy value: $DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY (expected lru|fifo)." >&2
+if [[ -n "$DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY" ]] && ! [[ "$DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY" =~ ^(lru|fifo|cost-lru)$ ]]; then
+  echo "Invalid --default-bmc-orig-cache-eviction-policy value: $DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY (expected lru|fifo|cost-lru)." >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
@@ -256,6 +267,29 @@ if [[ ! "$REUSE_COMPAT_MODE" =~ ^(off|warn|strict)$ ]]; then
   echo "Invalid --reuse-compat-mode value: $REUSE_COMPAT_MODE (expected off|warn|strict)." >&2
   exit 1
 fi
+
+for lane_regex in "${INCLUDE_LANE_REGEX[@]}"; do
+  if printf "" | grep -Eq "$lane_regex" >/dev/null 2>&1; then
+    :
+  else
+    rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+      echo "Invalid --include-lane-regex value: $lane_regex" >&2
+      exit 1
+    fi
+  fi
+done
+for lane_regex in "${EXCLUDE_LANE_REGEX[@]}"; do
+  if printf "" | grep -Eq "$lane_regex" >/dev/null 2>&1; then
+    :
+  else
+    rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+      echo "Invalid --exclude-lane-regex value: $lane_regex" >&2
+      exit 1
+    fi
+  fi
+done
 if [[ "$STOP_ON_FAIL" -eq 1 && "$LANE_JOBS" -gt 1 ]]; then
   echo "--stop-on-fail requires --lane-jobs=1 for deterministic stop semantics." >&2
   exit 1
@@ -303,7 +337,8 @@ declare -a BMC_ORIG_CACHE_MAX_ENTRIES
 declare -a BMC_ORIG_CACHE_MAX_BYTES
 declare -a BMC_ORIG_CACHE_MAX_AGE_SECONDS
 declare -a BMC_ORIG_CACHE_EVICTION_POLICY
-declare -a EXECUTED_INDICES
+SELECTED_INDICES=()
+EXECUTED_INDICES=()
 
 parse_failures=0
 while IFS= read -r line || [[ -n "$line" ]]; do
@@ -361,6 +396,44 @@ done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
   echo "No valid lanes loaded from: $LANES_TSV" >&2
+  exit 1
+fi
+
+lane_matches_selected_filters() {
+  local lane_id="$1"
+  local lane_regex=""
+  local include_matched=0
+
+  if [[ "${#INCLUDE_LANE_REGEX[@]}" -gt 0 ]]; then
+    include_matched=0
+    for lane_regex in "${INCLUDE_LANE_REGEX[@]}"; do
+      if [[ "$lane_id" =~ $lane_regex ]]; then
+        include_matched=1
+        break
+      fi
+    done
+    if [[ "$include_matched" -ne 1 ]]; then
+      return 1
+    fi
+  fi
+
+  for lane_regex in "${EXCLUDE_LANE_REGEX[@]}"; do
+    if [[ "$lane_id" =~ $lane_regex ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+for i in "${!LANE_ID[@]}"; do
+  if lane_matches_selected_filters "${LANE_ID[$i]}"; then
+    SELECTED_INDICES+=("$i")
+  fi
+done
+
+if [[ "${#SELECTED_INDICES[@]}" -eq 0 ]]; then
+  echo "No lanes selected after applying include/exclude regex filters." >&2
   exit 1
 fi
 
@@ -703,7 +776,7 @@ run_lane() {
     lane_bmc_orig_cache_eviction_policy="$DEFAULT_BMC_ORIG_CACHE_EVICTION_POLICY"
   fi
   if [[ -n "$lane_bmc_orig_cache_eviction_policy" ]]; then
-    if ! [[ "$lane_bmc_orig_cache_eviction_policy" =~ ^(lru|fifo)$ ]]; then
+    if ! [[ "$lane_bmc_orig_cache_eviction_policy" =~ ^(lru|fifo|cost-lru)$ ]]; then
       gate="CONFIG_ERROR"
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
@@ -739,7 +812,7 @@ run_lane() {
 }
 
 if [[ "$LANE_JOBS" -le 1 ]]; then
-  for i in "${!LANE_ID[@]}"; do
+  for i in "${SELECTED_INDICES[@]}"; do
     run_lane "$i"
     EXECUTED_INDICES+=("$i")
     if [[ "$STOP_ON_FAIL" -eq 1 ]]; then
@@ -752,7 +825,7 @@ if [[ "$LANE_JOBS" -le 1 ]]; then
   done
 else
   active_jobs=0
-  for i in "${!LANE_ID[@]}"; do
+  for i in "${SELECTED_INDICES[@]}"; do
     run_lane "$i" &
     EXECUTED_INDICES+=("$i")
     active_jobs=$((active_jobs + 1))

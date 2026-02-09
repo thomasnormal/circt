@@ -115,8 +115,12 @@ Execution controls:
   byte footprint (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-age-seconds <n>`: cap differential-BMC
   original-design cache entry age (`0` disables limit, default `0`).
-- `--bmc-orig-cache-eviction-policy lru|fifo`: eviction mode for
+- `--bmc-orig-cache-eviction-policy lru|fifo|cost-lru`: eviction mode for
   count/byte bounded differential-BMC original cache (`lru` default).
+  - `lru`: evict least-recently-used entries by access time.
+  - `fifo`: evict oldest entries by creation/update order.
+  - `cost-lru`: evict by highest `age/runtime` score, preserving expensive
+    cached original-BMC results longer under pressure.
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes. Supports concrete Yosys modes
@@ -231,12 +235,16 @@ Generated artifacts (default under `./mutation-cover-results`):
     BMC results in built-in differential BMC mode.
   - `bmc_orig_cache_miss_mutants`: count of mutants that required a fresh
     original-design BMC run in built-in differential BMC mode.
+  - `bmc_orig_cache_saved_runtime_ns`: estimated original-BMC runtime
+    nanoseconds avoided via cache hits (sum of cached original runtimes reused).
+  - `bmc_orig_cache_miss_runtime_ns`: original-BMC runtime nanoseconds spent on
+    cache misses in this run.
   - `bmc_orig_cache_write_status`: write status for cross-run original-BMC
     cache publication (`disabled|read_only|written|write_error`).
   - `bmc_orig_cache_max_entries` / `bmc_orig_cache_max_bytes` /
     `bmc_orig_cache_max_age_seconds`: configured cache limits.
   - `bmc_orig_cache_eviction_policy`: configured count/byte cache eviction
-    policy (`lru` or `fifo`).
+    policy (`lru`, `fifo`, or `cost-lru`).
   - `bmc_orig_cache_entries` / `bmc_orig_cache_bytes`: post-run local cache
     footprint.
   - `bmc_orig_cache_pruned_entries` / `bmc_orig_cache_pruned_bytes`: local
@@ -339,12 +347,16 @@ Execution controls:
   `run_mutation_cover.sh --bmc-orig-cache-max-bytes`.
 - `--default-bmc-orig-cache-max-age-seconds <n>`: default
   `run_mutation_cover.sh --bmc-orig-cache-max-age-seconds`.
-- `--default-bmc-orig-cache-eviction-policy lru|fifo`: default
+- `--default-bmc-orig-cache-eviction-policy lru|fifo|cost-lru`: default
   `run_mutation_cover.sh --bmc-orig-cache-eviction-policy`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
   policy for each lane's `run_mutation_cover.sh` invocation.
+- `--include-lane-regex <regex>`: run only lane IDs matching any provided
+  ERE selector (repeatable).
+- `--exclude-lane-regex <regex>`: skip lane IDs matching any provided ERE
+  selector (repeatable, applied after include selectors).
 - `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).
 
 Lane TSV schema (tab-separated):

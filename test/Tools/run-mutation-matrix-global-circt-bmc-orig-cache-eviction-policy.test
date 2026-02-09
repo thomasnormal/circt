@@ -15,7 +15,7 @@
 // RUN:   --out-dir %t/out \
 // RUN:   --create-mutated-script %t/fake-create-mutated.sh \
 // RUN:   --default-formal-global-propagate-circt-bmc %t/fake-circt-bmc.sh \
-// RUN:   --default-bmc-orig-cache-eviction-policy fifo \
+// RUN:   --default-bmc-orig-cache-eviction-policy cost-lru \
 // RUN:   --jobs-per-lane 1 \
 // RUN:   2>&1 | FileCheck %s --check-prefix=LOG
 //
@@ -27,4 +27,4 @@
 // RESULTS: lane_id{{.*}}status{{.*}}exit_code
 // RESULTS-NEXT: lane1{{.*}}PASS{{.*}}0
 //
-// METRICS: bmc_orig_cache_eviction_policy{{.*}}fifo
+// METRICS: bmc_orig_cache_eviction_policy{{.*}}cost-lru
