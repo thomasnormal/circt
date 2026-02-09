@@ -40217,3 +40217,53 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 775 - February 9, 2026
+
+### OpenTitan E2E LEC Mode Control in FormalAll
+
+1. Added explicit OpenTitan E2E LEC mode controls to `utils/run_formal_all.sh`:
+   - `--opentitan-e2e-lec-x-optimistic`
+   - `--opentitan-e2e-lec-strict-x`
+   - with mutual-exclusion validation.
+2. Default behavior is preserved (`x-optimistic`) for backward compatibility.
+3. `opentitan/E2E` invocation now forwards the selected mode to
+   `utils/run_opentitan_formal_e2e.sh` instead of hard-coding
+   `--lec-x-optimistic`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-e2e-strict-x.test`
+    - verifies strict mode forwarding (`--lec-strict-x`) and absence of
+      `--lec-x-optimistic`
+    - verifies conflict rejection when both E2E mode flags are provided.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-strict-x.test test/Tools/run-opentitan-formal-e2e-lec-modes.test test/Tools/run-formal-all-opentitan-lec-strict-dump-unknown.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test`:
+    - 5/5 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan mode checks via `run_formal_all.sh`:
+  - strict mode subset:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-strictx-followup-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-e2e-lec-strict-x --opentitan-e2e-sim-targets usbdev --opentitan-e2e-verilog-targets usbdev --opentitan-e2e-impl-filter canright --include-lane-regex '^opentitan/E2E$'`:
+      - summary: `total=3 pass=2 fail=1`
+  - default x-optimistic subset:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-xopt-followup-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-e2e-sim-targets usbdev --opentitan-e2e-verilog-targets usbdev --opentitan-e2e-impl-filter canright --include-lane-regex '^opentitan/E2E$'`:
+      - summary: `total=3 pass=3 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.

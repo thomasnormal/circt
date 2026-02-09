@@ -72,6 +72,12 @@ Restrict baseline history to a time window (in days from latest suite baseline):
 utils/run_formal_all.sh --strict-gate --baseline-window 7 --baseline-window-days 30
 ```
 
+Select OpenTitan E2E LEC mode explicitly (default remains x-optimistic):
+
+```bash
+utils/run_formal_all.sh --with-opentitan-e2e --opentitan ~/opentitan --opentitan-e2e-lec-strict-x --include-lane-regex '^opentitan/E2E$'
+```
+
 ## Mutation Coverage Harness (Certitude-Style Classification)
 
 Use the mutation harness to classify injected faults into:
@@ -355,6 +361,10 @@ Generated artifacts (default under `./mutation-cover-results`):
     generation in this run.
   - `generated_mutations_cache_saved_runtime_ns`: estimated runtime avoided by
     cache reuse (from cached generation metadata, `0` on miss/disabled).
+  - `generated_mutations_cache_lock_wait_ns`: lock acquisition wait time for
+    generated-mutation cache access.
+  - `generated_mutations_cache_lock_contended`: whether generated-mutation
+    cache locking observed contention (`1`/`0`).
   - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
@@ -424,7 +434,7 @@ utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutat
 Matrix `results.tsv` columns:
 
 ```text
-lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns
+lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns    generated_mutations_cache_lock_wait_ns    generated_mutations_cache_lock_contended
 ```
 
 Execution controls:
