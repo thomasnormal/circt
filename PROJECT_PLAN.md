@@ -89,7 +89,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Qualification cache reuse across iterations | **DONE** | 0 | Added `--reuse-pair-file` + `reused_pairs` metrics/JSON tracking |
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
-| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated-lane and parallel lane-jobs support; full external-suite wiring still pending |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, and reuse-pair pass-through; full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |

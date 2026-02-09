@@ -127,12 +127,15 @@ Execution controls:
 - `--lane-jobs <N>`: run up to `N` lanes concurrently.
 - `--jobs-per-lane <N>`: per-lane mutant worker count passed through to
   `run_mutation_cover.sh`.
+- `--default-reuse-pair-file <path>`: default
+  `run_mutation_cover.sh --reuse-pair-file` for lanes that do not set a
+  lane-specific reuse file.
 - `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).
 
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]
 ```
 
 Notes:
@@ -140,6 +143,8 @@ Notes:
 - Use `-` for `coverage_threshold` to skip threshold gating per lane.
 - For auto-generation lanes, set `mutations_file` to `-` and provide
   `generate_count` (plus optional top/seed/yosys columns).
+- `reuse_pair_file` (optional) overrides `--default-reuse-pair-file` for a
+  specific lane.
 
 Shard/route a run to selected lane IDs:
 
