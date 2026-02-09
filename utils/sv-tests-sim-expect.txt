@@ -2,21 +2,21 @@
 # Format: test_name<TAB>mode<TAB>reason
 # mode: compile-only | xfail | skip
 
-# UVM testbench tests: stream_unpack interpreter issue (process 3)
-uvm_agent_active	xfail	UVM testbench: needs resource_db + virtual interface clock
-uvm_agent_env	xfail	UVM testbench: stream_unpack interpretOperation failure
-uvm_agent_passive	xfail	UVM testbench: stream_unpack interpretOperation failure
+# UVM testbench tests: virtual interface signal propagation issue
+uvm_agent_active	xfail	UVM testbench: VIF signal mismatch + resource_db
+uvm_agent_env	xfail	UVM testbench: VIF signal mismatch (0 != 2)
+uvm_agent_passive	xfail	UVM testbench: VIF signal mismatch (0 != 2)
 uvm_driver_sequencer_env	xfail	UVM testbench: needs resource_db + sequencer interface
-uvm_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation failure
-uvm_scoreboard_env	xfail	UVM testbench: stream_unpack interpretOperation failure
-uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: stream_unpack interpretOperation failure
-uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation failure
+uvm_monitor_env	xfail	UVM testbench: VIF signal mismatch (0 != 2)
+uvm_scoreboard_env	xfail	UVM testbench: VIF delta overflow
+uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: VIF delta overflow
+uvm_scoreboard_monitor_env	xfail	UVM testbench: VIF delta overflow
 
 # Ch18: Constraint tests that fail at runtime (advanced constraint features)
 18.5.2--constraint-inheritance_1	pass	Constraint inheritance with override
 18.5.4--distribution_1	pass	Distribution constraints
-18.5.8.1--foreach-iterative-constraints_1	xfail	Foreach iterative constraints not supported
-18.5.8.2--array-reduction-iterative-constraints_1	xfail	Array reduction constraints not supported
+18.5.8.1--foreach-iterative-constraints_1	pass	Foreach iterative constraints
+18.5.8.2--array-reduction-iterative-constraints_1	pass	Array reduction constraints
 18.5.9--global-constraints_1	pass	Cross-object global constraints
 18.5.11--static-constraint-blocks_1	pass	Static constraint blocks with constraint_mode
 18.5.12--functions-in-constraint_1	pass	Function calls in constraints
@@ -30,7 +30,7 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.6.2--pre-randomize-method_1	pass	pre_randomize callback
 18.6.3--behavior-of-randomization-methods_2	pass	Infeasible constraint detection
 18.6.3--behavior-of-randomization-methods_3	pass	Infeasible constraint post_randomize
-18.7--in-line-constraints--randomize_0	xfail	Inline constraint range extraction
+18.7--in-line-constraints--randomize_0	pass	Inline constraint range extraction
 18.7--in-line-constraints--randomize_2	pass	Inline constraint range extraction
 18.7--in-line-constraints--randomize_4	pass	Inline constraint with variable select
 18.7--in-line-constraints--randomize_6	pass	Inline constraint with class variable
@@ -38,7 +38,7 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.8--disabling-random-variables-with-rand_mode_0	pass
 18.8--disabling-random-variables-with-rand_mode_1	pass
 18.8--disabling-random-variables-with-rand_mode_2	pass
-18.8--disabling-random-variables-with-rand_mode_3	xfail	static rand_mode not shared across instances
+18.8--disabling-random-variables-with-rand_mode_3	pass	static rand_mode shared across instances
 18.9--controlling-constraints-with-constraint_mode_0	pass	constraint_mode toggle
 18.11.1--in-line-constraint-checker_0	pass	Inline constraint checker
 18.11.1--in-line-constraint-checker_1	pass	Inline randc constraint checker
@@ -82,7 +82,7 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.14.2--thread-stability_1	pass	Thread stability deterministic
 
 # UVM testbench tests that now compile but fail/timeout
-uvm_resource_db_read_by_name	xfail	UVM resource_db: read_by_name fails
+uvm_resource_db_read_by_name	pass	UVM resource_db read_by_name
 uvm_test_run_test	pass	UVM run_test with grace period
 
 # Ch16: SVA UVM tests (concurrent assertions not simulated, hang forever)
