@@ -1,5 +1,74 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 805 - February 9, 2026
+
+### OpenTitan LEC/E2E Simplification After Strict 4-State Closure
+
+1. Removed OpenTitan `XPROP_ONLY` waiver plumbing from
+   `utils/run_opentitan_formal_e2e.sh`:
+   - dropped `--allow-xprop-only` CLI option
+   - `XFAIL` rows now always map to `FAIL (xprop_only)`.
+2. Removed OpenTitan waiver forwarding from `utils/run_formal_all.sh`:
+   - `opentitan/E2E` no longer receives `--allow-xprop-only` from
+     `--lec-accept-xprop-only`.
+3. Removed OpenTitan log-fallback case inference in `run_formal_all.sh` for
+   `opentitan/LEC` and `opentitan/LEC_STRICT`:
+   - lane now requires direct case TSV output
+   - missing case output is a hard lane error (`missing_results=1`).
+4. Refactored duplicated OpenTitan LEC lane orchestration in
+   `run_formal_all.sh` into a shared helper (`run_opentitan_lec_lane`) used by
+   both default and strict lanes.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-opentitan-formal-e2e.test`
+    - verifies `XFAIL` now fails OpenTitan E2E LEC (no acceptance path).
+  - `test/Tools/run-formal-all-opentitan-e2e.test`
+    - removes `--lec-accept-xprop-only` expectation from OpenTitan E2E
+      forwarding checks.
+  - `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+    - now verifies hard failure behavior when OpenTitan LEC case TSV is
+      missing.
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - updated OpenTitan fixture scripts to emit explicit case TSV rows
+      (no fallback dependency), with expected-failure case status updated to
+      `FAIL`.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_opentitan_formal_e2e.sh utils/run_formal_all.sh`: PASS
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit (focused OpenTitan/formal-all):
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-formal-e2e.test test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-mode-diff.test test/Tools/run-formal-all-opentitan-e2e-strict-lane.test test/Tools/run-formal-all-opentitan-e2e-strict-x.test test/Tools/run-formal-all-opentitan-lec.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-opentitan-lec-strict-dump-unknown.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-help.test`:
+    - 12/12 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-opentitan-lec-xprop-summary.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-xprop-fail-detail.test test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test`:
+    - 7/7 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-*.test test/Tools/run-opentitan-*.test`:
+    - 24/24 PASS
+- OpenTitan real runs:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_X_OPTIMISTIC=0 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --lec-strict-x --out-dir /tmp/opentitan-e2e-lec-strict-no-waiver`:
+    - summary: `pass=1 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-lanes-no-waiver --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$|^opentitan/LEC_STRICT$'`:
+    - `LEC`: `total=1 pass=1 fail=0`
+    - `LEC_STRICT`: `total=1 pass=1 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-dual-no-waiver --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$'`:
+    - `E2E`: `total=12 pass=12 fail=0`
+    - `E2E_STRICT`: `total=12 pass=12 fail=0`
+    - `E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=0`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+
 ## Iteration 804 - February 9, 2026
 
 ### `circt-mut` Native Migration: `generate` Core Path
