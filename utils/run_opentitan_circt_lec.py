@@ -155,6 +155,7 @@ def main() -> int:
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
+    lec_mode_label = os.environ.get("LEC_MODE_LABEL", "LEC").strip() or "LEC"
     z3_bin = os.environ.get("Z3_BIN", "")
     if lec_run_smtlib and not lec_smoke_only:
         if not z3_bin:
@@ -332,14 +333,14 @@ def main() -> int:
                                 flush=True,
                             )
                             case_rows.append(
-                                ("XFAIL", impl, str(impl_dir), "opentitan", "LEC")
+                                ("XFAIL", impl, str(impl_dir), "opentitan", lec_mode_label)
                             )
                             continue
                         raise subprocess.CalledProcessError(
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
                 print(f"{impl:24} OK", flush=True)
-                case_rows.append(("PASS", impl, str(impl_dir), "opentitan", "LEC"))
+                case_rows.append(("PASS", impl, str(impl_dir), "opentitan", lec_mode_label))
             except subprocess.CalledProcessError:
                 failures += 1
                 extra = ""
@@ -352,7 +353,7 @@ def main() -> int:
                 except Exception:
                     pass
                 print(f"{impl:24} FAIL{extra} (logs in {impl_dir})", flush=True)
-                case_rows.append(("FAIL", impl, str(impl_dir), "opentitan", "LEC"))
+                case_rows.append(("FAIL", impl, str(impl_dir), "opentitan", lec_mode_label))
 
     finally:
         if not keep_workdir:

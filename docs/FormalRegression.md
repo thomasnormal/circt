@@ -23,6 +23,12 @@ Accept LEC mismatches that are diagnosed as `XPROP_ONLY`:
 utils/run_formal_all.sh --lec-accept-xprop-only
 ```
 
+Run strict OpenTitan LEC audit (non-optimistic X semantics):
+
+```bash
+utils/run_formal_all.sh --with-opentitan-lec-strict --opentitan ~/opentitan --include-lane-regex '^opentitan/LEC_STRICT$'
+```
+
 Update baselines (updates `utils/formal-baselines.tsv` and the baseline table
 in `PROJECT_PLAN.md`):
 
@@ -171,6 +177,7 @@ smoke_1    bash /abs/path/run_test.sh smoke_1    result.txt    ^DETECTED$    ^SU
 Generated artifacts (default under `./mutation-cover-results`):
 - `summary.tsv`: mutant-level final class and detection provenance
 - `pair_qualification.tsv`: activation/propagation status per test-mutant pair
+  (includes synthetic `test_id=-` rows for per-mutant global filter outcomes).
 - `results.tsv`: detection outcomes for executed pairs
 - `metrics.tsv`: gate-oriented aggregate metrics (coverage, bucket counts, errors)
 - `summary.json`: machine-readable gate/coverage summary for CI trend ingestion
@@ -178,6 +185,10 @@ Generated artifacts (default under `./mutation-cover-results`):
 - hint metrics:
   - `hinted_mutants`: mutants with a usable prior `detected_by_test` hint
   - `hint_hits`: hinted mutants detected by the hinted test
+- reuse metrics:
+  - `reused_pairs`: reused per-(test,mutant) activation/propagation pairs.
+  - `reused_global_filters`: reused per-mutant global filter outcomes from
+    prior `pair_qualification.tsv` rows (`test_id=-`).
 - chain-filter telemetry metrics:
   - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
     back from LEC `UNKNOWN` to BMC.
@@ -741,6 +752,7 @@ Lane-id format:
 - `yosys/tests/sva/BMC`
 - `yosys/tests/sva/LEC`
 - `opentitan/LEC`
+- `opentitan/LEC_STRICT`
 - `avip/<name>/compile`
 
 Fail only on specific gate classes:

@@ -346,8 +346,14 @@ Options:
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
+  --with-opentitan-lec-strict
+                         Run strict OpenTitan LEC lane (LEC_X_OPTIMISTIC=0)
   --with-opentitan-e2e   Run OpenTitan non-smoke E2E parity lane
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
+  --opentitan-lec-impl-filter REGEX
+                         Regex filter for OpenTitan LEC implementations
+  --opentitan-lec-include-masked
+                         Include masked OpenTitan LEC implementations
   --opentitan-e2e-sim-targets LIST
                          Comma-separated OpenTitan E2E sim targets
   --opentitan-e2e-verilog-targets LIST
@@ -1768,8 +1774,11 @@ LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="none"
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
+WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_AVIP=0
+OPENTITAN_LEC_IMPL_FILTER=""
+OPENTITAN_LEC_INCLUDE_MASKED=0
 OPENTITAN_E2E_SIM_TARGETS=""
 OPENTITAN_E2E_VERILOG_TARGETS=""
 OPENTITAN_E2E_SIM_TIMEOUT=""
@@ -1800,8 +1809,14 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_DIR="$2"; WITH_OPENTITAN=1; shift 2 ;;
     --with-opentitan)
       WITH_OPENTITAN=1; shift ;;
+    --with-opentitan-lec-strict)
+      WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
       WITH_OPENTITAN_E2E=1; shift ;;
+    --opentitan-lec-impl-filter)
+      OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
+    --opentitan-lec-include-masked)
+      OPENTITAN_LEC_INCLUDE_MASKED=1; shift ;;
     --opentitan-e2e-sim-targets)
       OPENTITAN_E2E_SIM_TARGETS="$2"; shift 2 ;;
     --opentitan-e2e-verilog-targets)
@@ -6620,6 +6635,13 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
   else
     opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
     : > "$opentitan_case_results"
+    opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
+    if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+      opentitan_lec_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
+    fi
+    if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
+      opentitan_lec_args+=(--include-masked)
+    fi
     opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
       OUT="$opentitan_case_results"
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
@@ -6628,7 +6650,7 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     fi
     run_suite opentitan-lec \
       env "${opentitan_env[@]}" \
-      utils/run_opentitan_circt_lec.py --opentitan-root "$OPENTITAN_DIR" || true
+      utils/run_opentitan_circt_lec.py "${opentitan_lec_args[@]}" || true
     if [[ ! -s "$opentitan_case_results" ]]; then
       OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
       OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
@@ -6672,6 +6694,75 @@ PY
       fi
       pass=$((total - failures))
       record_result "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0
+    fi
+  fi
+fi
+
+# OpenTitan strict LEC audit lane (optional)
+if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
+  if lane_resume_from_state "opentitan/LEC_STRICT"; then
+    :
+  else
+    opentitan_strict_case_results="$OUT_DIR/opentitan-lec-strict-results.txt"
+    : > "$opentitan_strict_case_results"
+    opentitan_strict_args=(--opentitan-root "$OPENTITAN_DIR")
+    if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+      opentitan_strict_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
+    fi
+    if [[ "$OPENTITAN_LEC_INCLUDE_MASKED" == "1" ]]; then
+      opentitan_strict_args+=(--include-masked)
+    fi
+    opentitan_strict_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
+      LEC_X_OPTIMISTIC=0
+      LEC_MODE_LABEL=LEC_STRICT
+      OUT="$opentitan_strict_case_results"
+      CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
+    run_suite opentitan-lec-strict \
+      env "${opentitan_strict_env[@]}" \
+      utils/run_opentitan_circt_lec.py "${opentitan_strict_args[@]}" || true
+    if [[ ! -s "$opentitan_strict_case_results" ]]; then
+      OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec-strict.log" \
+      OPENTITAN_CASE_RESULTS_FILE="$opentitan_strict_case_results" python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+log_path = Path(os.environ["OPENTITAN_LOG_FILE"])
+out_path = Path(os.environ["OPENTITAN_CASE_RESULTS_FILE"])
+
+rows = []
+if log_path.exists():
+  for line in log_path.read_text().splitlines():
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+OK\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("PASS", impl, impl, "opentitan", "LEC_STRICT"))
+      continue
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("XFAIL", impl, impl, "opentitan", "LEC_STRICT"))
+      continue
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\([^)]+\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
+    if m:
+      impl = m.group(1)
+      rows.append(("FAIL", impl, m.group(2) or impl, "opentitan", "LEC_STRICT"))
+
+rows.sort(key=lambda r: (r[1], r[0], r[2]))
+with out_path.open("w") as f:
+  for row in rows:
+    f.write("\t".join(row) + "\n")
+PY
+    fi
+    line=$(grep -E "Running LEC on [0-9]+" "$OUT_DIR/opentitan-lec-strict.log" | tail -1 || true)
+    total=$(echo "$line" | sed -n 's/.*Running LEC on \([0-9]\+\).*/\1/p')
+    failures=$(grep -E "LEC failures: [0-9]+" "$OUT_DIR/opentitan-lec-strict.log" | tail -1 | sed -n 's/.*LEC failures: \([0-9]\+\).*/\1/p' || true)
+    if [[ -n "$total" ]]; then
+      if [[ -z "$failures" ]]; then
+        failures=0
+      fi
+      pass=$((total - failures))
+      record_result "opentitan" "LEC_STRICT" "$total" "$pass" "$failures" 0 0 0 0
     fi
   fi
 fi
@@ -7347,6 +7438,7 @@ result_sources = [
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
@@ -7855,6 +7947,7 @@ result_sources = [
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
