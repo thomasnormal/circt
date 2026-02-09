@@ -6,12 +6,12 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 210/210 | 100% |
+| circt-sim unit tests | 211/211 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
 | sv-tests simulation | 696/696 eligible pass+xfail | 100% |
 | sv-tests xfail (runtime gaps) | ~54 | See breakdown below |
 | sv-tests compile-only | 73 | Class-only + SVA UVM |
-| AVIPs (hvl_top only) | 6/9 available | APB, AHB, UART, SPI, AXI4, JTAG reach run_phase → UVM_FATAL at BFM get() |
+| AVIPs (hvl_top only) | 9/9 pass | All reach full phase lifecycle (build→run→report); no transactions without hdl_top |
 | AVIPs with transactions | 0/9 | **Blocked**: BFM gap — no hdl_top simulated → no bus transactions, 0% coverage |
 | sv-tests BMC | 26/26 | 100% (Codex) |
 | sv-tests LEC | 23/23 | 100% (Codex) |
@@ -19,14 +19,12 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 ### Recent Fixes (This Session)
 
-1. **Runtime vtable override in direct call_indirect path**: Fixed `exec_task` dispatching base class `run_phase` instead of derived class override; all three call_indirect paths now check self object's runtime vtable at byte offset 4
-2. **UVM phase sequencing**: Per-process phase map (`executePhaseBlockingPhaseMap`), `master_phase_process` fork detection, join_any objection polling with master child alive tracking
-3. **Constraint extraction improvements**: zext/sext lookup, compound range decomposition, constraint inheritance, VariableOp support for static blocks
-4. **Per-object RNG state**: `__moore_class_srandom(objPtr, seed)` with std::mt19937 per object address
-5. **Virtual interface clock propagation**: ContinuousAssignOp at module level → llhd.process for signal watching
-6. **Distribution constraint extraction**: `traceToPropertyName()` replaces BlockArgument-based lookup
-7. **Parametric covergroup sampling**: Fix 0% coverage - evaluate per-coverpoint expressions with bound formal parameters
-8. **Debug output cleanup**: Removed all 29 debug `llvm::errs()` traces from interpreter
+1. **Associative array deep copy** (UVM phase livelock fix): `aa1 = aa2` now calls `__moore_assoc_copy_into(dst, src)` instead of shallow pointer copy. Root cause of phase livelock: `uvm_phase::add()` copies predecessor maps between phase nodes then calls `.delete()` on the source, corrupting all shared references.
+2. **Call stack restoration fix**: Three bugs fixed — innermost-first frame processing, `waitConditionSavedBlock` derivation from outermost frame's callOp, `outermostCallOp` fallback for non-wait_condition suspensions.
+3. **Per-process RNG for random stability**: Replaced global std::rand/urandom with per-process RNG (IEEE 1800-2017 §18.13)
+4. **Coverpoint iff guard lowering**: Added iff_conditions to CovergroupSampleOp with AttrSizedOperandSegments
+5. **Class get/set_randstate lowering**: ImportVerilog emits __moore_class_get_randstate/__moore_class_set_randstate calls
+6. **Debug output cleanup**: Removed all [PH-TRACE] and [DBG-] debug logging from interpreter
 
 ### xfail Breakdown (~35 tests remaining)
 

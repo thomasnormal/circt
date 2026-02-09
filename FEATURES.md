@@ -58,7 +58,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 210 | 210 | 0 | All pass; runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
+| circt-sim | 211 | 211 | 0 | All pass; assoc array deep copy, call stack restoration, runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -79,7 +79,7 @@ to commercial simulators like Cadence Xcelium.
 | VTable dispatch | WORKS | Inherited methods, virtual calls across class hierarchy; runtime vtable override in all 3 call_indirect paths (X-fallback, direct, static) |
 | `process::self()` | WORKS | Intercepted for both old and new compilations |
 | **Data Structures** | | |
-| Associative arrays | WORKS | Auto-create on null, integer and string keys |
+| Associative arrays | WORKS | Auto-create on null, integer and string keys; deep-copy on whole-assignment (`aa1 = aa2`) via `__moore_assoc_copy_into` |
 | Queues | WORKS | `push_back`, `pop_front`, `size`, `sort`, `rsort`, `shuffle`, `reverse`, `unique` |
 | Dynamic arrays | WORKS | `new[N]`, element access, `size()` — fixed allocation sizing and native memory tracking |
 | Mailboxes | WORKS | DPI-based blocking/non-blocking |
@@ -131,15 +131,15 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 
 | AVIP | HvlTop | HdlTop | Combined | Status | Notes |
 |------|--------|--------|----------|--------|-------|
-| APB | Reaches run_phase | Compiles | Not tested | BFM Gap | Vtable dispatch works; `run_phase` dispatches to `apb_base_test`; UVM_FATAL at BFM `get()` |
-| AHB | Reaches run_phase | Compiles | Not tested | BFM Gap | Same — derived run_phase executes, fails at BFM lookup |
-| UART | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
-| I2S | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
-| I3C | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
-| SPI | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
-| AXI4 | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
-| AXI4Lite | .mlir missing | Compiles | Not tested | Needs recompile | Need `circt-verilog` recompile from .sv sources |
-| JTAG | Reaches run_phase | Compiles | Not tested | BFM Gap | Same |
+| APB | Full phase lifecycle | Compiles | Not tested | BFM Gap | All phases run (build→run→report); no transactions without hdl_top |
+| AHB | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| UART | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| I2S | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| I3C | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| SPI | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| AXI4 | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| AXI4Lite | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| JTAG | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
 
 **Road to full AVIP parity**:
 1. Compile both `hdl_top.sv` + `hvl_top.sv` together via `circt-verilog`
@@ -222,3 +222,7 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 | Runtime vtable override (direct path) | All 3 `call_indirect` paths (X-fallback, direct, static) now check self object's runtime vtable pointer at byte offset 4; resolves derived class method from correct vtable slot |
 | UVM phase sequencing | Per-process `executePhaseBlockingPhaseMap`, `master_phase_process` fork detection by name, join_any objection polling with `masterPhaseProcessChild` alive tracking; `wait_for_self_and_siblings_to_drop` native implementation |
 | Debug output cleanup | Removed 29 debug `llvm::errs()` traces ([EXEC-PHASE], [OBJECTION-DBG], [CI-DISPATCH], [VTABLE-DBG], [SIM-FORK], [DYN-CAST], etc.) |
+| Assoc array deep copy | `aa1 = aa2` emits `__moore_assoc_copy_into(dst, src)` instead of shallow pointer copy; fixes UVM phase graph corruption where `uvm_phase::add()` copies then deletes predecessor maps |
+| Per-process RNG for random stability | Replaced global `std::rand/urandom` with per-process `std::mt19937` (IEEE 1800-2017 §18.13); `__moore_class_get/set_randstate` for save/restore |
+| Coverpoint iff guard lowering | Added `iff_conditions` to `CovergroupSampleOp` with `AttrSizedOperandSegments`; conditional branch in MooreToCore to skip sample when iff evaluates false |
+| Call stack restoration fix | Three bugs: innermost-first frame processing, `waitConditionSavedBlock` derivation from outermost frame's callOp, `outermostCallOp` fallback for non-wait_condition suspensions |
