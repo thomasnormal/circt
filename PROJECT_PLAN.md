@@ -18326,55 +18326,32 @@ ninja -C build circt-verilog
   - Binds issuer-cert hash into lane-state config/manifest verification
     contracts for deterministic resume safety.
 
+### Iteration 712
+- Added Ed25519 refresh auto-URI policy profile registry support:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-json`
+  - `--lane-state-manifest-ed25519-refresh-policy-profile`
+- Profiles now provide shared and per-artifact defaults for:
+  - `auto_uri_policy`
+  - `auto_uri_allowed_schemes`
+- Effective precedence is now explicit and stable:
+  - per-artifact CLI > shared CLI > per-artifact profile > shared profile >
+    built-in defaults.
+- Planning impact:
+  - Enables fleet-wide baseline policy rollout for 24/7 farms without requiring
+    per-job flag duplication.
+  - Keeps strict determinism: profile-derived controls remain part of lane-state
+    config-hash compatibility checks.
+
 ### Recent Lane-State Hardening (See CHANGELOG)
-- Iterations 698-700 delivered refresh command integration plus retry/delay and
-  timeout/jitter controls for Ed25519 CRL/OCSP verification flows.
-- Iteration 701 adds signed CRL/OCSP refresh provenance emission in lane-state
-  manifests for post-run auditability of refresh attempt behavior.
-- Iteration 702 adds optional JSON source-metadata sidecars for CRL/OCSP refresh
-  hooks and signs those source metadata objects inside refresh provenance.
-- Iteration 703 enforces a strict versioned (`schema_version=1`) metadata
-  contract for CRL/OCSP source-metadata sidecars and rejects malformed metadata
-  before manifest emission.
-- Iteration 704 adds explicit metadata trust-policy gates (transport/status/URI
-  regex/TLS peer SHA/cert-chain digest) for CRL/OCSP refresh sidecars.
-- Iteration 705 adds metadata freshness policy gates (`max-age` and
-  `max-future-skew`) for CRL/OCSP refresh sidecars to prevent stale/future-skew
-  provenance acceptance.
-- Iteration 706 adds transport-aware metadata evidence requirements:
-  HTTP(S) metadata must include `http_status`; HTTPS metadata must include TLS
-  peer digest and non-empty cert-chain digests.
-- Iteration 707 adds built-in CRL/OCSP refresh URI mode
-  (`file://`, `http://`, `https://`) with command/URI mutual-exclusion,
-  required metadata sidecars for URI mode, and config-hash binding of refresh
-  URI settings.
-- Iteration 708 adds key-certificate-driven refresh URI auto-discovery:
-  - CRL: `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp`
-  - OCSP: `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia`
-  - Auto modes are metadata-gated, mutually exclusive with cmd/explicit URI,
-    and included in lane-state config-hash policy material.
-- Iteration 709 adds explicit auto-discovered URI selection policy controls:
-  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`
-  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`
-  - policy modes: `first` (default), `last`, `require_single`
-  - strict dependency on corresponding auto-URI mode, plus config-hash
-    binding for deterministic resume behavior.
-- Iteration 710 adds a shared auto-URI policy default knob:
-  - `--lane-state-manifest-ed25519-refresh-auto-uri-policy`
-  - effective precedence: per-artifact policy > shared policy > built-in
-    default
-  - lets long-running farms set one default policy for CRL/OCSP discovery while
-    preserving targeted per-artifact overrides.
-- Iteration 711 adds auto-discovery URI scheme allowlists:
-  - shared default:
-    `--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes`
-  - per-artifact overrides:
-    `--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes`,
-    `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes`
-  - effective precedence: per-artifact allowlist > shared allowlist >
-    built-in `file,http,https`.
-- These controls are part of lane-state config hash material, preserving strict
-  resume/merge policy compatibility checks across workers.
+- Iterations 698-712 completed the CRL/OCSP refresh control plane:
+  - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
+    timeout, and jitter controls.
+  - signed refresh provenance + strict schema-versioned metadata contracts and
+    trust-policy gates (transport/status/URI/TLS/freshness).
+  - cert-driven auto-discovery controls with explicit policy/scheme precedence,
+    including shared/per-artifact defaults and profile-based rollout.
+- Detailed implementation, diagnostics, and validation evidence is tracked in
+  `CHANGELOG.md`.
 
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
@@ -18386,11 +18363,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add policy profiles so production runs can centrally enforce
-    `require_single`/`last` defaults instead of relying on per-invocation CLI
-    selection.
-  - Add policy profiles for allowed URI schemes (e.g. globally disallow
-    `http`) with environment-specific defaults.
+  - Add signed, versioned profile-registry distribution flow (keyring-style)
+    so policy profiles can be centrally managed and independently audited.
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active

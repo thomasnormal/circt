@@ -89,6 +89,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-mani
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-issuer-cert-file /secrets/lane-state-ed25519-ocsp-issuer.pem --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-ocsp-responder-cert-file /secrets/lane-state-ed25519-ocsp-responder.pem --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 <sha256> --lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski --lane-state-manifest-ed25519-key-id ci-ed25519-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-crl-file /secrets/lane-state-ed25519.crl.pem --lane-state-manifest-ed25519-ocsp-response-file /secrets/lane-state-ed25519.ocsp.der --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia --lane-state-manifest-ed25519-refresh-policy-profiles-json /secrets/lane-state-refresh-policies.json --lane-state-manifest-ed25519-refresh-policy-profile prod_strict --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -139,6 +140,19 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp` resolves
   the CRL refresh URI from the selected key certificate
   `CRL Distribution Points` extension (keyring mode).
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-json` +
+    `--lane-state-manifest-ed25519-refresh-policy-profile` load shared CRL/OCSP
+    auto-URI defaults from a JSON profile registry.
+    - schema: `{"schema_version":1,"profiles":{...}}`
+    - profile keys:
+      - shared: `auto_uri_policy`, `auto_uri_allowed_schemes`
+      - per-artifact: `crl.{...}`, `ocsp.{...}`
+  - Effective precedence for policy/scheme defaults:
+    - per-artifact CLI override
+    - shared CLI override
+    - per-artifact profile value
+    - shared profile value
+    - built-in default
   - `--lane-state-manifest-ed25519-refresh-auto-uri-policy` sets a shared
     default policy for both CRL and OCSP auto-URI modes.
     - Specific flags

@@ -142,6 +142,12 @@ Options:
                          CRL/OCSP auto modes (specific per-artifact flags
                          override this): comma-separated subset of
                          file,http,https
+  --lane-state-manifest-ed25519-refresh-policy-profiles-json FILE
+                         JSON policy profile registry for cert-driven refresh
+                         auto-URI defaults (schema_version=1)
+  --lane-state-manifest-ed25519-refresh-policy-profile NAME
+                         Profile name selected from
+                         --lane-state-manifest-ed25519-refresh-policy-profiles-json
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -314,6 +320,118 @@ normalize_auto_uri_allowed_schemes() {
   printf '%s\n' "$normalized"
 }
 
+parse_refresh_auto_uri_policy_profile() {
+  local profiles_json="$1"
+  local profile_name="$2"
+  python3 - "$profiles_json" "$profile_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profiles_path = Path(sys.argv[1])
+profile_name = sys.argv[2].strip()
+
+try:
+  payload = json.loads(profiles_path.read_text(encoding="utf-8"))
+except Exception:
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: file '{profiles_path}' must contain JSON object",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+if not isinstance(payload, dict) or not payload:
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: file '{profiles_path}' must contain non-empty JSON object",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+unknown_top_keys = sorted(set(payload.keys()) - {"schema_version", "profiles"})
+if unknown_top_keys:
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: unknown key '{unknown_top_keys[0]}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+schema_version = payload.get("schema_version")
+if schema_version != 1:
+  print(
+      "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: schema_version must be 1",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+profiles = payload.get("profiles")
+if not isinstance(profiles, dict) or not profiles:
+  print(
+      "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: profiles must be non-empty object",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+profile = profiles.get(profile_name)
+if profile is None:
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profile: unknown profile '{profile_name}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if not isinstance(profile, dict):
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.profiles.{profile_name}: expected object",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+def emit_if_string(scope: dict, scope_name: str, key: str, out_key: str):
+  if key not in scope:
+    return
+  value = scope[key]
+  if not isinstance(value, str) or not value.strip():
+    print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.{scope_name}.{key}: expected non-empty string",
+      file=sys.stderr,
+    )
+    raise SystemExit(1)
+  print(f"{out_key}\t{value.strip()}")
+
+unknown_profile_keys = sorted(
+  set(profile.keys()) - {"auto_uri_policy", "auto_uri_allowed_schemes", "crl", "ocsp"}
+)
+if unknown_profile_keys:
+  print(
+      f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.profiles.{profile_name}: unknown key '{unknown_profile_keys[0]}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_policy", "shared_auto_uri_policy")
+emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_allowed_schemes", "shared_auto_uri_allowed_schemes")
+
+for artifact in ("crl", "ocsp"):
+  section = profile.get(artifact)
+  if section is None:
+    continue
+  if not isinstance(section, dict):
+    print(
+        f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.profiles.{profile_name}.{artifact}: expected object",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  unknown_section_keys = sorted(set(section.keys()) - {"auto_uri_policy", "auto_uri_allowed_schemes"})
+  if unknown_section_keys:
+    print(
+        f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json.profiles.{profile_name}.{artifact}: unknown key '{unknown_section_keys[0]}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_policy", f"{artifact}_auto_uri_policy")
+  emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_allowed_schemes", f"{artifact}_auto_uri_allowed_schemes")
+PY
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
@@ -396,6 +514,8 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=0
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -613,6 +733,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes)
       LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$2"; LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=1; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-json)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profile)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -800,28 +924,150 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" && ! "$L
   echo "invalid --lane-state-manifest-ed25519-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
   exit 1
 fi
-if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" ]]; then
-  if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
-    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
-  fi
-  if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
-    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
-  fi
-fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
   LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes")"
-  if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
-    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
-  fi
-  if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
-    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
-  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" == "1" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" == "1" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy: expected one of first,last,require_single" >&2
+  exit 1
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
   LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes")"
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
   LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes")"
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-json requires --lane-state-manifest-ed25519-refresh-policy-profile" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profile requires --lane-state-manifest-ed25519-refresh-policy-profiles-json" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  echo "refresh policy profiles JSON not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" >&2
+  exit 1
+fi
+
+PROFILE_SHARED_AUTO_URI_POLICY=""
+PROFILE_SHARED_AUTO_URI_POLICY_SET=0
+PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES=""
+PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_CRL_AUTO_URI_POLICY=""
+PROFILE_CRL_AUTO_URI_POLICY_SET=0
+PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES=""
+PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_OCSP_AUTO_URI_POLICY=""
+PROFILE_OCSP_AUTO_URI_POLICY_SET=0
+PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES=""
+PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=0
+
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
+  profile_policy_rows="$(
+    parse_refresh_auto_uri_policy_profile \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" \
+      "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILE"
+  )" || exit 1
+  if [[ -n "$profile_policy_rows" ]]; then
+    while IFS=$'\t' read -r profile_key profile_value; do
+      case "$profile_key" in
+        shared_auto_uri_policy)
+          PROFILE_SHARED_AUTO_URI_POLICY="$profile_value"
+          PROFILE_SHARED_AUTO_URI_POLICY_SET=1
+          ;;
+        shared_auto_uri_allowed_schemes)
+          PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
+          PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        crl_auto_uri_policy)
+          PROFILE_CRL_AUTO_URI_POLICY="$profile_value"
+          PROFILE_CRL_AUTO_URI_POLICY_SET=1
+          ;;
+        crl_auto_uri_allowed_schemes)
+          PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
+          PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        ocsp_auto_uri_policy)
+          PROFILE_OCSP_AUTO_URI_POLICY="$profile_value"
+          PROFILE_OCSP_AUTO_URI_POLICY_SET=1
+          ;;
+        ocsp_auto_uri_allowed_schemes)
+          PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
+          PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        *)
+          echo "internal error: unknown refresh policy profile field '$profile_key'" >&2
+          exit 1
+          ;;
+      esac
+    done <<< "$profile_policy_rows"
+  fi
+fi
+
+if [[ "$PROFILE_SHARED_AUTO_URI_POLICY_SET" == "1" && ! "$PROFILE_SHARED_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: profile shared auto_uri_policy must be one of first,last,require_single" >&2
+  exit 1
+fi
+if [[ "$PROFILE_CRL_AUTO_URI_POLICY_SET" == "1" && ! "$PROFILE_CRL_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: profile crl.auto_uri_policy must be one of first,last,require_single" >&2
+  exit 1
+fi
+if [[ "$PROFILE_OCSP_AUTO_URI_POLICY_SET" == "1" && ! "$PROFILE_OCSP_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-json: profile ocsp.auto_uri_policy must be one of first,last,require_single" >&2
+  exit 1
+fi
+if [[ "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-refresh-policy-profiles-json (profile shared auto_uri_allowed_schemes)")"
+fi
+if [[ "$PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-refresh-policy-profiles-json (profile crl.auto_uri_allowed_schemes)")"
+fi
+if [[ "$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-refresh-policy-profiles-json (profile ocsp.auto_uri_allowed_schemes)")"
+fi
+
+# Effective precedence:
+# specific CLI > shared CLI > specific profile > shared profile > defaults.
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
+  elif [[ "$PROFILE_CRL_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$PROFILE_CRL_AUTO_URI_POLICY"
+  elif [[ "$PROFILE_SHARED_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$PROFILE_SHARED_AUTO_URI_POLICY"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" != "1" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
+  elif [[ "$PROFILE_OCSP_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$PROFILE_OCSP_AUTO_URI_POLICY"
+  elif [[ "$PROFILE_SHARED_AUTO_URI_POLICY_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$PROFILE_SHARED_AUTO_URI_POLICY"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
+  elif [[ "$PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES"
+  elif [[ "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
+  elif [[ "$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES"
+  elif [[ "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES"
+  fi
 fi
 if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then
   echo "lane state file not readable: $LANE_STATE_TSV" >&2
