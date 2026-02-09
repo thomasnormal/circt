@@ -58,7 +58,7 @@ Options:
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
                          id_kind supports:
-                         base|base_diag|path|aggregate|base_regex|path_regex
+                         base|base_diag|path|aggregate|base_regex|base_diag_regex|path_regex
   --fail-on-unexpected-failure-cases
                          Fail when observed failing cases are not expected
   --fail-on-expired-expected-failure-cases
@@ -7613,15 +7613,15 @@ if expected_path is not None:
             f"suite/mode/id must be non-empty at data row {idx + 1}"
         )
       id_kind = row.get("id_kind", "base").strip().lower() or "base"
-      if id_kind not in {"base", "base_diag", "path", "aggregate", "base_regex", "path_regex"}:
+      if id_kind not in {"base", "base_diag", "path", "aggregate", "base_regex", "base_diag_regex", "path_regex"}:
         raise SystemExit(
             "invalid expected-failure-cases row for "
             f"suite={suite} mode={mode} id={case_id}: "
             "id_kind must be one of "
-            "base,base_diag,path,aggregate,base_regex,path_regex"
+            "base,base_diag,path,aggregate,base_regex,base_diag_regex,path_regex"
         )
       id_re = None
-      if id_kind in {"base_regex", "path_regex"}:
+      if id_kind in {"base_regex", "base_diag_regex", "path_regex"}:
         try:
           id_re = re.compile(case_id)
         except re.error as ex:
@@ -7682,6 +7682,9 @@ for row in expected_rows:
         continue
     elif row["id_kind"] == "base_diag":
       if obs["base_diag"] != row["id"]:
+        continue
+    elif row["id_kind"] == "base_diag_regex":
+      if row["id_re"] is None or row["id_re"].search(obs["base_diag"]) is None:
         continue
     elif row["id_kind"] == "path":
       if obs["path"] != row["id"]:
