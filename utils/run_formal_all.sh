@@ -6967,6 +6967,136 @@ if [[ "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; then
     "$OUT_DIR/opentitan-e2e-strict-results.txt"
 fi
 
+# OpenTitan E2E mode-diff synthesis (default vs strict)
+if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; then
+  opentitan_e2e_default_case_results="$OUT_DIR/opentitan-e2e-results.txt"
+  opentitan_e2e_strict_case_results="$OUT_DIR/opentitan-e2e-strict-results.txt"
+  opentitan_e2e_mode_diff_tsv="$OUT_DIR/opentitan-e2e-mode-diff.tsv"
+  opentitan_e2e_mode_diff_results="$OUT_DIR/opentitan-e2e-mode-diff-results.txt"
+  if [[ -s "$opentitan_e2e_default_case_results" && -s "$opentitan_e2e_strict_case_results" ]]; then
+    opentitan_e2e_mode_diff_counts="$(
+      OPENTITAN_E2E_DEFAULT_CASE_RESULTS="$opentitan_e2e_default_case_results" \
+      OPENTITAN_E2E_STRICT_CASE_RESULTS="$opentitan_e2e_strict_case_results" \
+      OPENTITAN_E2E_MODE_DIFF_TSV="$opentitan_e2e_mode_diff_tsv" \
+      OPENTITAN_E2E_MODE_DIFF_RESULTS="$opentitan_e2e_mode_diff_results" \
+      python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+default_path = Path(os.environ["OPENTITAN_E2E_DEFAULT_CASE_RESULTS"])
+strict_path = Path(os.environ["OPENTITAN_E2E_STRICT_CASE_RESULTS"])
+diff_tsv_path = Path(os.environ["OPENTITAN_E2E_MODE_DIFF_TSV"])
+diff_results_path = Path(os.environ["OPENTITAN_E2E_MODE_DIFF_RESULTS"])
+
+
+def load_rows(path: Path):
+  rows = {}
+  with path.open() as f:
+    for line in f:
+      line = line.rstrip("\n")
+      if not line:
+        continue
+      parts = line.split("\t")
+      if len(parts) < 3:
+        continue
+      status = parts[0].strip().upper()
+      base = parts[1].strip()
+      detail = parts[2].strip()
+      if not base:
+        continue
+      rows[base] = {
+          "status": status or "UNKNOWN",
+          "detail": detail,
+      }
+  return rows
+
+
+default_rows = load_rows(default_path)
+strict_rows = load_rows(strict_path)
+bases = sorted(set(default_rows.keys()) | set(strict_rows.keys()))
+
+with diff_tsv_path.open("w", newline="") as f:
+  writer = csv.writer(f, delimiter="\t")
+  writer.writerow(
+      [
+          "status",
+          "base",
+          "classification",
+          "status_e2e",
+          "status_e2e_strict",
+          "detail_e2e",
+          "detail_e2e_strict",
+      ]
+  )
+  fail_count = 0
+  for base in bases:
+    e2e = default_rows.get(base, {"status": "MISSING", "detail": ""})
+    strict = strict_rows.get(base, {"status": "MISSING", "detail": ""})
+    status_e2e = e2e["status"]
+    status_strict = strict["status"]
+    detail_e2e = e2e["detail"]
+    detail_strict = strict["detail"]
+    if status_e2e == status_strict and status_e2e != "MISSING":
+      classification = "same_status"
+      status = "PASS"
+    elif status_e2e == "MISSING":
+      classification = "missing_in_e2e"
+      status = "FAIL"
+    elif status_strict == "MISSING":
+      classification = "missing_in_e2e_strict"
+      status = "FAIL"
+    elif status_e2e == "PASS" and status_strict != "PASS":
+      classification = "strict_only_fail"
+      status = "FAIL"
+    elif status_e2e != "PASS" and status_strict == "PASS":
+      classification = "strict_only_pass"
+      status = "FAIL"
+    else:
+      classification = "status_diff"
+      status = "FAIL"
+    writer.writerow(
+        [
+            status,
+            base,
+            classification,
+            status_e2e,
+            status_strict,
+            detail_e2e,
+            detail_strict,
+        ]
+    )
+    if status == "FAIL":
+      fail_count += 1
+
+with diff_results_path.open("w") as f:
+  with diff_tsv_path.open() as src:
+    reader = csv.DictReader(src, delimiter="\t")
+    for row in reader:
+      if row.get("status", "").upper() != "FAIL":
+        continue
+      base = (row.get("base") or "").strip()
+      classification = (row.get("classification") or "").strip()
+      status_e2e = (row.get("status_e2e") or "").strip()
+      status_strict = (row.get("status_e2e_strict") or "").strip()
+      detail = (
+          f"{classification};e2e={status_e2e};e2e_strict={status_strict}"
+      )
+      f.write(f"FAIL\t{base}\t{detail}\topentitan\tE2E_MODE_DIFF\n")
+
+print(f"{len(bases)}\t{len(bases) - fail_count}\t{fail_count}")
+PY
+)"
+    IFS=$'\t' read -r opentitan_e2e_mode_diff_total opentitan_e2e_mode_diff_pass opentitan_e2e_mode_diff_fail <<< "$opentitan_e2e_mode_diff_counts"
+    if [[ -n "$opentitan_e2e_mode_diff_total" && -n "$opentitan_e2e_mode_diff_pass" && -n "$opentitan_e2e_mode_diff_fail" ]]; then
+      record_result "opentitan" "E2E_MODE_DIFF" \
+        "$opentitan_e2e_mode_diff_total" \
+        "$opentitan_e2e_mode_diff_pass" \
+        "$opentitan_e2e_mode_diff_fail" 0 0 0 0
+    fi
+  fi
+fi
+
 # AVIP compile smoke (optional)
 if [[ "$WITH_AVIP" == "1" ]]; then
   avip_case_results="$OUT_DIR/avip-results.txt"
@@ -7564,6 +7694,7 @@ result_sources = [
     ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
+    ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
 detailed_source_pairs = {
@@ -8137,6 +8268,7 @@ result_sources = [
     ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
     ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
+    ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
 detailed_pairs_observed = set()
@@ -8381,6 +8513,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
         ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
         ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
         ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
+        ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
         ("", "", out_dir / "avip-results.txt"),
     ]
     detailed_pairs_observed = set()
@@ -8666,6 +8799,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
         ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-results.txt"),
         ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
         ("opentitan", "E2E_STRICT", out_dir / "opentitan-e2e-strict-results.txt"),
+        ("opentitan", "E2E_MODE_DIFF", out_dir / "opentitan-e2e-mode-diff-results.txt"),
         ("", "", out_dir / "avip-results.txt"),
     ]
     detailed_pairs_observed = set()

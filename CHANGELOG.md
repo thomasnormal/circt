@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 777 - February 9, 2026
+
+### FormalAll: OpenTitan E2E Default-vs-Strict Mode Diff Artifact
+
+1. Extended `utils/run_formal_all.sh` to synthesize mode-diff outputs when
+   both OpenTitan E2E lanes run:
+   - `opentitan-e2e-mode-diff.tsv`
+   - `opentitan-e2e-mode-diff-results.txt`
+2. Added a synthetic case-tracking mode:
+   - `opentitan / E2E_MODE_DIFF`
+   - FAIL rows capture strict/default deltas with normalized classifications
+     (for example `strict_only_fail`).
+3. `E2E_MODE_DIFF` is now ingested by all expected-failure pipelines:
+   - expected-case matching
+   - expected-case refresh
+   - strict-gate fail-like case collection
+   This allows strict-only OpenTitan parity drift to be tracked with the same
+   case-level policy controls as other formal lanes.
+4. In dual-lane runs, formal summary now includes an explicit
+   `opentitan E2E_MODE_DIFF` result row to quantify default-vs-strict delta
+   volume.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-e2e-mode-diff.test`
+    - verifies dual-lane mode-diff generation
+    - verifies strict-only mismatch classification (`strict_only_fail`)
+    - verifies `E2E_MODE_DIFF` expected-failure case matching.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-strict-x.test test/Tools/run-formal-all-opentitan-e2e-strict-lane.test test/Tools/run-formal-all-opentitan-e2e-mode-diff.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-strict-gate-failure-cases.test`:
+    - 7/7 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan dual-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-mode-diff-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-e2e-sim-targets usbdev --opentitan-e2e-verilog-targets usbdev --opentitan-e2e-impl-filter canright --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'`:
+    - `opentitan/E2E`: `total=3 pass=3 fail=0`
+    - `opentitan/E2E_STRICT`: `total=3 pass=2 fail=1`
+    - `opentitan/E2E_MODE_DIFF`: `total=3 pass=2 fail=1`
+  - Diff artifact sample:
+    - `LEC:aes_sbox_canright` classified as `strict_only_fail`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
 ## Iteration 776 - February 9, 2026
 
 ### FormalAll: Dedicated OpenTitan `E2E_STRICT` Lane
