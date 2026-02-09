@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 786 - February 9, 2026
+
+### Mutation Cover: Install-Tree Auto Tool Discovery
+
+1. Extended `utils/run_mutation_cover.sh` built-in formal tool resolution for
+   `--formal-global-propagate-circt-lec [PATH]` and
+   `--formal-global-propagate-circt-bmc [PATH]` when PATH is omitted / `auto`:
+   - install-tree sibling `bin/` (for `<prefix>/share/circt/utils` scripts)
+   - then `PATH`
+   - then in-repo `./build/bin`
+2. This removes manual `circt-lec`/`circt-bmc` path wiring for installed
+   mutation scripts when `PATH` does not include `<prefix>/bin`.
+
+### Tests and Docs
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-lec-install-tree-auto-path.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-lec-auto-path.test test/Tools/run-mutation-cover-global-circt-chain-auto-path.test test/Tools/run-mutation-matrix-global-circt-bmc-auto-path.test test/Tools/run-mutation-cover-global-circt-lec-install-tree-auto-path.test`: PASS (4/4)
+  - `bash -n utils/run_mutation_cover.sh && bash -n utils/run_mutation_matrix.sh && build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (59/59)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-install-auto-resolve --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 785 - February 9, 2026
 
 ### Mutation Matrix: Gate Summary Export
