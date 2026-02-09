@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 726 - February 9, 2026
+
+### Mutation Lane Matrix Runner
+
+- Added `utils/run_mutation_matrix.sh` to execute multiple mutation-coverage
+  lanes and aggregate lane-level outcomes.
+- New capabilities:
+  - lane config TSV input (`--lanes-tsv`)
+  - per-lane pass-through jobs control (`--jobs-per-lane`)
+  - lane-level aggregation (`results.tsv`) with:
+    - lane status
+    - exit code
+    - coverage percentage
+    - gate status
+    - artifact paths
+  - optional fail-fast (`--stop-on-fail`)
+
+### Test and Docs Updates
+
+- Added lit tests:
+  - `test/Tools/run-mutation-matrix-help.test`
+  - `test/Tools/run-mutation-matrix.test`
+- Updated:
+  - `docs/FormalRegression.md`
+    - added mutation lane matrix runner section and lane TSV schema
+  - `PROJECT_PLAN.md`
+    - moved mutation CI lane integration from `MISSING` to `IN_PROGRESS`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level matrix regression:
+  - 2-lane scenario (`threshold 40` pass, `threshold 80` fail): PASS
+  - aggregated summary expected `pass=1 fail=1`: PASS.
+
 ## Iteration 725 - February 9, 2026
 
 ### Mutation Harness CI JSON Summary Artifact
