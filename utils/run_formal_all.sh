@@ -105,6 +105,13 @@ Options:
                          Ed25519 private key for lane-state manifest signing
   --lane-state-manifest-ed25519-public-key-file FILE
                          Ed25519 public key for lane-state manifest verification
+  --lane-state-manifest-ed25519-keyring-tsv FILE
+                         Ed25519 public-key keyring TSV for lane-state manifest
+                         verification (columns: key_id, public_key_file_path,
+                         not_before, not_after, status, key_sha256)
+  --lane-state-manifest-ed25519-keyring-sha256 HEX
+                         Optional SHA256 pin for
+                         --lane-state-manifest-ed25519-keyring-tsv
   --lane-state-manifest-ed25519-key-id ID
                          Optional key identifier embedded in Ed25519 manifests
   --include-lane-regex REGEX
@@ -195,8 +202,15 @@ LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED=""
 LANE_STATE_MANIFEST_SIGN_MODE="none"
 LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE=""
+LANE_STATE_MANIFEST_ED25519_KEYRING_TSV=""
+LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
+LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE=""
+LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER=""
+LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE=""
+LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="none"
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -334,6 +348,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-public-key-file)
       LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-keyring-tsv)
+      LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-keyring-sha256)
+      LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
@@ -413,6 +431,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && -z "$LANE_STATE_TSV" 
   echo "--lane-state-manifest-ed25519-public-key-file requires --lane-state-tsv" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-keyring-tsv requires --lane-state-tsv" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   echo "--lane-state-hmac-key-file and --lane-state-hmac-keyring-tsv are mutually exclusive" >&2
   exit 1
@@ -423,6 +445,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -n "$LANE_STATE_HMAC
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   echo "--lane-state-manifest-ed25519-private-key-file is mutually exclusive with lane-state HMAC signing options" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-public-key-file and --lane-state-manifest-ed25519-keyring-tsv are mutually exclusive" >&2
   exit 1
 fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
@@ -459,6 +485,14 @@ if [[ -n "$LANE_STATE_HMAC_KEYRING_SHA256" && ! "$LANE_STATE_HMAC_KEYRING_SHA256
   echo "invalid --lane-state-hmac-keyring-sha256: expected 64 hex chars" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-keyring-sha256 requires --lane-state-manifest-ed25519-keyring-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-keyring-sha256: expected 64 hex chars" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   echo "--lane-state-hmac-key-id requires --lane-state-hmac-key-file or --lane-state-hmac-keyring-tsv" >&2
   exit 1
@@ -467,12 +501,26 @@ if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && -z "$LANE_STATE_HMAC_KEY_ID" ]]; then
   echo "--lane-state-hmac-keyring-tsv requires --lane-state-hmac-key-id" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" ]]; then
-  echo "--lane-state-manifest-ed25519-private-key-file requires --lane-state-manifest-ed25519-public-key-file" >&2
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && \
+      -z "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && \
+      -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-private-key-file requires --lane-state-manifest-ed25519-public-key-file or --lane-state-manifest-ed25519-keyring-tsv" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-public-key-file requires --lane-state-manifest-ed25519-private-key-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && -z "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-keyring-tsv requires --lane-state-manifest-ed25519-private-key-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && -z "$LANE_STATE_MANIFEST_ED25519_KEY_ID" ]]; then
+  echo "--lane-state-manifest-ed25519-keyring-tsv requires --lane-state-manifest-ed25519-key-id" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && ! -r "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "lane state Ed25519 keyring TSV not readable: $LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
@@ -583,9 +631,172 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
     echo "lane-state Ed25519 manifest mode requires openssl in PATH" >&2
     exit 1
   fi
-  LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256="$(
-    sha256sum "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" | awk '{print $1}'
-  )"
+  if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+    mapfile -t lane_state_ed25519_keyring_resolved < <(
+      LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
+      LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
+      LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+      python3 - <<'PY'
+import hashlib
+from datetime import datetime
+import os
+import re
+import sys
+from pathlib import Path
+
+keyring_path = Path(os.environ["LANE_STATE_MANIFEST_ED25519_KEYRING_TSV"])
+expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256", "").strip()
+target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
+
+keyring_bytes = keyring_path.read_bytes()
+actual_sha = hashlib.sha256(keyring_bytes).hexdigest()
+if expected_sha and actual_sha != expected_sha:
+  print(
+      f"lane state Ed25519 keyring SHA256 mismatch: expected {expected_sha}, found {actual_sha}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+rows = {}
+
+def parse_date(value: str, field: str) -> str:
+  if not value:
+    return ""
+  if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+    print(
+        f"invalid lane state Ed25519 keyring {field}: expected YYYY-MM-DD",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  try:
+    datetime.strptime(value, "%Y-%m-%d")
+  except ValueError:
+    print(
+        f"invalid lane state Ed25519 keyring {field}: invalid calendar date",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  return value
+
+for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), start=1):
+  line = raw_line.strip()
+  if not line or line.startswith("#"):
+    continue
+  cols = raw_line.split("\t")
+  if len(cols) < 2:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: expected at least key_id and public_key_file_path",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if len(cols) > 6:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: expected at most 6 columns",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  key_id = cols[0].strip()
+  key_file_path = cols[1].strip()
+  not_before = cols[2].strip() if len(cols) >= 3 else ""
+  not_after = cols[3].strip() if len(cols) >= 4 else ""
+  status = cols[4].strip() if len(cols) >= 5 else ""
+  key_sha = cols[5].strip() if len(cols) >= 6 else ""
+  if not key_id:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: empty key_id",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if key_id in rows:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: duplicate key_id '{key_id}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if not key_file_path:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: empty public_key_file_path",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if status and status not in {"active", "revoked"}:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: status must be active or revoked",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if key_sha and not re.fullmatch(r"[0-9a-f]{64}", key_sha):
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: key_sha256 must be 64 hex chars",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  not_before = parse_date(not_before, f"row {keyring_path}:{line_no} not_before")
+  not_after = parse_date(not_after, f"row {keyring_path}:{line_no} not_after")
+  if not_before and not_after and not_before > not_after:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: not_before is after not_after",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  rows[key_id] = (key_file_path, not_before, not_after, status, key_sha)
+
+if target_key_id not in rows:
+  print(
+      f"lane state Ed25519 keyring missing key_id '{target_key_id}' in {keyring_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+key_file_path, not_before, not_after, status, key_sha = rows[target_key_id]
+if status == "revoked":
+  print(
+      f"lane state Ed25519 key_id '{target_key_id}' is revoked in keyring {keyring_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+key_path = Path(key_file_path)
+if not key_path.is_absolute():
+  key_path = (keyring_path.parent / key_path).resolve()
+if not key_path.is_file():
+  print(
+      f"lane state Ed25519 public key file for key_id '{target_key_id}' not found: {key_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+actual_key_sha = hashlib.sha256(key_path.read_bytes()).hexdigest()
+if key_sha and actual_key_sha != key_sha:
+  print(
+      f"lane state Ed25519 public key SHA256 mismatch for key_id '{target_key_id}': expected {key_sha}, found {actual_key_sha}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+print(str(key_path))
+print(actual_key_sha)
+print(actual_sha)
+print(not_before)
+print(not_after)
+PY
+    )
+    if [[ "${#lane_state_ed25519_keyring_resolved[@]}" -ne 5 ]]; then
+      echo "internal error: failed to resolve lane state Ed25519 keyring" >&2
+      exit 1
+    fi
+    LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE="${lane_state_ed25519_keyring_resolved[0]}"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256="${lane_state_ed25519_keyring_resolved[1]}"
+    LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED="${lane_state_ed25519_keyring_resolved[2]}"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE="${lane_state_ed25519_keyring_resolved[3]}"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER="${lane_state_ed25519_keyring_resolved[4]}"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="keyring"
+  else
+    LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256="$(
+      sha256sum "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" | awk '{print $1}'
+    )"
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="file"
+  fi
   LANE_STATE_MANIFEST_SIGN_MODE="ed25519"
 elif [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   mapfile -t lane_state_keyring_resolved < <(
@@ -896,8 +1107,10 @@ compute_lane_state_config_hash() {
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
     printf "lane_state_hmac_keyring_sha256=%s\n" "$LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED"
     printf "lane_state_manifest_sign_mode=%s\n" "$LANE_STATE_MANIFEST_SIGN_MODE"
+    printf "lane_state_ed25519_public_key_mode=%s\n" "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE"
     printf "lane_state_ed25519_key_id=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEY_ID"
     printf "lane_state_ed25519_public_key_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256"
+    printf "lane_state_ed25519_keyring_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -1015,6 +1228,8 @@ lane_state_emit_manifest() {
   LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
   LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" \
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+  LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
+  LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   python3 - <<'PY'
 import base64
 import hashlib
@@ -1026,13 +1241,13 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-def parse_window_date(value: str, field: str):
+def parse_window_date(value: str, field: str, key_kind: str):
   if not value:
     return None
   try:
     return datetime.strptime(value, "%Y-%m-%d").date()
   except ValueError:
-    print(f"invalid lane state HMAC {field}: expected YYYY-MM-DD", file=os.sys.stderr)
+    print(f"invalid lane state {key_kind} {field}: expected YYYY-MM-DD", file=os.sys.stderr)
     raise SystemExit(1)
 
 generated_dt = datetime.now(timezone.utc)
@@ -1040,8 +1255,8 @@ generated_at = generated_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 generated_date = generated_dt.date()
 key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
 key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
-window_start = parse_window_date(key_not_before, "not_before")
-window_end = parse_window_date(key_not_after, "not_after")
+window_start = parse_window_date(key_not_before, "not_before", "HMAC")
+window_end = parse_window_date(key_not_after, "not_after", "HMAC")
 if window_start and generated_date < window_start:
   print(
       f"lane state HMAC key_id '{os.environ.get('LANE_STATE_HMAC_KEY_ID', '')}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
@@ -1077,6 +1292,22 @@ elif sign_mode == "ed25519":
   key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
   if key_id:
     payload["ed25519_key_id"] = key_id
+  ed_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
+  ed_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
+  ed_window_start = parse_window_date(ed_key_not_before, "not_before", "Ed25519")
+  ed_window_end = parse_window_date(ed_key_not_after, "not_after", "Ed25519")
+  if ed_window_start and generated_date < ed_window_start:
+    print(
+        f"lane state Ed25519 key_id '{key_id}' not active at generated_at_utc {generated_at} (window {ed_key_not_before}..{ed_key_not_after or '-'})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  if ed_window_end and generated_date > ed_window_end:
+    print(
+        f"lane state Ed25519 key_id '{key_id}' not active at generated_at_utc {generated_at} (window {ed_key_not_before or '-'}..{ed_key_not_after})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
   canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
   with tempfile.NamedTemporaryFile(delete=False) as payload_file:
     payload_file.write(canonical_payload)
@@ -1144,8 +1375,10 @@ lane_state_verify_manifest() {
   LANE_STATE_HMAC_KEY_NOT_BEFORE="$LANE_STATE_HMAC_KEY_NOT_BEFORE" \
   LANE_STATE_HMAC_KEY_NOT_AFTER="$LANE_STATE_HMAC_KEY_NOT_AFTER" \
   LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
-  LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" \
+  LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE" \
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+  LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
+  LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   SOURCE_LABEL="$source_label" \
   python3 - <<'PY'
 import base64
@@ -1168,14 +1401,16 @@ key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
 key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
 expected_sign_mode = os.environ["LANE_STATE_MANIFEST_SIGN_MODE"]
 expected_ed25519_key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
+ed25519_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
+ed25519_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
 
-def parse_window_date(value: str, field: str):
+def parse_window_date(value: str, field: str, key_kind: str):
   if not value:
     return None
   try:
     return datetime.strptime(value, "%Y-%m-%d").date()
   except ValueError:
-    print(f"invalid lane state HMAC {field}: expected YYYY-MM-DD", file=os.sys.stderr)
+    print(f"invalid lane state {key_kind} {field}: expected YYYY-MM-DD", file=os.sys.stderr)
     raise SystemExit(1)
 
 try:
@@ -1229,8 +1464,8 @@ if expected_sign_mode == "hmac":
     )
     raise SystemExit(1)
   generated_date = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").date()
-  window_start = parse_window_date(key_not_before, "not_before")
-  window_end = parse_window_date(key_not_after, "not_after")
+  window_start = parse_window_date(key_not_before, "not_before", "HMAC")
+  window_end = parse_window_date(key_not_after, "not_after", "HMAC")
   if window_start and generated_date < window_start:
     print(
         f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
@@ -1282,6 +1517,22 @@ elif expected_sign_mode == "ed25519":
   if expected_ed25519_key_id and manifest_key_id != expected_ed25519_key_id:
     print(
         f"invalid lane-state manifest for {source}: ed25519_key_id mismatch (expected '{expected_ed25519_key_id}', found '{manifest_key_id}')",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  generated_date = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").date()
+  ed_window_start = parse_window_date(ed25519_key_not_before, "not_before", "Ed25519")
+  ed_window_end = parse_window_date(ed25519_key_not_after, "not_after", "Ed25519")
+  key_id_for_window = expected_ed25519_key_id or manifest_key_id
+  if ed_window_start and generated_date < ed_window_start:
+    print(
+        f"lane state Ed25519 key_id '{key_id_for_window}' not active at generated_at_utc {generated_at} (window {ed25519_key_not_before}..{ed25519_key_not_after or '-'})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  if ed_window_end and generated_date > ed_window_end:
+    print(
+        f"lane state Ed25519 key_id '{key_id_for_window}' not active at generated_at_utc {generated_at} (window {ed25519_key_not_before or '-'}..{ed25519_key_not_after})",
         file=os.sys.stderr,
     )
     raise SystemExit(1)

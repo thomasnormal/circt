@@ -18187,6 +18187,18 @@ ninja -C build circt-verilog
   - Enables safer distributed verification where private signing keys remain
     isolated from resume/merge workers.
 
+### Iteration 684
+- Added Ed25519 keyring/trust-store mode for lane-state manifests:
+  - `--lane-state-manifest-ed25519-keyring-tsv`
+  - `--lane-state-manifest-ed25519-keyring-sha256`
+  - key resolution by `--lane-state-manifest-ed25519-key-id` with optional
+    validity windows and key SHA pinning.
+- Planning impact:
+  - Moves Ed25519 verification from single-file trust to auditable keyring-based
+    trust policy with deterministic content pinning.
+  - Improves key rotation and signer lifecycle controls for 24/7 distributed
+    closure.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18197,7 +18209,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add certificate-chain/trust-store policy on top of Ed25519 signer material.
+  - Add certificate-chain or external PKI trust-anchor support on top of
+    keyring-based Ed25519 policy.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
