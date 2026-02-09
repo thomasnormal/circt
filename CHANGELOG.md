@@ -10,6 +10,17 @@
    - `global_propagate_circt_bmc`
    - `global_propagate_z3`
    - `global_propagate_bmc_z3`
+   - lane timeout/cache/gate override fields:
+     - `global_propagate_timeout_seconds`
+     - `global_propagate_lec_timeout_seconds`
+     - `global_propagate_bmc_timeout_seconds`
+     - `global_propagate_bmc_bound`
+     - `global_propagate_bmc_ignore_asserts_until`
+     - `bmc_orig_cache_max_entries`
+     - `bmc_orig_cache_max_bytes`
+     - `bmc_orig_cache_max_age_seconds`
+     - `bmc_orig_cache_eviction_policy`
+     - `skip_baseline`, `fail_on_undetected`, `fail_on_errors`
 2. Added lane/default effective-mode preflight checks:
    - chain mode validation (`lec-then-bmc|bmc-then-lec|consensus|auto`)
    - chain requirements (both LEC/BMC tools required via lane or defaults)
@@ -25,8 +36,10 @@
   - `test/Tools/circt-mut-matrix-lane-global-circt-lec-missing.test`
   - `test/Tools/circt-mut-matrix-lane-global-z3-missing.test`
   - `test/Tools/circt-mut-matrix-lane-global-filter-conflict-native.test`
+  - `test/Tools/circt-mut-matrix-lane-global-timeout-invalid.test`
+  - `test/Tools/circt-mut-matrix-lane-gate-override-invalid.test`
+  - `test/Tools/circt-mut-matrix-lane-bmc-cache-eviction-invalid.test`
 - Updated:
-  - `test/Tools/circt-mut-forward-matrix.test`
   - `README.md`
   - `docs/FormalRegression.md`
   - `PROJECT_PLAN.md`
@@ -34,10 +47,10 @@
 ### Validation
 
 - `ninja -C build circt-mut`: PASS
-- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (72/72)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (75/75)
 - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
 - External filtered cadence:
-  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-lane-formal-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-lane-numeric-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
   - summary:
     - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
     - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,

@@ -304,6 +304,14 @@ Execution controls:
     validation with effective default fallback:
     `global_propagate_circt_lec`, `global_propagate_circt_bmc`,
     `global_propagate_z3`, `global_propagate_bmc_z3`.
+  - lane timeout/cache/gate override fields are now validated natively:
+    `global_propagate_timeout_seconds`,
+    `global_propagate_lec_timeout_seconds`,
+    `global_propagate_bmc_timeout_seconds`, `global_propagate_bmc_bound`,
+    `global_propagate_bmc_ignore_asserts_until`,
+    `bmc_orig_cache_max_entries`, `bmc_orig_cache_max_bytes`,
+    `bmc_orig_cache_max_age_seconds`, `bmc_orig_cache_eviction_policy`,
+    `skip_baseline`, `fail_on_undetected`, `fail_on_errors`.
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.

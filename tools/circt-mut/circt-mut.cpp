@@ -25,6 +25,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/Regex.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include <chrono>
@@ -410,11 +411,23 @@ struct MatrixRewriteResult {
 struct MatrixLanePreflightDefaults {
   std::string mutationsYosys;
   std::string globalFilterCmd;
+  std::string globalFilterTimeoutSeconds;
+  std::string globalFilterLECTimeoutSeconds;
+  std::string globalFilterBMCTimeoutSeconds;
   std::string globalFilterCirctLEC;
   std::string globalFilterCirctBMC;
   std::string globalFilterCirctChain;
   std::string globalFilterZ3;
   std::string globalFilterBMCZ3;
+  std::string globalFilterBMCBound;
+  std::string globalFilterBMCIgnoreAssertsUntil;
+  std::string bmcOrigCacheMaxEntries;
+  std::string bmcOrigCacheMaxBytes;
+  std::string bmcOrigCacheMaxAgeSeconds;
+  std::string bmcOrigCacheEvictionPolicy;
+  bool skipBaseline = false;
+  bool failOnUndetected = false;
+  bool failOnErrors = false;
 };
 
 static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
@@ -462,9 +475,21 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
     StringRef laneGlobalFilterCmd = getCol(14);
     StringRef laneGlobalFilterLEC = getCol(15);
     StringRef laneGlobalFilterBMC = getCol(16);
+    StringRef laneGlobalFilterBMCBound = getCol(18);
     StringRef laneGlobalFilterBMCZ3 = getCol(21);
+    StringRef laneGlobalFilterBMCIgnoreAssertsUntil = getCol(23);
     StringRef laneGlobalFilterZ3 = getCol(27);
     StringRef laneGlobalFilterChain = getCol(34);
+    StringRef laneBMCOrigCacheMaxEntries = getCol(35);
+    StringRef laneBMCOrigCacheMaxBytes = getCol(36);
+    StringRef laneBMCOrigCacheMaxAgeSeconds = getCol(37);
+    StringRef laneBMCOrigCacheEvictionPolicy = getCol(38);
+    StringRef laneSkipBaseline = getCol(39);
+    StringRef laneFailOnUndetected = getCol(40);
+    StringRef laneFailOnErrors = getCol(41);
+    StringRef laneGlobalFilterTimeoutSeconds = getCol(42);
+    StringRef laneGlobalFilterLECTimeoutSeconds = getCol(43);
+    StringRef laneGlobalFilterBMCTimeoutSeconds = getCol(44);
     std::string laneLabel = laneID.empty() ? "<unknown>" : laneID.str();
 
     auto resolveLaneTool = [&](StringRef laneValue, StringRef defaultValue,
@@ -486,6 +511,37 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
            " executable in --lanes-tsv at line " +
            Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
            laneLabel + "): " + requested)
+              .str();
+      return false;
+    };
+    auto validateRegex = [&](StringRef laneValue, StringRef defaultValue,
+                             const Regex &pattern, StringRef fieldName,
+                             StringRef expected) -> bool {
+      StringRef value = withDefault(laneValue, defaultValue);
+      if (value.empty())
+        return true;
+      if (pattern.match(value))
+        return true;
+      error = (Twine("Invalid lane ") + fieldName + " value in --lanes-tsv at "
+               "line " + Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + value + " (expected " +
+               expected + ").")
+                  .str();
+      return false;
+    };
+    auto parseGateOverride = [&](StringRef laneValue,
+                                 StringRef fieldName) -> bool {
+      StringRef value = normalized(laneValue);
+      if (value.empty())
+        return true;
+      if (value == "1" || value == "0" || value == "true" || value == "false" ||
+          value == "yes" || value == "no")
+        return true;
+      error =
+          (Twine("Invalid lane ") + fieldName + " override in --lanes-tsv at "
+           "line " + Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+           " (lane " + laneLabel + "): " + value +
+           " (expected 1|0|true|false|yes|no|-).")
               .str();
       return false;
     };
@@ -568,6 +624,54 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
         !resolveLaneTool(laneGlobalFilterBMCZ3, defaults.globalFilterBMCZ3,
                          "global_propagate_bmc_z3", "", /*allowAuto=*/false))
       return false;
+    if (!validateRegex(laneGlobalFilterTimeoutSeconds,
+                       defaults.globalFilterTimeoutSeconds, Regex("^[0-9]+$"),
+                       "global_propagate_timeout_seconds", "0-9 integer"))
+      return false;
+    if (!validateRegex(laneGlobalFilterLECTimeoutSeconds,
+                       defaults.globalFilterLECTimeoutSeconds,
+                       Regex("^[0-9]+$"), "global_propagate_lec_timeout_seconds",
+                       "0-9 integer"))
+      return false;
+    if (!validateRegex(laneGlobalFilterBMCTimeoutSeconds,
+                       defaults.globalFilterBMCTimeoutSeconds,
+                       Regex("^[0-9]+$"), "global_propagate_bmc_timeout_seconds",
+                       "0-9 integer"))
+      return false;
+    if (!validateRegex(laneGlobalFilterBMCBound, defaults.globalFilterBMCBound,
+                       Regex("^[1-9][0-9]*$"), "global_propagate_bmc_bound",
+                       "positive integer"))
+      return false;
+    if (!validateRegex(laneGlobalFilterBMCIgnoreAssertsUntil,
+                       defaults.globalFilterBMCIgnoreAssertsUntil,
+                       Regex("^[0-9]+$"),
+                       "global_propagate_bmc_ignore_asserts_until",
+                       "0-9 integer"))
+      return false;
+    if (!validateRegex(laneBMCOrigCacheMaxEntries, defaults.bmcOrigCacheMaxEntries,
+                       Regex("^[0-9]+$"), "bmc_orig_cache_max_entries",
+                       "0-9 integer"))
+      return false;
+    if (!validateRegex(laneBMCOrigCacheMaxBytes, defaults.bmcOrigCacheMaxBytes,
+                       Regex("^[0-9]+$"), "bmc_orig_cache_max_bytes",
+                       "0-9 integer"))
+      return false;
+    if (!validateRegex(laneBMCOrigCacheMaxAgeSeconds,
+                       defaults.bmcOrigCacheMaxAgeSeconds, Regex("^[0-9]+$"),
+                       "bmc_orig_cache_max_age_seconds", "0-9 integer"))
+      return false;
+    if (!validateRegex(laneBMCOrigCacheEvictionPolicy,
+                       defaults.bmcOrigCacheEvictionPolicy,
+                       Regex("^(lru|fifo|cost-lru)$"),
+                       "bmc_orig_cache_eviction_policy", "lru|fifo|cost-lru"))
+      return false;
+    if (!parseGateOverride(laneSkipBaseline, "skip_baseline"))
+      return false;
+    if (!parseGateOverride(laneFailOnUndetected,
+                           "fail_on_undetected"))
+      return false;
+    if (!parseGateOverride(laneFailOnErrors, "fail_on_errors"))
+      return false;
 
     bool autoGenerateLane =
         mutationsFile == "-" && !generateCount.empty() && generateCount != "-";
@@ -606,6 +710,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   std::string lanesTSVPath;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
+    auto valueFromArg = [&]() -> StringRef {
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos)
+        return arg.substr(eqPos + 1);
+      if (i + 1 < args.size())
+        return args[i + 1];
+      return StringRef();
+    };
 
     auto resolveWithOptionalValue =
         [&](StringRef flag, StringRef toolName,
@@ -735,11 +847,24 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     if (arg == "--default-formal-global-propagate-cmd" ||
         arg.starts_with("--default-formal-global-propagate-cmd=")) {
       hasDefaultGlobalFilterCmd = true;
-      size_t eqPos = arg.find('=');
-      if (eqPos != StringRef::npos)
-        defaults.globalFilterCmd = arg.substr(eqPos + 1).str();
-      else if (i + 1 < args.size())
-        defaults.globalFilterCmd = args[i + 1].str();
+      defaults.globalFilterCmd = valueFromArg().str();
+    }
+    if (arg == "--default-formal-global-propagate-timeout-seconds" ||
+        arg.starts_with("--default-formal-global-propagate-timeout-seconds=")) {
+      defaults.globalFilterTimeoutSeconds =
+          valueFromArg().str();
+    }
+    if (arg == "--default-formal-global-propagate-lec-timeout-seconds" ||
+        arg.starts_with(
+            "--default-formal-global-propagate-lec-timeout-seconds=")) {
+      defaults.globalFilterLECTimeoutSeconds =
+          valueFromArg().str();
+    }
+    if (arg == "--default-formal-global-propagate-bmc-timeout-seconds" ||
+        arg.starts_with(
+            "--default-formal-global-propagate-bmc-timeout-seconds=")) {
+      defaults.globalFilterBMCTimeoutSeconds =
+          valueFromArg().str();
     }
     if (arg == "--default-formal-global-propagate-circt-chain" ||
         arg.starts_with("--default-formal-global-propagate-circt-chain=")) {
@@ -754,6 +879,43 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         defaultGlobalFilterChainMode.clear();
       defaults.globalFilterCirctChain = defaultGlobalFilterChainMode;
     }
+    if (arg == "--default-formal-global-propagate-bmc-bound" ||
+        arg.starts_with("--default-formal-global-propagate-bmc-bound=")) {
+      defaults.globalFilterBMCBound =
+          valueFromArg().str();
+    }
+    if (arg == "--default-formal-global-propagate-bmc-ignore-asserts-until" ||
+        arg.starts_with(
+            "--default-formal-global-propagate-bmc-ignore-asserts-until=")) {
+      defaults.globalFilterBMCIgnoreAssertsUntil =
+          valueFromArg().str();
+    }
+    if (arg == "--default-bmc-orig-cache-max-entries" ||
+        arg.starts_with("--default-bmc-orig-cache-max-entries=")) {
+      defaults.bmcOrigCacheMaxEntries =
+          valueFromArg().str();
+    }
+    if (arg == "--default-bmc-orig-cache-max-bytes" ||
+        arg.starts_with("--default-bmc-orig-cache-max-bytes=")) {
+      defaults.bmcOrigCacheMaxBytes =
+          valueFromArg().str();
+    }
+    if (arg == "--default-bmc-orig-cache-max-age-seconds" ||
+        arg.starts_with("--default-bmc-orig-cache-max-age-seconds=")) {
+      defaults.bmcOrigCacheMaxAgeSeconds =
+          valueFromArg().str();
+    }
+    if (arg == "--default-bmc-orig-cache-eviction-policy" ||
+        arg.starts_with("--default-bmc-orig-cache-eviction-policy=")) {
+      defaults.bmcOrigCacheEvictionPolicy =
+          valueFromArg().str();
+    }
+    if (arg == "--skip-baseline")
+      defaults.skipBaseline = true;
+    if (arg == "--fail-on-undetected")
+      defaults.failOnUndetected = true;
+    if (arg == "--fail-on-errors")
+      defaults.failOnErrors = true;
 
     result.rewrittenArgs.push_back(arg.str());
   }
