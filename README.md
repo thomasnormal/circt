@@ -230,6 +230,10 @@ It also runs native global-filter preflight checks:
 - rejects conflicting non-chain global filter mode combinations early.
 `circt-mut matrix` now applies the same preflight model for default global
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
+Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
+options for built-in filters (`--formal-global-propagate-z3`,
+`--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
+if unresolved.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified

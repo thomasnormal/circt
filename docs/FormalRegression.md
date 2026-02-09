@@ -281,6 +281,8 @@ Execution controls:
   - built-in global-filter tool options (`--formal-global-propagate-circt-lec`
     / `--formal-global-propagate-circt-bmc`) are now pre-resolved natively,
     including bare `auto` forms, before script dispatch.
+  - explicit built-in Z3 options are pre-resolved natively:
+    `--formal-global-propagate-z3`, `--formal-global-propagate-bmc-z3`.
   - native preflight now validates chain-mode values, injects missing built-in
     LEC/BMC tools for `--formal-global-propagate-circt-chain`, and rejects
     conflicting non-chain global-filter mode combinations before dispatch.
@@ -291,6 +293,9 @@ Execution controls:
     natively (`--default-formal-global-propagate-circt-lec`,
     `--default-formal-global-propagate-circt-bmc`,
     `--default-formal-global-propagate-circt-chain`) before script dispatch.
+  - explicit default Z3 options are pre-resolved natively:
+    `--default-formal-global-propagate-z3`,
+    `--default-formal-global-propagate-bmc-z3`.
   - chain mode auto-injects default built-in LEC/BMC tools when omitted, and
     conflicting non-chain default global-filter modes are rejected early.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design

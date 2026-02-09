@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 812 - February 9, 2026
+
+### Native Z3 Preflight Resolution for `circt-mut` Cover/Matrix
+
+1. Extended native preflight in `tools/circt-mut/circt-mut.cpp` to resolve
+   built-in global-filter Z3 options before script dispatch:
+   - cover:
+     - `--formal-global-propagate-z3`
+     - `--formal-global-propagate-bmc-z3`
+   - matrix defaults:
+     - `--default-formal-global-propagate-z3`
+     - `--default-formal-global-propagate-bmc-z3`
+2. Added fast-fail diagnostics in `circt-mut` when these Z3 options are
+   missing values or cannot be resolved from the environment.
+3. Preserved migration compatibility:
+   - `cover`/`matrix` still dispatch to shell scripts after native preflight.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-cover-global-z3-rewrite.test`
+  - `test/Tools/circt-mut-cover-global-z3-missing.test`
+  - `test/Tools/circt-mut-matrix-global-z3-rewrite.test`
+  - `test/Tools/circt-mut-matrix-global-z3-missing.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (61/61)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (116/116)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-z3-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 811 - February 9, 2026
 
 ### `circt-mut matrix` Native Default Global-Filter Preflight

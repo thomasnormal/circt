@@ -268,6 +268,29 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       return true;
     };
+    auto resolveWithRequiredValue = [&](StringRef flag) -> bool {
+      std::string requested;
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        requested = arg.substr(eqPos + 1).str();
+      } else if (i + 1 < args.size()) {
+        requested = args[++i].str();
+      }
+      if (requested.empty()) {
+        result.error = (Twine("circt-mut cover: missing value for ") + flag).str();
+        return false;
+      }
+      auto resolved = resolveToolPath(requested);
+      if (!resolved) {
+        result.error = (Twine("circt-mut cover: unable to resolve ") + flag +
+                        " executable: " + requested)
+                           .str();
+        return false;
+      }
+      result.rewrittenArgs.push_back(flag.str());
+      result.rewrittenArgs.push_back(*resolved);
+      return true;
+    };
 
     if (arg == "--formal-global-propagate-circt-lec" ||
         arg.starts_with("--formal-global-propagate-circt-lec=")) {
@@ -282,6 +305,18 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       hasGlobalFilterBMC = true;
       if (!resolveWithOptionalValue("--formal-global-propagate-circt-bmc",
                                     "circt-bmc"))
+        return result;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-z3" ||
+        arg.starts_with("--formal-global-propagate-z3=")) {
+      if (!resolveWithRequiredValue("--formal-global-propagate-z3"))
+        return result;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-bmc-z3" ||
+        arg.starts_with("--formal-global-propagate-bmc-z3=")) {
+      if (!resolveWithRequiredValue("--formal-global-propagate-bmc-z3"))
         return result;
       continue;
     }
@@ -403,6 +438,30 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       return true;
     };
+    auto resolveWithRequiredValue = [&](StringRef flag) -> bool {
+      std::string requested;
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        requested = arg.substr(eqPos + 1).str();
+      } else if (i + 1 < args.size()) {
+        requested = args[++i].str();
+      }
+      if (requested.empty()) {
+        result.error =
+            (Twine("circt-mut matrix: missing value for ") + flag).str();
+        return false;
+      }
+      auto resolved = resolveToolPath(requested);
+      if (!resolved) {
+        result.error = (Twine("circt-mut matrix: unable to resolve ") + flag +
+                        " executable: " + requested)
+                           .str();
+        return false;
+      }
+      result.rewrittenArgs.push_back(flag.str());
+      result.rewrittenArgs.push_back(*resolved);
+      return true;
+    };
 
     if (arg == "--default-formal-global-propagate-circt-lec" ||
         arg.starts_with("--default-formal-global-propagate-circt-lec=")) {
@@ -417,6 +476,18 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       hasDefaultGlobalFilterBMC = true;
       if (!resolveWithOptionalValue("--default-formal-global-propagate-circt-bmc",
                                     "circt-bmc"))
+        return result;
+      continue;
+    }
+    if (arg == "--default-formal-global-propagate-z3" ||
+        arg.starts_with("--default-formal-global-propagate-z3=")) {
+      if (!resolveWithRequiredValue("--default-formal-global-propagate-z3"))
+        return result;
+      continue;
+    }
+    if (arg == "--default-formal-global-propagate-bmc-z3" ||
+        arg.starts_with("--default-formal-global-propagate-bmc-z3=")) {
+      if (!resolveWithRequiredValue("--default-formal-global-propagate-bmc-z3"))
         return result;
       continue;
     }
