@@ -154,13 +154,15 @@ Execution controls:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
 - Built-in chained circt-lec/circt-bmc global filter:
-  - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec`
+  - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus`
   - requires both `--formal-global-propagate-circt-lec` and
     `--formal-global-propagate-circt-bmc` options.
   - `lec-then-bmc`: use LEC first and fall back to differential BMC when LEC
     returns `UNKNOWN` or an error.
   - `bmc-then-lec`: use differential BMC first and fall back to LEC when BMC
     returns `UNKNOWN` or an error.
+  - `consensus`: run both LEC and differential BMC and classify
+    `not_propagated` only when both agree on non-propagation.
 
 `tests.tsv` format (tab-separated):
 
@@ -198,6 +200,12 @@ Generated artifacts (default under `./mutation-cover-results`):
     back from BMC `UNKNOWN` to LEC.
   - `chain_lec_resolved_not_propagated_mutants`: count of mutants classified as
     `not_propagated` by chained-mode LEC fallback.
+  - `chain_consensus_not_propagated_mutants`: count of mutants classified
+    `not_propagated` under consensus mode.
+  - `chain_consensus_disagreement_mutants`: count of mutants where LEC/BMC
+    disagree in consensus mode (`eq+different` or `neq+equal`).
+  - `chain_consensus_error_mutants`: count of consensus-mode mutants that
+    resolved to `error`.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
@@ -264,7 +272,7 @@ Execution controls:
   without a lane-specific circt-bmc global filter path.
 - `--default-formal-global-propagate-circt-chain <mode>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-chain` for lanes
-  without a lane-specific chain mode (`lec-then-bmc|bmc-then-lec`).
+  without a lane-specific chain mode (`lec-then-bmc|bmc-then-lec|consensus`).
 - `--default-formal-global-propagate-circt-bmc-args <args>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc-args` for lanes
   without lane-specific bmc args.
@@ -944,11 +952,16 @@ Each run writes:
   by expected failure cases (when `--expected-failure-cases-file` is used)
 - `<out-dir>/opentitan-lec-results.txt` per-implementation OpenTitan LEC case
   rows (when `--with-opentitan` is used)
+- `<out-dir>/opentitan-lec-strict-results.txt` per-implementation strict
+  OpenTitan LEC case rows (when `--with-opentitan-lec-strict` is used)
 - `<out-dir>/avip-results.txt` per-AVIP compile case rows (when `--with-avip`
   is used)
 - Harnesses treat `BMC_RESULT=SAT|UNSAT|UNKNOWN` and
   `LEC_RESULT=EQ|NEQ|UNKNOWN` tokens as the source of truth for pass/fail
   classification when not in smoke mode.
+  - OpenTitan LEC case artifacts may include a diagnostic tag suffix
+    (for example `#XPROP_ONLY`) to preserve mismatch class in case-level
+    gating artifacts.
 
 JSON summary schema:
 

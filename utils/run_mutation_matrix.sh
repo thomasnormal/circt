@@ -65,7 +65,7 @@ Optional:
   --default-formal-global-propagate-circt-chain MODE
                             Default --formal-global-propagate-circt-chain for
                             lanes without lane-specific global_propagate_circt_chain
-                            (lec-then-bmc|bmc-then-lec)
+                            (lec-then-bmc|bmc-then-lec|consensus)
   --default-formal-global-propagate-circt-bmc-args ARGS
                             Default --formal-global-propagate-circt-bmc-args
                             for lanes without lane-specific global_propagate_bmc_args
