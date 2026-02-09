@@ -30,6 +30,12 @@
 // METRICS: global_filter_timeout_mutants{{.*}}1
 // METRICS: global_filter_lec_timeout_mutants{{.*}}1
 // METRICS: global_filter_bmc_timeout_mutants{{.*}}0
+// METRICS-DAG: global_filter_lec_runs{{.*}}1
+// METRICS-DAG: global_filter_bmc_runs{{.*}}0
+// METRICS-DAG: global_filter_cmd_runs{{.*}}0
+// METRICS-DAG: global_filter_lec_runtime_ns{{.*[1-9][0-9]*}}
+// METRICS-DAG: global_filter_bmc_runtime_ns{{.*}}0
+// METRICS-DAG: global_filter_cmd_runtime_ns{{.*}}0
 // METRICS: errors{{.*}}0
 //
 // PAIR: 1{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_timeout=1{{.*}}global_filter_lec_timeout=1

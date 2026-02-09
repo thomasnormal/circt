@@ -1513,19 +1513,34 @@ run_command_global_filter() {
   local tool_label="$4"
   local timeout_seconds="$5"
   local exit_code=0
+  local start_ns=0
+  local end_ns=0
+  local runtime_ns=0
 
+  start_ns="$(current_epoch_ns)"
   if [[ "$timeout_seconds" -le 0 ]]; then
-    run_command "$run_dir" "$cmd" "$log_file"
-    return $?
+    set +e
+    (
+      cd "$run_dir"
+      bash -lc "$cmd"
+    ) >"$log_file" 2>&1
+    exit_code=$?
+    set -e
+  else
+    set +e
+    (
+      cd "$run_dir"
+      timeout --signal=TERM --kill-after=5 "${timeout_seconds}" bash -lc "$cmd"
+    ) >"$log_file" 2>&1
+    exit_code=$?
+    set -e
   fi
-
-  set +e
-  (
-    cd "$run_dir"
-    timeout --signal=TERM --kill-after=5 "${timeout_seconds}" bash -lc "$cmd"
-  ) >"$log_file" 2>&1
-  exit_code=$?
-  set -e
+  end_ns="$(current_epoch_ns)"
+  if [[ "$end_ns" -gt "$start_ns" ]]; then
+    runtime_ns=$((end_ns - start_ns))
+  fi
+  printf "\nGLOBAL_FILTER_RUNTIME_NS=%s tool=%s timeout_seconds=%s exit_code=%s\n" \
+    "$runtime_ns" "$tool_label" "$timeout_seconds" "$exit_code" >> "$log_file"
   mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$timeout_seconds" "$exit_code"
   return "$exit_code"
 }
@@ -1537,21 +1552,56 @@ run_command_argv_global_filter() {
   local timeout_seconds="$4"
   shift 4
   local exit_code=0
+  local start_ns=0
+  local end_ns=0
+  local runtime_ns=0
 
+  start_ns="$(current_epoch_ns)"
   if [[ "$timeout_seconds" -le 0 ]]; then
-    run_command_argv "$run_dir" "$log_file" "$@"
-    return $?
+    set +e
+    (
+      cd "$run_dir"
+      "$@"
+    ) >"$log_file" 2>&1
+    exit_code=$?
+    set -e
+  else
+    set +e
+    (
+      cd "$run_dir"
+      timeout --signal=TERM --kill-after=5 "${timeout_seconds}" "$@"
+    ) >"$log_file" 2>&1
+    exit_code=$?
+    set -e
   fi
-
-  set +e
-  (
-    cd "$run_dir"
-    timeout --signal=TERM --kill-after=5 "${timeout_seconds}" "$@"
-  ) >"$log_file" 2>&1
-  exit_code=$?
-  set -e
+  end_ns="$(current_epoch_ns)"
+  if [[ "$end_ns" -gt "$start_ns" ]]; then
+    runtime_ns=$((end_ns - start_ns))
+  fi
+  printf "\nGLOBAL_FILTER_RUNTIME_NS=%s tool=%s timeout_seconds=%s exit_code=%s\n" \
+    "$runtime_ns" "$tool_label" "$timeout_seconds" "$exit_code" >> "$log_file"
   mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$timeout_seconds" "$exit_code"
   return "$exit_code"
+}
+
+global_filter_runtime_sum_count_for_tool() {
+  local log_file="$1"
+  local tool="$2"
+  awk -v tool="$tool" '
+    $1 ~ /^GLOBAL_FILTER_RUNTIME_NS=/ {
+      runtime = $1
+      sub(/^GLOBAL_FILTER_RUNTIME_NS=/, "", runtime)
+      label = $2
+      sub(/^tool=/, "", label)
+      if (label == tool && runtime ~ /^[0-9]+$/) {
+        sum += runtime
+        count += 1
+      }
+    }
+    END {
+      printf "%s\t%s\n", sum + 0, count + 0
+    }
+  ' "$log_file"
 }
 
 classify_activate() {
@@ -1597,7 +1647,11 @@ classify_propagate_cmd() {
   fi
 
   rc=0
-  if [[ "$timeout_seconds" -gt 0 ]]; then
+  if [[ "$tool_label" == "global-cmd" ]]; then
+    if ! run_command_global_filter "$run_dir" "$propagate_cmd" "$log_file" "$tool_label" "$timeout_seconds"; then
+      rc=$?
+    fi
+  elif [[ "$timeout_seconds" -gt 0 ]]; then
     if ! run_command_global_filter "$run_dir" "$propagate_cmd" "$log_file" "$tool_label" "$timeout_seconds"; then
       rc=$?
     fi
@@ -2337,6 +2391,12 @@ process_mutation() {
   local global_filter_timeout=0
   local global_filter_lec_timeout=0
   local global_filter_bmc_timeout=0
+  local global_filter_lec_runtime_ns=0
+  local global_filter_bmc_runtime_ns=0
+  local global_filter_cmd_runtime_ns=0
+  local global_filter_lec_runs=0
+  local global_filter_bmc_runs=0
+  local global_filter_cmd_runs=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -2382,6 +2442,12 @@ process_mutation() {
       printf "global_filter_timeout\t0\n"
       printf "global_filter_lec_timeout\t0\n"
       printf "global_filter_bmc_timeout\t0\n"
+      printf "global_filter_lec_runtime_ns\t0\n"
+      printf "global_filter_bmc_runtime_ns\t0\n"
+      printf "global_filter_cmd_runtime_ns\t0\n"
+      printf "global_filter_lec_runs\t0\n"
+      printf "global_filter_bmc_runs\t0\n"
+      printf "global_filter_cmd_runs\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -2533,6 +2599,17 @@ process_mutation() {
         bmc_orig_cache_miss_runtime_ns="$bmc_orig_runtime_ns"
       fi
     fi
+  fi
+  if [[ -f "$mutation_dir/global_propagate.log" ]]; then
+    read -r global_filter_lec_runtime_ns global_filter_lec_runs < <(
+      global_filter_runtime_sum_count_for_tool "$mutation_dir/global_propagate.log" "circt-lec"
+    )
+    read -r global_filter_bmc_runtime_ns global_filter_bmc_runs < <(
+      global_filter_runtime_sum_count_for_tool "$mutation_dir/global_propagate.log" "circt-bmc"
+    )
+    read -r global_filter_cmd_runtime_ns global_filter_cmd_runs < <(
+      global_filter_runtime_sum_count_for_tool "$mutation_dir/global_propagate.log" "global-cmd"
+    )
   fi
   if [[ -n "$global_filter_state" ]]; then
     if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "auto" ]]; then
@@ -2744,6 +2821,12 @@ process_mutation() {
     printf "global_filter_timeout\t%s\n" "$global_filter_timeout"
     printf "global_filter_lec_timeout\t%s\n" "$global_filter_lec_timeout"
     printf "global_filter_bmc_timeout\t%s\n" "$global_filter_bmc_timeout"
+    printf "global_filter_lec_runtime_ns\t%s\n" "$global_filter_lec_runtime_ns"
+    printf "global_filter_bmc_runtime_ns\t%s\n" "$global_filter_bmc_runtime_ns"
+    printf "global_filter_cmd_runtime_ns\t%s\n" "$global_filter_cmd_runtime_ns"
+    printf "global_filter_lec_runs\t%s\n" "$global_filter_lec_runs"
+    printf "global_filter_bmc_runs\t%s\n" "$global_filter_bmc_runs"
+    printf "global_filter_cmd_runs\t%s\n" "$global_filter_cmd_runs"
   } > "$meta_local"
 }
 
@@ -2881,6 +2964,12 @@ count_global_filter_bmc_unknown=0
 count_global_filter_timeout=0
 count_global_filter_lec_timeout=0
 count_global_filter_bmc_timeout=0
+count_global_filter_lec_runtime_ns=0
+count_global_filter_bmc_runtime_ns=0
+count_global_filter_cmd_runtime_ns=0
+count_global_filter_lec_runs=0
+count_global_filter_bmc_runs=0
+count_global_filter_cmd_runs=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -3163,6 +3252,60 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_global_filter_bmc_timeout" =~ ^[0-9]+$ ]]; then
     count_global_filter_bmc_timeout=$((count_global_filter_bmc_timeout + local_global_filter_bmc_timeout))
   fi
+
+  local_global_filter_lec_runtime_ns=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_lec_runtime_ns="$(awk -F$'\t' '$1=="global_filter_lec_runtime_ns"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_lec_runtime_ns="${local_global_filter_lec_runtime_ns:-0}"
+  fi
+  if [[ "$local_global_filter_lec_runtime_ns" =~ ^[0-9]+$ ]]; then
+    count_global_filter_lec_runtime_ns=$((count_global_filter_lec_runtime_ns + local_global_filter_lec_runtime_ns))
+  fi
+
+  local_global_filter_bmc_runtime_ns=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_bmc_runtime_ns="$(awk -F$'\t' '$1=="global_filter_bmc_runtime_ns"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_bmc_runtime_ns="${local_global_filter_bmc_runtime_ns:-0}"
+  fi
+  if [[ "$local_global_filter_bmc_runtime_ns" =~ ^[0-9]+$ ]]; then
+    count_global_filter_bmc_runtime_ns=$((count_global_filter_bmc_runtime_ns + local_global_filter_bmc_runtime_ns))
+  fi
+
+  local_global_filter_cmd_runtime_ns=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_cmd_runtime_ns="$(awk -F$'\t' '$1=="global_filter_cmd_runtime_ns"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_cmd_runtime_ns="${local_global_filter_cmd_runtime_ns:-0}"
+  fi
+  if [[ "$local_global_filter_cmd_runtime_ns" =~ ^[0-9]+$ ]]; then
+    count_global_filter_cmd_runtime_ns=$((count_global_filter_cmd_runtime_ns + local_global_filter_cmd_runtime_ns))
+  fi
+
+  local_global_filter_lec_runs=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_lec_runs="$(awk -F$'\t' '$1=="global_filter_lec_runs"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_lec_runs="${local_global_filter_lec_runs:-0}"
+  fi
+  if [[ "$local_global_filter_lec_runs" =~ ^[0-9]+$ ]]; then
+    count_global_filter_lec_runs=$((count_global_filter_lec_runs + local_global_filter_lec_runs))
+  fi
+
+  local_global_filter_bmc_runs=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_bmc_runs="$(awk -F$'\t' '$1=="global_filter_bmc_runs"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_bmc_runs="${local_global_filter_bmc_runs:-0}"
+  fi
+  if [[ "$local_global_filter_bmc_runs" =~ ^[0-9]+$ ]]; then
+    count_global_filter_bmc_runs=$((count_global_filter_bmc_runs + local_global_filter_bmc_runs))
+  fi
+
+  local_global_filter_cmd_runs=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_cmd_runs="$(awk -F$'\t' '$1=="global_filter_cmd_runs"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_cmd_runs="${local_global_filter_cmd_runs:-0}"
+  fi
+  if [[ "$local_global_filter_cmd_runs" =~ ^[0-9]+$ ]]; then
+    count_global_filter_cmd_runs=$((count_global_filter_cmd_runs + local_global_filter_cmd_runs))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -3306,6 +3449,12 @@ fi
   printf "global_filter_timeout_mutants\t%s\n" "$count_global_filter_timeout"
   printf "global_filter_lec_timeout_mutants\t%s\n" "$count_global_filter_lec_timeout"
   printf "global_filter_bmc_timeout_mutants\t%s\n" "$count_global_filter_bmc_timeout"
+  printf "global_filter_lec_runtime_ns\t%s\n" "$count_global_filter_lec_runtime_ns"
+  printf "global_filter_bmc_runtime_ns\t%s\n" "$count_global_filter_bmc_runtime_ns"
+  printf "global_filter_cmd_runtime_ns\t%s\n" "$count_global_filter_cmd_runtime_ns"
+  printf "global_filter_lec_runs\t%s\n" "$count_global_filter_lec_runs"
+  printf "global_filter_bmc_runs\t%s\n" "$count_global_filter_bmc_runs"
+  printf "global_filter_cmd_runs\t%s\n" "$count_global_filter_cmd_runs"
   printf "generated_mutations_enabled\t%s\n" "$GENERATED_MUTATIONS_ENABLED"
   printf "generated_mutations_cache_hit\t%s\n" "$GENERATED_MUTATIONS_CACHE_HIT"
   printf "generated_mutations_cache_miss\t%s\n" "$GENERATED_MUTATIONS_CACHE_MISS"
@@ -3374,6 +3523,12 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "global_filter_timeout_mutants": $count_global_filter_timeout,
   "global_filter_lec_timeout_mutants": $count_global_filter_lec_timeout,
   "global_filter_bmc_timeout_mutants": $count_global_filter_bmc_timeout,
+  "global_filter_lec_runtime_ns": $count_global_filter_lec_runtime_ns,
+  "global_filter_bmc_runtime_ns": $count_global_filter_bmc_runtime_ns,
+  "global_filter_cmd_runtime_ns": $count_global_filter_cmd_runtime_ns,
+  "global_filter_lec_runs": $count_global_filter_lec_runs,
+  "global_filter_bmc_runs": $count_global_filter_bmc_runs,
+  "global_filter_cmd_runs": $count_global_filter_cmd_runs,
   "generated_mutations_enabled": $GENERATED_MUTATIONS_ENABLED,
   "generated_mutations_cache_hit": $GENERATED_MUTATIONS_CACHE_HIT,
   "generated_mutations_cache_miss": $GENERATED_MUTATIONS_CACHE_MISS,
@@ -3414,7 +3569,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_resolved_propagated=${count_chain_bmc_resolved_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_resolved_propagated=${count_chain_lec_resolved_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} chain_auto_short_circuit=${count_chain_auto_short_circuit} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} global_filter_timeout=${count_global_filter_timeout} global_filter_lec_timeout=${count_global_filter_lec_timeout} global_filter_bmc_timeout=${count_global_filter_bmc_timeout} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_resolved_propagated=${count_chain_bmc_resolved_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_resolved_propagated=${count_chain_lec_resolved_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} chain_auto_short_circuit=${count_chain_auto_short_circuit} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} global_filter_timeout=${count_global_filter_timeout} global_filter_lec_timeout=${count_global_filter_lec_timeout} global_filter_bmc_timeout=${count_global_filter_bmc_timeout} global_filter_lec_runtime_ns=${count_global_filter_lec_runtime_ns} global_filter_bmc_runtime_ns=${count_global_filter_bmc_runtime_ns} global_filter_cmd_runtime_ns=${count_global_filter_cmd_runtime_ns} global_filter_lec_runs=${count_global_filter_lec_runs} global_filter_bmc_runs=${count_global_filter_bmc_runs} global_filter_cmd_runs=${count_global_filter_cmd_runs} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

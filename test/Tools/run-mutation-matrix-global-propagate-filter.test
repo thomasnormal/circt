@@ -20,6 +20,7 @@
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/lane1/summary.tsv
 // RUN: FileCheck %s --check-prefix=METRICS < %t/out/lane1/metrics.tsv
+// RUN: FileCheck %s --check-prefix=JSON < %t/out/lane1/summary.json
 
 // LOG: Mutation matrix summary: pass=1 fail=0
 
@@ -30,3 +31,16 @@
 // SUMMARY: 2{{.*}}propagated_not_detected
 
 // METRICS: global_filtered_not_propagated_mutants{{.*}}1
+// METRICS-DAG: global_filter_lec_runs{{.*}}0
+// METRICS-DAG: global_filter_bmc_runs{{.*}}0
+// METRICS-DAG: global_filter_cmd_runs{{.*}}2
+// METRICS-DAG: global_filter_lec_runtime_ns{{.*}}0
+// METRICS-DAG: global_filter_bmc_runtime_ns{{.*}}0
+// METRICS-DAG: global_filter_cmd_runtime_ns{{.*[0-9]+}}
+
+// JSON-DAG: "global_filter_lec_runs": 0
+// JSON-DAG: "global_filter_bmc_runs": 0
+// JSON-DAG: "global_filter_cmd_runs": 2
+// JSON-DAG: "global_filter_lec_runtime_ns": 0
+// JSON-DAG: "global_filter_bmc_runtime_ns": 0
+// JSON-DAG: "global_filter_cmd_runtime_ns":

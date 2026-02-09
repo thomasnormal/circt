@@ -400,6 +400,18 @@ Generated artifacts (default under `./mutation-cover-results`):
     filtering timed out.
   - `global_filter_bmc_timeout_mutants`: count of mutants where differential
     BMC global filtering timed out.
+  - `global_filter_lec_runtime_ns`: summed wall-clock runtime for built-in
+    LEC global-filter invocations across mutants.
+  - `global_filter_bmc_runtime_ns`: summed wall-clock runtime for built-in
+    differential BMC global-filter invocations across mutants.
+  - `global_filter_cmd_runtime_ns`: summed wall-clock runtime for
+    command-mode global-filter invocations (`--formal-global-propagate-cmd`).
+  - `global_filter_lec_runs`: number of built-in LEC global-filter
+    invocations across mutants.
+  - `global_filter_bmc_runs`: number of built-in differential BMC
+    global-filter invocations across mutants.
+  - `global_filter_cmd_runs`: number of command-mode global-filter
+    invocations across mutants.
   - `generated_mutations_enabled`: whether this run used built-in mutation-list
     generation (`1`/`0`).
   - `generated_mutations_cache_hit`: whether generated-mutation cache lookup
