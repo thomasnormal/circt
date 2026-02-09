@@ -85,7 +85,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - 4-way classes (`not_activated`, `not_propagated`, `propagated_not_detected`, `detected`) | **DONE** | 0 | Mutant + pair-level artifacts |
 | - Formal activation/propagation pruning | **DONE** | 0 | Per test-mutant pair pre-qualification |
 | - Improvement + metric report modes | **DONE** | 0 | `improvement.tsv` + `metrics.tsv` outputs |
-| - Single-host parallel scheduler/resume | MISSING | — | Needed for large AVIP/suite throughput |
+| - Single-host parallel scheduler/resume | **DONE** | 0 | Added `--jobs` + `--resume` with deterministic report rebuild |
 | - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
 | - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | MISSING | — | Hook into recurring formal gate matrix |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |

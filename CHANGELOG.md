@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 724 - February 9, 2026
+
+### Mutation Harness Throughput/Resume Upgrade
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--jobs <N>`: single-host parallel per-mutant execution
+  - `--resume`: skip already completed mutants when local artifacts are present
+- Implementation details:
+  - workers emit per-mutant local artifacts under
+    `<work-dir>/mutations/<mutation-id>/`
+  - global reports are rebuilt deterministically in input mutation order
+    (stable output independent of worker scheduling order)
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--jobs` and `--resume` options
+  - added `test/Tools/run-mutation-cover-resume.test`
+    - validates first run executes workers
+    - validates second run with `--resume --skip-baseline` does not rerun
+      mutation workers
+  - `docs/FormalRegression.md`
+    - documented `--jobs` and `--resume` behavior
+  - `PROJECT_PLAN.md`
+    - marked single-host scheduler/resume as done for mutation coverage.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation (sandbox-compatible): PASS
+  - parallel execution with `--jobs 2`
+  - resume skip behavior with `--resume --skip-baseline`
+  - regression check of 4-way classification scenario (`50.00%` coverage)
+- Lit execution note:
+  - direct `llvm-lit` invocation remains blocked in this sandbox by Python
+    multiprocessing semaphore permission (`PermissionError: [Errno 13]`).
+
 ## Iteration 723 - February 9, 2026
 
 ### Mutation Coverage Harness (Certitude-Style 4-Way Classification)
