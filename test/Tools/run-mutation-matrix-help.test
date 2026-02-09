@@ -2,6 +2,7 @@
 
 // CHECK: run_mutation_matrix.sh [options]
 // CHECK: --lanes-tsv
+// CHECK: --gate-summary-file
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
 // CHECK: --skip-baseline

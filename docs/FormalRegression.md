@@ -60,6 +60,7 @@ utils/run_formal_all.sh --strict-gate
 - pass-rate non-regression
 - fail-like case-ID non-regression (`failure_cases` baseline telemetry)
 - OpenTitan `E2E_MODE_DIFF` `strict_only_fail` non-regression
+- OpenTitan `E2E_MODE_DIFF` `status_diff` non-regression
 
 Use a trailing baseline window for trend-aware strict gates:
 
@@ -97,6 +98,10 @@ Use a targeted gate without enabling all strict-gate checks:
 
 ```bash
 utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan ~/opentitan --fail-on-new-e2e-mode-diff-strict-only-fail --baseline-file /tmp/formal-baselines.tsv
+```
+
+```bash
+utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan ~/opentitan --fail-on-new-e2e-mode-diff-status-diff --baseline-file /tmp/formal-baselines.tsv
 ```
 
 ## Mutation Coverage Harness (Certitude-Style Classification)
@@ -462,6 +467,13 @@ Matrix `results.tsv` columns:
 lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns    generated_mutations_cache_lock_wait_ns    generated_mutations_cache_lock_contended
 ```
 
+Matrix gate summary artifact:
+
+```text
+<out-dir>/gate_summary.tsv
+gate_status    count
+```
+
 Execution controls:
 - `--lane-jobs <N>`: run up to `N` lanes concurrently.
 - `--lane-schedule-policy fifo|cache-aware`: lane dispatch strategy.
@@ -469,6 +481,8 @@ Execution controls:
   followers to reduce lock contention when `--reuse-cache-dir` is enabled.
 - `--jobs-per-lane <N>`: per-lane mutant worker count passed through to
   `run_mutation_cover.sh`.
+- `--gate-summary-file <path>`: write matrix gate-status counts
+  (default `<out-dir>/gate_summary.tsv`).
 - `--skip-baseline`: pass-through `run_mutation_cover.sh --skip-baseline`
   for all lanes.
 - `--fail-on-undetected`: pass-through
@@ -1045,6 +1059,7 @@ utils/run_formal_all.sh --fail-on-new-xpass
 utils/run_formal_all.sh --fail-on-passrate-regression
 utils/run_formal_all.sh --fail-on-new-failure-cases
 utils/run_formal_all.sh --fail-on-new-e2e-mode-diff-strict-only-fail
+utils/run_formal_all.sh --fail-on-new-e2e-mode-diff-status-diff
 ```
 
 Gate on known expected-failure budgets per suite/mode:
