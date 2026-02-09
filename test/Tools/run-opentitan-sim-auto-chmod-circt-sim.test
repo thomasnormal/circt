@@ -1,0 +1,12 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/ot %t/bin
+// RUN: printf '#!/bin/sh\nout=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "-o" ]; then shift; out="$1"; fi\n  shift\ndone\n: > "$out"\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho "TEST PASSED: prim_count smoke"\nexit 0\n' > %t/bin/circt-sim
+// RUN: chmod 0644 %t/bin/circt-sim
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_SIM=%t/bin/circt-sim OPENTITAN_DIR=%t/ot OUT_DIR=%t/out %S/../../utils/run_opentitan_circt_sim.sh prim_count --timeout=5 2>&1 | FileCheck %s
+// RUN: test -x %t/bin/circt-sim
+
+// CHECK: Warning: circt-sim is not executable
+// CHECK: TEST PASSED: prim_count smoke
+// CHECK: Simulation completed
