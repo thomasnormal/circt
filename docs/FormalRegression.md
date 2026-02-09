@@ -101,6 +101,24 @@ Gate behavior:
 - `--fail-on-undetected`: fails with exit code `3` if any `propagated_not_detected` mutants remain.
 - `--fail-on-errors`: fails with exit code `1` when formal/test infrastructure errors occur.
 
+### Mutation Lane Matrix Runner
+
+Run multiple mutation lanes from a single TSV:
+
+```bash
+utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutation-matrix
+```
+
+Lane TSV schema (tab-separated):
+
+```text
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold
+```
+
+Notes:
+- Use `-` for `activate_cmd` / `propagate_cmd` to disable that stage.
+- Use `-` for `coverage_threshold` to skip threshold gating per lane.
+
 Shard/route a run to selected lane IDs:
 
 ```bash

@@ -1,0 +1,7 @@
+// RUN: %S/../../utils/run_mutation_matrix.sh --help | FileCheck %s
+
+// CHECK: run_mutation_matrix.sh [options]
+// CHECK: --lanes-tsv
+// CHECK: --create-mutated-script
+// CHECK: --jobs-per-lane
+// CHECK: --stop-on-fail
