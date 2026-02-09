@@ -233,13 +233,16 @@ Run multiple lanes with `circt-mut matrix`:
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
-  --create-mutated-script ~/mcy/scripts/create_mutated.sh \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
   --include-lane-regex '^sv-tests|^verilator' \
   --exclude-lane-regex 'slow'
 ```
+
+Mutation materialization is built in by default via
+`utils/create_mutated_yosys.sh`. Override with `--create-mutated-script` only
+if you need MCY/external compatibility behavior.
 
 Command mapping by workflow:
 
@@ -315,7 +318,6 @@ certitude_run \
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
-  --create-mutated-script ~/mcy/scripts/create_mutated.sh \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \

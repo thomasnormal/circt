@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 780 - February 9, 2026
+
+### Mutation Cover: Built-In Mutant Materialization Default
+
+1. Added `utils/create_mutated_yosys.sh`:
+   - in-repo MCY-compatible mutant materialization helper
+   - consumes `-i/-o/-d` input/output/design contract used by
+     `run_mutation_cover.sh`
+   - invokes `yosys mutate` and writes `.il/.v/.sv` outputs
+2. Updated `utils/run_mutation_cover.sh` defaults:
+   - `--create-mutated-script` now defaults to
+     `utils/create_mutated_yosys.sh`
+   - removes hard dependency on `~/mcy/scripts/create_mutated.sh` for
+     standard flows
+3. Updated documentation:
+   - `README.md`
+   - `docs/FormalRegression.md`
+   - examples now treat `--create-mutated-script` as optional override
+     (MCY/site wrappers), not required baseline setup
+
+### Tests
+
+- Added:
+  - `test/Tools/run-mutation-create-mutated-yosys-basic.test`
+  - `test/Tools/run-mutation-cover-default-create-mutated.test`
+  - `test/Tools/run-mutation-matrix-default-create-mutated.test`
+- Updated roadmap note:
+  - `PROJECT_PLAN.md` (`circt-mut` row now tracks in-repo default mutator
+    coverage)
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/create_mutated_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-create-mutated-yosys-basic.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-matrix-default-create-mutated.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix-help.test test/Tools/circt-mut-help.test`: PASS (6/6)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-create-mutated-yosys-basic.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (69/69)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-default-mutator --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `i2s_avip`, `i3c_avip`,
+      `jtag_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 779 - February 9, 2026
 
 ### Mutation Matrix: Cache-Aware Lane Scheduling

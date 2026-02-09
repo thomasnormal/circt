@@ -1,0 +1,21 @@
+// RUN: rm -rf %t && mkdir -p %t %t/bin
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_MARK\n' > %t/input.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nlog=""\nscript=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -ql) log="$2"; shift 2 ;;\n    *) script="$1"; shift ;;\n  esac\ndone\ndesign=$(sed -n "s/^read_rtlil //p" "$script" | head -n1)\nout=$(sed -n "s/^write_rtlil //p" "$script" | head -n1)\nmut=$(sed -n "s/^mutate //p" "$script" | head -n1)\ncp "$design" "$out"\necho >> "$out"\necho "// mutate: $mut" >> "$out"\nprintf "fake yosys ok\\n" > "$log"\n' > %t/bin/yosys
+// RUN: chmod +x %t/bin/yosys
+//
+// RUN: PATH="%t/bin:$PATH" %S/../../utils/create_mutated_yosys.sh \
+// RUN:   --input %t/input.txt \
+// RUN:   --design %t/design.il \
+// RUN:   --output %t/out.il \
+// RUN:   --script %t/mutate.ys
+//
+// RUN: FileCheck %s --check-prefix=SCRIPT < %t/mutate.ys
+// RUN: FileCheck %s --check-prefix=OUT < %t/out.il
+//
+// SCRIPT: read_rtlil {{.*}}/design.il
+// SCRIPT: mutate M_MARK
+// SCRIPT: write_rtlil {{.*}}/out.il
+//
+// OUT: module top; endmodule
+// OUT: // mutate: M_MARK

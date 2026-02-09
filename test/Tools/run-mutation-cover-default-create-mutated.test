@@ -1,0 +1,24 @@
+// RUN: rm -rf %t && mkdir -p %t %t/bin
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_MARK\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif grep -q \"// mutate: M_MARK\" ../mutant.il; then\n  echo DETECTED > result.txt\nelse\n  echo SURVIVED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nlog=""\nscript=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -ql) log="$2"; shift 2 ;;\n    *) script="$1"; shift ;;\n  esac\ndone\ndesign=$(sed -n "s/^read_rtlil //p" "$script" | head -n1)\nout=$(sed -n "s/^write_rtlil //p" "$script" | head -n1)\nmut=$(sed -n "s/^mutate //p" "$script" | head -n1)\ncp "$design" "$out"\necho >> "$out"\necho "// mutate: $mut" >> "$out"\nprintf "fake yosys ok\\n" > "$log"\n' > %t/bin/yosys
+// RUN: chmod +x %t/bin/yosys
+//
+// RUN: PATH="%t/bin:$PATH" %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --skip-baseline \
+// RUN:   --work-dir %t/out
+//
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=METRICS < %t/out/metrics.tsv
+//
+// SUMMARY: mutation_id{{.*}}classification
+// SUMMARY: 1{{.*}}detected
+//
+// METRICS: detected_mutants{{.*}}1
+// METRICS: errors{{.*}}0
