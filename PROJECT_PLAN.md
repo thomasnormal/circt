@@ -18237,6 +18237,15 @@ ninja -C build circt-verilog
   - Prevents acceptance of revoked-status data from expired CRLs.
   - Tightens revocation policy from "CRL present" to "CRL present and fresh".
 
+### Iteration 689
+- Added Ed25519 OCSP revocation checks for lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-response-file`
+  - requires `--lane-state-manifest-ed25519-ca-file`
+  - OCSP response hash now binds into lane-state config/manifest contracts.
+- Planning impact:
+  - Closes online-status parity gap by supporting revocation proofs beyond CRL.
+  - Strengthens signer revocation policy for distributed 24/7 checkpoint trust.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18247,8 +18256,9 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add OCSP revocation integration on top of CA + subject + CRL policy
-    controls.
+  - Add OCSP freshness and responder-identity policy controls (currently
+    response-file based only).
+  - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

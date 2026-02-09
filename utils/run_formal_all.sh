@@ -118,6 +118,10 @@ Options:
   --lane-state-manifest-ed25519-crl-file FILE
                          Optional CRL PEM checked with --lane-state-manifest-ed25519-ca-file
                          during Ed25519 keyring cert verification
+  --lane-state-manifest-ed25519-ocsp-response-file FILE
+                         Optional DER OCSP response checked with
+                         --lane-state-manifest-ed25519-ca-file during Ed25519
+                         keyring cert verification
   --lane-state-manifest-ed25519-cert-subject-regex REGEX
                          Optional regex constraint applied to selected Ed25519
                          certificate subject (keyring mode)
@@ -215,12 +219,14 @@ LANE_STATE_MANIFEST_ED25519_KEYRING_TSV=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CA_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
+LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED=""
 LANE_STATE_MANIFEST_ED25519_CA_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
+LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER=""
@@ -371,6 +377,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-file)
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-response-file)
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-cert-subject-regex)
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
@@ -526,6 +534,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" && -z "$LANE_STATE_MANIFEST_ED2
   echo "--lane-state-manifest-ed25519-crl-file requires --lane-state-manifest-ed25519-ca-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-response-file requires --lane-state-manifest-ed25519-keyring-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_CA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-response-file requires --lane-state-manifest-ed25519-ca-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
   echo "--lane-state-manifest-ed25519-cert-subject-regex requires --lane-state-manifest-ed25519-keyring-tsv" >&2
   exit 1
@@ -566,6 +582,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CA_FILE" && ! -r "$LANE_STATE_MANIFEST_ED
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" ]]; then
   echo "lane state Ed25519 CRL file not readable: $LANE_STATE_MANIFEST_ED25519_CRL_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "lane state Ed25519 OCSP response file not readable: $LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
@@ -683,6 +703,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
@@ -699,6 +720,7 @@ expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256", "").
 target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
 ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
 crl_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_FILE", "").strip()
+ocsp_response_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE", "").strip()
 cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
@@ -963,6 +985,39 @@ if cert_file_path:
         verify_cmd,
         f"lane state Ed25519 certificate verify failed for key_id '{target_key_id}'",
     )
+    if ocsp_response_file:
+      ocsp_status_raw = run_openssl(
+          [
+              "openssl",
+              "ocsp",
+              "-issuer",
+              ca_file,
+              "-cert",
+              str(cert_path),
+              "-respin",
+              ocsp_response_file,
+              "-CAfile",
+              ca_file,
+              "-VAfile",
+              ca_file,
+              "-no_nonce",
+          ],
+          f"lane state Ed25519 OCSP verification failed for key_id '{target_key_id}'",
+      ).stdout.decode("utf-8", errors="replace")
+      status_match = re.search(r":\s*(good|revoked|unknown)\b", ocsp_status_raw)
+      if status_match is None:
+        print(
+            f"lane state Ed25519 OCSP status parse failed for key_id '{target_key_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      ocsp_status = status_match.group(1)
+      if ocsp_status != "good":
+        print(
+            f"lane state Ed25519 OCSP status is {ocsp_status} for key_id '{target_key_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 elif ca_file:
   print(
       f"lane state Ed25519 keyring key_id '{target_key_id}' missing cert_file_path while --lane-state-manifest-ed25519-ca-file is set",
@@ -999,8 +1054,16 @@ PY
       else
         LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
       fi
+      if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+        LANE_STATE_MANIFEST_ED25519_OCSP_SHA256="$(
+          sha256sum "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" | awk '{print $1}'
+        )"
+      else
+        LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
+      fi
     else
       LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
+      LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
     fi
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="keyring"
   else
@@ -1014,6 +1077,7 @@ PY
     LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
     LANE_STATE_MANIFEST_ED25519_CA_SHA256=""
     LANE_STATE_MANIFEST_ED25519_CRL_SHA256=""
+    LANE_STATE_MANIFEST_ED25519_OCSP_SHA256=""
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="file"
   fi
   LANE_STATE_MANIFEST_SIGN_MODE="ed25519"
@@ -1333,6 +1397,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SHA256"
     printf "lane_state_ed25519_ca_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CA_SHA256"
     printf "lane_state_ed25519_crl_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_SHA256"
+    printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
@@ -1453,6 +1518,7 @@ lane_state_emit_manifest() {
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
   LANE_STATE_MANIFEST_ED25519_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_CERT_SHA256" \
   LANE_STATE_MANIFEST_ED25519_CRL_SHA256="$LANE_STATE_MANIFEST_ED25519_CRL_SHA256" \
+  LANE_STATE_MANIFEST_ED25519_OCSP_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   python3 - <<'PY'
@@ -1523,6 +1589,9 @@ elif sign_mode == "ed25519":
   crl_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_SHA256", "").strip()
   if crl_sha:
     payload["ed25519_crl_sha256"] = crl_sha
+  ocsp_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_SHA256", "").strip()
+  if ocsp_sha:
+    payload["ed25519_ocsp_sha256"] = ocsp_sha
   ed_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
   ed_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
   ed_window_start = parse_window_date(ed_key_not_before, "not_before", "Ed25519")
@@ -1610,6 +1679,7 @@ lane_state_verify_manifest() {
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
   LANE_STATE_MANIFEST_ED25519_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_CERT_SHA256" \
   LANE_STATE_MANIFEST_ED25519_CRL_SHA256="$LANE_STATE_MANIFEST_ED25519_CRL_SHA256" \
+  LANE_STATE_MANIFEST_ED25519_OCSP_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   SOURCE_LABEL="$source_label" \
@@ -1636,6 +1706,7 @@ expected_sign_mode = os.environ["LANE_STATE_MANIFEST_SIGN_MODE"]
 expected_ed25519_key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
 expected_ed25519_cert_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SHA256", "").strip()
 expected_ed25519_crl_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_SHA256", "").strip()
+expected_ed25519_ocsp_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_SHA256", "").strip()
 ed25519_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
 ed25519_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
 
@@ -1778,6 +1849,19 @@ elif expected_sign_mode == "ed25519":
   if expected_ed25519_crl_sha and manifest_crl_sha != expected_ed25519_crl_sha:
     print(
         f"invalid lane-state manifest for {source}: ed25519_crl_sha256 mismatch (expected {expected_ed25519_crl_sha}, found {manifest_crl_sha})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  manifest_ocsp_sha = payload.get("ed25519_ocsp_sha256", "")
+  if manifest_ocsp_sha and (not isinstance(manifest_ocsp_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_ocsp_sha)):
+    print(
+        f"invalid lane-state manifest for {source}: ed25519_ocsp_sha256 must be 64 hex chars",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  if expected_ed25519_ocsp_sha and manifest_ocsp_sha != expected_ed25519_ocsp_sha:
+    print(
+        f"invalid lane-state manifest for {source}: ed25519_ocsp_sha256 mismatch (expected {expected_ed25519_ocsp_sha}, found {manifest_ocsp_sha})",
         file=os.sys.stderr,
     )
     raise SystemExit(1)
