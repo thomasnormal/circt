@@ -349,6 +349,9 @@ Execution controls:
     `propagated` (do not prune).
   - `auto`: run LEC and differential BMC in parallel with consensus-safe
     classification (same pruning semantics as `consensus` with lower wall-time).
+    When either engine returns a decisive propagated result (`NEQ`, `UNKNOWN`,
+    or differential mismatch), auto may short-circuit and cancel the peer
+    engine.
 
 `tests.tsv` format (tab-separated):
 
@@ -422,6 +425,8 @@ Generated artifacts (default under `./mutation-cover-results`):
     resolved to `error`.
   - `chain_auto_parallel_mutants`: count of mutants classified using
     auto-mode parallel LEC/BMC execution.
+  - `chain_auto_short_circuit_mutants`: count of auto-mode mutants where
+    execution short-circuited after one engine already proved propagation.
   - `bmc_orig_cache_hit_mutants`: count of mutants using cached original-design
     BMC results in built-in differential BMC mode.
   - `bmc_orig_cache_miss_mutants`: count of mutants that required a fresh

@@ -150,6 +150,8 @@ Formal command conventions:
     - circt-chain auto:
         run circt-lec and differential circt-bmc in parallel; classify with
         consensus-safe semantics (not_propagated only on both not_propagated).
+        auto may short-circuit and cancel the peer engine when one side
+        already proves propagated.
 
 Test command conventions:
   Each test command runs in a per-(test,mutant) directory and must write result_file.
@@ -626,6 +628,7 @@ declare -A REUSE_GLOBAL_CHAIN_CONSENSUS_NOT_PROPAGATED
 declare -A REUSE_GLOBAL_CHAIN_CONSENSUS_DISAGREEMENT
 declare -A REUSE_GLOBAL_CHAIN_CONSENSUS_ERROR
 declare -A REUSE_GLOBAL_CHAIN_AUTO_PARALLEL
+declare -A REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT
 declare -A REUSE_GLOBAL_FILTER_LEC_UNKNOWN
 declare -A REUSE_GLOBAL_FILTER_BMC_UNKNOWN
 declare -A FILE_HASH_CACHE
@@ -757,6 +760,7 @@ load_reuse_pairs() {
       REUSE_GLOBAL_CHAIN_CONSENSUS_DISAGREEMENT["$mutation_id"]="$([[ "$note" == *"chain_consensus_disagreement=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_CONSENSUS_ERROR["$mutation_id"]="$([[ "$note" == *"chain_consensus_error=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_CHAIN_AUTO_PARALLEL["$mutation_id"]="$([[ "$note" == *"chain_auto_parallel=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT["$mutation_id"]="$([[ "$note" == *"chain_auto_short_circuit=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_FILTER_LEC_UNKNOWN["$mutation_id"]="$([[ "$note" == *"global_filter_lec_unknown=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_FILTER_BMC_UNKNOWN["$mutation_id"]="$([[ "$note" == *"global_filter_bmc_unknown=1"* ]] && printf "1" || printf "0")"
       continue
@@ -1766,7 +1770,7 @@ classify_global_propagate_circt_chain() {
   local lec_pid=""
   local bmc_pid=""
 
-  if [[ "$chain_mode" == "consensus" || "$chain_mode" == "auto" ]]; then
+  if [[ "$chain_mode" == "consensus" ]]; then
     (
       classify_global_propagate_circt_lec_raw "$run_dir" "$lec_log" > "$lec_result_file"
     ) &
@@ -1796,10 +1800,146 @@ classify_global_propagate_circt_chain() {
     fi
     {
       printf "# chain_mode=%s lec_state=%s lec_rc=%s\n" "$chain_mode" "$lec_state" "$lec_rc"
-      cat "$lec_log"
+      [[ -f "$lec_log" ]] && cat "$lec_log"
       printf "\n# chain_%s_bmc_state=%s bmc_rc=%s\n" "$chain_mode" "$bmc_state" "$bmc_rc"
-      cat "$bmc_log"
+      [[ -f "$bmc_log" ]] && cat "$bmc_log"
     } > "$log_file"
+    if [[ "$lec_state" == "eq" && "$bmc_state" == "equal" ]]; then
+      printf "not_propagated\t%s\n" "$final_rc"
+      return
+    fi
+    if [[ "$lec_state" == "neq" || "$lec_state" == "unknown" || "$bmc_state" == "different" || "$bmc_state" == "unknown" ]]; then
+      printf "propagated\t%s\n" "$final_rc"
+      return
+    fi
+    if [[ "$lec_state" == "error" && "$bmc_state" == "equal" ]]; then
+      printf "propagated\t%s\n" "$final_rc"
+      return
+    fi
+    if [[ "$bmc_state" == "error" && "$lec_state" == "eq" ]]; then
+      printf "propagated\t%s\n" "$final_rc"
+      return
+    fi
+    printf "error\t%s\n" "$final_rc"
+    return
+  fi
+
+  if [[ "$chain_mode" == "auto" ]]; then
+    local lec_done=0
+    local bmc_done=0
+    local auto_short_circuit=0
+    local auto_winner=""
+    local auto_winner_state=""
+    local auto_winner_rc="-1"
+
+    (
+      classify_global_propagate_circt_lec_raw "$run_dir" "$lec_log" > "$lec_result_file"
+    ) &
+    lec_pid=$!
+    (
+      classify_global_propagate_circt_bmc_raw "$run_dir" "$bmc_log" > "$bmc_result_file"
+    ) &
+    bmc_pid=$!
+
+    while :; do
+      if [[ "$lec_done" -eq 0 ]]; then
+        if [[ -s "$lec_result_file" ]]; then
+          read -r lec_state lec_rc < "$lec_result_file"
+          lec_done=1
+        elif ! kill -0 "$lec_pid" 2>/dev/null; then
+          wait "$lec_pid" 2>/dev/null || true
+          if [[ -s "$lec_result_file" ]]; then
+            read -r lec_state lec_rc < "$lec_result_file"
+          else
+            lec_state="error"
+            lec_rc="-1"
+          fi
+          lec_done=1
+        fi
+      fi
+
+      if [[ "$bmc_done" -eq 0 ]]; then
+        if [[ -s "$bmc_result_file" ]]; then
+          read -r bmc_state bmc_rc < "$bmc_result_file"
+          bmc_done=1
+        elif ! kill -0 "$bmc_pid" 2>/dev/null; then
+          wait "$bmc_pid" 2>/dev/null || true
+          if [[ -s "$bmc_result_file" ]]; then
+            read -r bmc_state bmc_rc < "$bmc_result_file"
+          else
+            bmc_state="error"
+            bmc_rc="-1"
+          fi
+          bmc_done=1
+        fi
+      fi
+
+      if [[ "$lec_done" -eq 1 && "$bmc_done" -eq 0 && ( "$lec_state" == "neq" || "$lec_state" == "unknown" ) ]]; then
+        auto_short_circuit=1
+        auto_winner="lec"
+        auto_winner_state="$lec_state"
+        auto_winner_rc="$lec_rc"
+        kill "$bmc_pid" 2>/dev/null || true
+        wait "$bmc_pid" 2>/dev/null || true
+        bmc_done=1
+        bmc_state="cancelled"
+        bmc_rc="-1"
+      fi
+
+      if [[ "$bmc_done" -eq 1 && "$lec_done" -eq 0 && ( "$bmc_state" == "different" || "$bmc_state" == "unknown" ) ]]; then
+        auto_short_circuit=1
+        auto_winner="bmc"
+        auto_winner_state="$bmc_state"
+        auto_winner_rc="$bmc_rc"
+        kill "$lec_pid" 2>/dev/null || true
+        wait "$lec_pid" 2>/dev/null || true
+        lec_done=1
+        lec_state="cancelled"
+        lec_rc="-1"
+      fi
+
+      if [[ "$auto_short_circuit" -eq 1 || ( "$lec_done" -eq 1 && "$bmc_done" -eq 1 ) ]]; then
+        break
+      fi
+      sleep 0.01
+    done
+
+    wait "$lec_pid" 2>/dev/null || true
+    wait "$bmc_pid" 2>/dev/null || true
+
+    rm -f "$lec_result_file" "$bmc_result_file"
+
+    if [[ "$auto_short_circuit" -eq 1 ]]; then
+      final_rc="$auto_winner_rc"
+      if [[ -z "$final_rc" || "$final_rc" == "-1" ]]; then
+        final_rc="$lec_rc"
+        if [[ "$final_rc" -eq 0 || "$final_rc" == "-1" ]]; then
+          final_rc="$bmc_rc"
+        fi
+      fi
+    else
+      final_rc="$lec_rc"
+      if [[ "$final_rc" -eq 0 ]]; then
+        final_rc="$bmc_rc"
+      fi
+    fi
+
+    {
+      printf "# chain_mode=auto lec_state=%s lec_rc=%s\n" "$lec_state" "$lec_rc"
+      [[ -f "$lec_log" ]] && cat "$lec_log"
+      printf "\n# chain_auto_bmc_state=%s bmc_rc=%s\n" "$bmc_state" "$bmc_rc"
+      [[ -f "$bmc_log" ]] && cat "$bmc_log"
+      if [[ "$auto_short_circuit" -eq 1 ]]; then
+        printf "\n# chain_auto_short_circuit=1 winner=%s winner_state=%s winner_rc=%s\n" \
+          "$auto_winner" "$auto_winner_state" "$auto_winner_rc"
+      fi
+    } > "$log_file"
+
+    if [[ "$auto_short_circuit" -eq 1 ]]; then
+      printf "propagated\t%s\n" "$final_rc"
+      return
+    fi
+
     if [[ "$lec_state" == "eq" && "$bmc_state" == "equal" ]]; then
       printf "not_propagated\t%s\n" "$final_rc"
       return
@@ -2014,6 +2154,7 @@ process_mutation() {
   local chain_consensus_disagreement=0
   local chain_consensus_error=0
   local chain_auto_parallel=0
+  local chain_auto_short_circuit=0
   local bmc_orig_cache_hit=0
   local bmc_orig_cache_miss=0
   local bmc_orig_runtime_ns=0
@@ -2056,6 +2197,7 @@ process_mutation() {
       printf "chain_consensus_disagreement\t0\n"
       printf "chain_consensus_error\t0\n"
       printf "chain_auto_parallel\t0\n"
+      printf "chain_auto_short_circuit\t0\n"
       printf "bmc_orig_cache_hit\t0\n"
       printf "bmc_orig_cache_miss\t0\n"
       printf "bmc_orig_cache_saved_runtime_ns\t0\n"
@@ -2090,6 +2232,7 @@ process_mutation() {
       chain_consensus_disagreement="${REUSE_GLOBAL_CHAIN_CONSENSUS_DISAGREEMENT[$mutation_id]:-0}"
       chain_consensus_error="${REUSE_GLOBAL_CHAIN_CONSENSUS_ERROR[$mutation_id]:-0}"
       chain_auto_parallel="${REUSE_GLOBAL_CHAIN_AUTO_PARALLEL[$mutation_id]:-0}"
+      chain_auto_short_circuit="${REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT[$mutation_id]:-0}"
       global_filter_lec_unknown="${REUSE_GLOBAL_FILTER_LEC_UNKNOWN[$mutation_id]:-0}"
       global_filter_bmc_unknown="${REUSE_GLOBAL_FILTER_BMC_UNKNOWN[$mutation_id]:-0}"
       {
@@ -2139,6 +2282,9 @@ process_mutation() {
       fi
     elif [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "auto" ]]; then
       chain_auto_parallel=1
+      if grep -Eq '^# chain_auto_short_circuit=1 ' "$mutation_dir/global_propagate.log"; then
+        chain_auto_short_circuit=1
+      fi
     fi
     if [[ "$global_filter_state" == "propagated" ]]; then
       if grep -Eq '^# chain_mode=.* primary=lec primary_state=error ' "$mutation_dir/global_propagate.log" || \
@@ -2189,6 +2335,9 @@ process_mutation() {
   if [[ -n "$global_filter_state" ]]; then
     if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "auto" ]]; then
       chain_auto_parallel=1
+      if grep -Eq '^# chain_auto_short_circuit=1 ' "$mutation_dir/global_propagate.log"; then
+        chain_auto_short_circuit=1
+      fi
     fi
     case "$global_filter_state" in
       not_propagated)
@@ -2218,7 +2367,7 @@ process_mutation() {
         ;;
     esac
     if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
-      global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_resolved_propagated=${chain_bmc_resolved_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated};chain_lec_resolved_propagated=${chain_lec_resolved_propagated};chain_lec_error_fallback=${chain_lec_error_fallback};chain_bmc_error_fallback=${chain_bmc_error_fallback};chain_consensus_not_propagated=${chain_consensus_not_propagated};chain_consensus_disagreement=${chain_consensus_disagreement};chain_consensus_error=${chain_consensus_error};chain_auto_parallel=${chain_auto_parallel}"
+      global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_resolved_propagated=${chain_bmc_resolved_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated};chain_lec_resolved_propagated=${chain_lec_resolved_propagated};chain_lec_error_fallback=${chain_lec_error_fallback};chain_bmc_error_fallback=${chain_bmc_error_fallback};chain_consensus_not_propagated=${chain_consensus_not_propagated};chain_consensus_disagreement=${chain_consensus_disagreement};chain_consensus_error=${chain_consensus_error};chain_auto_parallel=${chain_auto_parallel};chain_auto_short_circuit=${chain_auto_short_circuit}"
     fi
     if [[ "$bmc_orig_cache_hit" -eq 1 ]]; then
       global_filter_note="${global_filter_note};bmc_orig_cache=hit"
@@ -2374,6 +2523,7 @@ process_mutation() {
     printf "chain_consensus_disagreement\t%s\n" "$chain_consensus_disagreement"
     printf "chain_consensus_error\t%s\n" "$chain_consensus_error"
     printf "chain_auto_parallel\t%s\n" "$chain_auto_parallel"
+    printf "chain_auto_short_circuit\t%s\n" "$chain_auto_short_circuit"
     printf "bmc_orig_cache_hit\t%s\n" "$bmc_orig_cache_hit"
     printf "bmc_orig_cache_miss\t%s\n" "$bmc_orig_cache_miss"
     printf "bmc_orig_cache_saved_runtime_ns\t%s\n" "$bmc_orig_cache_saved_runtime_ns"
@@ -2507,6 +2657,7 @@ count_chain_consensus_not_propagated=0
 count_chain_consensus_disagreement=0
 count_chain_consensus_error=0
 count_chain_auto_parallel=0
+count_chain_auto_short_circuit=0
 count_bmc_orig_cache_hit=0
 count_bmc_orig_cache_miss=0
 count_bmc_orig_cache_saved_runtime_ns=0
@@ -2706,6 +2857,15 @@ for i in "${!MUTATION_IDS[@]}"; do
     count_chain_auto_parallel=$((count_chain_auto_parallel + local_chain_auto_parallel))
   fi
 
+  local_chain_auto_short_circuit=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_auto_short_circuit="$(awk -F$'\t' '$1=="chain_auto_short_circuit"{print $2}' "$meta_local" | head -n1)"
+    local_chain_auto_short_circuit="${local_chain_auto_short_circuit:-0}"
+  fi
+  if [[ "$local_chain_auto_short_circuit" =~ ^[0-9]+$ ]]; then
+    count_chain_auto_short_circuit=$((count_chain_auto_short_circuit + local_chain_auto_short_circuit))
+  fi
+
   local_bmc_orig_cache_hit=0
   if [[ -f "$meta_local" ]]; then
     local_bmc_orig_cache_hit="$(awk -F$'\t' '$1=="bmc_orig_cache_hit"{print $2}' "$meta_local" | head -n1)"
@@ -2892,6 +3052,7 @@ fi
   printf "chain_consensus_disagreement_mutants\t%s\n" "$count_chain_consensus_disagreement"
   printf "chain_consensus_error_mutants\t%s\n" "$count_chain_consensus_error"
   printf "chain_auto_parallel_mutants\t%s\n" "$count_chain_auto_parallel"
+  printf "chain_auto_short_circuit_mutants\t%s\n" "$count_chain_auto_short_circuit"
   printf "bmc_orig_cache_hit_mutants\t%s\n" "$count_bmc_orig_cache_hit"
   printf "bmc_orig_cache_miss_mutants\t%s\n" "$count_bmc_orig_cache_miss"
   printf "bmc_orig_cache_saved_runtime_ns\t%s\n" "$count_bmc_orig_cache_saved_runtime_ns"
@@ -2946,14 +3107,17 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "global_filtered_not_propagated_mutants": $count_global_filtered_not_propagated,
   "chain_lec_unknown_fallbacks": $count_chain_lec_unknown_fallbacks,
   "chain_bmc_resolved_not_propagated_mutants": $count_chain_bmc_resolved_not_propagated,
+  "chain_bmc_resolved_propagated_mutants": $count_chain_bmc_resolved_propagated,
   "chain_bmc_unknown_fallbacks": $count_chain_bmc_unknown_fallbacks,
   "chain_lec_resolved_not_propagated_mutants": $count_chain_lec_resolved_not_propagated,
+  "chain_lec_resolved_propagated_mutants": $count_chain_lec_resolved_propagated,
   "chain_lec_error_fallbacks": $count_chain_lec_error_fallbacks,
   "chain_bmc_error_fallbacks": $count_chain_bmc_error_fallbacks,
   "chain_consensus_not_propagated_mutants": $count_chain_consensus_not_propagated,
   "chain_consensus_disagreement_mutants": $count_chain_consensus_disagreement,
   "chain_consensus_error_mutants": $count_chain_consensus_error,
   "chain_auto_parallel_mutants": $count_chain_auto_parallel,
+  "chain_auto_short_circuit_mutants": $count_chain_auto_short_circuit,
   "bmc_orig_cache_hit_mutants": $count_bmc_orig_cache_hit,
   "bmc_orig_cache_miss_mutants": $count_bmc_orig_cache_miss,
   "bmc_orig_cache_saved_runtime_ns": $count_bmc_orig_cache_saved_runtime_ns,
@@ -3000,7 +3164,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_resolved_propagated=${count_chain_bmc_resolved_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_resolved_propagated=${count_chain_lec_resolved_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} chain_auto_short_circuit=${count_chain_auto_short_circuit} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
