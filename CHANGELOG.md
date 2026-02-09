@@ -1,5 +1,62 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 717 - February 9, 2026
+
+### Refresh-Policy Manifest Signer Revocation/Freshness Controls
+
+- Extended refresh-policy profile-manifest signer keyring mode in
+  `utils/run_formal_all.sh` with signer-cert revocation/freshness controls:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-crl-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-sha256`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-max-age-secs`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update`
+- New validation and trust behavior in signer keyring mode:
+  - CRL/OCSP options require signer keyring mode and signer keyring CA mode
+  - optional OCSP response SHA pin must be 64 hex chars
+  - CRL path and OCSP response path are readability-validated
+  - CRL policy enforces revocation checks and CRL `nextUpdate` freshness
+  - OCSP policy enforces signer status `good`, `thisUpdate` freshness, and
+    optional `nextUpdate` presence.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material with profile-manifest signer
+  revocation/freshness policy inputs:
+  - signer keyring CRL file path + resolved CRL SHA256
+  - signer keyring OCSP response file path + expected/resolved OCSP SHA256
+  - signer keyring OCSP max-age policy
+  - signer keyring OCSP require-next-update policy.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: dependency/format checks for new signer keyring CRL/OCSP flags
+    - positive: signer keyring flow with CRL + OCSP policy enabled
+    - negative: revoked signer cert via CRL
+    - negative: OCSP `nextUpdate` missing when required
+  - `docs/FormalRegression.md`
+    - documented signer keyring CRL/OCSP options and policy semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-manifest-keyring-revocation-sweep-20260209-053601 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - summary:
+      - sv-tests BMC/LEC: 1/1 PASS each
+      - verilator-verification BMC/LEC: 1/1 PASS each
+      - yosys/tests/sva BMC/LEC: 1/1 PASS each
+      - OpenTitan LEC: 1/1 PASS
+      - AVIP compile lanes: 2/9 PASS, 7 failed with `PermissionError` opening
+        `/home/thomas-ahle/circt/build/bin/circt-verilog` (environmental).
+
 ## Iteration 716 - February 9, 2026
 
 ### Refresh-Policy Manifest Signer Cert Anchoring

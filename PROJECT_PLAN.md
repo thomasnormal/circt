@@ -18342,72 +18342,23 @@ ninja -C build circt-verilog
   - Keeps strict determinism: profile-derived controls remain part of lane-state
     config-hash compatibility checks.
 
-### Iteration 713
-- Added profile-registry integrity pinning for Ed25519 refresh auto-URI
-  profiles:
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-sha256`
-  - optional SHA256 pin checked against
-    `--lane-state-manifest-ed25519-refresh-policy-profiles-json`.
-- Lane-state compatibility hashing now records:
-  - selected refresh profile name
-  - resolved profile-registry SHA256
+### Lane-State Hardening Snapshot (Iterations 713-717)
+- Delivered chain of trust for refresh-policy profile registries and their
+  signer material:
+  - profile-registry SHA pinning
+  - signed profile-registry manifest verification
+  - signer keyring mode for profile-manifest signers
+  - signer certificate anchoring + CA verification
+  - signer CRL/OCSP revocation and freshness policy controls.
 - Planning impact:
-  - Hardens profile-registry supply chain in distributed formal farms.
-  - Ensures resume/merge rejects runs that drift in selected profile or profile
-    registry content.
-
-### Iteration 714
-- Added signed refresh policy profile-registry manifest verification:
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json`
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
-- Manifest verification now enforces:
-  - strict schema/version and allowed-key contract
-  - `profiles_sha256` equality to resolved registry SHA
-  - Ed25519 signature verification against a pinned public key
-  - optional signer key-id match when expected key-id is configured.
-- Planning impact:
-  - Moves profile-registry integrity from hash pinning only to authenticated
-    signer identity.
-  - Strengthens cross-worker resume determinism by binding manifest signer/pubkey
-    material into lane-state compatibility hashing.
-
-### Iteration 715
-- Added keyring-backed signer rotation support for refresh-policy profile
-  manifests:
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv`
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-sha256`
-- Added signer-keyring checks for:
-  - key_id lookup from manifest payload
-  - signer status (`active` / `revoked`)
-  - optional signer-key SHA pin
-  - optional signer validity windows (`not_before` / `not_after`) against
-    manifest `generated_at_utc`.
-- Planning impact:
-  - Enables signer-key rotation without per-run public-key file rewiring.
-  - Brings profile-manifest trust to parity with existing keyring-based formal
-    trust contracts used elsewhere in lane-state flows.
-
-### Iteration 716
-- Added signer-certificate-aware refresh-policy profile-manifest signer keyring
-  hardening:
-  - optional keyring row columns:
-    - `cert_file_path`
-    - `cert_sha256`
-  - optional CA anchoring:
-    - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file`
-- Added signer identity and trust checks in keyring mode:
-  - cert SHA pin validation when provided
-  - cert public key must match signer keyring public key
-  - CA-chain verification via configured CA anchor
-  - strict failure when CA anchoring is requested but signer row has no cert.
-- Planning impact:
-  - Closes the signer-cert anchoring gap for profile-manifest signer rotation.
-  - Tightens cross-worker resume safety by binding signer cert/CA trust material
-    into compatibility hashing.
+  - Refresh-policy profile trust now supports rotation-friendly signer identity
+    and cert-based revocation controls while remaining deterministic under
+    resume/merge config-hash policies.
+- Detailed implementation, diagnostics, and validation evidence for each
+  iteration is tracked in `CHANGELOG.md`.
 
 ### Recent Lane-State Hardening (See CHANGELOG)
-- Iterations 698-715 completed the CRL/OCSP refresh control plane:
+- Iterations 698-717 completed the CRL/OCSP refresh control plane:
   - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
     timeout, and jitter controls.
   - signed refresh provenance + strict schema-versioned metadata contracts and
@@ -18428,8 +18379,9 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add explicit signer-cert revocation/freshness policy controls for profile
-    manifests (CRL/OCSP parity with lane-state manifest signer policy).
+  - Add responder-identity/pinning policy controls for profile-manifest signer
+    OCSP checks (responder cert pin/EKU/AKI parity with lane-state signer
+    policy).
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active

@@ -188,6 +188,24 @@ Lane-state semantics:
     - requires keyring mode
     - requires selected signer key row to provide `cert_file_path`
     - validates signer cert chain via `openssl verify -CAfile`.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-crl-file`
+    optionally enables signer-cert CRL revocation + freshness checks in profile
+    manifest keyring mode:
+    - requires keyring mode
+    - requires `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file`
+    - requires selected signer key row to provide `cert_file_path`.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file`
+    optionally enables signer-cert OCSP status checks in profile manifest
+    keyring mode:
+    - requires keyring mode
+    - requires `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file`
+    - requires selected signer key row to provide `cert_file_path`.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-sha256`
+    optionally pins exact signer-cert OCSP response content hash.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-max-age-secs`
+    rejects OCSP responses whose `thisUpdate` age exceeds N seconds.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update`
+    enforces presence of OCSP `nextUpdate`.
   - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
     optionally pins the expected manifest signer `key_id`.
   - `--lane-state-manifest-ed25519-refresh-auto-uri-policy` sets a shared
