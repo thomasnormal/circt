@@ -22,6 +22,8 @@
 // CHECK: --default-formal-global-propagate-circt-bmc
 // CHECK: --default-formal-global-propagate-circt-chain
 // CHECK: --default-formal-global-propagate-bmc-ignore-asserts-until
+// CHECK: --default-bmc-orig-cache-max-entries
+// CHECK: --default-bmc-orig-cache-max-bytes
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs
