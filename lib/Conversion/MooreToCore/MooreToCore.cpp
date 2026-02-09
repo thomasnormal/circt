@@ -21991,6 +21991,19 @@ struct ConditionalConstraintInfo {
   SmallVector<RangeConstraintInfo> elseConstraints;
 };
 
+/// Helper structure to hold extracted class-level dynamic constraint info.
+/// These are property-to-property comparisons like `x < v` where both operands
+/// are class properties and neither is a compile-time constant.
+struct ClassDynConstraintInfo {
+  StringRef prop;         // Constrained property name (rand)
+  StringRef boundProp;    // Bound property name (non-rand or rand)
+  StringRef constraintName; // Name of the constraint block
+  bool isUpper;           // true = upper bound, false = lower bound
+  bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
+  bool isSigned = false;
+  bool isSoft = false;
+};
+
 /// Forward declaration: trace a value back through ReadOp/ClassPropertyRefOp/
 /// VariableOp to find the property name being constrained.
 static StringRef traceToPropertyName(Value variable);
@@ -22412,6 +22425,160 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   }
 
   return constraints;
+}
+
+/// Extract class-level dynamic (property-to-property) constraints from a class
+/// declaration. These are comparisons like `x < v` in constraint blocks where
+/// both operands are class properties and neither is a compile-time constant.
+/// Walks the full class hierarchy (child first, then parents).
+static SmallVector<ClassDynConstraintInfo>
+extractClassDynamicConstraints(ClassDeclOp classDecl) {
+  SmallVector<ClassDynConstraintInfo> results;
+
+  // Helper: extract property name from read(class.property_ref(@prop)),
+  // looking through zext/sext/trunc.
+  auto getPropertyName = [](Value v) -> StringRef {
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
+    if (auto readOp = v.getDefiningOp<ReadOp>()) {
+      if (auto propRef =
+              readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
+        return propRef.getProperty();
+      if (auto varOp = readOp.getInput().getDefiningOp<VariableOp>()) {
+        if (auto nameAttr = varOp.getNameAttr())
+          return nameAttr.getValue();
+      }
+    }
+    return {};
+  };
+
+  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+      FVInt fvVal = constOp.getValue();
+      if (fvVal.hasUnknown())
+        return std::nullopt;
+      return fvVal.getRawValue().getSExtValue();
+    }
+    return std::nullopt;
+  };
+
+  // Helper: try to extract a dynamic property-to-property bound.
+  auto tryExtractDynBound =
+      [&](Operation *defOp, bool isSoft,
+          StringRef constraintName) -> bool {
+    if (!defOp || defOp->getNumOperands() != 2)
+      return false;
+    Value lhs = defOp->getOperand(0);
+    Value rhs = defOp->getOperand(1);
+
+    StringRef lhsProp = getPropertyName(lhs);
+    StringRef rhsProp = getPropertyName(rhs);
+
+    // Both sides must be properties, and at least one must be non-constant.
+    // Skip if either side IS a constant (handled by extractRangeConstraints).
+    if (lhsProp.empty() || rhsProp.empty())
+      return false;
+    if (getConstVal(lhs) || getConstVal(rhs))
+      return false;
+
+    // Determine comparison kind
+    bool isUpperBound = false;
+    bool isStrict = false;
+    bool isSigned = false;
+
+    if (isa<SltOp>(defOp)) {
+      isSigned = true; isStrict = true; isUpperBound = true;
+    } else if (isa<SleOp>(defOp)) {
+      isSigned = true; isStrict = false; isUpperBound = true;
+    } else if (isa<SgtOp>(defOp)) {
+      isSigned = true; isStrict = true; isUpperBound = false;
+    } else if (isa<SgeOp>(defOp)) {
+      isSigned = true; isStrict = false; isUpperBound = false;
+    } else if (isa<UltOp>(defOp)) {
+      isStrict = true; isUpperBound = true;
+    } else if (isa<UleOp>(defOp)) {
+      isStrict = false; isUpperBound = true;
+    } else if (isa<UgtOp>(defOp)) {
+      isStrict = true; isUpperBound = false;
+    } else if (isa<UgeOp>(defOp)) {
+      isStrict = false; isUpperBound = false;
+    } else {
+      return false;
+    }
+
+    // lhsProp <cmp> rhsProp: lhsProp is constrained, rhsProp is the bound
+    ClassDynConstraintInfo info;
+    info.prop = lhsProp;
+    info.boundProp = rhsProp;
+    info.constraintName = constraintName;
+    info.isUpper = isUpperBound;
+    info.isStrict = isStrict;
+    info.isSigned = isSigned;
+    info.isSoft = isSoft;
+    results.push_back(info);
+    return true;
+  };
+
+  // Process a single class for dynamic constraints
+  auto processClass = [&](ClassDeclOp decl) {
+    for (auto &op : decl.getBody().getOps()) {
+      auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+      if (!constraintBlock)
+        continue;
+
+      StringRef constraintName = constraintBlock.getSymName();
+
+      for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+        auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
+        if (!exprOp)
+          continue;
+
+        Value cond = exprOp.getCondition();
+        Operation *defOp = cond.getDefiningOp();
+        if (!defOp)
+          continue;
+
+        bool isSoft = exprOp.getIsSoft();
+
+        // Try and(cmp1, cmp2) decomposition
+        if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+          Operation *lhsOp = defOp->getOperand(0).getDefiningOp();
+          Operation *rhsOp = defOp->getOperand(1).getDefiningOp();
+          if (lhsOp && rhsOp) {
+            bool matched =
+                tryExtractDynBound(lhsOp, isSoft, constraintName);
+            matched |= tryExtractDynBound(rhsOp, isSoft, constraintName);
+            if (matched)
+              continue;
+          }
+        }
+
+        // Try direct comparison
+        tryExtractDynBound(defOp, isSoft, constraintName);
+      }
+    }
+  };
+
+  // Walk class hierarchy: child first, then parents
+  processClass(classDecl);
+  ClassDeclOp parentDecl = classDecl;
+  while (auto baseAttr = parentDecl.getBaseAttr()) {
+    ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+    auto *baseSym = mod.lookupSymbol(baseAttr);
+    if (!baseSym)
+      break;
+    auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+    if (!baseClass)
+      break;
+    processClass(baseClass);
+    parentDecl = baseClass;
+  }
+
+  return results;
 }
 
 /// Helper to extract a predicate (property == constant) from a Moore IR value.
@@ -23050,6 +23217,30 @@ extractInlineRangeConstraints(Region &inlineRegion,
         propIdx++;
       }
     }
+
+    // Also include properties from parent classes so constraints referencing
+    // inherited properties can be extracted.
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      unsigned parentIdx = baseClass.getBaseAttr() ? 1 : 1;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+          if (!propertyMap.contains(propDecl.getSymName())) {
+            propertyMap[propDecl.getSymName()] = {parentIdx,
+                                                  propDecl.getPropertyType()};
+          }
+          parentIdx++;
+        }
+      }
+      parentDecl = baseClass;
+    }
   }
 
   // Helper: extract property name from a value, looking through zext/sext/trunc
@@ -23402,6 +23593,30 @@ extractInlineDistConstraints(Region &inlineRegion,
         propIdx++;
       }
     }
+
+    // Also include properties from parent classes so constraints referencing
+    // inherited properties can be extracted.
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      unsigned parentIdx = baseClass.getBaseAttr() ? 1 : 1;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+          if (!propertyMap.contains(propDecl.getSymName())) {
+            propertyMap[propDecl.getSymName()] = {parentIdx,
+                                                  propDecl.getPropertyType()};
+          }
+          parentIdx++;
+        }
+      }
+      parentDecl = baseClass;
+    }
   }
 
   // Walk through the inline constraint region looking for ConstraintDistOp
@@ -23491,6 +23706,30 @@ extractInlineSoftConstraints(Region &inlineRegion,
         propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
         propIdx++;
       }
+    }
+
+    // Also include properties from parent classes so constraints referencing
+    // inherited properties can be extracted.
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      unsigned parentIdx = baseClass.getBaseAttr() ? 1 : 1;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+          if (!propertyMap.contains(propDecl.getSymName())) {
+            propertyMap[propDecl.getSymName()] = {parentIdx,
+                                                  propDecl.getPropertyType()};
+          }
+          parentIdx++;
+        }
+      }
+      parentDecl = baseClass;
     }
   }
 
@@ -24389,6 +24628,22 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       op->removeAttr("circt.inline_dynamic_constraints");
     }
 
+    // Also extract class-level dynamic constraints (property-to-property
+    // comparisons like `x < v` in constraint blocks).
+    if (classDecl) {
+      auto classDynConstraints = extractClassDynamicConstraints(classDecl);
+      for (const auto &cdc : classDynConstraints) {
+        DynConstraint dc;
+        dc.prop = cdc.prop;
+        dc.boundProp = cdc.boundProp;
+        dc.isUpper = cdc.isUpper;
+        dc.isStrict = cdc.isStrict;
+        dc.isSigned = cdc.isSigned;
+        dc.isSoft = cdc.isSoft;
+        dynamicConstraints.push_back(dc);
+      }
+    }
+
     // Separate hard constraints from soft range constraints
     SmallVector<RangeConstraintInfo> hardConstraints;
     llvm::DenseSet<StringRef> hardConstrainedProps;
@@ -24483,8 +24738,33 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         }
       }
 
-      // Process each level: within level, last-wins; across levels, first-wins.
-      llvm::DenseMap<StringRef, size_t> softRangeByProp;
+      // IEEE 1800-2017 §18.7: Inline soft constraints have the HIGHEST
+      // priority, overriding all class-level soft constraints.
+      // Process inline soft range constraints first, then class levels.
+
+      // Inline soft range constraints (highest priority).
+      if (!inlineRegion.empty()) {
+        auto inlineRanges =
+            extractInlineRangeConstraints(inlineRegion, classDecl, cache,
+                                          classSym);
+        llvm::DenseMap<StringRef, const RangeConstraintInfo*> inlineLast;
+        SmallVector<RangeConstraintInfo> inlineStorage(inlineRanges);
+        for (const auto &c : inlineStorage) {
+          if (c.isSoft && !hardConstrainedProps.contains(c.propertyName) &&
+              !claimedSoftProps.contains(c.propertyName)) {
+            inlineLast[c.propertyName] = &c;
+          }
+        }
+        for (auto &[propName, cPtr] : inlineLast) {
+          if (!claimedSoftProps.contains(propName)) {
+            softRangeConstraints.push_back(*cPtr);
+            claimedSoftProps.insert(propName);
+          }
+        }
+      }
+
+      // Then process class levels: within level, last-wins; across levels,
+      // first-wins; but already-claimed by inline are skipped.
       for (auto &level : levels) {
         // Within this level, find the last soft constraint per property.
         llvm::DenseMap<StringRef, const RangeConstraintInfo*> levelLast;
@@ -24497,7 +24777,6 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         // Add level's winners to the result (if not already claimed).
         for (auto &[propName, cPtr] : levelLast) {
           if (!claimedSoftProps.contains(propName)) {
-            softRangeByProp[propName] = softRangeConstraints.size();
             softRangeConstraints.push_back(*cPtr);
             claimedSoftProps.insert(propName);
           }
@@ -24599,6 +24878,140 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           return success();
         }
       }
+    }
+
+    // Handle check_only mode (randomize(null)): IEEE 1800-2017 §18.11.1
+    // randomize(null) treats ALL rand variables as state variables. It checks
+    // whether the CURRENT property values satisfy all constraints.
+    // Returns 1 if satisfied, 0 if not. Does NOT modify any variables.
+    if (op.getCheckOnly()) {
+      Value satisfied = arith::ConstantOp::create(rewriter, loc, i1Ty,
+                                                   rewriter.getBoolAttr(true));
+
+      // Helper: load a property's current value from the class object
+      auto loadPropValue = [&](StringRef propName) -> Value {
+        auto pathIt = structInfo->propertyPath.find(propName);
+        if (pathIt == structInfo->propertyPath.end())
+          return nullptr;
+        SmallVector<LLVM::GEPArg> gep;
+        gep.push_back(0);
+        for (unsigned idx : pathIt->second)
+          gep.push_back(static_cast<int32_t>(idx));
+        auto ptr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                        classPtr, gep);
+        Type fieldTy = resolveStructFieldType(structTy, pathIt->second);
+        return LLVM::LoadOp::create(rewriter, loc, fieldTy, ptr);
+      };
+
+      // Check static range constraints: current value within [min, max]
+      for (const auto &hc : hardConstraints) {
+        Value propVal = loadPropValue(hc.propertyName);
+        if (!propVal)
+          continue;
+        auto intTy = dyn_cast<IntegerType>(propVal.getType());
+        if (!intTy)
+          continue;
+        // Extend to i64 for comparison
+        Value propVal64 = propVal;
+        if (intTy.getWidth() < 64)
+          propVal64 = arith::ExtSIOp::create(rewriter, loc, i64Ty, propVal);
+        else if (intTy.getWidth() > 64)
+          propVal64 = arith::TruncIOp::create(rewriter, loc, i64Ty, propVal);
+
+        if (hc.isMultiRange) {
+          // Multi-range: check if value is in any range
+          Value inAny = arith::ConstantOp::create(rewriter, loc, i1Ty,
+              rewriter.getBoolAttr(false));
+          for (const auto &range : hc.ranges) {
+            Value lo = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(range.first));
+            Value hi = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(range.second));
+            Value geMin = arith::CmpIOp::create(rewriter, loc,
+                arith::CmpIPredicate::sge, propVal64, lo);
+            Value leMax = arith::CmpIOp::create(rewriter, loc,
+                arith::CmpIPredicate::sle, propVal64, hi);
+            Value inRange = arith::AndIOp::create(rewriter, loc, geMin, leMax);
+            inAny = arith::OrIOp::create(rewriter, loc, inAny, inRange);
+          }
+          satisfied = arith::AndIOp::create(rewriter, loc, satisfied, inAny);
+        } else {
+          // Single range: check min <= val <= max
+          Value lo = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(hc.minValue));
+          Value hi = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(hc.maxValue));
+          Value geMin = arith::CmpIOp::create(rewriter, loc,
+              arith::CmpIPredicate::sge, propVal64, lo);
+          Value leMax = arith::CmpIOp::create(rewriter, loc,
+              arith::CmpIPredicate::sle, propVal64, hi);
+          Value inRange = arith::AndIOp::create(rewriter, loc, geMin, leMax);
+          satisfied = arith::AndIOp::create(rewriter, loc, satisfied, inRange);
+        }
+      }
+
+      // Check dynamic constraints: compare current prop value against bound
+      for (const auto &dc : dynamicConstraints) {
+        if (dc.boundProp.empty())
+          continue;
+        Value propVal = loadPropValue(dc.prop);
+        Value boundVal = loadPropValue(dc.boundProp);
+        if (!propVal || !boundVal)
+          continue;
+
+        // Normalize both to the same width for comparison
+        auto propIntTy = dyn_cast<IntegerType>(propVal.getType());
+        auto boundIntTy = dyn_cast<IntegerType>(boundVal.getType());
+        if (!propIntTy || !boundIntTy)
+          continue;
+        unsigned w = std::max(propIntTy.getWidth(), boundIntTy.getWidth());
+        auto wTy = IntegerType::get(rewriter.getContext(), w);
+        if (propIntTy.getWidth() < w) {
+          propVal = dc.isSigned
+              ? (Value)arith::ExtSIOp::create(rewriter, loc, wTy, propVal)
+              : (Value)arith::ExtUIOp::create(rewriter, loc, wTy, propVal);
+        }
+        if (boundIntTy.getWidth() < w) {
+          boundVal = dc.isSigned
+              ? (Value)arith::ExtSIOp::create(rewriter, loc, wTy, boundVal)
+              : (Value)arith::ExtUIOp::create(rewriter, loc, wTy, boundVal);
+        }
+
+        // Compare current values using the constraint's comparison
+        arith::CmpIPredicate pred;
+        if (dc.isUpper && dc.isStrict)
+          pred = dc.isSigned ? arith::CmpIPredicate::slt
+                             : arith::CmpIPredicate::ult;
+        else if (dc.isUpper && !dc.isStrict)
+          pred = dc.isSigned ? arith::CmpIPredicate::sle
+                             : arith::CmpIPredicate::ule;
+        else if (!dc.isUpper && dc.isStrict)
+          pred = dc.isSigned ? arith::CmpIPredicate::sgt
+                             : arith::CmpIPredicate::ugt;
+        else
+          pred = dc.isSigned ? arith::CmpIPredicate::sge
+                             : arith::CmpIPredicate::uge;
+        Value ok = arith::CmpIOp::create(rewriter, loc, pred, propVal, boundVal);
+        satisfied = arith::AndIOp::create(rewriter, loc, satisfied, ok);
+      }
+
+      // Check soft constraints: current value == default
+      for (const auto &sc : effectiveSoftConstraints) {
+        Value propVal = loadPropValue(sc.propertyName);
+        if (!propVal)
+          continue;
+        auto intTy = dyn_cast<IntegerType>(propVal.getType());
+        if (!intTy)
+          continue;
+        Value expected = arith::ConstantOp::create(rewriter, loc, intTy,
+            rewriter.getIntegerAttr(intTy, sc.defaultValue));
+        Value ok = arith::CmpIOp::create(rewriter, loc,
+            arith::CmpIPredicate::eq, propVal, expected);
+        satisfied = arith::AndIOp::create(rewriter, loc, satisfied, ok);
+      }
+
+      rewriter.replaceOp(op, satisfied);
+      return success();
     }
 
     // If we have any constraints, use constraint-aware randomization
