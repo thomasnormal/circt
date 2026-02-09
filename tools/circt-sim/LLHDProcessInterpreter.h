@@ -1297,12 +1297,13 @@ private:
   bool checkRTTICast(int32_t srcTypeId, int32_t targetTypeId);
 
   /// Initialize LLVM global variables, especially vtables.
-  mlir::LogicalResult initializeGlobals();
+  mlir::LogicalResult initializeGlobals(const DiscoveredGlobalOps &globalOps);
 
   /// Execute LLVM global constructors (llvm.mlir.global_ctors).
   /// This calls functions like __moore_global_init_* that initialize
   /// UVM globals (e.g., uvm_top) at simulation startup.
-  mlir::LogicalResult executeGlobalConstructors();
+  mlir::LogicalResult
+  executeGlobalConstructors(const DiscoveredGlobalOps &globalOps);
 
   /// Execute module-level LLVM operations (alloca, call, store) that are
   /// defined in the hw.module body but outside of llhd.process blocks.
