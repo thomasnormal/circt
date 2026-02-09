@@ -148,11 +148,13 @@ Execution controls:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
 - Built-in chained circt-lec/circt-bmc global filter:
-  - `--formal-global-propagate-circt-chain lec-then-bmc`
+  - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec`
   - requires both `--formal-global-propagate-circt-lec` and
     `--formal-global-propagate-circt-bmc` options.
-  This mode uses LEC first and falls back to differential BMC when LEC returns
-  `UNKNOWN` or an error.
+  - `lec-then-bmc`: use LEC first and fall back to differential BMC when LEC
+    returns `UNKNOWN` or an error.
+  - `bmc-then-lec`: use differential BMC first and fall back to LEC when BMC
+    returns `UNKNOWN` or an error.
 
 `tests.tsv` format (tab-separated):
 
@@ -181,6 +183,10 @@ Generated artifacts (default under `./mutation-cover-results`):
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
     `not_propagated` by chained-mode BMC fallback.
+  - `chain_bmc_unknown_fallbacks`: count of mutants where chained mode fell
+    back from BMC `UNKNOWN` to LEC.
+  - `chain_lec_resolved_not_propagated_mutants`: count of mutants classified as
+    `not_propagated` by chained-mode LEC fallback.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
@@ -247,7 +253,7 @@ Execution controls:
   without a lane-specific circt-bmc global filter path.
 - `--default-formal-global-propagate-circt-chain <mode>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-chain` for lanes
-  without a lane-specific chain mode.
+  without a lane-specific chain mode (`lec-then-bmc|bmc-then-lec`).
 - `--default-formal-global-propagate-circt-bmc-args <args>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc-args` for lanes
   without lane-specific bmc args.

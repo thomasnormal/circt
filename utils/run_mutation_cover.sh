@@ -62,7 +62,7 @@ Optional:
                              other global filter modes)
   --formal-global-propagate-circt-chain MODE
                              Built-in chained global filter strategy
-                             (lec-then-bmc). Requires both
+                             (lec-then-bmc|bmc-then-lec). Requires both
                              --formal-global-propagate-circt-lec and
                              --formal-global-propagate-circt-bmc.
   --formal-global-propagate-circt-bmc-args ARGS
@@ -122,6 +122,9 @@ Formal command conventions:
     - circt-chain lec-then-bmc:
         run circt-lec first; on LEC UNKNOWN/error, fall back to circt-bmc
         differential classification.
+    - circt-chain bmc-then-lec:
+        run circt-bmc differential first; on BMC UNKNOWN/error, fall back to
+        circt-lec classification.
 
 Test command conventions:
   Each test command runs in a per-(test,mutant) directory and must write result_file.
@@ -330,8 +333,8 @@ if [[ ! "$FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" =~ ^[0-9]+$ ]]; then
 fi
 
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
-  if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" != "lec-then-bmc" ]]; then
-    echo "Invalid --formal-global-propagate-circt-chain value: $FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN (expected lec-then-bmc)." >&2
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" != "lec-then-bmc" && "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" != "bmc-then-lec" ]]; then
+    echo "Invalid --formal-global-propagate-circt-chain value: $FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN (expected lec-then-bmc|bmc-then-lec)." >&2
     exit 1
   fi
   if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
@@ -1111,50 +1114,106 @@ classify_global_propagate_circt_bmc() {
 classify_global_propagate_circt_chain() {
   local run_dir="$1"
   local log_file="$2"
-  local lec_state=""
-  local lec_rc="-1"
-  local bmc_state=""
-  local bmc_rc="-1"
+  local primary_tool=""
+  local primary_state=""
+  local primary_rc="-1"
+  local fallback_tool=""
+  local fallback_state=""
+  local fallback_rc="-1"
   local final_rc="-1"
   local lec_log="${log_file}.lec"
   local bmc_log="${log_file}.bmc"
 
-  if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" != "lec-then-bmc" ]]; then
+  case "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" in
+    lec-then-bmc)
+      primary_tool="lec"
+      fallback_tool="bmc"
+      ;;
+    bmc-then-lec)
+      primary_tool="bmc"
+      fallback_tool="lec"
+      ;;
+    *)
+      printf "error\t-1\n"
+      return
+      ;;
+  esac
+
+  if [[ "$primary_tool" == "lec" ]]; then
+    read -r primary_state primary_rc < <(classify_global_propagate_circt_lec_raw "$run_dir" "$lec_log")
+    case "$primary_state" in
+      eq)
+        cp "$lec_log" "$log_file"
+        printf "not_propagated\t%s\n" "$primary_rc"
+        return
+        ;;
+      neq)
+        cp "$lec_log" "$log_file"
+        printf "propagated\t%s\n" "$primary_rc"
+        return
+        ;;
+    esac
+  elif [[ "$primary_tool" == "bmc" ]]; then
+    read -r primary_state primary_rc < <(classify_global_propagate_circt_bmc_raw "$run_dir" "$bmc_log")
+    case "$primary_state" in
+      equal)
+        cp "$bmc_log" "$log_file"
+        printf "not_propagated\t%s\n" "$primary_rc"
+        return
+        ;;
+      different)
+        cp "$bmc_log" "$log_file"
+        printf "propagated\t%s\n" "$primary_rc"
+        return
+        ;;
+    esac
+  else
     printf "error\t-1\n"
     return
   fi
 
-  read -r lec_state lec_rc < <(classify_global_propagate_circt_lec_raw "$run_dir" "$lec_log")
-  case "$lec_state" in
-    eq)
-      cp "$lec_log" "$log_file"
-      printf "not_propagated\t%s\n" "$lec_rc"
-      return
-      ;;
-    neq)
-      cp "$lec_log" "$log_file"
-      printf "propagated\t%s\n" "$lec_rc"
-      return
-      ;;
-  esac
-
-  read -r bmc_state bmc_rc < <(classify_global_propagate_circt_bmc_raw "$run_dir" "$bmc_log")
-  final_rc="$bmc_rc"
+  if [[ "$fallback_tool" == "bmc" ]]; then
+    read -r fallback_state fallback_rc < <(classify_global_propagate_circt_bmc_raw "$run_dir" "$bmc_log")
+  elif [[ "$fallback_tool" == "lec" ]]; then
+    read -r fallback_state fallback_rc < <(classify_global_propagate_circt_lec_raw "$run_dir" "$lec_log")
+  else
+    printf "error\t-1\n"
+    return
+  fi
+  final_rc="$fallback_rc"
   if [[ "$final_rc" -eq 0 ]]; then
-    final_rc="$lec_rc"
+    final_rc="$primary_rc"
   fi
   {
-    printf "# chain_mode=lec-then-bmc lec_state=%s lec_rc=%s\n" "$lec_state" "$lec_rc"
-    cat "$lec_log"
-    printf "\n# chain_fallback=bmc bmc_state=%s bmc_rc=%s\n" "$bmc_state" "$bmc_rc"
-    cat "$bmc_log"
+    printf "# chain_mode=%s primary=%s primary_state=%s primary_rc=%s\n" \
+      "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" "$primary_tool" "$primary_state" "$primary_rc"
+    if [[ "$primary_tool" == "lec" ]]; then
+      cat "$lec_log"
+    else
+      cat "$bmc_log"
+    fi
+    printf "\n# chain_fallback=%s fallback_state=%s fallback_rc=%s\n" \
+      "$fallback_tool" "$fallback_state" "$fallback_rc"
+    if [[ "$fallback_tool" == "bmc" ]]; then
+      cat "$bmc_log"
+    else
+      cat "$lec_log"
+    fi
   } > "$log_file"
 
-  case "$bmc_state" in
-    equal) printf "not_propagated\t%s\n" "$final_rc" ;;
-    different|unknown) printf "propagated\t%s\n" "$final_rc" ;;
-    *) printf "error\t%s\n" "$final_rc" ;;
-  esac
+  if [[ "$fallback_tool" == "bmc" ]]; then
+    case "$fallback_state" in
+      equal) printf "not_propagated\t%s\n" "$final_rc" ;;
+      different|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+      *) printf "error\t%s\n" "$final_rc" ;;
+    esac
+  else
+    case "$fallback_state" in
+      eq) printf "not_propagated\t%s\n" "$final_rc" ;;
+      neq|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+      *) printf "error\t%s\n" "$final_rc" ;;
+    esac
+  fi
 }
 
 run_test_and_classify() {
@@ -1233,6 +1292,8 @@ process_mutation() {
   local global_filtered_not_propagated=0
   local chain_lec_unknown_fallback=0
   local chain_bmc_resolved_not_propagated=0
+  local chain_bmc_unknown_fallback=0
+  local chain_lec_resolved_not_propagated=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -1257,6 +1318,8 @@ process_mutation() {
       printf "global_filtered_not_propagated\t0\n"
       printf "chain_lec_unknown_fallback\t0\n"
       printf "chain_bmc_resolved_not_propagated\t0\n"
+      printf "chain_bmc_unknown_fallback\t0\n"
+      printf "chain_lec_resolved_not_propagated\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -1300,11 +1363,17 @@ process_mutation() {
     esac
   fi
   if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
-    if grep -Eq '^# chain_mode=lec-then-bmc lec_state=unknown ' "$mutation_dir/global_propagate.log"; then
+    if grep -Eq '^# chain_mode=lec-then-bmc primary=lec primary_state=unknown ' "$mutation_dir/global_propagate.log"; then
       chain_lec_unknown_fallback=1
     fi
-    if grep -Eq '^# chain_fallback=bmc bmc_state=equal ' "$mutation_dir/global_propagate.log"; then
+    if grep -Eq '^# chain_fallback=bmc fallback_state=equal ' "$mutation_dir/global_propagate.log"; then
       chain_bmc_resolved_not_propagated=1
+    fi
+    if grep -Eq '^# chain_mode=bmc-then-lec primary=bmc primary_state=unknown ' "$mutation_dir/global_propagate.log"; then
+      chain_bmc_unknown_fallback=1
+    fi
+    if grep -Eq '^# chain_fallback=lec fallback_state=eq ' "$mutation_dir/global_propagate.log"; then
+      chain_lec_resolved_not_propagated=1
     fi
   fi
 
@@ -1431,6 +1500,8 @@ process_mutation() {
     printf "global_filtered_not_propagated\t%s\n" "$global_filtered_not_propagated"
     printf "chain_lec_unknown_fallback\t%s\n" "$chain_lec_unknown_fallback"
     printf "chain_bmc_resolved_not_propagated\t%s\n" "$chain_bmc_resolved_not_propagated"
+    printf "chain_bmc_unknown_fallback\t%s\n" "$chain_bmc_unknown_fallback"
+    printf "chain_lec_resolved_not_propagated\t%s\n" "$chain_lec_resolved_not_propagated"
   } > "$meta_local"
 }
 
@@ -1537,6 +1608,8 @@ count_hint_hits=0
 count_global_filtered_not_propagated=0
 count_chain_lec_unknown_fallbacks=0
 count_chain_bmc_resolved_not_propagated=0
+count_chain_bmc_unknown_fallbacks=0
+count_chain_lec_resolved_not_propagated=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -1630,6 +1703,24 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_chain_bmc_resolved_not_propagated" =~ ^[0-9]+$ ]]; then
     count_chain_bmc_resolved_not_propagated=$((count_chain_bmc_resolved_not_propagated + local_chain_bmc_resolved_not_propagated))
   fi
+
+  local_chain_bmc_unknown_fallback=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_bmc_unknown_fallback="$(awk -F$'\t' '$1=="chain_bmc_unknown_fallback"{print $2}' "$meta_local" | head -n1)"
+    local_chain_bmc_unknown_fallback="${local_chain_bmc_unknown_fallback:-0}"
+  fi
+  if [[ "$local_chain_bmc_unknown_fallback" =~ ^[0-9]+$ ]]; then
+    count_chain_bmc_unknown_fallbacks=$((count_chain_bmc_unknown_fallbacks + local_chain_bmc_unknown_fallback))
+  fi
+
+  local_chain_lec_resolved_not_propagated=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_lec_resolved_not_propagated="$(awk -F$'\t' '$1=="chain_lec_resolved_not_propagated"{print $2}' "$meta_local" | head -n1)"
+    local_chain_lec_resolved_not_propagated="${local_chain_lec_resolved_not_propagated:-0}"
+  fi
+  if [[ "$local_chain_lec_resolved_not_propagated" =~ ^[0-9]+$ ]]; then
+    count_chain_lec_resolved_not_propagated=$((count_chain_lec_resolved_not_propagated + local_chain_lec_resolved_not_propagated))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -1711,6 +1802,8 @@ fi
   printf "global_filtered_not_propagated_mutants\t%s\n" "$count_global_filtered_not_propagated"
   printf "chain_lec_unknown_fallbacks\t%s\n" "$count_chain_lec_unknown_fallbacks"
   printf "chain_bmc_resolved_not_propagated_mutants\t%s\n" "$count_chain_bmc_resolved_not_propagated"
+  printf "chain_bmc_unknown_fallbacks\t%s\n" "$count_chain_bmc_unknown_fallbacks"
+  printf "chain_lec_resolved_not_propagated_mutants\t%s\n" "$count_chain_lec_resolved_not_propagated"
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
@@ -1733,6 +1826,8 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "global_filtered_not_propagated_mutants": $count_global_filtered_not_propagated,
   "chain_lec_unknown_fallbacks": $count_chain_lec_unknown_fallbacks,
   "chain_bmc_resolved_not_propagated_mutants": $count_chain_bmc_resolved_not_propagated,
+  "chain_bmc_unknown_fallbacks": $count_chain_bmc_unknown_fallbacks,
+  "chain_lec_resolved_not_propagated_mutants": $count_chain_lec_resolved_not_propagated,
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
@@ -1748,7 +1843,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
