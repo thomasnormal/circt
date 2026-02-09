@@ -126,6 +126,11 @@ Options:
                          --lane-state-manifest-ed25519-crl-refresh-cmd
   --lane-state-manifest-ed25519-crl-refresh-delay-secs N
                          Delay between CRL refresh retries in seconds
+  --lane-state-manifest-ed25519-crl-refresh-timeout-secs N
+                         Timeout per CRL refresh attempt in seconds
+  --lane-state-manifest-ed25519-crl-refresh-jitter-secs N
+                         Additional random delay per retry attempt
+                         (0..N seconds) for CRL refresh
   --lane-state-manifest-ed25519-ocsp-response-file FILE
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
@@ -138,6 +143,11 @@ Options:
                          --lane-state-manifest-ed25519-ocsp-refresh-cmd
   --lane-state-manifest-ed25519-ocsp-refresh-delay-secs N
                          Delay between OCSP refresh retries in seconds
+  --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs N
+                         Timeout per OCSP refresh attempt in seconds
+  --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs N
+                         Additional random delay per retry attempt
+                         (0..N seconds) for OCSP refresh
   --lane-state-manifest-ed25519-ocsp-response-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-ocsp-response-file
@@ -262,10 +272,14 @@ LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_FILE=""
@@ -441,6 +455,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-timeout-secs)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-jitter-secs)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-cmd)
@@ -449,6 +467,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-delay-secs)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-responder-cert-file)
@@ -634,12 +656,28 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" && -z "$LANE_STAT
   echo "--lane-state-manifest-ed25519-crl-refresh-delay-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-timeout-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-jitter-secs requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-retries: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-delay-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-timeout-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-jitter-secs: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
@@ -662,12 +700,28 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" && -z "$LANE_STA
   echo "--lane-state-manifest-ed25519-ocsp-refresh-delay-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-retries: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-delay-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -892,32 +946,78 @@ run_lane_state_ed25519_refresh_hook() {
   local artifact_file="$3"
   local refresh_retries="$4"
   local refresh_delay_secs="$5"
+  local refresh_timeout_secs="$6"
+  local refresh_jitter_secs="$7"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
+  local timeout_secs="${refresh_timeout_secs:-0}"
+  local jitter_secs="${refresh_jitter_secs:-0}"
   local max_attempts="$((retry_count + 1))"
   local attempt=1
+  local cmd_rc=0
+  local sleep_secs=0
   if [[ -z "$refresh_cmd" ]]; then
     return
   fi
   while (( attempt <= max_attempts )); do
-    if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
+    if (( timeout_secs > 0 )); then
+      if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
+         LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
+         LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
+         LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+         LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
+         python3 - "$refresh_cmd" "$timeout_secs" <<'PY'
+import subprocess
+import sys
+
+cmd = sys.argv[1]
+timeout_secs = int(sys.argv[2])
+try:
+  completed = subprocess.run(
+      ["bash", "-lc", cmd],
+      check=False,
+      timeout=timeout_secs,
+  )
+except subprocess.TimeoutExpired:
+  raise SystemExit(124)
+raise SystemExit(completed.returncode)
+PY
+      then
+        cmd_rc=0
+      else
+        cmd_rc=$?
+      fi
+    else
+      if LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
          LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
          LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
          LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
          LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
          bash -lc "$refresh_cmd"; then
+        cmd_rc=0
+      else
+        cmd_rc=$?
+      fi
+    fi
+    if [[ "$cmd_rc" == "0" ]]; then
       if [[ -r "$artifact_file" ]]; then
         return
       fi
       echo "lane state Ed25519 ${artifact_name} file not readable after refresh attempt ${attempt}/${max_attempts}: $artifact_file" >&2
+    elif [[ "$cmd_rc" == "124" ]]; then
+      echo "lane state Ed25519 ${artifact_name} refresh command timed out on attempt ${attempt}/${max_attempts} (timeout=${timeout_secs}s): $refresh_cmd" >&2
     else
       echo "lane state Ed25519 ${artifact_name} refresh command failed on attempt ${attempt}/${max_attempts}: $refresh_cmd" >&2
     fi
     if (( attempt >= max_attempts )); then
       exit 1
     fi
-    if (( delay_secs > 0 )); then
-      sleep "$delay_secs"
+    sleep_secs="$delay_secs"
+    if (( jitter_secs > 0 )); then
+      sleep_secs=$((sleep_secs + (RANDOM % (jitter_secs + 1))))
+    fi
+    if (( sleep_secs > 0 )); then
+      sleep "$sleep_secs"
     fi
     attempt=$((attempt + 1))
   done
@@ -934,13 +1034,17 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" \
-      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS"
     run_lane_state_ed25519_refresh_hook \
       "OCSP response" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" \
-      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -1848,10 +1952,14 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_CMD"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
+    printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
+    printf "lane_state_ed25519_crl_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
     printf "lane_state_ed25519_ocsp_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
+    printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"
+    printf "lane_state_ed25519_ocsp_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS"
     printf "lane_state_ed25519_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_issuer_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"

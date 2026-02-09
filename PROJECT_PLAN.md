@@ -18326,29 +18326,11 @@ ninja -C build circt-verilog
   - Binds issuer-cert hash into lane-state config/manifest verification
     contracts for deterministic resume safety.
 
-### Iteration 698
-- Added pre-verification CRL/OCSP refresh hooks for Ed25519 lane-state keyring
-  mode:
-  - `--lane-state-manifest-ed25519-crl-refresh-cmd`
-  - `--lane-state-manifest-ed25519-ocsp-refresh-cmd`
-  - both commands are bound into lane-state config hash material
-  - refresh commands execute before keyring certificate/OCSP validation
-- Planning impact:
-  - Enables 24/7 automation to refresh revocation artifacts immediately before
-    resume/reset verification.
-  - Reduces stale-artifact failure churn without weakening explicit OCSP/CRL
-    policy checks.
-
-### Iteration 699
-- Added retry/backoff controls for Ed25519 CRL/OCSP refresh hooks:
-  - `--lane-state-manifest-ed25519-crl-refresh-retries`
-  - `--lane-state-manifest-ed25519-crl-refresh-delay-secs`
-  - `--lane-state-manifest-ed25519-ocsp-refresh-retries`
-  - `--lane-state-manifest-ed25519-ocsp-refresh-delay-secs`
-  - retry/backoff policy now contributes to lane-state config hash
-- Planning impact:
-  - Hardens 24/7 closure flows against transient revocation-fetch failures.
-  - Keeps resume safety strict by rejecting refresh-policy drift across workers.
+### Recent Lane-State Hardening (See CHANGELOG)
+- Iterations 698-700 delivered refresh command integration plus retry/delay and
+  timeout/jitter controls for Ed25519 CRL/OCSP verification flows.
+- These controls are part of lane-state config hash material, preserving strict
+  resume/merge policy compatibility checks across workers.
 
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
@@ -18362,8 +18344,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Add timeout and jitter policy for refresh hooks to bound stuck fetches and
-    synchronized retry storms.
+  - Add signed refresh-artifact provenance (bind source metadata + fetch digest
+    chain into manifest policy).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
