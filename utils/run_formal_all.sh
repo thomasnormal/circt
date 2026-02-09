@@ -125,6 +125,8 @@ Options:
   --lane-state-manifest-ed25519-ocsp-max-age-secs N
                          Max allowed OCSP response age in seconds from
                          thisUpdate (default when OCSP is enabled: 604800)
+  --lane-state-manifest-ed25519-ocsp-require-next-update
+                         Require OCSP responses to include Next Update
   --lane-state-manifest-ed25519-cert-subject-regex REGEX
                          Optional regex constraint applied to selected Ed25519
                          certificate subject (keyring mode)
@@ -225,6 +227,7 @@ LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=0
 LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
@@ -386,6 +389,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-max-age-secs)
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-require-next-update)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=1; shift ;;
     --lane-state-manifest-ed25519-cert-subject-regex)
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
@@ -551,6 +556,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MA
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-max-age-secs requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-require-next-update requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" =~ ^[0-9]+$ ]]; then
@@ -727,6 +736,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" \
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
@@ -745,6 +755,7 @@ ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
 crl_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_FILE", "").strip()
 ocsp_response_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE", "").strip()
 ocsp_max_age_secs = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS", "").strip()
+ocsp_require_next_update = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE", "").strip() == "1"
 cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
@@ -1080,6 +1091,12 @@ if cert_file_path:
           )
           raise SystemExit(1)
       next_update_match = re.search(r"Next Update:\s*(.+)", ocsp_status_raw)
+      if next_update_match is None and ocsp_require_next_update:
+        print(
+            f"lane state Ed25519 OCSP nextUpdate missing for key_id '{target_key_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
       if next_update_match is not None:
         next_update_dt = parse_ocsp_time(next_update_match.group(1), "nextUpdate")
         if next_update_dt < now_utc:
@@ -1469,6 +1486,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_SHA256"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE"
+    printf "lane_state_ed25519_ocsp_require_next_update=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE"
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
