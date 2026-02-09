@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 719 - February 9, 2026
+
+### Lane-State Refresh Metadata Chain-Length Policies
+
+- Extended lane-state Ed25519 refresh metadata policy controls in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-length-min`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-length-min`
+- New behavior:
+  - each policy requires its corresponding `...refresh-metadata-file`
+  - each policy value must be a non-negative integer
+  - metadata validation now enforces minimum `cert_chain_sha256` length when
+    configured.
+
+### HTTPS Metadata Evidence Capture Hardening
+
+- Built-in URI refresh path now attempts richer HTTPS certificate-chain evidence
+  capture for metadata sidecars:
+  - captures leaf TLS peer SHA (`tls_peer_sha256`)
+  - attempts full observed certificate chain hashing into
+    `cert_chain_sha256` (leaf-first when available).
+- Preserved compatibility with existing metadata contracts:
+  - no new hard equality requirement between `tls_peer_sha256` and
+    `cert_chain_sha256[0]` was introduced.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for new CRL/OCSP chain-length-min options
+    - negative metadata policy mismatch checks for CRL and OCSP chain-length
+      enforcement
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP metadata chain-length-min policy flags
+    - documented HTTPS refresh metadata chain-capture behavior.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-chainlen-sweep-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - summary:
+      - sv-tests BMC/LEC: 1/1 PASS each
+      - verilator-verification BMC/LEC: 1/1 PASS each
+      - yosys/tests/sva BMC/LEC: 1/1 PASS each
+      - OpenTitan LEC: 1/1 PASS
+      - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 718 - February 9, 2026
 
 ### Refresh-Policy Manifest Signer OCSP Responder Identity/Pinning Parity
