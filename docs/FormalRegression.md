@@ -131,9 +131,14 @@ Lane-state semantics:
   `--lane-state-manifest-ed25519-ca-file`.
 - `--lane-state-manifest-ed25519-crl-refresh-cmd` runs a command before keyring
   verification to refresh the CRL artifact path.
+- `--lane-state-manifest-ed25519-crl-refresh-uri` enables built-in CRL fetch
+  (`file://`, `http://`, `https://`) without wrapper scripts.
+  - URI mode requires `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
+  - URI mode is mutually exclusive with
+    `--lane-state-manifest-ed25519-crl-refresh-cmd`.
 - `--lane-state-manifest-ed25519-crl-refresh-retries` and
   `--lane-state-manifest-ed25519-crl-refresh-delay-secs` control retry/backoff
-  for CRL refresh hook execution.
+  for CRL refresh execution (command or URI mode).
 - `--lane-state-manifest-ed25519-crl-refresh-timeout-secs` bounds each CRL
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-crl-refresh-jitter-secs` adds randomized
@@ -163,9 +168,14 @@ Lane-state semantics:
   `--lane-state-manifest-ed25519-ca-file`.
 - `--lane-state-manifest-ed25519-ocsp-refresh-cmd` runs a command before
   keyring verification to refresh the OCSP response artifact path.
+- `--lane-state-manifest-ed25519-ocsp-refresh-uri` enables built-in OCSP
+  response fetch (`file://`, `http://`, `https://`) without wrapper scripts.
+  - URI mode requires `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
+  - URI mode is mutually exclusive with
+    `--lane-state-manifest-ed25519-ocsp-refresh-cmd`.
 - `--lane-state-manifest-ed25519-ocsp-refresh-retries` and
   `--lane-state-manifest-ed25519-ocsp-refresh-delay-secs` control retry/backoff
-  for OCSP refresh hook execution.
+  for OCSP refresh execution (command or URI mode).
 - `--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs` bounds each OCSP
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs` adds randomized

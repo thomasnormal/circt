@@ -18344,6 +18344,10 @@ ninja -C build circt-verilog
 - Iteration 706 adds transport-aware metadata evidence requirements:
   HTTP(S) metadata must include `http_status`; HTTPS metadata must include TLS
   peer digest and non-empty cert-chain digests.
+- Iteration 707 adds built-in CRL/OCSP refresh URI mode
+  (`file://`, `http://`, `https://`) with command/URI mutual-exclusion,
+  required metadata sidecars for URI mode, and config-hash binding of refresh
+  URI settings.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
