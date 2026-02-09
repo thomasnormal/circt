@@ -4200,7 +4200,14 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
                 )
             )
         return (op, tuple(operands))
-    if op in {"div", "mod"}:
+    if op in {
+        "div",
+        "mod",
+        "div_floor",
+        "div_trunc_zero",
+        "mod_floor",
+        "mod_trunc_zero",
+    }:
         if not isinstance(payload, list) or len(payload) != 2:
             fail(
                 f"error: invalid {field_name}.{op}: expected [lhs, rhs] operands"
@@ -4217,7 +4224,17 @@ def parse_int_expression(expr, field_name: str, budget=None, depth: int = 1):
             budget,
             depth + 1,
         )
-        return (op, lhs_expr, rhs_expr)
+        if op == "div":
+            return (op, lhs_expr, rhs_expr)
+        if op == "mod":
+            return (op, lhs_expr, rhs_expr)
+        if op == "div_floor":
+            return ("div_with_mode", "floor", lhs_expr, rhs_expr)
+        if op == "div_trunc_zero":
+            return ("div_with_mode", "trunc_zero", lhs_expr, rhs_expr)
+        if op == "mod_floor":
+            return ("mod_with_mode", "floor", lhs_expr, rhs_expr)
+        return ("mod_with_mode", "trunc_zero", lhs_expr, rhs_expr)
     if op == "with_int_arithmetic":
         if not isinstance(payload, list) or len(payload) != 2:
             fail(
@@ -4315,6 +4332,18 @@ def evaluate_int_expression(expr, context, int_arithmetic=None):
         return evaluate_int_modulus(
             lhs_value, rhs_value, int_arithmetic["mod_mode"]
         )
+    if kind == "div_with_mode":
+        lhs_value = evaluate_int_expression(expr[2], context, int_arithmetic)
+        rhs_value = evaluate_int_expression(expr[3], context, int_arithmetic)
+        if lhs_value is None or rhs_value is None:
+            return None
+        return evaluate_int_division(lhs_value, rhs_value, expr[1])
+    if kind == "mod_with_mode":
+        lhs_value = evaluate_int_expression(expr[2], context, int_arithmetic)
+        rhs_value = evaluate_int_expression(expr[3], context, int_arithmetic)
+        if lhs_value is None or rhs_value is None:
+            return None
+        return evaluate_int_modulus(lhs_value, rhs_value, expr[1])
     return None
 
 
@@ -4351,6 +4380,26 @@ def format_int_expression(expr):
         return f"({format_int_expression(expr[1])}/{format_int_expression(expr[2])})"
     if kind == "mod":
         return f"({format_int_expression(expr[1])}%{format_int_expression(expr[2])})"
+    if kind == "div_with_mode":
+        return (
+            "("
+            + format_int_expression(expr[2])
+            + "/"
+            + format_int_expression(expr[3])
+            + " @div_mode="
+            + expr[1]
+            + ")"
+        )
+    if kind == "mod_with_mode":
+        return (
+            "("
+            + format_int_expression(expr[2])
+            + "%"
+            + format_int_expression(expr[3])
+            + " @mod_mode="
+            + expr[1]
+            + ")"
+        )
     return "<invalid>"
 
 
@@ -4374,6 +4423,11 @@ def collect_int_expression_keys(expr, out_keys):
     if kind in {"div", "mod"}:
         collect_int_expression_keys(expr[1], out_keys)
         collect_int_expression_keys(expr[2], out_keys)
+        return
+    if kind in {"div_with_mode", "mod_with_mode"}:
+        collect_int_expression_keys(expr[2], out_keys)
+        collect_int_expression_keys(expr[3], out_keys)
+        return
 
 
 def parse_bool_expression(
