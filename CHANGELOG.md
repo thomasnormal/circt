@@ -1,5 +1,77 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 743 - February 9, 2026
+
+### Mutation Generation Config/Selector Controls
+
+- Extended `utils/generate_mutations_yosys.sh` with advanced mutate controls:
+  - `--cfg KEY=VALUE` (repeatable)
+  - `--cfgs <csv>`
+  - `--select <expr>` (repeatable)
+  - `--selects <csv>`
+- New generator behavior:
+  - validates `--cfg` entries as `KEY=INTEGER`
+  - appends `-cfg KEY VALUE` and select expressions to each generated
+    `mutate -list` invocation.
+  - fixed `set -u` robustness for empty mode/cfg/select arrays.
+
+### Cover/Matrix Integration
+
+- Extended `utils/run_mutation_cover.sh` generation path with:
+  - `--mutations-cfg <csv>`
+  - `--mutations-select <csv>`
+  - pass-through to generator `--cfgs` / `--selects`.
+- Extended `utils/run_mutation_matrix.sh` generated-lane controls with:
+  - defaults:
+    - `--default-mutations-cfg <csv>`
+    - `--default-mutations-select <csv>`
+  - lane TSV optional columns:
+    - `mutations_cfg`
+    - `mutations_select`
+  - backward compatibility:
+    - new generation columns appended at end of lane schema.
+
+### Tests and Docs Updates
+
+- Updated tests:
+  - `test/Tools/run-mutation-generate-basic.test`
+    - verifies `-cfg` and select expression emission in generated Yosys script.
+  - `test/Tools/run-mutation-cover-generate.test`
+    - verifies cover-mode pass-through of generation cfg/select controls.
+  - `test/Tools/run-mutation-matrix-generate.test`
+    - verifies matrix default generation cfg/select pass-through.
+  - `test/Tools/run-mutation-generate-help.test`
+    - checks new generator options.
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--mutations-cfg` / `--mutations-select`.
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks default generation cfg/select options.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+    - documented generation cfg/select controls and matrix default/lane wiring.
+  - `PROJECT_PLAN.md`
+    - moved native mutation operator expansion to `IN_PROGRESS` with cfg/select
+      controls landed.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - generator cfg/select emission scenario: PASS
+  - cover generated-mutation cfg/select pass-through scenario: PASS
+  - matrix generated-lane cfg/select default pass-through scenario: PASS
+  - matrix old-schema BMC lane compatibility (no new generation columns): PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-cfg-select --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 742 - February 9, 2026
 
 ### Mutation Matrix LEC Option Parity

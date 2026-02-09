@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -22,6 +22,10 @@ Optional:
                             Default --reuse-summary-file for lanes that do not set reuse_summary_file
   --default-mutations-modes CSV
                             Default --mutations-modes for generated-mutation lanes
+  --default-mutations-cfg CSV
+                            Default --mutations-cfg for generated-mutation lanes
+  --default-mutations-select CSV
+                            Default --mutations-select for generated-mutation lanes
   --default-formal-global-propagate-cmd CMD
                             Default --formal-global-propagate-cmd for lanes
                             without lane-specific global_propagate_cmd
@@ -98,6 +102,8 @@ JOBS_PER_LANE=1
 DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
 DEFAULT_MUTATIONS_MODES=""
+DEFAULT_MUTATIONS_CFG=""
+DEFAULT_MUTATIONS_SELECT=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS=""
@@ -129,6 +135,8 @@ while [[ $# -gt 0 ]]; do
     --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
+    --default-mutations-cfg) DEFAULT_MUTATIONS_CFG="$2"; shift 2 ;;
+    --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --default-formal-global-propagate-circt-lec) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
     --default-formal-global-propagate-circt-lec-args) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS="$2"; shift 2 ;;
@@ -217,6 +225,8 @@ declare -a MUTATIONS_YOSYS
 declare -a REUSE_PAIR_FILE
 declare -a REUSE_SUMMARY_FILE
 declare -a MUTATIONS_MODES
+declare -a MUTATIONS_CFG
+declare -a MUTATIONS_SELECT
 declare -a GLOBAL_PROPAGATE_CMD
 declare -a GLOBAL_PROPAGATE_CIRCT_LEC
 declare -a GLOBAL_PROPAGATE_CIRCT_LEC_ARGS
@@ -241,7 +251,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -262,6 +272,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   REUSE_PAIR_FILE+=("${reuse_pair_file:--}")
   REUSE_SUMMARY_FILE+=("${reuse_summary_file:--}")
   MUTATIONS_MODES+=("${mutations_modes:--}")
+  MUTATIONS_CFG+=("${mutations_cfg:--}")
+  MUTATIONS_SELECT+=("${mutations_select:--}")
   GLOBAL_PROPAGATE_CMD+=("${global_propagate_cmd:--}")
   GLOBAL_PROPAGATE_CIRCT_LEC+=("${global_propagate_circt_lec:--}")
   GLOBAL_PROPAGATE_CIRCT_LEC_ARGS+=("${global_propagate_circt_lec_args:--}")
@@ -300,6 +312,8 @@ run_lane() {
   local lane_reuse_pair_file=""
   local lane_reuse_summary_file=""
   local lane_mutations_modes=""
+  local lane_mutations_cfg=""
+  local lane_mutations_select=""
   local lane_global_propagate_cmd=""
   local lane_global_propagate_circt_lec=""
   local lane_global_propagate_circt_lec_args=""
@@ -377,6 +391,14 @@ run_lane() {
     if [[ "$lane_mutations_modes" == "-" || -z "$lane_mutations_modes" ]]; then
       lane_mutations_modes="$DEFAULT_MUTATIONS_MODES"
     fi
+    lane_mutations_cfg="${MUTATIONS_CFG[$i]}"
+    if [[ "$lane_mutations_cfg" == "-" || -z "$lane_mutations_cfg" ]]; then
+      lane_mutations_cfg="$DEFAULT_MUTATIONS_CFG"
+    fi
+    lane_mutations_select="${MUTATIONS_SELECT[$i]}"
+    if [[ "$lane_mutations_select" == "-" || -z "$lane_mutations_select" ]]; then
+      lane_mutations_select="$DEFAULT_MUTATIONS_SELECT"
+    fi
     if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
       cmd+=(--mutations-top "${MUTATIONS_TOP[$i]}")
     fi
@@ -388,6 +410,12 @@ run_lane() {
     fi
     if [[ -n "$lane_mutations_modes" ]]; then
       cmd+=(--mutations-modes "$lane_mutations_modes")
+    fi
+    if [[ -n "$lane_mutations_cfg" ]]; then
+      cmd+=(--mutations-cfg "$lane_mutations_cfg")
+    fi
+    if [[ -n "$lane_mutations_select" ]]; then
+      cmd+=(--mutations-select "$lane_mutations_select")
     fi
   fi
 
