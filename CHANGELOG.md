@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 793 - February 9, 2026
+
+### Mutation Chain Telemetry: Symmetric Fallback Resolution Metrics
+
+1. Extended chained global-filter telemetry in
+   `utils/run_mutation_cover.sh` with propagated-resolution counters:
+   - `chain_bmc_resolved_propagated_mutants`
+   - `chain_lec_resolved_propagated_mutants`
+2. Kept reuse correctness intact:
+   - new counters are serialized in global-filter note sideband
+     (`pair_qualification.tsv`, `test_id=-`) and restored from reuse inputs.
+3. This closes asymmetry in chain analytics:
+   - previous telemetry only counted fallback resolutions that ended in
+     `not_propagated`, making propagated fallback outcomes less visible.
+
+### Tests and Documentation
+
+- Updated tests:
+  - `test/Tools/run-mutation-cover-global-circt-chain-filter.test`
+  - `test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test`
+- Updated docs:
+  - `docs/FormalRegression.md` (new chain fallback propagated metrics).
+  - `PROJECT_PLAN.md` (chain telemetry inventory reflects new metrics).
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation*.test`: PASS (84/84)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-chain-propagated-metrics --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 792 - February 9, 2026
 
 ### Mutation Generation: Batch Per-Round Yosys Invocations
@@ -41209,3 +41253,60 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 794 - February 9, 2026
+
+### FormalAll Strict-Gate Hardening for OpenTitan E2E Mode-Diff
+
+1. Extended `utils/run_formal_all.sh` strict-gate coverage for OpenTitan
+   `E2E_MODE_DIFF` with two new drift gates:
+   - `--fail-on-new-e2e-mode-diff-missing-in-e2e`
+   - `--fail-on-new-e2e-mode-diff-missing-in-e2e-strict`
+2. Wired both gates through all control points:
+   - CLI help/arg parsing
+   - strict-gate default bundle (`--strict-gate`)
+   - comparator env plumbing and gate checks.
+3. Fixed a parser correctness bug in strict-gate telemetry extraction:
+   - `parse_result_summary` now accepts metric keys containing digits
+     (`[a-z][a-z0-9_]*`), which is required for keys like
+     `missing_in_e2e` and `missing_in_e2e_strict`.
+   - Applied consistently in both strict-gate comparator blocks that parse
+     result summaries.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e.test`
+  - `test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e-strict.test`
+- These regressions verify baseline-window gate failures for both missing-case
+  drift classes.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit (focused strict-gate/mode-diff bundle):
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-fail.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-status-diff.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-pass.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e-strict.test test/Tools/run-formal-all-opentitan-e2e-mode-diff.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-strict-gate-failure-cases.test test/Tools/run-formal-all-help.test`:
+    - 9/9 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+- OpenTitan canonical dual-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-gate-digits-20260209-164611 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'`:
+    - `E2E`: `total=12 pass=10 fail=2`
+    - `E2E_STRICT`: `total=12 pass=11 fail=1`
+    - `E2E_MODE_DIFF`: `strict_only_fail=1 strict_only_pass=2 status_diff=0 missing_in_e2e=0 missing_in_e2e_strict=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+- OpenTitan default E2E currently fails on `SIM:gpio` and `SIM:uart` while
+  strict E2E passes those targets (`strict_only_pass=2`).
