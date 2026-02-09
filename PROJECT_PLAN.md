@@ -18084,6 +18084,18 @@ ninja -C build circt-verilog
     targeted truncation behavior.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 729
+- Added concise per-operator arithmetic shorthand in route-context integer
+  expressions:
+  - `div_floor`, `div_trunc_zero`
+  - `mod_floor`, `mod_trunc_zero`
+- Planner impact:
+  - reduces verbosity of expression-local arithmetic configuration for common
+    `div`/`mod` migrations.
+  - keeps schema/clause defaults intact while improving readability and
+    maintainability of mixed-arithmetic policy schemas.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
