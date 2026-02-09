@@ -21783,6 +21783,22 @@ struct DistConstraintInfo {
   bool isSigned = false;    // Signedness of the property
 };
 
+/// Helper structure to hold extracted conditional constraint information.
+/// Conditional constraints are applied only when a predicate is true.
+/// Pattern: `constraint c { b1 == 5 -> b2 == 10; }` (implication)
+/// Pattern: `constraint c { if (b1 == 5) b2 == 10; else b2 == 20; }` (if-else)
+struct ConditionalConstraintInfo {
+  StringRef constraintName;     // Name of the constraint block
+  StringRef predicateProperty;  // Property name in predicate
+  int64_t predicateValue;       // Value to compare against
+  unsigned predicateFieldIndex; // Field index for GEP
+  unsigned predicateBitWidth;   // Bit width of predicate property
+  // Consequent constraints (when predicate is true)
+  SmallVector<RangeConstraintInfo> thenConstraints;
+  // Else constraints (when predicate is false, for if-else)
+  SmallVector<RangeConstraintInfo> elseConstraints;
+};
+
 /// Extract simple range constraints from a class declaration.
 /// Returns a list of range constraints found in ConstraintInsideOp operations.
 /// Only extracts constraints that can be expressed as simple [min, max] ranges.
@@ -22030,10 +22046,82 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
           int64_t lo = cv + 1;
           if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
         }
-      } else if (isa<EqOp>(defOp)) {
+      } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
         bounds.lower = cv;
         bounds.upper = cv;
       }
+    }
+
+    // Also look for set membership patterns: or(eq(prop, c1), eq(prop, c2))
+    // These arise from `b inside {3, 10}` which Slang compiles to
+    // or(wildcard_eq(b, 3), wildcard_eq(b, 10)) wrapped in ConstraintExprOp.
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
+      if (!exprOp)
+        continue;
+      Value cond = exprOp.getCondition();
+      Operation *defOp = cond.getDefiningOp();
+      if (!defOp || !isa<OrOp>(defOp) || defOp->getNumOperands() != 2)
+        continue;
+
+      // Helper to extract property name from eq/weq operand
+      auto extractEqMember =
+          [&](Value v) -> std::pair<StringRef, std::optional<int64_t>> {
+        Operation *memberOp = v.getDefiningOp();
+        if (!memberOp || memberOp->getNumOperands() != 2)
+          return {"", std::nullopt};
+        if (!isa<EqOp>(memberOp) && !isa<WildcardEqOp>(memberOp))
+          return {"", std::nullopt};
+        Value mLhs = memberOp->getOperand(0);
+        Value mRhs = memberOp->getOperand(1);
+        StringRef name = getPropertyName(mLhs);
+        auto val = getConstVal(mRhs);
+        if (name.empty() || !val) {
+          name = getPropertyName(mRhs);
+          val = getConstVal(mLhs);
+        }
+        return {name, val};
+      };
+
+      auto [name1, val1] = extractEqMember(defOp->getOperand(0));
+      auto [name2, val2] = extractEqMember(defOp->getOperand(1));
+      if (name1.empty() || name2.empty() || name1 != name2 || !val1 || !val2)
+        continue;
+
+      // Skip if already covered by another constraint
+      bool alreadyCovered = false;
+      for (auto &existing : constraints) {
+        if (existing.propertyName == name1 &&
+            existing.constraintName == constraintName) {
+          alreadyCovered = true;
+          break;
+        }
+      }
+      if (alreadyCovered)
+        continue;
+
+      auto it = propertyMap.find(name1);
+      if (it == propertyMap.end())
+        continue;
+
+      unsigned fieldIdx = it->second.first;
+      Type fieldType = it->second.second;
+      unsigned bitWidth = 32;
+      if (auto intType = dyn_cast<IntType>(fieldType))
+        bitWidth = intType.getWidth();
+
+      RangeConstraintInfo info;
+      info.propertyName = name1;
+      info.constraintName = constraintName;
+      info.fieldIndex = fieldIdx;
+      info.bitWidth = bitWidth;
+      info.isSoft = exprOp.getIsSoft();
+      info.isMultiRange = true;
+      info.minValue = *val1;
+      info.maxValue = *val1;
+      info.ranges.push_back({*val1, *val1});
+      info.ranges.push_back({*val2, *val2});
+      constraints.push_back(info);
     }
 
     // Convert collected bounds into RangeConstraintInfo entries
@@ -22083,6 +22171,176 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   }
 
   return constraints;
+}
+
+/// Helper to extract a predicate (property == constant) from a Moore IR value.
+/// Returns the property name and constant value, or empty/nullopt if not
+/// matchable.
+static std::pair<StringRef, std::optional<int64_t>>
+extractPredicate(Value condition) {
+  Operation *defOp = condition.getDefiningOp();
+  if (!defOp || defOp->getNumOperands() != 2)
+    return {"", std::nullopt};
+  if (!isa<EqOp>(defOp) && !isa<WildcardEqOp>(defOp))
+    return {"", std::nullopt};
+
+  auto getPropertyName = [](Value v) -> StringRef {
+    if (auto readOp = v.getDefiningOp<ReadOp>())
+      if (auto propRef = readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
+        return propRef.getProperty();
+    return {};
+  };
+  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+      FVInt fvVal = constOp.getValue();
+      if (fvVal.hasUnknown())
+        return std::nullopt;
+      return fvVal.getRawValue().getSExtValue();
+    }
+    return std::nullopt;
+  };
+
+  Value lhs = defOp->getOperand(0);
+  Value rhs = defOp->getOperand(1);
+  StringRef name = getPropertyName(lhs);
+  auto val = getConstVal(rhs);
+  if (name.empty() || !val) {
+    name = getPropertyName(rhs);
+    val = getConstVal(lhs);
+  }
+  return {name, val};
+}
+
+/// Recursively extract range constraints from a constraint region (used for
+/// implication consequent and if-else then/else regions).
+static SmallVector<RangeConstraintInfo>
+extractConstraintsFromRegion(Region &region, StringRef constraintName,
+                             const DenseMap<StringRef, std::pair<unsigned, Type>>
+                                 &propertyMap) {
+  SmallVector<RangeConstraintInfo> result;
+  if (region.empty())
+    return result;
+
+  for (auto &op : region.front().getOperations()) {
+    // Handle ConstraintExprOp with equality pattern
+    if (auto exprOp = dyn_cast<ConstraintExprOp>(op)) {
+      Value cond = exprOp.getCondition();
+      auto [name, val] = extractPredicate(cond);
+      if (!name.empty() && val) {
+        auto it = propertyMap.find(name);
+        if (it != propertyMap.end()) {
+          RangeConstraintInfo info;
+          info.propertyName = name;
+          info.constraintName = constraintName;
+          info.fieldIndex = it->second.first;
+          info.bitWidth = 32;
+          if (auto intType = dyn_cast<IntType>(it->second.second))
+            info.bitWidth = intType.getWidth();
+          info.isSoft = false;
+          info.isMultiRange = false;
+          info.minValue = *val;
+          info.maxValue = *val;
+          result.push_back(info);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/// Extract conditional constraints (implications and if-else) from a class.
+/// These generate runtime conditional code to apply constraints based on
+/// the values of other properties after basic randomization.
+static SmallVector<ConditionalConstraintInfo, 4>
+extractConditionalConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
+                              SymbolRefAttr classSym) {
+  SmallVector<ConditionalConstraintInfo, 4> conditionals;
+
+  // Build property map (same as in extractRangeConstraints)
+  DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+  unsigned propIdx = classDecl.getBaseAttr() ? 1 : 1; // typeID or base at 0
+  for (auto &op : classDecl.getBody().getOps()) {
+    if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+      propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
+      propIdx++;
+    }
+  }
+
+  // Walk through constraint blocks
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+
+    StringRef constraintName = constraintBlock.getSymName();
+
+    // Recursive helper to extract conditionals from a block of operations
+    std::function<void(Block &)> walkOps = [&](Block &block) {
+      for (auto &constraintOp : block.getOperations()) {
+        // Handle ConstraintImplicationOp
+        if (auto implOp = dyn_cast<ConstraintImplicationOp>(constraintOp)) {
+          auto [predName, predVal] = extractPredicate(implOp.getAntecedent());
+          if (predName.empty() || !predVal)
+            continue;
+
+          auto predIt = propertyMap.find(predName);
+          if (predIt == propertyMap.end())
+            continue;
+
+          ConditionalConstraintInfo info;
+          info.constraintName = constraintName;
+          info.predicateProperty = predName;
+          info.predicateValue = *predVal;
+          info.predicateFieldIndex = predIt->second.first;
+          info.predicateBitWidth = 32;
+          if (auto intType = dyn_cast<IntType>(predIt->second.second))
+            info.predicateBitWidth = intType.getWidth();
+
+          info.thenConstraints = extractConstraintsFromRegion(
+              implOp.getConsequent(), constraintName, propertyMap);
+          conditionals.push_back(info);
+        }
+
+        // Handle ConstraintIfElseOp
+        if (auto ifElseOp = dyn_cast<ConstraintIfElseOp>(constraintOp)) {
+          auto [predName, predVal] =
+              extractPredicate(ifElseOp.getCondition());
+          if (predName.empty() || !predVal)
+            continue;
+
+          auto predIt = propertyMap.find(predName);
+          if (predIt == propertyMap.end())
+            continue;
+
+          ConditionalConstraintInfo info;
+          info.constraintName = constraintName;
+          info.predicateProperty = predName;
+          info.predicateValue = *predVal;
+          info.predicateFieldIndex = predIt->second.first;
+          info.predicateBitWidth = 32;
+          if (auto intType = dyn_cast<IntType>(predIt->second.second))
+            info.predicateBitWidth = intType.getWidth();
+
+          info.thenConstraints = extractConstraintsFromRegion(
+              ifElseOp.getThenRegion(), constraintName, propertyMap);
+          info.elseConstraints = extractConstraintsFromRegion(
+              ifElseOp.getElseRegion(), constraintName, propertyMap);
+
+          // Also recurse into nested conditionals within then/else regions
+          if (!ifElseOp.getThenRegion().empty())
+            walkOps(ifElseOp.getThenRegion().front());
+          if (!ifElseOp.getElseRegion().empty())
+            walkOps(ifElseOp.getElseRegion().front());
+
+          conditionals.push_back(info);
+        }
+      }
+    };
+
+    walkOps(constraintBlock.getBody().front());
+  }
+
+  return conditionals;
 }
 
 /// Extract soft constraints from a class declaration.
@@ -22979,6 +23237,13 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
     }
 
+    // Extract conditional constraints (implications and if-else)
+    SmallVector<ConditionalConstraintInfo, 4> conditionalConstraints;
+    if (classDecl) {
+      conditionalConstraints =
+          extractConditionalConstraints(classDecl, cache, classSym);
+    }
+
     // Also extract constraints from the inline constraint region (if present)
     // Inline constraints are specified with `randomize() with { ... }` syntax
     // and are combined with class-level constraints (IEEE 1800-2017 Section 18.7)
@@ -23074,7 +23339,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
-        !distConstraints.empty()) {
+        !distConstraints.empty() || !conditionalConstraints.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -23391,6 +23656,102 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
           // Store the soft constraint default value
           LLVM::StoreOp::create(rewriter, loc, defaultVal, fieldPtr);
+        }
+      }
+
+      // Apply conditional constraints (implications and if-else).
+      // These are evaluated AFTER all hard/soft/dist constraints have been
+      // applied, so predicate properties already have their constrained values.
+      if (!conditionalConstraints.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_randomize_with_range", rangeFnTy);
+
+        // Helper to apply a list of range constraints to fields
+        auto applyConstraintList =
+            [&](const SmallVector<RangeConstraintInfo> &constraints) {
+              for (const auto &c : constraints) {
+                auto pathIt = structInfo->propertyPath.find(c.propertyName);
+                if (pathIt == structInfo->propertyPath.end())
+                  continue;
+
+                SmallVector<LLVM::GEPArg> gepIdx;
+                gepIdx.push_back(0);
+                for (unsigned idx : pathIt->second)
+                  gepIdx.push_back(static_cast<int32_t>(idx));
+                auto fPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                                classPtr, gepIdx);
+
+                auto minC = LLVM::ConstantOp::create(
+                    rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(c.minValue));
+                auto maxC = LLVM::ConstantOp::create(
+                    rewriter, loc, i64Ty,
+                    rewriter.getI64IntegerAttr(c.maxValue));
+                auto rangeResult = LLVM::CallOp::create(
+                    rewriter, loc, TypeRange{i64Ty},
+                    SymbolRefAttr::get(rangeFn), ValueRange{minC, maxC});
+
+                Type fieldIntTy = IntegerType::get(ctx, c.bitWidth);
+                Value truncVal = rangeResult.getResult();
+                if (c.bitWidth < 64)
+                  truncVal = arith::TruncIOp::create(rewriter, loc, fieldIntTy,
+                                                     truncVal);
+                LLVM::StoreOp::create(rewriter, loc, truncVal, fPtr);
+              }
+            };
+
+        for (const auto &cond : conditionalConstraints) {
+          OpBuilder::InsertionGuard guard(rewriter);
+
+          // Check if the constraint is enabled
+          Value applyCond;
+          if (!cond.constraintName.empty()) {
+            applyCond = createConstraintEnabledCheck(cond.constraintName);
+          }
+
+          // Read the predicate property's current value
+          auto predPathIt =
+              structInfo->propertyPath.find(cond.predicateProperty);
+          if (predPathIt == structInfo->propertyPath.end())
+            continue;
+
+          SmallVector<LLVM::GEPArg> predGepIdx;
+          predGepIdx.push_back(0);
+          for (unsigned idx : predPathIt->second)
+            predGepIdx.push_back(static_cast<int32_t>(idx));
+          auto predPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                             classPtr, predGepIdx);
+          Type predIntTy = IntegerType::get(ctx, cond.predicateBitWidth);
+          auto predVal =
+              LLVM::LoadOp::create(rewriter, loc, predIntTy, predPtr);
+
+          // Compare with predicate value
+          auto predConst = arith::ConstantOp::create(
+              rewriter, loc, predIntTy,
+              rewriter.getIntegerAttr(predIntTy, cond.predicateValue));
+          Value predMatch = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq, predVal, predConst);
+
+          // AND with constraint-enabled check
+          if (applyCond)
+            predMatch =
+                arith::AndIOp::create(rewriter, loc, predMatch, applyCond);
+
+          bool hasElse = !cond.elseConstraints.empty();
+          auto ifOp =
+              scf::IfOp::create(rewriter, loc, TypeRange{}, predMatch,
+                                /*withElseRegion=*/hasElse);
+
+          // Then branch: apply consequent constraints
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+          applyConstraintList(cond.thenConstraints);
+
+          // Else branch: apply else constraints (for if-else)
+          if (hasElse) {
+            rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+            applyConstraintList(cond.elseConstraints);
+          }
         }
       }
 
