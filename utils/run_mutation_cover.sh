@@ -51,10 +51,11 @@ Optional:
   --formal-global-propagate-cmd CMD
                              Optional per-mutant propagation filter cmd run once
                              before per-test qualification/detection
-  --formal-global-propagate-circt-lec PATH
+  --formal-global-propagate-circt-lec [PATH]
                              Use circt-lec as built-in per-mutant global
                              propagation filter (mutually exclusive with
-                             --formal-global-propagate-cmd)
+                             --formal-global-propagate-cmd). If PATH is omitted
+                             or set to 'auto', resolves from ./build/bin and PATH.
   --formal-global-propagate-circt-lec-args ARGS
                              Extra args passed to circt-lec global filter
   --formal-global-propagate-c1 NAME
@@ -69,15 +70,16 @@ Optional:
   --formal-global-propagate-accept-xprop-only
                              Pass --accept-xprop-only to circt-lec global
                              propagation filter
-  --formal-global-propagate-circt-bmc PATH
+  --formal-global-propagate-circt-bmc [PATH]
                              Use circt-bmc as built-in differential global
                              filter (orig vs mutant; mutually exclusive with
-                             other global filter modes)
+                             other global filter modes). If PATH is omitted
+                             or set to 'auto', resolves from ./build/bin and PATH.
   --formal-global-propagate-circt-chain MODE
                              Built-in chained global filter strategy
-                             (lec-then-bmc|bmc-then-lec|consensus|auto). Requires both
-                             --formal-global-propagate-circt-lec and
-                             --formal-global-propagate-circt-bmc.
+                             (lec-then-bmc|bmc-then-lec|consensus|auto). If
+                             circt-lec/circt-bmc paths are not provided, they
+                             are auto-resolved from ./build/bin and PATH.
   --formal-global-propagate-circt-bmc-args ARGS
                              Extra args passed to circt-bmc global filter
   --formal-global-propagate-bmc-bound N
@@ -256,14 +258,30 @@ while [[ $# -gt 0 ]]; do
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --formal-global-propagate-cmd) FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
-    --formal-global-propagate-circt-lec) FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
+    --formal-global-propagate-circt-lec)
+      if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
+        FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"
+        shift 2
+      else
+        FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="auto"
+        shift
+      fi
+      ;;
     --formal-global-propagate-circt-lec-args) FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS="$2"; shift 2 ;;
     --formal-global-propagate-c1) FORMAL_GLOBAL_PROPAGATE_C1="$2"; shift 2 ;;
     --formal-global-propagate-c2) FORMAL_GLOBAL_PROPAGATE_C2="$2"; shift 2 ;;
     --formal-global-propagate-z3) FORMAL_GLOBAL_PROPAGATE_Z3="$2"; shift 2 ;;
     --formal-global-propagate-assume-known-inputs) FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=1; shift ;;
     --formal-global-propagate-accept-xprop-only) FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=1; shift ;;
-    --formal-global-propagate-circt-bmc) FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"; shift 2 ;;
+    --formal-global-propagate-circt-bmc)
+      if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
+        FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"
+        shift 2
+      else
+        FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="auto"
+        shift
+      fi
+      ;;
     --formal-global-propagate-circt-chain) FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN="$2"; shift 2 ;;
     --formal-global-propagate-circt-bmc-args) FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS="$2"; shift 2 ;;
     --formal-global-propagate-bmc-bound) FORMAL_GLOBAL_PROPAGATE_BMC_BOUND="$2"; shift 2 ;;
@@ -399,10 +417,8 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
     echo "--formal-global-propagate-circt-chain cannot be combined with --formal-global-propagate-cmd." >&2
     exit 1
   fi
-  if [[ -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" || -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]]; then
-    echo "--formal-global-propagate-circt-chain requires both --formal-global-propagate-circt-lec and --formal-global-propagate-circt-bmc." >&2
-    exit 1
-  fi
+  [[ -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]] && FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="auto"
+  [[ -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]] && FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="auto"
 else
   global_filter_mode_count=0
   [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]] && global_filter_mode_count=$((global_filter_mode_count + 1))
@@ -432,9 +448,28 @@ resolve_tool_path() {
   return 1
 }
 
+resolve_circt_tool_path() {
+  local requested="$1"
+  local tool_name="$2"
+  local repo_candidate="${SCRIPT_DIR}/../build/bin/${tool_name}"
+  local resolved=""
+  if [[ "$requested" == "auto" ]]; then
+    if resolved="$(resolve_tool_path "$tool_name")"; then
+      printf "%s\n" "$resolved"
+      return 0
+    fi
+    if [[ -x "$repo_candidate" ]]; then
+      printf "%s\n" "$repo_candidate"
+      return 0
+    fi
+    return 1
+  fi
+  resolve_tool_path "$requested"
+}
+
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
-  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC")"; then
-    echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" >&2
+  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED="$(resolve_circt_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" "circt-lec")"; then
+    echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC (searched repo build/bin and PATH)." >&2
     exit 1
   fi
 fi
@@ -445,8 +480,8 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3" ]]; then
   fi
 fi
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]]; then
-  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC")"; then
-    echo "Unable to resolve --formal-global-propagate-circt-bmc executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" >&2
+  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED="$(resolve_circt_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" "circt-bmc")"; then
+    echo "Unable to resolve --formal-global-propagate-circt-bmc executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC (searched repo build/bin and PATH)." >&2
     exit 1
   fi
 fi

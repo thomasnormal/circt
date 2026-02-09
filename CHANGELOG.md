@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 767 - February 9, 2026
+
+### Mutation Tool Auto-Discovery for circt-lec/circt-bmc
+
+- Updated `utils/run_mutation_cover.sh` built-in global filter CLI so
+  `--formal-global-propagate-circt-lec` and
+  `--formal-global-propagate-circt-bmc` accept optional paths.
+- When paths are omitted (or set to `auto`), tool resolution now searches:
+  - `PATH`
+  - `<circt-root>/build/bin`
+- Chained global filter mode now auto-enables `circt-lec`/`circt-bmc`
+  discovery when explicit paths are not provided.
+- Updated `utils/run_mutation_matrix.sh` default filter options to support the
+  same no-path `auto` behavior:
+  - `--default-formal-global-propagate-circt-lec`
+  - `--default-formal-global-propagate-circt-bmc`
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-lec-auto-path.test`
+  - `test/Tools/run-mutation-cover-global-circt-chain-auto-path.test`
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-auto-path.test`
+- Updated:
+  - `README.md` (mutation tool usage + no-path discovery behavior)
+  - `docs/FormalRegression.md` (workflow mapping + auto-discovery docs)
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-lec-auto-path.test test/Tools/run-mutation-cover-global-circt-chain-auto-path.test test/Tools/run-mutation-matrix-global-circt-bmc-auto-path.test test/Tools/run-mutation-cover-global-circt-lec-filter.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-cover-help.test`: PASS (9/9)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (48/48)
+
 ## Iteration 766 - February 9, 2026
 
 ### Mutation Global Filter UNKNOWN Telemetry

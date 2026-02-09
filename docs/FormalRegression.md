@@ -104,8 +104,6 @@ utils/run_mutation_cover.sh \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
   --formal-global-propagate-circt-chain auto \
-  --formal-global-propagate-circt-lec /path/to/circt-lec \
-  --formal-global-propagate-circt-bmc /path/to/circt-bmc \
   --work-dir /tmp/mutation-cover
 ```
 
@@ -168,10 +166,16 @@ certitude_run \
 utils/run_mutation_matrix.sh \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
-  --default-formal-global-propagate-circt-lec /path/to/circt-lec \
-  --default-formal-global-propagate-circt-bmc /path/to/circt-bmc \
+  --default-formal-global-propagate-circt-lec \
+  --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto
 ```
+
+Tool discovery for built-in global filters:
+- If circt-lec/circt-bmc path options are omitted or set to `auto`,
+  `run_mutation_cover.sh` resolves tools from `PATH`, then
+  `<circt-root>/build/bin`.
+- Explicit paths still take precedence.
 
 Equivalent MCY flow (one MCY project per lane):
 
@@ -247,7 +251,7 @@ Execution controls:
   run once before per-test qualification/detection. Mutants proven
   `NOT_PROPAGATED` are classified as `not_propagated` without running tests.
 - Built-in circt-lec global filter (mutually exclusive with command mode):
-  - `--formal-global-propagate-circt-lec <path>`
+  - `--formal-global-propagate-circt-lec [path]`
   - `--formal-global-propagate-circt-lec-args "<args>"`
   - `--formal-global-propagate-c1 <module>` / `--formal-global-propagate-c2 <module>`
   - `--formal-global-propagate-z3 <path>`
@@ -258,7 +262,7 @@ Execution controls:
   - `LEC_RESULT=NEQ|UNKNOWN` => `propagated` (conservative fallback)
 - Built-in differential circt-bmc global filter (mutually exclusive with other
   global filter modes):
-  - `--formal-global-propagate-circt-bmc <path>`
+  - `--formal-global-propagate-circt-bmc [path]`
   - `--formal-global-propagate-circt-bmc-args "<args>"`
   - `--formal-global-propagate-bmc-bound <n>`
   - `--formal-global-propagate-bmc-module <name>`
@@ -280,8 +284,7 @@ Execution controls:
   - cache bounds can be applied by entry count, byte footprint, and entry age.
 - Built-in chained circt-lec/circt-bmc global filter:
   - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
-  - requires both `--formal-global-propagate-circt-lec` and
-    `--formal-global-propagate-circt-bmc` options.
+  - if circt-lec/circt-bmc paths are omitted, both are auto-resolved.
   - `lec-then-bmc`: use LEC first and fall back to differential BMC when LEC
     returns `UNKNOWN` or an error.
   - `bmc-then-lec`: use differential BMC first and fall back to LEC when BMC
@@ -412,7 +415,7 @@ Execution controls:
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.
-- `--default-formal-global-propagate-circt-lec <path>`: default
+- `--default-formal-global-propagate-circt-lec [path]`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-lec` for lanes
   without a lane-specific circt-lec global filter path.
 - `--default-formal-global-propagate-circt-lec-args <args>`: default
@@ -428,7 +431,7 @@ Execution controls:
   `run_mutation_cover.sh --formal-global-propagate-assume-known-inputs`.
 - `--default-formal-global-propagate-accept-xprop-only`: default
   `run_mutation_cover.sh --formal-global-propagate-accept-xprop-only`.
-- `--default-formal-global-propagate-circt-bmc <path>`: default
+- `--default-formal-global-propagate-circt-bmc [path]`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-bmc` for lanes
   without a lane-specific circt-bmc global filter path.
 - `--default-formal-global-propagate-circt-chain <mode>`: default
@@ -1154,6 +1157,11 @@ Each run writes:
   - OpenTitan LEC case artifacts may include a diagnostic tag suffix
     (for example `#XPROP_ONLY`) to preserve mismatch class in case-level
     gating artifacts.
+  - OpenTitan LEC artifact paths are deterministic in formal-all runs:
+    - default lane: `<out-dir>/opentitan-lec-work/<impl>`
+    - strict lane: `<out-dir>/opentitan-lec-strict-work/<impl>`
+  - OpenTitan E2E LEC artifacts are deterministic under:
+    `<out-dir>/opentitan-formal-e2e/lec-workdir/<impl>`.
 
 JSON summary schema:
 
