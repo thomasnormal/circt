@@ -109,6 +109,16 @@ Execution controls:
 - `--formal-global-propagate-cmd <cmd>`: per-mutant formal propagation filter
   run once before per-test qualification/detection. Mutants proven
   `NOT_PROPAGATED` are classified as `not_propagated` without running tests.
+- Built-in circt-lec global filter (mutually exclusive with command mode):
+  - `--formal-global-propagate-circt-lec <path>`
+  - `--formal-global-propagate-circt-lec-args "<args>"`
+  - `--formal-global-propagate-c1 <module>` / `--formal-global-propagate-c2 <module>`
+  - `--formal-global-propagate-z3 <path>`
+  - `--formal-global-propagate-assume-known-inputs`
+  - `--formal-global-propagate-accept-xprop-only`
+  This mode classifies by `circt-lec` output tokens:
+  - `LEC_RESULT=EQ` => `not_propagated`
+  - `LEC_RESULT=NEQ` => `propagated`
 
 `tests.tsv` format (tab-separated):
 
@@ -169,6 +179,9 @@ Execution controls:
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.
+- `--default-formal-global-propagate-circt-lec <path>`: default
+  `run_mutation_cover.sh --formal-global-propagate-circt-lec` for lanes
+  without a lane-specific circt-lec global filter path.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -178,7 +191,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]
 ```
 
 Notes:
@@ -194,6 +207,10 @@ Notes:
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides
   `--default-formal-global-propagate-cmd` for a specific lane.
+- `global_propagate_circt_lec` (optional) overrides
+  `--default-formal-global-propagate-circt-lec` for a specific lane.
+- `global_propagate_cmd` and `global_propagate_circt_lec` are mutually
+  exclusive within a lane.
 
 Shard/route a run to selected lane IDs:
 

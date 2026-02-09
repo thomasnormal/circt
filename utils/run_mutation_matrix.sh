@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -25,6 +25,9 @@ Optional:
   --default-formal-global-propagate-cmd CMD
                             Default --formal-global-propagate-cmd for lanes
                             without lane-specific global_propagate_cmd
+  --default-formal-global-propagate-circt-lec PATH
+                            Default --formal-global-propagate-circt-lec for
+                            lanes without lane-specific global_propagate_circt_lec
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
@@ -49,6 +52,7 @@ DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
 DEFAULT_MUTATIONS_MODES=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
@@ -65,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
+    --default-formal-global-propagate-circt-lec) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
@@ -130,6 +135,7 @@ declare -a REUSE_PAIR_FILE
 declare -a REUSE_SUMMARY_FILE
 declare -a MUTATIONS_MODES
 declare -a GLOBAL_PROPAGATE_CMD
+declare -a GLOBAL_PROPAGATE_CIRCT_LEC
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -138,7 +144,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -160,6 +166,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   REUSE_SUMMARY_FILE+=("${reuse_summary_file:--}")
   MUTATIONS_MODES+=("${mutations_modes:--}")
   GLOBAL_PROPAGATE_CMD+=("${global_propagate_cmd:--}")
+  GLOBAL_PROPAGATE_CIRCT_LEC+=("${global_propagate_circt_lec:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -183,6 +190,7 @@ run_lane() {
   local lane_reuse_summary_file=""
   local lane_mutations_modes=""
   local lane_global_propagate_cmd=""
+  local lane_global_propagate_circt_lec=""
 
   mkdir -p "$lane_dir"
 
@@ -273,6 +281,13 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_cmd" ]]; then
     cmd+=(--formal-global-propagate-cmd "$lane_global_propagate_cmd")
+  fi
+  lane_global_propagate_circt_lec="${GLOBAL_PROPAGATE_CIRCT_LEC[$i]}"
+  if [[ "$lane_global_propagate_circt_lec" == "-" || -z "$lane_global_propagate_circt_lec" ]]; then
+    lane_global_propagate_circt_lec="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC"
+  fi
+  if [[ -n "$lane_global_propagate_circt_lec" ]]; then
+    cmd+=(--formal-global-propagate-circt-lec "$lane_global_propagate_circt_lec")
   fi
   if [[ -n "${THRESHOLD[$i]}" && "${THRESHOLD[$i]}" != "-" ]]; then
     cmd+=(--coverage-threshold "${THRESHOLD[$i]}")

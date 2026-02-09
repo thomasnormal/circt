@@ -1,5 +1,73 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 739 - February 9, 2026
+
+### LEC-Native Global Mutant Relevance Filtering
+
+- Extended `utils/run_mutation_cover.sh` with built-in circt-lec integration:
+  - `--formal-global-propagate-circt-lec <path>`
+  - `--formal-global-propagate-circt-lec-args "<args>"`
+  - `--formal-global-propagate-c1 <module>`
+  - `--formal-global-propagate-c2 <module>`
+  - `--formal-global-propagate-z3 <path>`
+  - `--formal-global-propagate-assume-known-inputs`
+  - `--formal-global-propagate-accept-xprop-only`
+- Built-in filter classification maps directly to `circt-lec` results:
+  - `LEC_RESULT=EQ` => `not_propagated`
+  - `LEC_RESULT=NEQ` => `propagated`
+- Added conflict guard:
+  - `--formal-global-propagate-cmd` and
+    `--formal-global-propagate-circt-lec` are now mutually exclusive.
+- Reuse compatibility manifests/hashes now include circt-lec global-filter
+  configuration fields to prevent unsafe reuse across formal-config changes.
+
+### Matrix Integration
+
+- Extended `utils/run_mutation_matrix.sh` with circt-lec global-filter
+  pass-through:
+  - lane TSV optional column: `global_propagate_circt_lec`
+  - `--default-formal-global-propagate-circt-lec <path>`
+
+### Tests and Docs Updates
+
+- Added lit regressions:
+  - `test/Tools/run-mutation-cover-global-circt-lec-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-lec-filter.test`
+  - `test/Tools/run-mutation-cover-global-filter-conflict.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--formal-global-propagate-circt-lec`
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-formal-global-propagate-circt-lec`
+  - `docs/FormalRegression.md`
+    - documented LEC-native global filter options + matrix lane/default wiring
+  - `PROJECT_PLAN.md`
+    - marked LEC-native global relevance helper as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- Manual command-level validation:
+  - cover LEC-native global filter (`--formal-global-propagate-circt-lec`):
+    PASS (`M_EQ` filtered as `not_propagated`)
+  - matrix default LEC-native global filter pass-through
+    (`--default-formal-global-propagate-circt-lec`): PASS
+  - conflict guard (`--formal-global-propagate-cmd` +
+    `--formal-global-propagate-circt-lec`): PASS (expected fail-fast)
+  - regression sanity:
+    - command-mode global filter path: PASS
+    - multi-mode generation (`--mutations-modes arith,control`): PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-global-circt-lec --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 738 - February 9, 2026
 
 ### Global Formal Mutant Relevance Filter
