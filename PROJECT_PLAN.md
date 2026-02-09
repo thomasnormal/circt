@@ -230,10 +230,10 @@ See CHANGELOG.md on recent progress.
 22. `run_formal_all.sh` strict-gate now tracks fail-like case IDs via baseline
     `failure_cases` telemetry and flags diagnostic drift even when aggregate
     fail counts stay flat.
-24. OpenTitan LEC fallback parsing in `run_formal_all.sh` now preserves
-    diagnostic suffixes (`#XPROP_ONLY`, etc.) for both `opentitan/LEC` and
-    `opentitan/LEC_STRICT` case rows when `run_opentitan_circt_lec.py` cannot
-    emit case TSV output directly.
+24. OpenTitan LEC lanes in `run_formal_all.sh` now require direct case TSV
+    output from `run_opentitan_circt_lec.py`; missing case output is recorded as
+    a hard lane error (`missing_results=1`) instead of log-based fallback
+    inference.
 25. `run_formal_all.sh` expected-failure case ingestion/refresh now reads
     detailed `yosys/tests/sva` BMC case rows (`yosys-bmc-results.txt`) in
     addition to summary counters, enabling per-case BMC expectations without
