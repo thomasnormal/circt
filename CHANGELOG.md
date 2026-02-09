@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 723 - February 9, 2026
+
+### Mutation Coverage Harness (Certitude-Style 4-Way Classification)
+
+- Added `utils/run_mutation_cover.sh` as a CIRCT-native mutation coverage driver.
+- New capabilities:
+  - manifest-driven multi-test matrix execution (`--tests-manifest`)
+  - formal pre-qualification stages:
+    - activation (`--formal-activate-cmd`)
+    - propagation (`--formal-propagate-cmd`)
+  - 4-way mutant classification:
+    - `not_activated`
+    - `not_propagated`
+    - `propagated_not_detected`
+    - `detected`
+  - hard-gate controls:
+    - coverage threshold (`--coverage-threshold`, exit code `2`)
+    - undetected propagated mutants (`--fail-on-undetected`, exit code `3`)
+    - infrastructure/formal errors (`--fail-on-errors`, exit code `1`)
+
+### Reporting Outputs
+
+- Added artifact outputs under work dir:
+  - `summary.tsv` (mutant-level class)
+  - `pair_qualification.tsv` (per test-mutant activation/propagation)
+  - `results.tsv` (per test-mutant detection result)
+  - `metrics.tsv` (gate metrics)
+  - `improvement.tsv` (bucket-to-remediation mapping)
+- Added explicit gate status emission (`PASS`, `FAIL_THRESHOLD`,
+  `FAIL_UNDETECTED`, `FAIL_ERRORS`).
+
+### Tests and Docs Updates
+
+- Added lit tests:
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-cover-classification.test`
+  - `test/Tools/run-mutation-cover-threshold.test`
+- Updated docs:
+  - `docs/FormalRegression.md`
+    - new mutation harness section with usage, manifest schema, artifacts, and
+      gate behavior
+- Updated roadmap status:
+  - `PROJECT_PLAN.md`
+    - added `Mutation coverage (Certitude-style)` feature block with completed
+      vs missing items.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit execution note:
+  - direct `llvm-lit` execution is blocked in this sandbox due Python
+    multiprocessing semaphore permission (`PermissionError: [Errno 13]`).
+- Manual command-level validation of all three new lit scenarios: PASS
+  - help option coverage
+  - 4-way classification scenario (`not_activated`, `not_propagated`,
+    `detected`, `propagated_not_detected`) with expected `50.00%` coverage
+  - threshold fail scenario with expected exit code `2` and `FAIL_THRESHOLD`
+    gate status.
+
 ## Iteration 722 (Sim) - February 9, 2026
 
 ### Parametric Covergroup Sampling Fix (0% → Real Coverage)

@@ -54,6 +54,47 @@ Restrict baseline history to a time window (in days from latest suite baseline):
 utils/run_formal_all.sh --strict-gate --baseline-window 7 --baseline-window-days 30
 ```
 
+## Mutation Coverage Harness (Certitude-Style Classification)
+
+Use the mutation harness to classify injected faults into:
+`not_activated`, `not_propagated`, `propagated_not_detected`, and `detected`.
+
+Basic usage:
+
+```bash
+utils/run_mutation_cover.sh \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --tests-manifest /path/to/tests.tsv \
+  --formal-activate-cmd "your_activation_check_cmd" \
+  --formal-propagate-cmd "your_propagation_check_cmd" \
+  --coverage-threshold 90
+```
+
+`tests.tsv` format (tab-separated):
+
+```text
+test_id    run_cmd    result_file    kill_pattern    survive_pattern
+```
+
+Example row:
+
+```text
+smoke_1    bash /abs/path/run_test.sh smoke_1    result.txt    ^DETECTED$    ^SURVIVED$
+```
+
+Generated artifacts (default under `./mutation-cover-results`):
+- `summary.tsv`: mutant-level final class and detection provenance
+- `pair_qualification.tsv`: activation/propagation status per test-mutant pair
+- `results.tsv`: detection outcomes for executed pairs
+- `metrics.tsv`: gate-oriented aggregate metrics (coverage, bucket counts, errors)
+- `improvement.tsv`: actionable bucket-to-remediation mapping
+
+Gate behavior:
+- `--coverage-threshold <pct>`: fails with exit code `2` when detected/relevant falls below threshold.
+- `--fail-on-undetected`: fails with exit code `3` if any `propagated_not_detected` mutants remain.
+- `--fail-on-errors`: fails with exit code `1` when formal/test infrastructure errors occur.
+
 Shard/route a run to selected lane IDs:
 
 ```bash

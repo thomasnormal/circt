@@ -1,0 +1,8 @@
+// RUN: %S/../../utils/run_mutation_cover.sh --help | FileCheck %s
+
+// CHECK: run_mutation_cover.sh [options]
+// CHECK: --tests-manifest
+// CHECK: --formal-activate-cmd
+// CHECK: --formal-propagate-cmd
+// CHECK: --coverage-threshold
+// CHECK: --fail-on-undetected
