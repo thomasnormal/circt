@@ -37124,3 +37124,50 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Parse-target coverage in `run_opentitan_circt_verilog.sh` does not yet match
   all parity-plan targets (`dma`, `keymgr_dpe` currently unresolved).
 - `aes_sbox_canright` remains blocked on strict 4-state/X-prop parity.
+
+## Iteration 735 - February 9, 2026
+
+### ImportVerilog Capture Fix for `$readmemh/$readmemb` in Tasks
+
+- Fixed ImportVerilog lowering so task-local `$readmemh` / `$readmemb` calls
+  explicitly capture outer-scope memory references.
+- Change in `lib/Conversion/ImportVerilog/Statements.cpp`:
+  - call `context.captureRef(mem)` before emitting:
+    - `moore.builtin.readmemh`
+    - `moore.builtin.readmemb`
+- This prevents region-isolation violations when a task body only performs a
+  `readmem*` call on module memory.
+
+### Test Coverage
+
+- Updated:
+  - `test/Conversion/ImportVerilog/readmemh-task-capture.sv`
+    - added task-only `load_h` (`$readmemh`) and `load_b` (`$readmemb`) case
+    - verifies generated `func.func` body uses captured args for `readmem*`
+
+### Validation
+
+- Build:
+  - `ninja -C build circt-verilog`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Conversion/ImportVerilog/readmemh-task-capture.sv`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Conversion/ImportVerilog/readmem.sv test/Conversion/MooreToCore/system-call-ops.mlir`:
+    - 2/2 PASS
+- OpenTitan targeted parse checks:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_verilog.sh i2c --ir-hw`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_verilog.sh spi_device --ir-hw`:
+    - FAIL (now blocked by `llhd.sig.array_get` index-width verifier issue)
+- OpenTitan non-smoke E2E (verilog-only targeted):
+  - `utils/run_opentitan_formal_e2e.sh --opentitan-root /home/thomas-ahle/opentitan --out-dir /tmp/opentitan-e2e-readmemfix-1770628516 --skip-sim --skip-lec --verilog-targets i2c,spi_device`:
+    - summary: `pass=1 fail=1`
+    - `VERILOG i2c`: PASS
+    - `VERILOG spi_device`: FAIL
+
+### Remaining Limitations
+
+- `VERILOG spi_device` still fails on `llhd.sig.array_get` verifier strictness
+  for single-element arrays.
+- Other previously known OpenTitan strict-parity blockers remain (`usbdev`
+  sim/parse and `aes_sbox_canright` XPROP_ONLY).
