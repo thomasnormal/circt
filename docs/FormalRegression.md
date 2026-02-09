@@ -220,7 +220,8 @@ circt-mut matrix \
 
 Tool discovery for built-in global filters:
 - If circt-lec/circt-bmc path options are omitted or set to `auto`,
-  `run_mutation_cover.sh` resolves tools from `PATH`, then
+  `run_mutation_cover.sh` resolves tools from install-tree sibling `bin/`
+  (for `<prefix>/share/circt/utils` script layouts), then `PATH`, then
   `<circt-root>/build/bin`.
 - Explicit paths still take precedence.
 

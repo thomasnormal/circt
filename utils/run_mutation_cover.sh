@@ -55,7 +55,8 @@ Optional:
                              Use circt-lec as built-in per-mutant global
                              propagation filter (mutually exclusive with
                              --formal-global-propagate-cmd). If PATH is omitted
-                             or set to 'auto', resolves from ./build/bin and PATH.
+                             or set to 'auto', resolves from install-tree
+                             sibling bin/, then PATH, then ./build/bin.
   --formal-global-propagate-circt-lec-args ARGS
                              Extra args passed to circt-lec global filter
   --formal-global-propagate-c1 NAME
@@ -74,12 +75,14 @@ Optional:
                              Use circt-bmc as built-in differential global
                              filter (orig vs mutant; mutually exclusive with
                              other global filter modes). If PATH is omitted
-                             or set to 'auto', resolves from ./build/bin and PATH.
+                             or set to 'auto', resolves from install-tree
+                             sibling bin/, then PATH, then ./build/bin.
   --formal-global-propagate-circt-chain MODE
                              Built-in chained global filter strategy
                              (lec-then-bmc|bmc-then-lec|consensus|auto). If
                              circt-lec/circt-bmc paths are not provided, they
-                             are auto-resolved from ./build/bin and PATH.
+                             are auto-resolved from install-tree sibling bin/,
+                             then PATH, then ./build/bin.
   --formal-global-propagate-circt-bmc-args ARGS
                              Extra args passed to circt-bmc global filter
   --formal-global-propagate-bmc-bound N
@@ -452,8 +455,16 @@ resolve_circt_tool_path() {
   local requested="$1"
   local tool_name="$2"
   local repo_candidate="${SCRIPT_DIR}/../build/bin/${tool_name}"
+  local install_candidate=""
   local resolved=""
+  if [[ "$(basename "$SCRIPT_DIR")" == "utils" && "$(basename "$(dirname "$SCRIPT_DIR")")" == "circt" && "$(basename "$(dirname "$(dirname "$SCRIPT_DIR")")")" == "share" ]]; then
+    install_candidate="${SCRIPT_DIR}/../../../bin/${tool_name}"
+  fi
   if [[ "$requested" == "auto" ]]; then
+    if [[ -n "$install_candidate" && -x "$install_candidate" ]]; then
+      printf "%s\n" "$install_candidate"
+      return 0
+    fi
     if resolved="$(resolve_tool_path "$tool_name")"; then
       printf "%s\n" "$resolved"
       return 0
@@ -469,7 +480,7 @@ resolve_circt_tool_path() {
 
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
   if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED="$(resolve_circt_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" "circt-lec")"; then
-    echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC (searched repo build/bin and PATH)." >&2
+    echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC (searched repo build/bin, install-tree sibling bin, and PATH)." >&2
     exit 1
   fi
 fi
@@ -481,7 +492,7 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3" ]]; then
 fi
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]]; then
   if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED="$(resolve_circt_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" "circt-bmc")"; then
-    echo "Unable to resolve --formal-global-propagate-circt-bmc executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC (searched repo build/bin and PATH)." >&2
+    echo "Unable to resolve --formal-global-propagate-circt-bmc executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC (searched repo build/bin, install-tree sibling bin, and PATH)." >&2
     exit 1
   fi
 fi

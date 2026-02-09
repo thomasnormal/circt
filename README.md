@@ -211,7 +211,8 @@ circt-mut cover \
 
 `circt-lec` / `circt-bmc` discovery is automatic when you enable built-in
 global filters:
-- first from `PATH`
+- first from install-tree sibling `bin/` (when running installed scripts)
+- then from `PATH`
 - then from `./build/bin` in this CIRCT checkout
 - you can still override with explicit paths.
 
