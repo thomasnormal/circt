@@ -23756,10 +23756,25 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
 
       applyRandcFields(constraintsByProperty);
-      // Return success
       restorePreservedFields();
-      auto successVal = hw::ConstantOp::create(rewriter, loc, i1Ty, 1);
-      rewriter.replaceOp(op, successVal);
+
+      // Compute return value: 1 if any rand property is enabled, 0 if all
+      // disabled. IEEE 1800-2017 §18.8: if all rand variables are deactivated,
+      // randomize() shall fail and return 0.
+      Value anyRandEnabled =
+          arith::ConstantOp::create(rewriter, loc, i1Ty,
+                                    rewriter.getBoolAttr(false));
+      if (classDecl) {
+        for (auto propDecl :
+             classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
+          if (propDecl.isRandomizable()) {
+            Value enabled = createRandEnabledCheck(propDecl.getSymName());
+            anyRandEnabled =
+                arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+          }
+        }
+      }
+      rewriter.replaceOp(op, anyRandEnabled);
       return success();
     }
 
@@ -23783,7 +23798,25 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     applyRandcFields(constraintsByProperty);
     restorePreservedFields();
-    rewriter.replaceOp(op, truncResult);
+
+    // AND with rand_mode check: if all rand properties are disabled, return 0.
+    Value returnVal = truncResult;
+    if (classDecl) {
+      Value anyRandEnabled =
+          arith::ConstantOp::create(rewriter, loc, i1Ty,
+                                    rewriter.getBoolAttr(false));
+      for (auto propDecl :
+           classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
+        if (propDecl.isRandomizable()) {
+          Value enabled = createRandEnabledCheck(propDecl.getSymName());
+          anyRandEnabled =
+              arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+        }
+      }
+      returnVal =
+          arith::AndIOp::create(rewriter, loc, truncResult, anyRandEnabled);
+    }
+    rewriter.replaceOp(op, returnVal);
     return success();
   }
 
