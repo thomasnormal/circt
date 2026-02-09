@@ -1231,6 +1231,8 @@ process_mutation() {
   local global_filter_state=""
   local global_filter_rc="-1"
   local global_filtered_not_propagated=0
+  local chain_lec_unknown_fallback=0
+  local chain_bmc_resolved_not_propagated=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -1253,6 +1255,8 @@ process_mutation() {
       printf "hinted_mutant\t0\n"
       printf "hint_hit\t0\n"
       printf "global_filtered_not_propagated\t0\n"
+      printf "chain_lec_unknown_fallback\t0\n"
+      printf "chain_bmc_resolved_not_propagated\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -1294,6 +1298,14 @@ process_mutation() {
           "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "global_filter_invalid_state" >> "$pair_local"
         ;;
     esac
+  fi
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
+    if grep -Eq '^# chain_mode=lec-then-bmc lec_state=unknown ' "$mutation_dir/global_propagate.log"; then
+      chain_lec_unknown_fallback=1
+    fi
+    if grep -Eq '^# chain_fallback=bmc bmc_state=equal ' "$mutation_dir/global_propagate.log"; then
+      chain_bmc_resolved_not_propagated=1
+    fi
   fi
 
   hinted_test="${REUSE_DETECTED_TEST[$mutation_id]:-}"
@@ -1417,6 +1429,8 @@ process_mutation() {
     printf "hinted_mutant\t%s\n" "$hinted_mutant"
     printf "hint_hit\t%s\n" "$hint_hit"
     printf "global_filtered_not_propagated\t%s\n" "$global_filtered_not_propagated"
+    printf "chain_lec_unknown_fallback\t%s\n" "$chain_lec_unknown_fallback"
+    printf "chain_bmc_resolved_not_propagated\t%s\n" "$chain_bmc_resolved_not_propagated"
   } > "$meta_local"
 }
 
@@ -1521,6 +1535,8 @@ count_reused_pairs=0
 count_hinted_mutants=0
 count_hint_hits=0
 count_global_filtered_not_propagated=0
+count_chain_lec_unknown_fallbacks=0
+count_chain_bmc_resolved_not_propagated=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -1595,6 +1611,24 @@ for i in "${!MUTATION_IDS[@]}"; do
   fi
   if [[ "$local_global_filtered" =~ ^[0-9]+$ ]]; then
     count_global_filtered_not_propagated=$((count_global_filtered_not_propagated + local_global_filtered))
+  fi
+
+  local_chain_lec_unknown_fallback=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_lec_unknown_fallback="$(awk -F$'\t' '$1=="chain_lec_unknown_fallback"{print $2}' "$meta_local" | head -n1)"
+    local_chain_lec_unknown_fallback="${local_chain_lec_unknown_fallback:-0}"
+  fi
+  if [[ "$local_chain_lec_unknown_fallback" =~ ^[0-9]+$ ]]; then
+    count_chain_lec_unknown_fallbacks=$((count_chain_lec_unknown_fallbacks + local_chain_lec_unknown_fallback))
+  fi
+
+  local_chain_bmc_resolved_not_propagated=0
+  if [[ -f "$meta_local" ]]; then
+    local_chain_bmc_resolved_not_propagated="$(awk -F$'\t' '$1=="chain_bmc_resolved_not_propagated"{print $2}' "$meta_local" | head -n1)"
+    local_chain_bmc_resolved_not_propagated="${local_chain_bmc_resolved_not_propagated:-0}"
+  fi
+  if [[ "$local_chain_bmc_resolved_not_propagated" =~ ^[0-9]+$ ]]; then
+    count_chain_bmc_resolved_not_propagated=$((count_chain_bmc_resolved_not_propagated + local_chain_bmc_resolved_not_propagated))
   fi
 done
 
@@ -1675,6 +1709,8 @@ fi
   printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
   printf "hint_hits\t%s\n" "$count_hint_hits"
   printf "global_filtered_not_propagated_mutants\t%s\n" "$count_global_filtered_not_propagated"
+  printf "chain_lec_unknown_fallbacks\t%s\n" "$count_chain_lec_unknown_fallbacks"
+  printf "chain_bmc_resolved_not_propagated_mutants\t%s\n" "$count_chain_bmc_resolved_not_propagated"
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
@@ -1695,6 +1731,8 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "hinted_mutants": $count_hinted_mutants,
   "hint_hits": $count_hint_hits,
   "global_filtered_not_propagated_mutants": $count_global_filtered_not_propagated,
+  "chain_lec_unknown_fallbacks": $count_chain_lec_unknown_fallbacks,
+  "chain_bmc_resolved_not_propagated_mutants": $count_chain_bmc_resolved_not_propagated,
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
@@ -1710,7 +1748,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

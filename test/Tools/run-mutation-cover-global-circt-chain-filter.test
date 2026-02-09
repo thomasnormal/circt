@@ -30,6 +30,8 @@
 // SUMMARY: 2{{.*}}propagated_not_detected
 
 // METRICS: global_filtered_not_propagated_mutants{{.*}}1
+// METRICS: chain_lec_unknown_fallbacks{{.*}}2
+// METRICS: chain_bmc_resolved_not_propagated_mutants{{.*}}1
 // METRICS: errors{{.*}}0
 
 // PAIR: 1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated

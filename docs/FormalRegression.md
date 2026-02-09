@@ -176,6 +176,11 @@ Generated artifacts (default under `./mutation-cover-results`):
 - hint metrics:
   - `hinted_mutants`: mutants with a usable prior `detected_by_test` hint
   - `hint_hits`: hinted mutants detected by the hinted test
+- chain-filter telemetry metrics:
+  - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
+    back from LEC `UNKNOWN` to BMC.
+  - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
+    `not_propagated` by chained-mode BMC fallback.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
