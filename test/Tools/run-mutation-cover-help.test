@@ -7,6 +7,7 @@
 // CHECK: --coverage-threshold
 // CHECK: --fail-on-undetected
 // CHECK: --reuse-pair-file
+// CHECK: --reuse-summary-file
 // CHECK: --jobs
 // CHECK: --resume
 // CHECK: --generate-mutations

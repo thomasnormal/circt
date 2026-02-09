@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 732 - February 9, 2026
+
+### Mutation Detection-Order Hint Reuse
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--reuse-summary-file <summary.tsv>`
+    - reuses prior `detected_by_test` evidence to prioritize likely-detecting
+      tests first per mutant.
+- Added hint-aware pair note classification:
+  - `hinted_run_detection`
+  - `hinted_cached_run_detection`
+- Added aggregate hint metrics:
+  - `hinted_mutants`
+  - `hint_hits`
+  - emitted in both `metrics.tsv` and `summary.json`, and run summary log.
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-cover-hints.test`
+    - validates hint-driven test ordering and hit accounting.
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--reuse-summary-file` option
+  - `docs/FormalRegression.md`
+    - documented hint reuse and the new metrics
+  - `PROJECT_PLAN.md`
+    - marked detection-order hint reuse as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation:
+  - 2-mutant run with prior hint for one mutant:
+    - hinted mutant executes hinted test first and detects early: PASS
+    - `hinted_mutants=1`, `hint_hits=1` in metrics + JSON + run summary: PASS.
+
 ## Iteration 731 - February 9, 2026
 
 ### Mutation Matrix Reuse-Pair Integration

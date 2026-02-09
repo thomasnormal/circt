@@ -87,6 +87,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Improvement + metric report modes | **DONE** | 0 | `improvement.tsv` + `metrics.tsv` outputs |
 | - Single-host parallel scheduler/resume | **DONE** | 0 | Added `--jobs` + `--resume` with deterministic report rebuild |
 | - Qualification cache reuse across iterations | **DONE** | 0 | Added `--reuse-pair-file` + `reused_pairs` metrics/JSON tracking |
+| - Detection-order hint reuse | **DONE** | 0 | Added `--reuse-summary-file` + `hinted_mutants`/`hint_hits` metrics |
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
 | - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, and reuse-pair pass-through; full external-suite wiring still pending |
