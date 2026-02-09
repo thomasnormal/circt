@@ -1,5 +1,73 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 746 - February 9, 2026
+
+### Mutation Mode Family Expansion (MCY/Yosys-Compatible)
+
+- Extended `utils/generate_mutations_yosys.sh` mode handling so family names map
+  deterministically to concrete Yosys mutate modes:
+  - `arith` -> `inv,const0,const1`
+  - `control` -> `cnot0,cnot1`
+  - `balanced` / `all` -> `inv,const0,const1,cnot0,cnot1`
+- Family semantics are deterministic and count-preserving:
+  - family-level allocations from `--modes`/`--mode-counts` are split across
+    concrete modes with stable ordering and remainder distribution.
+  - keeps existing high-level Certitude-style family controls while producing
+    mutation lists compatible with standard Yosys mutate mode names.
+
+### Cover/Matrix Help and Docs Alignment
+
+- Updated `utils/run_mutation_cover.sh` help text for `--mutations-modes` to
+  document concrete + family mode semantics.
+- Updated `utils/run_mutation_matrix.sh` help text for
+  `--default-mutations-modes` with the same semantics.
+- Updated `docs/FormalRegression.md` to document:
+  - concrete modes (`inv,const0,const1,cnot0,cnot1`)
+  - family aliases (`arith,control,balanced,all`)
+  - deterministic family-to-concrete split behavior.
+- Updated `PROJECT_PLAN.md` mutation operator-expansion status to track this
+  family expansion milestone.
+
+### Tests
+
+- Updated generator tests:
+  - `test/Tools/run-mutation-generate-modes.test`
+  - `test/Tools/run-mutation-generate-mode-counts.test`
+  - `test/Tools/run-mutation-generate-profiles.test`
+- Updated cover generation tests:
+  - `test/Tools/run-mutation-cover-generate-modes.test`
+  - `test/Tools/run-mutation-cover-generate-mode-counts.test`
+  - `test/Tools/run-mutation-cover-generate-profiles.test`
+- Updated matrix generation tests:
+  - `test/Tools/run-mutation-matrix-generate-modes.test`
+  - `test/Tools/run-mutation-matrix-generate-mode-counts.test`
+  - `test/Tools/run-mutation-matrix-generate-profiles.test`
+- Each updated test now validates concrete-mode emission/allocations resulting
+  from family inputs.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-modes.test test/Tools/run-mutation-generate-mode-counts.test test/Tools/run-mutation-generate-profiles.test test/Tools/run-mutation-cover-generate-modes.test test/Tools/run-mutation-cover-generate-mode-counts.test test/Tools/run-mutation-cover-generate-profiles.test test/Tools/run-mutation-matrix-generate-modes.test test/Tools/run-mutation-matrix-generate-mode-counts.test test/Tools/run-mutation-matrix-generate-profiles.test`: PASS
+- Manual command-level validation:
+  - generator family split (`--modes arith,control --count 4`): PASS
+    - output: `M_INV`, `M_CONST0`, `M_CNOT0`, `M_CNOT1`
+  - generator weighted family split
+    (`--mode-counts arith=3,control=1 --count 4`): PASS
+    - output: `M_INV`, `M_CONST0`, `M_CONST1`, `M_CNOT0`
+  - cover generated-mutation profile path with family expansion: PASS
+  - matrix generated-lane family path: PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-mode-families --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 745 - February 9, 2026
 
 ### Weighted Mutation Mode Allocation
