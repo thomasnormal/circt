@@ -383,6 +383,7 @@ EOF
     cp "$cache_file" "$OUT_FILE"
     echo "Generated mutations: $(wc -l < "$OUT_FILE") (cache hit)"
     echo "Mutation file: $OUT_FILE"
+    echo "Mutation cache status: hit"
     echo "Mutation cache file: $cache_file"
     exit 0
   fi
@@ -535,5 +536,8 @@ fi
 echo "Generated mutations: $(wc -l < "$OUT_FILE")"
 echo "Mutation file: $OUT_FILE"
 if [[ -n "$cache_file" ]]; then
+  echo "Mutation cache status: miss"
   echo "Mutation cache file: $cache_file"
+else
+  echo "Mutation cache status: disabled"
 fi

@@ -16,7 +16,13 @@
 // RUN: env HITS=%t/hits.txt %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-a --create-mutated-script %t/fake-create-mutated.sh --reuse-cache-dir %t/reuse-cache --jobs-per-lane 2 2>&1 | FileCheck %s --check-prefix=LOGA
 // RUN: env HITS=%t/hits.txt %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-b --create-mutated-script %t/fake-create-mutated.sh --reuse-cache-dir %t/reuse-cache --jobs-per-lane 2 2>&1 | FileCheck %s --check-prefix=LOGB
 // RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=HITS
+// RUN: FileCheck %s --check-prefix=METRICSA < %t/out-a/lane_gen/metrics.tsv
+// RUN: FileCheck %s --check-prefix=METRICSB < %t/out-b/lane_gen/metrics.tsv
 
 // LOGA: Mutation matrix summary: pass=1 fail=0
 // LOGB: Mutation matrix summary: pass=1 fail=0
 // HITS: 1
+// METRICSA: generated_mutations_cache_hit{{.*}}0
+// METRICSA: generated_mutations_cache_status{{.*}}miss
+// METRICSB: generated_mutations_cache_hit{{.*}}1
+// METRICSB: generated_mutations_cache_status{{.*}}hit

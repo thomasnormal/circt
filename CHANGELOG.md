@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 770 - February 9, 2026
+
+### Mutation Generation Cache Telemetry (Cover/Matrix)
+
+- Extended `utils/generate_mutations_yosys.sh` cache logging with explicit
+  status lines:
+  - `Mutation cache status: hit`
+  - `Mutation cache status: miss`
+  - `Mutation cache status: disabled`
+- Extended `utils/run_mutation_cover.sh` to parse generation-cache status from
+  `generate_mutations.log` and export run-level telemetry to both
+  `metrics.tsv` and `summary.json`:
+  - `generated_mutations_enabled`
+  - `generated_mutations_cache_hit`
+  - `generated_mutations_cache_miss`
+  - `generated_mutations_cache_status`
+- This telemetry is automatically available in matrix lane artifacts because
+  each lane emits cover metrics.
+
+### Tests and Documentation
+
+- Updated tests:
+  - `test/Tools/run-mutation-generate-cache.test`
+  - `test/Tools/run-mutation-cover-generate-cache.test`
+  - `test/Tools/run-mutation-matrix-generate-cache.test`
+- Updated docs:
+  - `README.md` (cache telemetry metrics summary)
+  - `docs/FormalRegression.md` (metrics definitions)
+  - `PROJECT_PLAN.md` (lane-integration telemetry status)
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate-cache.test`: PASS (3/3)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (17/17)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-cache-telemetry --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 769 - February 9, 2026
 
 ### Mutation Generation Cache (Yosys `mutate -list`)

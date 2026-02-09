@@ -38,7 +38,17 @@
 
 // RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=HITS
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out-b/summary.tsv
+// RUN: FileCheck %s --check-prefix=METRICSA < %t/out-a/metrics.tsv
+// RUN: FileCheck %s --check-prefix=METRICSB < %t/out-b/metrics.tsv
 
 // HITS: 1
 // SUMMARY: 1{{.*}}propagated_not_detected
 // SUMMARY: 2{{.*}}propagated_not_detected
+// METRICSA: generated_mutations_enabled{{.*}}1
+// METRICSA: generated_mutations_cache_hit{{.*}}0
+// METRICSA: generated_mutations_cache_miss{{.*}}1
+// METRICSA: generated_mutations_cache_status{{.*}}miss
+// METRICSB: generated_mutations_enabled{{.*}}1
+// METRICSB: generated_mutations_cache_hit{{.*}}1
+// METRICSB: generated_mutations_cache_miss{{.*}}0
+// METRICSB: generated_mutations_cache_status{{.*}}hit

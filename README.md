@@ -359,6 +359,10 @@ Outputs are written under `--work-dir` / `--out-dir` and include
 When `--reuse-cache-dir` is set, generated mutation lists are now cached by
 design+generator options to avoid repeated Yosys mutation-list synthesis across
 runs/lanes.
+`metrics.tsv` now reports generated-list cache usage via:
+- `generated_mutations_cache_status` (`hit|miss|disabled`)
+- `generated_mutations_cache_hit`
+- `generated_mutations_cache_miss`
 
 For full option reference, global-filter modes, cache/reuse controls, and the
 complete lane TSV schema, see `docs/FormalRegression.md`.

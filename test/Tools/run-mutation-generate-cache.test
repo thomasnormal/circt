@@ -2,11 +2,13 @@
 // RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho hit >> "$HITS"\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" "$script" | tail -n1)\necho "1 MUT_CACHE_A" > "$out"\necho "2 MUT_CACHE_B" >> "$out"\n' > %t/fake-yosys.sh
 // RUN: chmod +x %t/fake-yosys.sh
-// RUN: env HITS=%t/hits.txt %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations-a.txt --top top --count 2 --seed 7 --yosys %t/fake-yosys.sh --cache-dir %t/cache
-// RUN: env HITS=%t/hits.txt %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations-b.txt --top top --count 2 --seed 7 --yosys %t/fake-yosys.sh --cache-dir %t/cache
+// RUN: env HITS=%t/hits.txt %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations-a.txt --top top --count 2 --seed 7 --yosys %t/fake-yosys.sh --cache-dir %t/cache 2>&1 | FileCheck %s --check-prefix=MISS
+// RUN: env HITS=%t/hits.txt %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations-b.txt --top top --count 2 --seed 7 --yosys %t/fake-yosys.sh --cache-dir %t/cache 2>&1 | FileCheck %s --check-prefix=HIT
 // RUN: diff -u %t/mutations-a.txt %t/mutations-b.txt
 // RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=HITS
 // RUN: ls %t/cache/*.mutations.txt | wc -l | FileCheck %s --check-prefix=CACHE
 
 // HITS: 1
 // CACHE: 1
+// MISS: Mutation cache status: miss
+// HIT: Mutation cache status: hit
