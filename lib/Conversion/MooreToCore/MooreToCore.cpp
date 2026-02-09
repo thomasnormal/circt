@@ -21793,6 +21793,7 @@ struct ConditionalConstraintInfo {
   int64_t predicateValue;       // Value to compare against
   unsigned predicateFieldIndex; // Field index for GEP
   unsigned predicateBitWidth;   // Bit width of predicate property
+  bool predicateIsPointer = false; // Whether predicate is a class handle (ptr)
   // Consequent constraints (when predicate is true)
   SmallVector<RangeConstraintInfo> thenConstraints;
   // Else constraints (when predicate is false, for if-else)
@@ -22175,13 +22176,12 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
 /// Helper to extract a predicate (property == constant) from a Moore IR value.
 /// Returns the property name and constant value, or empty/nullopt if not
-/// matchable.
+/// matchable. Also handles class handle null checks:
+///   class_handle_cmp eq (read(property), class.null) -> property == 0
 static std::pair<StringRef, std::optional<int64_t>>
 extractPredicate(Value condition) {
   Operation *defOp = condition.getDefiningOp();
   if (!defOp || defOp->getNumOperands() != 2)
-    return {"", std::nullopt};
-  if (!isa<EqOp>(defOp) && !isa<WildcardEqOp>(defOp))
     return {"", std::nullopt};
 
   auto getPropertyName = [](Value v) -> StringRef {
@@ -22190,6 +22190,26 @@ extractPredicate(Value condition) {
         return propRef.getProperty();
     return {};
   };
+
+  // Handle class_handle_cmp eq (read(property), class.null)
+  if (auto cmpOp = dyn_cast<ClassHandleCmpOp>(defOp)) {
+    Value lhs = cmpOp.getLhs();
+    Value rhs = cmpOp.getRhs();
+    // Check if one side is a property read and the other is null
+    StringRef name = getPropertyName(lhs);
+    bool rhsIsNull = rhs.getDefiningOp<ClassNullOp>() != nullptr;
+    if (name.empty() || !rhsIsNull) {
+      name = getPropertyName(rhs);
+      rhsIsNull = lhs.getDefiningOp<ClassNullOp>() != nullptr;
+    }
+    if (!name.empty() && rhsIsNull)
+      return {name, int64_t(0)};
+    return {"", std::nullopt};
+  }
+
+  if (!isa<EqOp>(defOp) && !isa<WildcardEqOp>(defOp))
+    return {"", std::nullopt};
+
   auto getConstVal = [](Value v) -> std::optional<int64_t> {
     if (auto constOp = v.getDefiningOp<ConstantOp>()) {
       FVInt fvVal = constOp.getValue();
@@ -22295,6 +22315,8 @@ extractConditionalConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
           info.predicateBitWidth = 32;
           if (auto intType = dyn_cast<IntType>(predIt->second.second))
             info.predicateBitWidth = intType.getWidth();
+          if (isa<ClassHandleType>(predIt->second.second))
+            info.predicateIsPointer = true;
 
           info.thenConstraints = extractConstraintsFromRegion(
               implOp.getConsequent(), constraintName, propertyMap);
@@ -22320,6 +22342,8 @@ extractConditionalConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
           info.predicateBitWidth = 32;
           if (auto intType = dyn_cast<IntType>(predIt->second.second))
             info.predicateBitWidth = intType.getWidth();
+          if (isa<ClassHandleType>(predIt->second.second))
+            info.predicateIsPointer = true;
 
           info.thenConstraints = extractConstraintsFromRegion(
               ifElseOp.getThenRegion(), constraintName, propertyMap);
@@ -23363,6 +23387,32 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       auto basicFnTy = LLVM::LLVMFunctionType::get(i32Ty, {ptrTy, i64Ty});
       auto basicFn = getOrCreateRuntimeFunc(mod, rewriter,
                                             "__moore_randomize_basic", basicFnTy);
+      // Pre-save POINTER predicate values BEFORE randomize_basic because
+      // randomize_basic overwrites all fields including non-rand class handles
+      // used in constraint guards (e.g., `if (next == null) b1 == 5;`).
+      // Integer predicates are NOT pre-saved because they may be set by other
+      // hard constraints (e.g., `b1 == 5; b1 == 5 -> b2 == 10;`).
+      llvm::DenseMap<StringRef, Value> savedPredicateValues;
+      for (const auto &cond : conditionalConstraints) {
+        if (!cond.predicateIsPointer)
+          continue;
+        if (savedPredicateValues.count(cond.predicateProperty))
+          continue;
+        auto predPathIt =
+            structInfo->propertyPath.find(cond.predicateProperty);
+        if (predPathIt == structInfo->propertyPath.end())
+          continue;
+        SmallVector<LLVM::GEPArg> predGepIdx;
+        predGepIdx.push_back(0);
+        for (unsigned idx : predPathIt->second)
+          predGepIdx.push_back(static_cast<int32_t>(idx));
+        auto predPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                           classPtr, predGepIdx);
+        Value savedVal =
+            LLVM::LoadOp::create(rewriter, loc, ptrTy, predPtr);
+        savedPredicateValues[cond.predicateProperty] = savedVal;
+      }
+
       LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                            SymbolRefAttr::get(basicFn),
                            ValueRange{classPtr, classSizeConst});
@@ -23817,28 +23867,58 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             applyCond = createConstraintEnabledCheck(cond.constraintName);
           }
 
-          // Read the predicate property's current value
-          auto predPathIt =
-              structInfo->propertyPath.find(cond.predicateProperty);
-          if (predPathIt == structInfo->propertyPath.end())
-            continue;
+          // Use the pre-saved predicate value (saved before randomize_basic
+          // garbled non-rand fields). Fall back to loading from memory if no
+          // saved value exists.
+          auto savedIt = savedPredicateValues.find(cond.predicateProperty);
 
-          SmallVector<LLVM::GEPArg> predGepIdx;
-          predGepIdx.push_back(0);
-          for (unsigned idx : predPathIt->second)
-            predGepIdx.push_back(static_cast<int32_t>(idx));
-          auto predPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
-                                             classPtr, predGepIdx);
-          Type predIntTy = IntegerType::get(ctx, cond.predicateBitWidth);
-          auto predVal =
-              LLVM::LoadOp::create(rewriter, loc, predIntTy, predPtr);
-
-          // Compare with predicate value
-          auto predConst = arith::ConstantOp::create(
-              rewriter, loc, predIntTy,
-              rewriter.getIntegerAttr(predIntTy, cond.predicateValue));
-          Value predMatch = arith::CmpIOp::create(
-              rewriter, loc, arith::CmpIPredicate::eq, predVal, predConst);
+          Value predMatch;
+          if (cond.predicateIsPointer) {
+            Value predVal;
+            if (savedIt != savedPredicateValues.end()) {
+              predVal = savedIt->second;
+            } else {
+              auto predPathIt =
+                  structInfo->propertyPath.find(cond.predicateProperty);
+              if (predPathIt == structInfo->propertyPath.end())
+                continue;
+              SmallVector<LLVM::GEPArg> predGepIdx;
+              predGepIdx.push_back(0);
+              for (unsigned idx : predPathIt->second)
+                predGepIdx.push_back(static_cast<int32_t>(idx));
+              auto predPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                                 structTy, classPtr, predGepIdx);
+              predVal =
+                  LLVM::LoadOp::create(rewriter, loc, ptrTy, predPtr);
+            }
+            auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+            predMatch = LLVM::ICmpOp::create(
+                rewriter, loc, LLVM::ICmpPredicate::eq, predVal, nullPtr);
+          } else {
+            Type predIntTy = IntegerType::get(ctx, cond.predicateBitWidth);
+            Value predVal;
+            if (savedIt != savedPredicateValues.end()) {
+              predVal = savedIt->second;
+            } else {
+              auto predPathIt =
+                  structInfo->propertyPath.find(cond.predicateProperty);
+              if (predPathIt == structInfo->propertyPath.end())
+                continue;
+              SmallVector<LLVM::GEPArg> predGepIdx;
+              predGepIdx.push_back(0);
+              for (unsigned idx : predPathIt->second)
+                predGepIdx.push_back(static_cast<int32_t>(idx));
+              auto predPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                                 structTy, classPtr, predGepIdx);
+              predVal =
+                  LLVM::LoadOp::create(rewriter, loc, predIntTy, predPtr);
+            }
+            auto predConst = arith::ConstantOp::create(
+                rewriter, loc, predIntTy,
+                rewriter.getIntegerAttr(predIntTy, cond.predicateValue));
+            predMatch = arith::CmpIOp::create(
+                rewriter, loc, arith::CmpIPredicate::eq, predVal, predConst);
+          }
 
           // AND with constraint-enabled check
           if (applyCond)

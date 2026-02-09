@@ -64,7 +64,7 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.5.5--uniqueness-constraints_1	pass	Uniqueness constraint
 18.5.6--implication_1	pass	Implication constraint
 18.5.7--if-else-constraints_4	pass	If-else constraint
-18.5.13--constraint-guards_1	xfail	Constraint guard not applied
+18.5.13--constraint-guards_1	pass	Constraint guard with null check
 18.5.14.1--soft-constraint-priorities_3	pass
 18.6.1--randomize-method_0	pass	Basic randomize method
 18.6.3--behavior-of-randomization-methods_1	pass	Randomization behavior check
