@@ -154,11 +154,15 @@ Lane-state semantics:
       - shared:
         `auto_uri_policy`, `auto_uri_allowed_schemes`,
         `refresh_metadata_require_ca_cert_in_cert_chain`,
-        `refresh_metadata_require_tls_peer_in_cert_chain`
+        `refresh_metadata_require_tls_peer_in_cert_chain`,
+        `refresh_metadata_max_age_secs`,
+        `refresh_metadata_max_future_skew_secs`
       - per-artifact (`crl.{...}`, `ocsp.{...}`) may override:
         `auto_uri_policy`, `auto_uri_allowed_schemes`,
         `refresh_metadata_require_ca_cert_in_cert_chain`,
-        `refresh_metadata_require_tls_peer_in_cert_chain`
+        `refresh_metadata_require_tls_peer_in_cert_chain`,
+        `refresh_metadata_max_age_secs`,
+        `refresh_metadata_max_future_skew_secs`
   - Effective precedence for policy/scheme defaults:
     - per-artifact CLI override
     - shared CLI override
@@ -168,6 +172,12 @@ Lane-state semantics:
   - Effective precedence for profile-driven refresh metadata chain-membership
     defaults (`...require_ca_cert_in_cert_chain`,
     `...require_tls_peer_in_cert_chain`):
+    - explicit per-artifact CLI flag
+    - per-artifact profile value
+    - shared profile value
+    - built-in default
+  - Effective precedence for profile-driven refresh metadata freshness defaults
+    (`...max_age_secs`, `...max_future_skew_secs`):
     - explicit per-artifact CLI flag
     - per-artifact profile value
     - shared profile value
