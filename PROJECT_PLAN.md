@@ -18282,6 +18282,19 @@ ninja -C build circt-verilog
   - Reduces risk of accepting responses from unexpected but chain-valid
     responders in multi-issuer environments.
 
+### Iteration 694
+- Added OCSP responder certificate pinning controls for Ed25519 lane-state
+  keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-responder-cert-file`
+  - `--lane-state-manifest-ed25519-ocsp-responder-cert-sha256`
+  - OCSP verification can now be bound to an explicit responder certificate,
+    not only CA-chain acceptance plus responder-id text policy.
+- Planning impact:
+  - Hardens multi-issuer deployments by requiring signer-certificate linkage for
+    OCSP responses.
+  - Improves deterministic trust posture for 24/7 distributed closure and
+    resume safety.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18292,10 +18305,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add stronger OCSP responder certificate/signer pinning for multi-issuer
-    deployments (beyond responder-id string policy).
-  - Add OCSP/certificate signer linkage policy hardening for multi-issuer
-    deployments.
+  - Add explicit OCSP responder signer EKU/issuer linkage assertions to prevent
+    permissive acceptance of non-OCSP-signing certs in complex PKI chains.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
