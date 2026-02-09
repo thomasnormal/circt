@@ -23785,6 +23785,17 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     // Also extract constraints from the inline constraint region (if present)
     // Inline constraints are specified with `randomize() with { ... }` syntax
     // and are combined with class-level constraints (IEEE 1800-2017 Section 18.7)
+    // DynFixup holds dynamic constraint info with pre-computed SSA values
+    // for the min/max bounds, to be applied after basic randomization.
+    struct DynFixup {
+      StringRef prop;
+      Value dynMin;    // runtime lower bound (i64)
+      Value dynMax;    // runtime upper bound (i64)
+      unsigned bitWidth;
+      bool isSoft;
+    };
+    SmallVector<DynFixup> dynFixups;
+
     Region &inlineRegion = op.getInlineConstraints();
     if (!inlineRegion.empty()) {
       auto inlineRangeConstraints =
@@ -23803,22 +23814,380 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       distConstraints.append(inlineDistConstraints.begin(),
                              inlineDistConstraints.end());
 
-      // Erase all ops in the inline constraint region now that we've extracted
-      // the constraint information. This prevents other patterns from trying
-      // to convert these ops (which would fail since we skip them).
-      Block &inlineBlock = inlineRegion.front();
-      SmallVector<Operation *> opsToErase;
-      for (auto &op : inlineBlock.getOperations())
-        opsToErase.push_back(&op);
-      for (auto *op : llvm::reverse(opsToErase))
-        rewriter.eraseOp(op);
+      // The inline region's ops are still Moore IR (the dialect conversion
+      // processes RandomizeOp as a unit, not its individual inner ops).
+      // Helper: trace a Moore value to find a property name (class property)
+      // or indicate it's a non-property value.
+      auto getInlinePropName = [](Value v) -> StringRef {
+        if (auto zextOp = v.getDefiningOp<ZExtOp>())
+          v = zextOp.getInput();
+        else if (auto sextOp = v.getDefiningOp<SExtOp>())
+          v = sextOp.getInput();
+        else if (auto truncOp = v.getDefiningOp<TruncOp>())
+          v = truncOp.getInput();
+        return traceToPropertyName(v);
+      };
+
+      // Helper: check if a Moore value is a class property reference
+      auto isClassProperty = [](Value v) -> bool {
+        if (auto zextOp = v.getDefiningOp<ZExtOp>())
+          v = zextOp.getInput();
+        else if (auto sextOp = v.getDefiningOp<SExtOp>())
+          v = sextOp.getInput();
+        else if (auto truncOp = v.getDefiningOp<TruncOp>())
+          v = truncOp.getInput();
+        if (auto readOp = v.getDefiningOp<ReadOp>()) {
+          return readOp.getInput().getDefiningOp<ClassPropertyRefOp>() !=
+                 nullptr;
+        }
+        return v.getDefiningOp<ClassPropertyRefOp>() != nullptr;
+      };
+
+      // Helper: check if a value is a constant
+      auto isConstVal = [](Value v) -> bool {
+        return v.getDefiningOp<ConstantOp>() != nullptr;
+      };
+
+      for (auto &inlineOp : inlineRegion.front().getOperations()) {
+        auto exprOp = dyn_cast<ConstraintExprOp>(inlineOp);
+        if (!exprOp)
+          continue;
+
+        Value cond = exprOp.getCondition();
+        Operation *defOp = cond.getDefiningOp();
+        if (!defOp)
+          continue;
+
+        // Must be a Moore comparison op with 2 operands
+        if (defOp->getNumOperands() != 2)
+          continue;
+
+        Value lhs = defOp->getOperand(0);
+        Value rhs = defOp->getOperand(1);
+
+        // Identify which side is a class property and which is the bound
+        StringRef propName = getInlinePropName(lhs);
+        Value dynBound = rhs;
+        bool varOnLhs = true;
+        bool lhsIsProp = isClassProperty(lhs);
+        bool rhsIsProp = isClassProperty(rhs);
+        if (!lhsIsProp || propName.empty()) {
+          propName = getInlinePropName(rhs);
+          dynBound = lhs;
+          varOnLhs = false;
+          lhsIsProp = rhsIsProp;
+        }
+        if (propName.empty() || !lhsIsProp)
+          continue;
+        // Skip if the bound is also a class property (handled by pre-pass)
+        bool boundIsProp = varOnLhs ? rhsIsProp : isClassProperty(lhs);
+        if (boundIsProp)
+          continue;
+        // Skip if the bound is a constant (handled by pre-pass)
+        if (isConstVal(dynBound))
+          continue;
+
+        // Determine constraint direction from the Moore comparison op
+        bool isUpperBound = false;
+        bool isStrict = false;
+        bool isSigned = false;
+        if (isa<SltOp>(defOp)) {
+          isSigned = true; isStrict = true;
+          isUpperBound = varOnLhs;
+        } else if (isa<SleOp>(defOp)) {
+          isSigned = true;
+          isUpperBound = varOnLhs;
+        } else if (isa<SgtOp>(defOp)) {
+          isSigned = true; isStrict = true;
+          isUpperBound = !varOnLhs;
+        } else if (isa<SgeOp>(defOp)) {
+          isSigned = true;
+          isUpperBound = !varOnLhs;
+        } else if (isa<UltOp>(defOp)) {
+          isStrict = true;
+          isUpperBound = varOnLhs;
+        } else if (isa<UleOp>(defOp)) {
+          isUpperBound = varOnLhs;
+        } else if (isa<UgtOp>(defOp)) {
+          isStrict = true;
+          isUpperBound = !varOnLhs;
+        } else if (isa<UgeOp>(defOp)) {
+          isUpperBound = !varOnLhs;
+        } else {
+          continue;
+        }
+
+        // Look up property bit width
+        auto propPathIt = structInfo->propertyPath.find(propName);
+        if (propPathIt == structInfo->propertyPath.end())
+          continue;
+        Type fieldTy = resolveStructFieldType(structTy, propPathIt->second);
+        auto fIntTy = dyn_cast_or_null<IntegerType>(fieldTy);
+        if (!fIntTy)
+          continue;
+        unsigned bitWidth = fIntTy.getWidth();
+
+        // The bound value is a Moore-typed SSA value. It could be:
+        // 1. `moore.read %ref` where %ref is a variable/property outside
+        // 2. A block argument (function parameter)
+        // 3. An expression (moore.add, etc.) whose leaf operands are from
+        //    outside the inline region
+        // We recursively convert the Moore expression tree to target ops.
+        DenseMap<Value, Value> mooreToConverted;
+        std::function<Value(Value)> convertMooreValue =
+            [&](Value v) -> Value {
+          // Check cache
+          auto cacheIt = mooreToConverted.find(v);
+          if (cacheIt != mooreToConverted.end())
+            return cacheIt->second;
+
+          Value result;
+
+          // Look through zext/sext/trunc
+          if (auto zextOp = v.getDefiningOp<ZExtOp>()) {
+            Value inner = convertMooreValue(zextOp.getInput());
+            if (inner) {
+              Type resTy = typeConverter->convertType(v.getType());
+              if (resTy && isa<IntegerType>(resTy))
+                result = arith::ExtUIOp::create(rewriter, loc, resTy, inner);
+            }
+          } else if (auto sextOp = v.getDefiningOp<SExtOp>()) {
+            Value inner = convertMooreValue(sextOp.getInput());
+            if (inner) {
+              Type resTy = typeConverter->convertType(v.getType());
+              if (resTy && isa<IntegerType>(resTy))
+                result = arith::ExtSIOp::create(rewriter, loc, resTy, inner);
+            }
+          } else if (auto truncOp = v.getDefiningOp<TruncOp>()) {
+            Value inner = convertMooreValue(truncOp.getInput());
+            if (inner) {
+              Type resTy = typeConverter->convertType(v.getType());
+              if (resTy && isa<IntegerType>(resTy))
+                result = arith::TruncIOp::create(rewriter, loc, resTy, inner);
+            }
+          }
+          // moore.read %ref → load from converted ref
+          else if (auto readOp = v.getDefiningOp<ReadOp>()) {
+            Value ref = readOp.getInput();
+            Value convertedRef;
+
+            // First try direct remapping (for refs defined outside).
+            // Only call getRemappedValue for values outside the inline
+            // region to avoid triggering materializations.
+            bool refIsOutside = false;
+            if (mlir::isa<BlockArgument>(ref)) {
+              refIsOutside = true;
+            } else if (auto *refDefOp = ref.getDefiningOp()) {
+              refIsOutside = refDefOp->getParentRegion() != &inlineRegion;
+            }
+            if (refIsOutside) {
+              // For block arguments, look up directly from entry block
+              if (auto refBlockArg = mlir::dyn_cast<BlockArgument>(ref)) {
+                auto funcOp = op->getParentOfType<func::FuncOp>();
+                if (funcOp) {
+                  Block *entryBlock = &funcOp.getBody().front();
+                  unsigned argIdx = refBlockArg.getArgNumber();
+                  if (argIdx < entryBlock->getNumArguments())
+                    convertedRef = entryBlock->getArgument(argIdx);
+                }
+              } else {
+                convertedRef = rewriter.getRemappedValue(ref);
+              }
+            }
+
+            // If that fails, check if ref is a ClassPropertyRefOp inside
+            // the inline region. Convert it by GEP-ing the class pointer.
+            if (!convertedRef) {
+              if (auto propRefOp = ref.getDefiningOp<ClassPropertyRefOp>()) {
+                Value classObj = propRefOp.getInstance();
+                StringRef propName = propRefOp.getProperty();
+                // Get the converted class pointer
+                Value convertedClassPtr;
+                if (auto classBlockArg = mlir::dyn_cast<BlockArgument>(classObj)) {
+                  auto funcOp = op->getParentOfType<func::FuncOp>();
+                  if (funcOp) {
+                    Block *entryBlock = &funcOp.getBody().front();
+                    unsigned argIdx = classBlockArg.getArgNumber();
+                    if (argIdx < entryBlock->getNumArguments())
+                      convertedClassPtr = entryBlock->getArgument(argIdx);
+                  }
+                } else {
+                  convertedClassPtr = convertMooreValue(classObj);
+                }
+                if (convertedClassPtr) {
+                  if (auto castOp = convertedClassPtr
+                          .getDefiningOp<UnrealizedConversionCastOp>())
+                    if (castOp.getInputs().size() == 1)
+                      convertedClassPtr = castOp.getInputs()[0];
+                  // Look up the class struct type and field path
+                  auto handleTy = dyn_cast<ClassHandleType>(classObj.getType());
+                  if (handleTy) {
+                    auto refClassSym = handleTy.getClassSym();
+                    auto refStructInfo = cache.getStructInfo(refClassSym);
+                    if (refStructInfo) {
+                      auto pathIt = refStructInfo->propertyPath.find(propName);
+                      if (pathIt != refStructInfo->propertyPath.end()) {
+                        SmallVector<LLVM::GEPArg> gepIdx;
+                        gepIdx.push_back(0);
+                        for (unsigned idx : pathIt->second)
+                          gepIdx.push_back(static_cast<int32_t>(idx));
+                        convertedRef = LLVM::GEPOp::create(
+                            rewriter, loc, ptrTy, refStructInfo->classBody,
+                            convertedClassPtr, gepIdx);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            if (convertedRef) {
+              if (auto castOp =
+                      convertedRef.getDefiningOp<UnrealizedConversionCastOp>())
+                if (castOp.getInputs().size() == 1)
+                  convertedRef = castOp.getInputs()[0];
+              Type valTy = typeConverter->convertType(v.getType());
+              if (valTy && isa<LLVM::LLVMPointerType>(convertedRef.getType()))
+                result = LLVM::LoadOp::create(rewriter, loc, valTy,
+                                               convertedRef);
+              else if (valTy)
+                result = convertedRef;
+            }
+          }
+          // moore.constant → arith.constant
+          else if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+            Type resTy = typeConverter->convertType(v.getType());
+            if (resTy && isa<IntegerType>(resTy)) {
+              auto intTy = cast<IntegerType>(resTy);
+              APInt val = constOp.getValue().getRawValue();
+              if (val.getBitWidth() != intTy.getWidth())
+                val = val.sextOrTrunc(intTy.getWidth());
+              result = arith::ConstantOp::create(rewriter, loc, intTy,
+                  rewriter.getIntegerAttr(intTy, val));
+            }
+          }
+          // moore.add → arith.addi
+          else if (v.getDefiningOp() && isa<AddOp>(v.getDefiningOp())) {
+            auto addOp = cast<AddOp>(v.getDefiningOp());
+            Value lhsC = convertMooreValue(addOp.getLhs());
+            Value rhsC = convertMooreValue(addOp.getRhs());
+            if (lhsC && rhsC)
+              result = arith::AddIOp::create(rewriter, loc, lhsC, rhsC);
+          }
+          // moore.sub → arith.subi
+          else if (v.getDefiningOp() && isa<SubOp>(v.getDefiningOp())) {
+            auto subOp = cast<SubOp>(v.getDefiningOp());
+            Value lhsC = convertMooreValue(subOp.getLhs());
+            Value rhsC = convertMooreValue(subOp.getRhs());
+            if (lhsC && rhsC)
+              result = arith::SubIOp::create(rewriter, loc, lhsC, rhsC);
+          }
+          // moore.mul → arith.muli
+          else if (v.getDefiningOp() && isa<MulOp>(v.getDefiningOp())) {
+            auto mulOp = cast<MulOp>(v.getDefiningOp());
+            Value lhsC = convertMooreValue(mulOp.getLhs());
+            Value rhsC = convertMooreValue(mulOp.getRhs());
+            if (lhsC && rhsC)
+              result = arith::MulIOp::create(rewriter, loc, lhsC, rhsC);
+          }
+          // Block argument: look up the converted argument directly
+          // from the function's entry block (avoid getRemappedValue which
+          // may trigger materializations that prevent inline region erasure)
+          else if (auto blockArg = mlir::dyn_cast<BlockArgument>(v)) {
+            auto funcOp = op->getParentOfType<func::FuncOp>();
+            if (funcOp) {
+              Block *entryBlock = &funcOp.getBody().front();
+              unsigned argIdx = blockArg.getArgNumber();
+              if (argIdx < entryBlock->getNumArguments()) {
+                result = entryBlock->getArgument(argIdx);
+              }
+            }
+          }
+          // Value defined outside the inline region
+          else if (v.getDefiningOp() &&
+                   v.getDefiningOp()->getParentRegion() != &inlineRegion) {
+            Value remapped = rewriter.getRemappedValue(v);
+            if (remapped) {
+              if (auto castOp =
+                      remapped.getDefiningOp<UnrealizedConversionCastOp>())
+                if (castOp.getInputs().size() == 1)
+                  remapped = castOp.getInputs()[0];
+              result = remapped;
+            }
+          }
+
+          if (result)
+            mooreToConverted[v] = result;
+          return result;
+        };
+
+        Value convertedBound = convertMooreValue(dynBound);
+        if (!convertedBound)
+          continue;
+
+        // Extend to i64
+        Value boundVal64 = convertedBound;
+        auto boundIntTy = dyn_cast<IntegerType>(convertedBound.getType());
+        if (boundIntTy && boundIntTy.getWidth() < 64) {
+          if (isSigned)
+            boundVal64 = arith::ExtSIOp::create(rewriter, loc, i64Ty,
+                                                 convertedBound);
+          else
+            boundVal64 = arith::ExtUIOp::create(rewriter, loc, i64Ty,
+                                                 convertedBound);
+        } else if (boundIntTy && boundIntTy.getWidth() > 64) {
+          boundVal64 = arith::TruncIOp::create(rewriter, loc, i64Ty,
+                                                convertedBound);
+        }
+
+        int64_t typeMin = isSigned ? -(1LL << (bitWidth - 1)) : 0;
+        int64_t typeMax = isSigned ? ((1LL << (bitWidth - 1)) - 1)
+                                   : ((1ULL << bitWidth) - 1);
+
+        Value one64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+            rewriter.getI64IntegerAttr(1));
+        DynFixup fixup;
+        fixup.prop = propName;
+        fixup.bitWidth = bitWidth;
+        fixup.isSoft = exprOp.getIsSoft();
+
+        if (isUpperBound) {
+          fixup.dynMin = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(typeMin));
+          fixup.dynMax = boundVal64;
+          if (isStrict)
+            fixup.dynMax = arith::SubIOp::create(rewriter, loc,
+                                                  fixup.dynMax, one64);
+        } else {
+          fixup.dynMin = boundVal64;
+          if (isStrict)
+            fixup.dynMin = arith::AddIOp::create(rewriter, loc,
+                                                  fixup.dynMin, one64);
+          fixup.dynMax = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(typeMax));
+        }
+        dynFixups.push_back(fixup);
+      }
+
+      // The inline region ops will be erased when rewriter.replaceOp(op, ...)
+      // is called below (the framework handles erasing the op and its regions).
+      // We must NOT manually erase them here because the dialect conversion
+      // framework may have inserted UnrealizedConversionCastOp materializations
+      // that it tracks internally.
     }
 
     // Read pre-extracted ConstraintExprOp constraints from the attribute
     // (set by the pre-pass before conversion). These are expression-based
     // inline constraints like `x > 0; x < 100;` that use comparison ops
     // which would be converted before RandomizeOp sees them.
-    if (auto exprAttr = op->getAttrOfType<ArrayAttr>(
+    // NOTE: Only read this attribute if the inline region was empty.
+    // If the inline region is non-empty, extractInlineRangeConstraints
+    // already handled constant bounds directly from the Moore ops,
+    // so reading the attribute would create duplicates.
+    if (!inlineRegion.empty()) {
+      // Just remove the attribute to prevent it from persisting
+      op->removeAttr("circt.inline_expr_constraints");
+    } else if (auto exprAttr = op->getAttrOfType<ArrayAttr>(
             "circt.inline_expr_constraints")) {
       // Build property map for looking up field indices
       DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
@@ -23879,6 +24248,40 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
       // Remove the attribute now that we've read it
       op->removeAttr("circt.inline_expr_constraints");
+    }
+
+    // Read pre-extracted dynamic constraints from the attribute.
+    // These are inline constraints like `x < y;` where the bound is a
+    // runtime value (another property or a variable/argument).
+    struct DynConstraint {
+      StringRef prop;
+      StringRef boundProp;    // non-empty if bound is a same-class property
+      bool isUpper;           // true = upper bound, false = lower bound
+      bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
+      bool isSigned = false;
+      bool isSoft = false;
+    };
+    SmallVector<DynConstraint> dynamicConstraints;
+    if (auto dynAttr = op->getAttrOfType<ArrayAttr>(
+            "circt.inline_dynamic_constraints")) {
+      for (auto attr : dynAttr.getValue()) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto propAttr = dict.getAs<StringAttr>("prop");
+        if (!propAttr)
+          continue;
+        DynConstraint dc;
+        dc.prop = propAttr.getValue();
+        if (auto bp = dict.getAs<StringAttr>("bound_prop"))
+          dc.boundProp = bp.getValue();
+        dc.isUpper = dict.getAs<BoolAttr>("is_upper").getValue();
+        dc.isStrict = dict.getAs<BoolAttr>("is_strict").getValue();
+        dc.isSigned = dict.get("signed") != nullptr;
+        dc.isSoft = dict.get("soft") != nullptr;
+        dynamicConstraints.push_back(dc);
+      }
+      op->removeAttr("circt.inline_dynamic_constraints");
     }
 
     // Separate hard constraints from soft range constraints
@@ -23961,7 +24364,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
         !softRangeConstraints.empty() ||
-        !distConstraints.empty() || !conditionalConstraints.empty()) {
+        !distConstraints.empty() || !conditionalConstraints.empty() ||
+        !dynamicConstraints.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
           rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(byteSize));
@@ -23997,6 +24401,39 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                            SymbolRefAttr::get(basicFn),
                            ValueRange{classPtr, classSizeConst});
+
+      // Build a map of static constraint bounds BEFORE filtering, so that
+      // dynFixups can intersect with them at runtime.
+      DenseMap<StringRef, std::pair<int64_t, int64_t>> staticBoundsForDynFixups;
+      for (const auto &hc : hardConstraints) {
+        if (!hc.isMultiRange) {
+          auto it = staticBoundsForDynFixups.find(hc.propertyName);
+          if (it == staticBoundsForDynFixups.end()) {
+            staticBoundsForDynFixups[hc.propertyName] = {hc.minValue, hc.maxValue};
+          } else {
+            it->second.first = std::max(it->second.first, hc.minValue);
+            it->second.second = std::min(it->second.second, hc.maxValue);
+          }
+        }
+      }
+
+      // Remove hard constraints for properties that have dynFixups.
+      // The dynFixups will intersect with the static bounds at runtime,
+      // so applying the static constraint separately would be redundant
+      // (and the later dynFixup would overwrite the result anyway).
+      {
+        llvm::DenseSet<StringRef> dynFixedProps;
+        for (const auto &fixup : dynFixups)
+          dynFixedProps.insert(fixup.prop);
+        if (!dynFixedProps.empty()) {
+          hardConstraints.erase(
+              llvm::remove_if(hardConstraints,
+                  [&](const RangeConstraintInfo &c) {
+                    return dynFixedProps.contains(c.propertyName);
+                  }),
+              hardConstraints.end());
+        }
+      }
 
       // Apply hard range constraints - generate constrained random values
       if (!hardConstraints.empty()) {
@@ -24519,6 +24956,149 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           if (hasElse) {
             rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
             applyConstraintList(cond.elseConstraints);
+          }
+        }
+      }
+
+      // Apply dynamic constraints from pre-pass (property-to-property bounds)
+      // and from inline region analysis (variable/argument bounds).
+      {
+        // Merge property-to-property dynamic constraints (from pre-pass
+        // attributes) into dynFixups.
+        for (const auto &dc : dynamicConstraints) {
+          if (dc.boundProp.empty())
+            continue; // Only handle property bounds here
+
+          auto propPathIt = structInfo->propertyPath.find(dc.prop);
+          if (propPathIt == structInfo->propertyPath.end())
+            continue;
+          Type fieldTy = resolveStructFieldType(structTy, propPathIt->second);
+          auto intTy = dyn_cast_or_null<IntegerType>(fieldTy);
+          if (!intTy)
+            continue;
+          unsigned bitWidth = intTy.getWidth();
+
+          // Load the bound property AFTER randomize_basic
+          auto boundPathIt = structInfo->propertyPath.find(dc.boundProp);
+          if (boundPathIt == structInfo->propertyPath.end())
+            continue;
+          SmallVector<LLVM::GEPArg> boundGep;
+          boundGep.push_back(0);
+          for (unsigned idx : boundPathIt->second)
+            boundGep.push_back(static_cast<int32_t>(idx));
+          auto boundPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                               classPtr, boundGep);
+          Type boundFieldTy = resolveStructFieldType(structTy,
+                                                      boundPathIt->second);
+          Value boundVal = LLVM::LoadOp::create(rewriter, loc, boundFieldTy,
+                                                 boundPtr);
+          // Extend to i64
+          if (auto bIntTy = dyn_cast<IntegerType>(boundFieldTy)) {
+            if (bIntTy.getWidth() < 64) {
+              if (dc.isSigned)
+                boundVal = arith::ExtSIOp::create(rewriter, loc, i64Ty,
+                                                   boundVal);
+              else
+                boundVal = arith::ExtUIOp::create(rewriter, loc, i64Ty,
+                                                   boundVal);
+            } else if (bIntTy.getWidth() > 64) {
+              boundVal = arith::TruncIOp::create(rewriter, loc, i64Ty,
+                                                  boundVal);
+            }
+          }
+
+          int64_t typeMin = dc.isSigned ? -(1LL << (bitWidth - 1)) : 0;
+          int64_t typeMax = dc.isSigned ? ((1LL << (bitWidth - 1)) - 1)
+                                         : ((1ULL << bitWidth) - 1);
+          Value one64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(1));
+
+          DynFixup fixup;
+          fixup.prop = dc.prop;
+          fixup.bitWidth = bitWidth;
+          fixup.isSoft = dc.isSoft;
+          if (dc.isUpper) {
+            fixup.dynMin = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(typeMin));
+            fixup.dynMax = boundVal;
+            if (dc.isStrict)
+              fixup.dynMax = arith::SubIOp::create(rewriter, loc,
+                                                    fixup.dynMax, one64);
+          } else {
+            fixup.dynMin = boundVal;
+            if (dc.isStrict)
+              fixup.dynMin = arith::AddIOp::create(rewriter, loc,
+                                                    fixup.dynMin, one64);
+            fixup.dynMax = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(typeMax));
+          }
+          dynFixups.push_back(fixup);
+        }
+
+        // Now apply all dynFixups. For each fixup, check if there's a
+        // matching static hard constraint and intersect the ranges at
+        // runtime using max(static_min, dyn_min) and min(static_max, dyn_max).
+        if (!dynFixups.empty()) {
+          auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty,
+                                                         {i64Ty, i64Ty});
+          auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                                "__moore_randomize_with_range",
+                                                rangeFnTy);
+
+          for (const auto &fixup : dynFixups) {
+            auto propPathIt = structInfo->propertyPath.find(fixup.prop);
+            if (propPathIt == structInfo->propertyPath.end())
+              continue;
+            Type fieldTy = resolveStructFieldType(structTy,
+                                                   propPathIt->second);
+            auto intTy = dyn_cast_or_null<IntegerType>(fieldTy);
+            if (!intTy)
+              continue;
+
+            // Compute effective min/max by intersecting with static bounds
+            Value effectiveMin = fixup.dynMin;
+            Value effectiveMax = fixup.dynMax;
+            auto staticIt = staticBoundsForDynFixups.find(fixup.prop);
+            if (staticIt != staticBoundsForDynFixups.end()) {
+              Value staticMin = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(staticIt->second.first));
+              Value staticMax = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(staticIt->second.second));
+              // effectiveMin = max(static_min, dyn_min)
+              effectiveMin = arith::MaxSIOp::create(rewriter, loc,
+                                                      staticMin, effectiveMin);
+              // effectiveMax = min(static_max, dyn_max)
+              effectiveMax = arith::MinSIOp::create(rewriter, loc,
+                                                      staticMax, effectiveMax);
+            }
+
+            // Guard with rand_enabled check
+            OpBuilder::InsertionGuard guard(rewriter);
+            Value randEnabled = createRandEnabledCheck(fixup.prop);
+            auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{},
+                                           randEnabled,
+                                           /*withElseRegion=*/false);
+            rewriter.setInsertionPointToStart(
+                &ifOp.getThenRegion().front());
+
+            auto rangeResult = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+                ValueRange{effectiveMin, effectiveMax});
+
+            Value truncatedVal = rangeResult.getResult();
+            if (fixup.bitWidth < 64) {
+              truncatedVal = arith::TruncIOp::create(rewriter, loc, intTy,
+                                                      truncatedVal);
+            }
+
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0);
+            for (unsigned idx : propPathIt->second)
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy,
+                                                 structTy, classPtr,
+                                                 gepIndices);
+            LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
           }
         }
       }
@@ -26130,6 +26710,18 @@ void MooreToCorePass::runOnOperation() {
       };
       DenseMap<StringRef, BoundInfo> varBounds;
 
+      // Dynamic constraint info: one operand is a property, the other is
+      // another property of the same class (runtime value).
+      struct DynamicBoundInfo {
+        StringRef constrainedProp;
+        StringRef boundProp;         // non-empty if bound is same-class property
+        bool isUpperBound = true;    // true: prop < bound, false: prop > bound
+        bool isStrict = true;        // strict (< >) vs non-strict (<= >=)
+        bool isSigned = false;
+        bool isSoft = false;
+      };
+      SmallVector<DynamicBoundInfo> dynamicBounds;
+
       auto tryExtractBounds = [&](Operation *defOp, bool isSoft) -> bool {
         if (!defOp || defOp->getNumOperands() != 2)
           return false;
@@ -26188,6 +26780,114 @@ void MooreToCorePass::runOnOperation() {
         return true;
       };
 
+      // Try to extract a dynamic bound from a comparison where one operand
+      // is a property and the other is a non-constant runtime value.
+      // Returns true if a dynamic bound was extracted.
+      auto tryExtractDynamicBounds =
+          [&](Operation *defOp, bool isSoft) -> bool {
+        if (!defOp || defOp->getNumOperands() != 2)
+          return false;
+        Value lhs = defOp->getOperand(0);
+        Value rhs = defOp->getOperand(1);
+
+        // Determine which side is the property and which is the bound
+        StringRef propName = getPropertyName(lhs);
+        Value boundVal = rhs;
+        bool varOnLhs = true;
+        if (propName.empty()) {
+          propName = getPropertyName(rhs);
+          boundVal = lhs;
+          varOnLhs = false;
+        }
+        if (propName.empty())
+          return false;
+
+        // The bound must NOT be a constant (those are handled by
+        // tryExtractBounds)
+        if (getConstVal(boundVal))
+          return false;
+
+        // Determine the comparison kind
+        bool isUpperBound = false; // Does this constrain the upper bound?
+        bool isStrict = false;
+        bool isSigned = false;
+
+        if (isa<SltOp>(defOp)) {
+          isSigned = true;
+          isStrict = true;
+          isUpperBound = varOnLhs;   // x < bound => upper; bound < x => lower
+        } else if (isa<SleOp>(defOp)) {
+          isSigned = true;
+          isStrict = false;
+          isUpperBound = varOnLhs;
+        } else if (isa<SgtOp>(defOp)) {
+          isSigned = true;
+          isStrict = true;
+          isUpperBound = !varOnLhs;  // x > bound => lower; bound > x => upper
+        } else if (isa<SgeOp>(defOp)) {
+          isSigned = true;
+          isStrict = false;
+          isUpperBound = !varOnLhs;
+        } else if (isa<UltOp>(defOp)) {
+          isStrict = true;
+          isUpperBound = varOnLhs;
+        } else if (isa<UleOp>(defOp)) {
+          isStrict = false;
+          isUpperBound = varOnLhs;
+        } else if (isa<UgtOp>(defOp)) {
+          isStrict = true;
+          isUpperBound = !varOnLhs;
+        } else if (isa<UgeOp>(defOp)) {
+          isStrict = false;
+          isUpperBound = !varOnLhs;
+        } else {
+          return false;
+        }
+
+        // Check if the bound is another CLASS PROPERTY of the same class.
+        // traceToPropertyName returns names for both class properties AND
+        // local variables. We need to verify it's a class property by
+        // checking for ClassPropertyRefOp in the chain.
+        StringRef boundPropName;
+        {
+          Value v = boundVal;
+          if (auto zextOp = v.getDefiningOp<ZExtOp>())
+            v = zextOp.getInput();
+          else if (auto sextOp = v.getDefiningOp<SExtOp>())
+            v = sextOp.getInput();
+          else if (auto truncOp = v.getDefiningOp<TruncOp>())
+            v = truncOp.getInput();
+          if (auto readOp = v.getDefiningOp<ReadOp>()) {
+            if (auto propRef =
+                    readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
+              boundPropName = propRef.getProperty();
+          } else if (auto propRef =
+                         v.getDefiningOp<ClassPropertyRefOp>()) {
+            boundPropName = propRef.getProperty();
+          }
+        }
+
+        DynamicBoundInfo info;
+        info.constrainedProp = propName;
+        info.isUpperBound = isUpperBound;
+        info.isStrict = isStrict;
+        info.isSigned = isSigned;
+        info.isSoft = isSoft;
+
+        if (!boundPropName.empty()) {
+          // Bound is another class property - store the name
+          info.boundProp = boundPropName;
+        } else {
+          // Bound is a local variable/argument - these are handled
+          // directly in RandomizeOpConversion by inspecting the
+          // converted inline region ops (comb.icmp).
+          return false;
+        }
+
+        dynamicBounds.push_back(info);
+        return true;
+      };
+
       // Walk inline region for ConstraintExprOp with comparison operands
       for (auto &op : inlineRegion.front().getOperations()) {
         auto exprOp = dyn_cast<ConstraintExprOp>(op);
@@ -26208,47 +26908,84 @@ void MooreToCorePass::runOnOperation() {
             matched |= tryExtractBounds(rhsOp, isSoft);
             if (matched)
               continue;
+            // Fall back to dynamic bounds for each sub-comparison
+            matched = tryExtractDynamicBounds(lhsOp, isSoft);
+            matched |= tryExtractDynamicBounds(rhsOp, isSoft);
+            if (matched)
+              continue;
           }
         }
-        // Direct comparison
-        tryExtractBounds(defOp, isSoft);
+        // Direct comparison - try static first, then dynamic
+        if (!tryExtractBounds(defOp, isSoft))
+          tryExtractDynamicBounds(defOp, isSoft);
       }
 
-      // Convert bounds to attributes and store on the RandomizeOp
-      if (varBounds.empty())
-        return;
+      // Convert static bounds to attributes and store on the RandomizeOp
+      if (!varBounds.empty()) {
+        SmallVector<Attribute> constraintAttrs;
+        for (auto &[propName, bounds] : varBounds) {
+          if (!bounds.lower && !bounds.upper)
+            continue;
+          // Store as a dictionary: {prop, min, max, signed, soft}
+          SmallVector<NamedAttribute> entries;
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "prop"),
+              StringAttr::get(&context, propName)));
+          if (bounds.lower)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "min"),
+                IntegerAttr::get(IntegerType::get(&context, 64), *bounds.lower)));
+          if (bounds.upper)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "max"),
+                IntegerAttr::get(IntegerType::get(&context, 64), *bounds.upper)));
+          if (bounds.isSigned)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "signed"),
+                UnitAttr::get(&context)));
+          if (bounds.isSoft)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "soft"),
+                UnitAttr::get(&context)));
+          constraintAttrs.push_back(DictionaryAttr::get(&context, entries));
+        }
 
-      SmallVector<Attribute> constraintAttrs;
-      for (auto &[propName, bounds] : varBounds) {
-        if (!bounds.lower && !bounds.upper)
-          continue;
-        // Store as a dictionary: {prop, min, max, signed, soft}
-        SmallVector<NamedAttribute> entries;
-        entries.push_back(NamedAttribute(
-            StringAttr::get(&context, "prop"),
-            StringAttr::get(&context, propName)));
-        if (bounds.lower)
-          entries.push_back(NamedAttribute(
-              StringAttr::get(&context, "min"),
-              IntegerAttr::get(IntegerType::get(&context, 64), *bounds.lower)));
-        if (bounds.upper)
-          entries.push_back(NamedAttribute(
-              StringAttr::get(&context, "max"),
-              IntegerAttr::get(IntegerType::get(&context, 64), *bounds.upper)));
-        if (bounds.isSigned)
-          entries.push_back(NamedAttribute(
-              StringAttr::get(&context, "signed"),
-              UnitAttr::get(&context)));
-        if (bounds.isSoft)
-          entries.push_back(NamedAttribute(
-              StringAttr::get(&context, "soft"),
-              UnitAttr::get(&context)));
-        constraintAttrs.push_back(DictionaryAttr::get(&context, entries));
+        if (!constraintAttrs.empty()) {
+          randomizeOp->setAttr("circt.inline_expr_constraints",
+                               ArrayAttr::get(&context, constraintAttrs));
+        }
       }
 
-      if (!constraintAttrs.empty()) {
-        randomizeOp->setAttr("circt.inline_expr_constraints",
-                             ArrayAttr::get(&context, constraintAttrs));
+      // Convert dynamic bounds to attributes and store on the RandomizeOp
+      if (!dynamicBounds.empty()) {
+        SmallVector<Attribute> dynAttrs;
+        for (auto &dyn : dynamicBounds) {
+          SmallVector<NamedAttribute> entries;
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "prop"),
+              StringAttr::get(&context, dyn.constrainedProp)));
+          if (!dyn.boundProp.empty())
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "bound_prop"),
+                StringAttr::get(&context, dyn.boundProp)));
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "is_upper"),
+              BoolAttr::get(&context, dyn.isUpperBound)));
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "is_strict"),
+              BoolAttr::get(&context, dyn.isStrict)));
+          if (dyn.isSigned)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "signed"),
+                UnitAttr::get(&context)));
+          if (dyn.isSoft)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "soft"),
+                UnitAttr::get(&context)));
+          dynAttrs.push_back(DictionaryAttr::get(&context, entries));
+        }
+        randomizeOp->setAttr("circt.inline_dynamic_constraints",
+                             ArrayAttr::get(&context, dynAttrs));
       }
     };
 
