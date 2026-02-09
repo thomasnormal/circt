@@ -17,6 +17,8 @@
 // CHECK: --default-mutations-select
 // CHECK: --default-formal-global-propagate-cmd
 // CHECK: --default-formal-global-propagate-timeout-seconds
+// CHECK: --default-formal-global-propagate-lec-timeout-seconds
+// CHECK: --default-formal-global-propagate-bmc-timeout-seconds
 // CHECK: --default-formal-global-propagate-circt-lec
 // CHECK: --default-formal-global-propagate-circt-lec-args
 // CHECK: --default-formal-global-propagate-c1

@@ -220,6 +220,9 @@ global filters:
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified
 conservatively as `propagated` (mutants are not pruned).
+Use `--formal-global-propagate-lec-timeout-seconds <N>` and
+`--formal-global-propagate-bmc-timeout-seconds <N>` when LEC/BMC need different
+budgets; they override the global timeout for built-in LEC/BMC modes.
 
 For installed toolchains, `circt-mut` expects mutation workflow scripts under
 `<prefix>/share/circt/utils` and CIRCT now installs them there by default.
@@ -372,6 +375,9 @@ Core input formats:
   `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`
   with optional tail override `global_propagate_timeout_seconds` to set
   per-lane global formal timeout.
+  Additional optional tail overrides:
+  `global_propagate_lec_timeout_seconds`,
+  `global_propagate_bmc_timeout_seconds`.
 
 Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and

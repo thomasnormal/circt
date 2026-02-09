@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]<TAB>[bmc_orig_cache_max_age_seconds]<TAB>[bmc_orig_cache_eviction_policy]<TAB>[skip_baseline]<TAB>[fail_on_undetected]<TAB>[fail_on_errors]<TAB>[global_propagate_timeout_seconds]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]<TAB>[bmc_orig_cache_max_age_seconds]<TAB>[bmc_orig_cache_eviction_policy]<TAB>[skip_baseline]<TAB>[fail_on_undetected]<TAB>[fail_on_errors]<TAB>[global_propagate_timeout_seconds]<TAB>[global_propagate_lec_timeout_seconds]<TAB>[global_propagate_bmc_timeout_seconds]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -43,6 +43,16 @@ Optional:
                             Default --formal-global-propagate-timeout-seconds
                             for lanes without lane-specific
                             global_propagate_timeout_seconds
+  --default-formal-global-propagate-lec-timeout-seconds N
+                            Default
+                            --formal-global-propagate-lec-timeout-seconds
+                            for lanes without lane-specific
+                            global_propagate_lec_timeout_seconds
+  --default-formal-global-propagate-bmc-timeout-seconds N
+                            Default
+                            --formal-global-propagate-bmc-timeout-seconds
+                            for lanes without lane-specific
+                            global_propagate_bmc_timeout_seconds
   --default-formal-global-propagate-circt-lec [PATH]
                             Default --formal-global-propagate-circt-lec for
                             lanes without lane-specific global_propagate_circt_lec.
@@ -162,6 +172,8 @@ DEFAULT_MUTATIONS_CFG=""
 DEFAULT_MUTATIONS_SELECT=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_C1=""
@@ -210,6 +222,8 @@ while [[ $# -gt 0 ]]; do
     --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --default-formal-global-propagate-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --default-formal-global-propagate-lec-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --default-formal-global-propagate-bmc-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --default-formal-global-propagate-circt-lec)
       if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
         DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"
@@ -289,6 +303,14 @@ if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMA
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --default-formal-global-propagate-timeout-seconds value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --default-formal-global-propagate-lec-timeout-seconds value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --default-formal-global-propagate-bmc-timeout-seconds value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" =~ ^[0-9]+$ ]]; then
@@ -375,6 +397,8 @@ declare -a MUTATIONS_CFG
 declare -a MUTATIONS_SELECT
 declare -a GLOBAL_PROPAGATE_CMD
 declare -a GLOBAL_PROPAGATE_TIMEOUT_SECONDS
+declare -a GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS
+declare -a GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS
 declare -a GLOBAL_PROPAGATE_CIRCT_LEC
 declare -a GLOBAL_PROPAGATE_CIRCT_LEC_ARGS
 declare -a GLOBAL_PROPAGATE_C1
@@ -429,7 +453,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes bmc_orig_cache_max_age_seconds bmc_orig_cache_eviction_policy lane_skip_baseline lane_fail_on_undetected lane_fail_on_errors global_propagate_timeout_seconds _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes bmc_orig_cache_max_age_seconds bmc_orig_cache_eviction_policy lane_skip_baseline lane_fail_on_undetected lane_fail_on_errors global_propagate_timeout_seconds global_propagate_lec_timeout_seconds global_propagate_bmc_timeout_seconds _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -456,6 +480,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   MUTATIONS_SELECT+=("${mutations_select:--}")
   GLOBAL_PROPAGATE_CMD+=("${global_propagate_cmd:--}")
   GLOBAL_PROPAGATE_TIMEOUT_SECONDS+=("${global_propagate_timeout_seconds:--}")
+  GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS+=("${global_propagate_lec_timeout_seconds:--}")
+  GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS+=("${global_propagate_bmc_timeout_seconds:--}")
   GLOBAL_PROPAGATE_CIRCT_LEC+=("${global_propagate_circt_lec:--}")
   GLOBAL_PROPAGATE_CIRCT_LEC_ARGS+=("${global_propagate_circt_lec_args:--}")
   GLOBAL_PROPAGATE_C1+=("${global_propagate_c1:--}")
@@ -667,6 +693,8 @@ run_lane() {
   local lane_mutations_select=""
   local lane_global_propagate_cmd=""
   local lane_global_propagate_timeout_seconds=""
+  local lane_global_propagate_lec_timeout_seconds=""
+  local lane_global_propagate_bmc_timeout_seconds=""
   local lane_global_propagate_circt_lec=""
   local lane_global_propagate_circt_lec_args=""
   local lane_global_propagate_c1=""
@@ -859,6 +887,30 @@ run_lane() {
       return 0
     fi
     cmd+=(--formal-global-propagate-timeout-seconds "$lane_global_propagate_timeout_seconds")
+  fi
+  lane_global_propagate_lec_timeout_seconds="${GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS[$i]}"
+  if [[ "$lane_global_propagate_lec_timeout_seconds" == "-" || -z "$lane_global_propagate_lec_timeout_seconds" ]]; then
+    lane_global_propagate_lec_timeout_seconds="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS"
+  fi
+  if [[ -n "$lane_global_propagate_lec_timeout_seconds" ]]; then
+    if ! [[ "$lane_global_propagate_lec_timeout_seconds" =~ ^[0-9]+$ ]]; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    cmd+=(--formal-global-propagate-lec-timeout-seconds "$lane_global_propagate_lec_timeout_seconds")
+  fi
+  lane_global_propagate_bmc_timeout_seconds="${GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS[$i]}"
+  if [[ "$lane_global_propagate_bmc_timeout_seconds" == "-" || -z "$lane_global_propagate_bmc_timeout_seconds" ]]; then
+    lane_global_propagate_bmc_timeout_seconds="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_timeout_seconds" ]]; then
+    if ! [[ "$lane_global_propagate_bmc_timeout_seconds" =~ ^[0-9]+$ ]]; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    cmd+=(--formal-global-propagate-bmc-timeout-seconds "$lane_global_propagate_bmc_timeout_seconds")
   fi
   lane_global_propagate_circt_lec="${GLOBAL_PROPAGATE_CIRCT_LEC[$i]}"
   if [[ "$lane_global_propagate_circt_lec" == "-" || -z "$lane_global_propagate_circt_lec" ]]; then
