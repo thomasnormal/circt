@@ -13,7 +13,7 @@ uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: stream_unpack interpretOpe
 uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation failure
 
 # Ch18: Constraint tests that fail at runtime (advanced constraint features)
-18.5.2--constraint-inheritance_1	xfail	Constraint inheritance from base class not extracted
+18.5.2--constraint-inheritance_1	xfail	Constraint inheritance from parent class not propagated
 18.5.4--distribution_1	xfail	Distribution constraints not yet supported
 18.5.8.1--foreach-iterative-constraints_1	xfail	Foreach iterative constraints not supported
 18.5.8.2--array-reduction-iterative-constraints_1	xfail	Array reduction constraints not supported
@@ -39,7 +39,7 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.8--disabling-random-variables-with-rand_mode_1	xfail	rand_mode toggle not propagated (randc)
 18.8--disabling-random-variables-with-rand_mode_2	xfail	rand_mode toggle not propagated (re-enable)
 18.8--disabling-random-variables-with-rand_mode_3	xfail	rand_mode toggle not propagated (static)
-18.9--controlling-constraints-with-constraint_mode_0	xfail	constraint_mode toggle not propagated
+18.9--controlling-constraints-with-constraint_mode_0	pass	constraint_mode toggle
 18.11.1--in-line-constraint-checker_0	xfail	Inline constraint checker
 18.11.1--in-line-constraint-checker_1	xfail	Inline randc constraint checker
 18.11--in-line-random-variable-control_0	xfail	Inline variable control
@@ -56,22 +56,22 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.15--manually-seeding-randomize_1	xfail	Manual seed not producing reproducible values
 
 # Ch18: Newly-compiling constraint tests (previously COMPILE_FAIL)
-18.5--constraint-blocks_1	xfail	Constraint block execution not yet correct
-18.5.1--explicit-external-constraint_2	xfail	External constraint resolution
-18.5.1--implicit-external-constraint_2	xfail	Implicit external constraint resolution
-18.5.2--pure-constraint_1	xfail	Pure constraint override not supported
-18.5.3--set-membership_1	xfail	Set membership constraint not applied
-18.5.5--uniqueness-constraints_1	xfail	Uniqueness constraint not applied
-18.5.6--implication_1	xfail	Implication constraint not applied
-18.5.7--if-else-constraints_4	xfail	If-else constraint not applied
+18.5--constraint-blocks_1	pass	Constraint block execution
+18.5.1--explicit-external-constraint_2	pass	External constraint resolution
+18.5.1--implicit-external-constraint_2	pass	Implicit external constraint resolution
+18.5.2--pure-constraint_1	pass	Pure constraint override
+18.5.3--set-membership_1	pass	Set membership constraint
+18.5.5--uniqueness-constraints_1	pass	Uniqueness constraint
+18.5.6--implication_1	pass	Implication constraint
+18.5.7--if-else-constraints_4	pass	If-else constraint
 18.5.13--constraint-guards_1	xfail	Constraint guard not applied
 18.5.14.1--soft-constraint-priorities_3	xfail	Soft constraint priority not applied
-18.6.1--randomize-method_0	xfail	Basic randomize method (slow UVM sim)
-18.6.3--behavior-of-randomization-methods_1	xfail	Randomization behavior check
+18.6.1--randomize-method_0	pass	Basic randomize method
+18.6.3--behavior-of-randomization-methods_1	pass	Randomization behavior check
 18.10--dynamic-constraint-modification_0	xfail	Dynamic constraint modification
-18.12.1--adding-constraints-to-scope-variables_1	xfail	Scope variable constraint
-18.12--randomization-of-scope-variables_1	xfail	Scope variable randomization
-18.13.1--urandom_1	xfail	$urandom in class context
+18.12.1--adding-constraints-to-scope-variables_1	pass	Scope variable constraint
+18.12--randomization-of-scope-variables_1	pass	Scope variable randomization
+18.13.1--urandom_1	pass	$urandom in class context
 18.13.1--urandom_3	xfail	$urandom in class context
 18.13.2--urandom_range_1	xfail	$urandom_range in class context
 18.13.2--urandom_range_2	xfail	$urandom_range in class context
