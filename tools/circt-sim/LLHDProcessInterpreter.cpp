@@ -5604,6 +5604,42 @@ arith_dispatch:
         if (vtableGlobalName.empty())
           break;
 
+        // Runtime vtable override: read the actual vtable pointer from the
+        // object's memory to find the correct derived-class vtable. The
+        // compile-time struct type from the GEP may point to a base class
+        // vtable with stubs, while the runtime object is a derived class
+        // with real overrides.
+        if (!callIndirectOp.getArgOperands().empty()) {
+          InterpretedValue selfVal =
+              getValue(procId, callIndirectOp.getArgOperands()[0]);
+          if (!selfVal.isX()) {
+            uint64_t objAddr = selfVal.getUInt64();
+            uint64_t vtableOff = 0;
+            MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
+            // Vtable ptr is at byte offset 4 (after i32 class ID at offset 0)
+            if (objBlock && objBlock->initialized &&
+                objBlock->data.size() >= vtableOff + 12) {
+              uint64_t runtimeVtableAddr = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                runtimeVtableAddr |= static_cast<uint64_t>(
+                                         objBlock->data[vtableOff + 4 + i])
+                                     << (i * 8);
+              auto globalIt2 = addressToGlobal.find(runtimeVtableAddr);
+              if (globalIt2 != addressToGlobal.end()) {
+                std::string runtimeVtableName = globalIt2->second;
+                if (runtimeVtableName != vtableGlobalName &&
+                    globalMemoryBlocks.count(runtimeVtableName)) {
+                  LLVM_DEBUG(llvm::dbgs()
+                             << "  call_indirect: runtime vtable override: "
+                             << vtableGlobalName << " -> "
+                             << runtimeVtableName << "\n");
+                  vtableGlobalName = runtimeVtableName;
+                }
+              }
+            }
+          }
+        }
+
         // Step 6: find the vtable global and read the function address
         auto globalIt = globalMemoryBlocks.find(vtableGlobalName);
         if (globalIt == globalMemoryBlocks.end())
@@ -5648,6 +5684,33 @@ arith_dispatch:
         for (Value arg : callIndirectOp.getArgOperands())
           args.push_back(getValue(procId, arg));
 
+        // Intercept UVM phase/objection methods in the X-fallback path.
+        if ((resolvedName.contains("uvm_phase::raise_objection") ||
+             resolvedName.contains("uvm_phase::drop_objection")) &&
+            !resolvedName.contains("phase_hopper") &&
+            !args.empty() && !args[0].isX()) {
+          uint64_t phaseAddr = args[0].getUInt64();
+          InterpretedValue countVal =
+              args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+          int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+          auto objIt = phaseObjectionHandles.find(phaseAddr);
+          MooreObjectionHandle handle;
+          if (objIt != phaseObjectionHandles.end()) {
+            handle = objIt->second;
+          } else {
+            std::string phaseName = "phase_" + std::to_string(phaseAddr);
+            handle = __moore_objection_create(
+                phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+            phaseObjectionHandles[phaseAddr] = handle;
+          }
+          if (resolvedName.contains("raise_objection"))
+            __moore_objection_raise(handle, "", 0, "", 0, count);
+          else
+            __moore_objection_drop(handle, "", 0, "", 0, count);
+          resolved = true;
+          break;
+        }
+
         // Dispatch the call
         auto &callState = processStates[procId];
         ++callState.callDepth;
@@ -5656,8 +5719,15 @@ arith_dispatch:
                                             callIndirectOp);
         --callState.callDepth;
 
-        if (failed(callResult))
+        if (failed(callResult)) {
+          if (resolvedName.contains("traverse") ||
+              resolvedName.contains("execute") ||
+              resolvedName.contains("exec_task")) {
+            llvm::errs() << "[XFB-FAIL] " << resolvedName << " FAILED proc="
+                         << procId << "\n";
+          }
           break;
+        }
 
         // Set return values
         for (auto [result, val] :
@@ -5730,6 +5800,35 @@ arith_dispatch:
         }
         if (vtableGlobalName.empty())
           break;
+
+        // Runtime vtable override (same as X-fallback path above)
+        if (!callIndirectOp.getArgOperands().empty()) {
+          InterpretedValue selfVal2 =
+              getValue(procId, callIndirectOp.getArgOperands()[0]);
+          if (!selfVal2.isX()) {
+            uint64_t objAddr2 = selfVal2.getUInt64();
+            uint64_t vtableOff2 = 0;
+            MemoryBlock *objBlock2 = findBlockByAddress(objAddr2, vtableOff2);
+            if (objBlock2 && objBlock2->initialized &&
+                objBlock2->data.size() >= vtableOff2 + 12) {
+              uint64_t runtimeVtableAddr2 = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                runtimeVtableAddr2 |=
+                    static_cast<uint64_t>(
+                        objBlock2->data[vtableOff2 + 4 + i])
+                    << (i * 8);
+              auto globalIt3 = addressToGlobal.find(runtimeVtableAddr2);
+              if (globalIt3 != addressToGlobal.end()) {
+                std::string runtimeVtableName2 = globalIt3->second;
+                if (runtimeVtableName2 != vtableGlobalName &&
+                    globalMemoryBlocks.count(runtimeVtableName2)) {
+                  vtableGlobalName = runtimeVtableName2;
+                }
+              }
+            }
+          }
+        }
+
         auto globalIt = globalMemoryBlocks.find(vtableGlobalName);
         if (globalIt == globalMemoryBlocks.end())
           break;
@@ -5763,6 +5862,34 @@ arith_dispatch:
         SmallVector<InterpretedValue, 4> sArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           sArgs.push_back(getValue(procId, arg));
+
+        // Intercept UVM phase/objection methods in non-X static fallback.
+        if ((resolvedName.contains("uvm_phase::raise_objection") ||
+             resolvedName.contains("uvm_phase::drop_objection")) &&
+            !resolvedName.contains("phase_hopper") &&
+            !sArgs.empty() && !sArgs[0].isX()) {
+          uint64_t phaseAddr = sArgs[0].getUInt64();
+          InterpretedValue countVal =
+              sArgs.size() > 3 ? sArgs[3] : InterpretedValue(llvm::APInt(32, 1));
+          int64_t cnt = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+          auto objIt = phaseObjectionHandles.find(phaseAddr);
+          MooreObjectionHandle handle;
+          if (objIt != phaseObjectionHandles.end()) {
+            handle = objIt->second;
+          } else {
+            std::string phaseName = "phase_" + std::to_string(phaseAddr);
+            handle = __moore_objection_create(
+                phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+            phaseObjectionHandles[phaseAddr] = handle;
+          }
+          if (resolvedName.contains("raise_objection"))
+            __moore_objection_raise(handle, "", 0, "", 0, cnt);
+          else
+            __moore_objection_drop(handle, "", 0, "", 0, cnt);
+          staticResolved = true;
+          break;
+        }
+
         auto &cs2 = processStates[procId];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
@@ -5793,9 +5920,93 @@ arith_dispatch:
     }
 
     StringRef calleeName = it->second;
+    std::string overriddenCalleeName;
     LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
                             << llvm::format_hex(funcAddr, 16)
                             << " -> " << calleeName << "\n");
+
+    // Runtime vtable override for the direct resolution path.
+    // When the static function address maps to a base-class method, check
+    // the self object's actual runtime vtable and resolve to the derived
+    // class's override if it differs.
+    do {
+      // Trace the SSA chain: cast → load → GEP to find the method index
+      auto castOp = calleeValue.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+      if (!castOp || castOp.getInputs().size() != 1)
+        break;
+      auto funcPtrLoad = castOp.getInputs()[0].getDefiningOp<LLVM::LoadOp>();
+      if (!funcPtrLoad)
+        break;
+      auto vtableGEP = funcPtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+      if (!vtableGEP)
+        break;
+      auto vtableIndices = vtableGEP.getIndices();
+      int64_t methodIndex = -1;
+      if (vtableIndices.size() >= 2) {
+        auto lastIdx = vtableIndices[vtableIndices.size() - 1];
+        if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(lastIdx))
+          methodIndex = intAttr.getInt();
+        else if (auto dynIdx = llvm::dyn_cast_if_present<Value>(lastIdx)) {
+          InterpretedValue dynVal = getValue(procId, dynIdx);
+          if (!dynVal.isX())
+            methodIndex = static_cast<int64_t>(dynVal.getUInt64());
+        }
+      }
+      if (methodIndex < 0)
+        break;
+
+      // Read the self object's runtime vtable pointer
+      if (callIndirectOp.getArgOperands().empty())
+        break;
+      InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        break;
+      uint64_t objAddr = selfVal.getUInt64();
+      uint64_t vtableOff = 0;
+      MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
+      if (!objBlock || !objBlock->initialized ||
+          objBlock->data.size() < vtableOff + 12)
+        break;
+
+      // Read vtable pointer (8 bytes at offset 4, after i32 class_id)
+      uint64_t runtimeVtableAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        runtimeVtableAddr |= static_cast<uint64_t>(
+                                 objBlock->data[vtableOff + 4 + i])
+                             << (i * 8);
+      auto globalIt = addressToGlobal.find(runtimeVtableAddr);
+      if (globalIt == addressToGlobal.end())
+        break;
+      std::string runtimeVtableName = globalIt->second;
+
+      // Read the function pointer from the runtime vtable at the same slot
+      auto vtableBlockIt = globalMemoryBlocks.find(runtimeVtableName);
+      if (vtableBlockIt == globalMemoryBlocks.end())
+        break;
+      auto &vtableBlock = vtableBlockIt->second;
+      unsigned slotOffset = methodIndex * 8;
+      if (slotOffset + 8 > vtableBlock.size)
+        break;
+      uint64_t runtimeFuncAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        runtimeFuncAddr |=
+            static_cast<uint64_t>(vtableBlock.data[slotOffset + i]) << (i * 8);
+      if (runtimeFuncAddr == 0 || runtimeFuncAddr == funcAddr)
+        break;
+
+      // The runtime vtable has a different function at this slot — override
+      auto runtimeFuncIt = addressToFunction.find(runtimeFuncAddr);
+      if (runtimeFuncIt == addressToFunction.end())
+        break;
+
+      overriddenCalleeName = runtimeFuncIt->second;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  func.call_indirect: runtime vtable override: "
+                 << calleeName << " -> " << overriddenCalleeName
+                 << " (vtable=" << runtimeVtableName
+                 << " slot=" << methodIndex << ")\n");
+      calleeName = overriddenCalleeName;
+    } while (false);
 
     // Look up the function
     auto &state = processStates[procId];
@@ -5865,6 +6076,38 @@ arith_dispatch:
     bool indAddedToVisited = indHasArg0;
     if (indHasArg0)
       ++indDepthMap[indArg0Val];
+
+    // Intercept UVM phase/objection methods called via vtable dispatch.
+    // These bypass interpretFuncCall() so we handle them here directly.
+    if (calleeName.contains("uvm_phase::raise_objection") ||
+        calleeName.contains("uvm_phase::drop_objection")) {
+      if (!calleeName.contains("phase_hopper") && !args.empty() && !args[0].isX()) {
+        uint64_t phaseAddr = args[0].getUInt64();
+        InterpretedValue countVal =
+            args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+        int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+        auto it2 = phaseObjectionHandles.find(phaseAddr);
+        MooreObjectionHandle handle;
+        if (it2 != phaseObjectionHandles.end()) {
+          handle = it2->second;
+        } else {
+          std::string phaseName = "phase_" + std::to_string(phaseAddr);
+          handle = __moore_objection_create(
+              phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+          phaseObjectionHandles[phaseAddr] = handle;
+        }
+        if (calleeName.contains("raise_objection"))
+          __moore_objection_raise(handle, "", 0, "", 0, count);
+        else
+          __moore_objection_drop(handle, "", 0, "", 0, count);
+      }
+      if (indAddedToVisited) {
+        auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
+        if (depthRef > 0)
+          --depthRef;
+      }
+      return success();
+    }
 
     // Call the function with depth tracking
     ++callState.callDepth;
@@ -10279,6 +10522,364 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // Intercept uvm_oneway_hash — a CRC-based string hash used by
+  // uvm_create_random_seed. The compiled IR version uses llhd.ref types that
+  // fail in the interpreter. We implement it natively using the algorithm from
+  // uvm_misc.svh (UVM_STR_CRC_POLYNOMIAL = 0x04c11db6).
+  if (calleeName == "uvm_pkg::uvm_oneway_hash") {
+    // Args: (struct<(ptr,i64)> string_in, i32 seed)
+    // Read string from struct<(ptr, i64)> — same pattern as config_db.
+    std::string strIn;
+    if (callOp.getNumOperands() >= 1) {
+      InterpretedValue strVal = args[0];
+      if (!strVal.isX() && strVal.getWidth() >= 128) {
+        llvm::APInt bits = strVal.getAPInt();
+        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+        if (strPtr != 0 && strLen > 0) {
+          // Try dynamicStrings
+          auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+          if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+              dynIt->second.second > 0) {
+            strIn = std::string(
+                dynIt->second.first,
+                std::min(static_cast<size_t>(strLen),
+                         static_cast<size_t>(dynIt->second.second)));
+          } else {
+            // Try global/malloc memory
+            uint64_t off = 0;
+            MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+            if (gBlock && gBlock->initialized) {
+              size_t avail =
+                  std::min(static_cast<size_t>(strLen),
+                           gBlock->data.size() - static_cast<size_t>(off));
+              if (avail > 0)
+                strIn = std::string(
+                    reinterpret_cast<const char *>(gBlock->data.data() + off),
+                    avail);
+            } else if (strPtr >= 0x10000) {
+              // Native memory (direct pointer read)
+              const char *p = reinterpret_cast<const char *>(strPtr);
+              strIn = std::string(p, static_cast<size_t>(strLen));
+            }
+          }
+        }
+      }
+    }
+    uint32_t seed = 0;
+    if (callOp.getNumOperands() >= 2) {
+      InterpretedValue seedVal = args[1];
+      if (!seedVal.isX())
+        seed = static_cast<uint32_t>(seedVal.getUInt64());
+    }
+    if (seed == 0) {
+      // Use uvm_global_random_seed — load from the global variable
+      auto it = globalAddresses.find("uvm_pkg::uvm_global_random_seed");
+      if (it != globalAddresses.end()) {
+        uint64_t off = 0;
+        MemoryBlock *blk = findBlockByAddress(it->second, off);
+        if (blk && blk->initialized && blk->data.size() >= off + 4) {
+          std::memcpy(&seed, blk->data.data() + off, 4);
+        }
+      }
+      if (seed == 0)
+        seed = 1; // fallback
+    }
+    // CRC computation matching uvm_misc.svh
+    uint32_t result = seed;
+    uint32_t crc1 = 0xFFFFFFFF;
+    for (size_t i = 0; i < strIn.size(); ++i) {
+      uint8_t currentByte = static_cast<uint8_t>(strIn[i]);
+      if (currentByte == 0)
+        break;
+      for (int bit = 0; bit < 8; ++bit) {
+        bool msb = (crc1 >> 31) & 1;
+        crc1 <<= 1;
+        if (msb ^ ((currentByte >> bit) & 1)) {
+          crc1 ^= 0x04c11db6;
+          crc1 |= 1;
+        }
+      }
+    }
+    // Byte-reverse crc1 and add to result
+    uint32_t reversed = ((crc1 & 0xFF) << 24) | (((crc1 >> 8) & 0xFF) << 16) |
+                        (((crc1 >> 16) & 0xFF) << 8) | ((crc1 >> 24) & 0xFF);
+    result += ~reversed;
+    auto resultVal = callOp.getResult(0);
+    setValue(procId, resultVal,
+            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(result))));
+    return success();
+  }
+
+  // Intercept wait_for_self_and_siblings_to_drop to replace the complex
+  // interpreted version (which iterates predecessors, creates assoc arrays,
+  // calls get_objection, wait_for, etc.) with a simple native implementation.
+  // This function should block until the phase's objection count drops to 0.
+  if (calleeName.contains("wait_for_self_and_siblings_to_drop")) {
+    InterpretedValue phaseVal = args[0]; // %arg0 = phase pointer
+    if (phaseVal.isX())
+      return success();
+    uint64_t phaseAddr = phaseVal.getUInt64();
+
+    // Look up or create the objection handle for this phase.
+    MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+    auto it = phaseObjectionHandles.find(phaseAddr);
+    if (it != phaseObjectionHandles.end()) {
+      handle = it->second;
+    } else {
+      // No explicit handle yet — create one for this phase.
+      handle = __moore_objection_create("", 0);
+      phaseObjectionHandles[phaseAddr] = handle;
+    }
+
+    // Check current objection count.
+    int64_t count = 0;
+    if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+      count = __moore_objection_get_count(handle);
+
+    static std::map<ProcessId, int> wfsstdYieldCount;
+    if (count <= 0) {
+      // Objection count is 0 — but we need to yield to give forked processes
+      // (like run_phase) a chance to raise objections first.
+      int &yields = wfsstdYieldCount[procId];
+      if (yields >= 10) {
+        // Yielded enough — objections are truly at 0, return.
+        yields = 0;
+        return success();
+      }
+      ++yields;
+    } else {
+      // Objections are raised — reset yield counter.
+      wfsstdYieldCount[procId] = 0;
+    }
+
+    // Suspend and poll later.
+    auto &state = processStates[procId];
+    state.waiting = true;
+
+    SimTime currentTime = scheduler.getCurrentTime();
+    constexpr uint32_t kMaxDeltaPolls = 1000;
+    constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+    SimTime targetTime;
+    if (currentTime.deltaStep < kMaxDeltaPolls)
+      targetTime = currentTime.nextDelta();
+    else
+      targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+
+    auto callIt = mlir::Block::iterator(callOp.getOperation());
+
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active,
+        Event([this, procId, callIt]() {
+          auto &st = processStates[procId];
+          st.waiting = false;
+          st.currentOp = callIt;
+          scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+        }));
+
+    return success();
+  }
+
+  // Intercept uvm_phase::get_objection to bypass the interpreted version
+  // which fails because get_name() virtual dispatch crashes during objection
+  // object creation. We use a native objection handle map instead.
+  // This is critical for run_phase: without working objections, raise_objection
+  // fails → phase completes immediately → simulation stays at time 0.
+  if (calleeName.contains("uvm_phase::get_objection") &&
+      !calleeName.contains("get_objection_count") &&
+      !calleeName.contains("get_objection_total")) {
+    InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
+    if (phaseVal.isX()) {
+      // Return null
+      auto result = callOp.getResult(0);
+      setValue(procId, result, InterpretedValue(llvm::APInt(64, 0)));
+      return success();
+    }
+    uint64_t phaseAddr = phaseVal.getUInt64();
+
+    // Check if we already have an objection handle for this phase
+    auto it = phaseObjectionHandles.find(phaseAddr);
+    if (it != phaseObjectionHandles.end()) {
+      // Return the handle encoded as a non-null pointer so UVM code sees
+      // a valid objection object. The actual objection logic is handled
+      // by the raise/drop interceptors below.
+      auto result = callOp.getResult(0);
+      uint64_t syntheticAddr = 0xE0000000ULL + static_cast<uint64_t>(it->second);
+      setValue(procId, result, InterpretedValue(llvm::APInt(64, syntheticAddr)));
+      return success();
+    }
+
+    // Create a new objection handle for this phase via the runtime.
+    std::string phaseName = "phase_" + std::to_string(phaseAddr);
+    MooreObjectionHandle handle = __moore_objection_create(
+        phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+    phaseObjectionHandles[phaseAddr] = handle;
+
+    auto result = callOp.getResult(0);
+    uint64_t syntheticAddr = 0xE0000000ULL + static_cast<uint64_t>(handle);
+    setValue(procId, result, InterpretedValue(llvm::APInt(64, syntheticAddr)));
+    return success();
+  }
+
+  // Intercept uvm_phase::raise_objection and drop_objection to use native
+  // objection handles from the get_objection interceptor above.
+  if ((calleeName.contains("uvm_phase::raise_objection") ||
+       calleeName.contains("uvm_phase::drop_objection")) &&
+      !calleeName.contains("phase_hopper")) {
+    InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
+    // %arg2 = description string (struct<(ptr,i64)>), %arg3 = count (i32)
+    InterpretedValue countVal = args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+
+    if (phaseVal.isX())
+      return success();
+
+    uint64_t phaseAddr = phaseVal.getUInt64();
+    int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+
+    // Get or create the objection handle for this phase
+    auto it = phaseObjectionHandles.find(phaseAddr);
+    MooreObjectionHandle handle;
+    if (it != phaseObjectionHandles.end()) {
+      handle = it->second;
+    } else {
+      std::string phaseName = "phase_" + std::to_string(phaseAddr);
+      handle = __moore_objection_create(
+          phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+      phaseObjectionHandles[phaseAddr] = handle;
+    }
+
+    if (calleeName.contains("raise_objection"))
+      __moore_objection_raise(handle, "", 0, "", 0, count);
+    else
+      __moore_objection_drop(handle, "", 0, "", 0, count);
+    return success();
+  }
+
+  // Intercept uvm_objection methods that operate on our synthetic objection
+  // pointers (0xE0000000 + handle_id). The phase engine calls these to check
+  // whether all objections have been dropped before proceeding.
+  if (calleeName.contains("uvm_objection::")) {
+    // Map synthetic pointer back to objection handle
+    auto syntheticToHandle = [](uint64_t addr) -> MooreObjectionHandle {
+      if (addr >= 0xE0000000ULL && addr < 0xF0000000ULL)
+        return static_cast<MooreObjectionHandle>(addr - 0xE0000000ULL);
+      return MOORE_OBJECTION_INVALID_HANDLE;
+    };
+
+    if (calleeName.contains("get_objection_total") ||
+        calleeName.contains("get_objection_count")) {
+      InterpretedValue selfVal = args[0]; // uvm_objection* this
+      if (selfVal.isX()) {
+        auto result = callOp.getResult(0);
+        setValue(procId, result, InterpretedValue(llvm::APInt(32, 0)));
+        return success();
+      }
+      MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
+      int64_t count = 0;
+      if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+        count = __moore_objection_get_count(handle);
+      auto result = callOp.getResult(0);
+      setValue(procId, result,
+              InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(count))));
+      return success();
+    }
+
+    if (calleeName.contains("raise_objection")) {
+      InterpretedValue selfVal = args[0];
+      InterpretedValue countVal =
+          args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+      if (!selfVal.isX()) {
+        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
+        int64_t count =
+            countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+        if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+          __moore_objection_raise(handle, "", 0, "", 0, count);
+      }
+      return success();
+    }
+
+    if (calleeName.contains("drop_objection")) {
+      InterpretedValue selfVal = args[0];
+      InterpretedValue countVal =
+          args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+      if (!selfVal.isX()) {
+        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
+        int64_t count =
+            countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+        if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+          __moore_objection_drop(handle, "", 0, "", 0, count);
+      }
+      return success();
+    }
+
+    // wait_for: phase engine waits until all objections are dropped.
+    // We poll the objection count periodically using delta steps (like
+    // wait_condition). When count reaches 0, the phase can proceed.
+    if (calleeName.contains("wait_for")) {
+      // Get the objection handle from the synthetic self pointer.
+      InterpretedValue selfVal = args[0];
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!selfVal.isX())
+        handle = syntheticToHandle(selfVal.getUInt64());
+
+      // Check current objection count.
+      int64_t count = 0;
+      if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+        count = __moore_objection_get_count(handle);
+
+      // Track yield count per-proc for this wait_for cycle.
+      // We yield at least a few times to let forked processes raise objections
+      // before returning for count==0.
+      static std::map<ProcessId, int> waitForYieldCount;
+      if (count <= 0) {
+        int &yields = waitForYieldCount[procId];
+        if (yields >= 3) {
+          // Already yielded enough times with count==0 — return.
+          yields = 0;
+          return success();
+        }
+        ++yields;
+      } else {
+        // Objection raised — reset yield counter.
+        waitForYieldCount[procId] = 0;
+      }
+
+      // Suspend this process and poll via delta/time steps.
+      auto &state = processStates[procId];
+      state.waiting = true;
+
+      // Schedule a poll callback. Use the same bounded-delta strategy as
+      // wait_condition: delta steps first (keeps $time==0 during UVM init),
+      // then fall back to real time to avoid infinite delta loops.
+      SimTime currentTime = scheduler.getCurrentTime();
+      constexpr uint32_t kMaxDeltaPolls = 1000;
+      constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+      SimTime targetTime;
+      if (currentTime.deltaStep < kMaxDeltaPolls)
+        targetTime = currentTime.nextDelta();
+      else
+        targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+
+      // Save the iterator to this call op so we can re-execute it.
+      // executeStep() already advanced currentOp past this call, so we
+      // need to go back by one to point at this LLVM::CallOp.
+      auto callIt = mlir::Block::iterator(callOp.getOperation());
+
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId, callIt]() {
+            auto &st = processStates[procId];
+            st.waiting = false;
+            // Rewind currentOp to re-execute the wait_for call so the
+            // interceptor can re-check the objection count.
+            st.currentOp = callIt;
+            scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+          }));
+
+      return success();
+    }
+  }
+
   // Intercept UVM config_db_implementation_t::set/get/exists methods.
   // These are stub methods generated by MooreToCore for the UVM config_db class.
   // We replace them with a real key-value store so config_db actually works.
@@ -10595,6 +11196,177 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     mlir::Block::iterator resumeOp) {
   if (funcOp.getBody().empty())
     return failure();
+
+  // Intercept UVM phase objection functions at the func body level.
+  // These are called via call_indirect (vtable dispatch) which bypasses the
+  // interceptors in interpretFuncCall. We handle them here to ensure they
+  // work regardless of which call_indirect path dispatched the call.
+  //
+  // We intercept both:
+  //   uvm_phase::raise_objection(%arg0=phase, %arg1=obj, %arg2=desc, %arg3=count)
+  //   uvm_phase_hopper::raise_objection(%arg0=hopper/phase, %arg1=obj, %arg2=desc, %arg3=count)
+  // The hopper IS a phase (uvm_phase_hopper extends uvm_phase), so %arg0 can
+  // be used as the phase address in both cases.
+  StringRef funcName = funcOp.getSymName();
+  if ((funcName.contains("raise_objection") ||
+       funcName.contains("drop_objection")) &&
+      (funcName.contains("uvm_phase::") || funcName.contains("uvm_phase_hopper::")) &&
+      !funcName.contains("uvm_objection::") &&
+      !args.empty() && !args[0].isX()) {
+    // For uvm_phase::raise_objection, args[0] is the phase node.
+    // For uvm_phase_hopper::raise_objection, args[0] is the hopper (NOT the phase).
+    // Use currentExecutingPhaseAddr if it's a hopper call; otherwise use args[0].
+    uint64_t phaseAddr;
+    if (funcName.contains("phase_hopper") && currentExecutingPhaseAddr != 0) {
+      phaseAddr = currentExecutingPhaseAddr;
+    } else {
+      phaseAddr = args[0].getUInt64();
+    }
+    InterpretedValue countVal =
+        args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
+    int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+    auto objIt = phaseObjectionHandles.find(phaseAddr);
+    MooreObjectionHandle handle;
+    if (objIt != phaseObjectionHandles.end()) {
+      handle = objIt->second;
+    } else {
+      std::string phaseName = "phase_" + std::to_string(phaseAddr);
+      handle = __moore_objection_create(
+          phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+      phaseObjectionHandles[phaseAddr] = handle;
+    }
+    if (funcName.contains("raise_objection"))
+      __moore_objection_raise(handle, "", 0, "", 0, count);
+    else
+      __moore_objection_drop(handle, "", 0, "", 0, count);
+    return success();
+  }
+
+  // Intercept uvm_phase_hopper::execute_phase for task phases.
+  // The original MLIR uses a complex sim.fork join_any structure with 3
+  // branches (phase_done monitor, objection poller, timeout). Due to
+  // timing issues in the interpreter, one branch completes immediately,
+  // causing the join_any to return → execute_phase returns → subsequent
+  // phases (extract, check, report) run before run_phase finishes.
+  //
+  // Fix: For task phases, we bypass the complex fork structure entirely.
+  // Instead, we call traverse_on (which dispatches exec_task → component
+  // run_phase via fork), then poll the objection count natively until it
+  // drops to 0 (meaning run_phase completed and objections were dropped).
+  if (funcName == "uvm_pkg::uvm_phase_hopper::execute_phase") {
+    if (args.size() >= 2 && !args[1].isX()) {
+      uint64_t phaseAddr = args[1].getUInt64();
+
+      // Track which phase is currently being executed
+      currentExecutingPhaseAddr = phaseAddr;
+
+      // Ensure we have an objection handle for this phase
+      auto objIt = phaseObjectionHandles.find(phaseAddr);
+      if (objIt == phaseObjectionHandles.end()) {
+        std::string phaseName = "phase_" + std::to_string(phaseAddr);
+        MooreObjectionHandle handle = __moore_objection_create(
+            phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+        phaseObjectionHandles[phaseAddr] = handle;
+      }
+
+      // We let the function run naturally. The function will:
+      // 1. Set phase state to EXECUTING (already done before calling us)
+      // 2. Check get_phase_type: if non-IMP → ^bb1 (simple path, ok)
+      // 3. If IMP: check dyn_cast for task_phase → ^bb4 (fork path)
+      //
+      // For ^bb4, the MLIR creates master_phase_process fork (join_none)
+      // which calls traverse_on, then creates the problematic join_any.
+      //
+      // Set a flag so that when the sim.fork join_any is created,
+      // we convert it to block on objections instead.
+      // Don't set executePhaseBlockingPhaseMap here — we don't yet know
+      // if this is a task phase. The map entry is set when the
+      // "master_phase_process" join_none fork is detected in interpretSimFork.
+    }
+  }
+
+  // Redirect base-class stubs to derived-class overrides when the runtime
+  // vtable points to the correct derived class but static vtable resolution
+  // picks the base-class stub (because the GEP uses the compile-time struct
+  // type). This fixes exec_task/traverse for task phases like run_phase.
+  if (funcName == "uvm_pkg::uvm_phase::exec_task" ||
+      funcName == "uvm_pkg::uvm_phase::traverse" ||
+      funcName == "uvm_pkg::uvm_phase::execute") {
+    // The function body is empty (just "return"). Try to find the correct
+    // derived-class override by reading the runtime vtable from the object.
+    if (!args.empty() && !args[0].isX()) {
+      uint64_t objAddr = args[0].getUInt64();
+      // The vtable pointer is at offset [0,0,0,1] in the object struct —
+      // but the object layout varies. Read the vtable address from memory:
+      // For UVM objects, vtable ptr is at byte offset 4 (after the 4-byte
+      // class ID at offset 0).
+      uint64_t vtableOff = 0;
+      MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
+      if (objBlock && objBlock->initialized &&
+          objBlock->data.size() >= vtableOff + 12) {
+        // Read vtable pointer from byte offset 4 (ptr is 8 bytes)
+        uint64_t vtableAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          vtableAddr |= static_cast<uint64_t>(
+                            objBlock->data[vtableOff + 4 + i])
+                        << (i * 8);
+        // Look up which vtable global this address belongs to
+        auto vtableIt = addressToGlobal.find(vtableAddr);
+        if (vtableIt != addressToGlobal.end()) {
+          std::string vtableName = vtableIt->second;
+          // Derive the class name from "__vtable__"
+          auto pos = vtableName.find("::__vtable__");
+          if (pos != std::string::npos) {
+            std::string className = vtableName.substr(0, pos);
+            // Determine which method slot we need
+            int64_t methodSlot = -1;
+            if (funcName.contains("exec_task"))
+              methodSlot = 26;
+            else if (funcName.contains("traverse"))
+              methodSlot = 31;
+            else if (funcName.contains("execute"))
+              methodSlot = 32;
+
+            // Read the function address from the vtable at the slot
+            auto globalIt = globalMemoryBlocks.find(vtableName);
+            if (globalIt != globalMemoryBlocks.end() && methodSlot >= 0) {
+              auto &vtableBlock = globalIt->second;
+              unsigned slotOffset = methodSlot * 8;
+              if (slotOffset + 8 <= vtableBlock.size) {
+                uint64_t funcAddr2 = 0;
+                for (unsigned i = 0; i < 8; ++i)
+                  funcAddr2 |=
+                      static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                      << (i * 8);
+                if (funcAddr2 != 0) {
+                  auto funcIt = addressToFunction.find(funcAddr2);
+                  if (funcIt != addressToFunction.end()) {
+                    StringRef derivedName = funcIt->second;
+                    if (derivedName != funcName) {
+                      // Found a derived override — call it instead
+                      auto &state = processStates[procId];
+                      Operation *parent = state.processOrInitialOp;
+                      while (parent && !isa<ModuleOp>(parent))
+                        parent = parent->getParentOp();
+                      ModuleOp moduleOp =
+                          parent ? cast<ModuleOp>(parent) : rootModule;
+                      auto derivedFuncOp =
+                          moduleOp.lookupSymbol<func::FuncOp>(derivedName);
+                      if (derivedFuncOp) {
+                        return interpretFuncBody(procId, derivedFuncOp, args,
+                                                 results, callOp, resumeBlock,
+                                                 resumeOp);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 
   Block &entryBlock = funcOp.getBody().front();
 
@@ -11765,6 +12537,103 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
   // Parse the join type
   ForkJoinType joinType = parseForkJoinType(forkOp.getJoinType());
 
+  // When we detect the "master_phase_process" join_none fork, this confirms
+  // that execute_phase is running for a TASK phase. Set the blocking phase
+  // map so the NEXT join_any on this process (or its child) gets intercepted.
+  bool isMasterPhaseProcessFork = false;
+  uint64_t masterPhaseAddr = 0;
+  if (joinType == ForkJoinType::JoinNone && currentExecutingPhaseAddr != 0) {
+    auto nameAttr = forkOp->getAttrOfType<mlir::StringAttr>("name");
+    if (nameAttr && nameAttr.getValue() == "master_phase_process") {
+      isMasterPhaseProcessFork = true;
+      masterPhaseAddr = currentExecutingPhaseAddr;
+      executePhaseBlockingPhaseMap[procId] = currentExecutingPhaseAddr;
+    }
+  }
+
+  // Intercept join_any inside execute_phase for task phases.
+  // The MLIR creates a join_any with 3 branches (phase_done monitor,
+  // objection poller, timeout). Due to interpreter timing, one branch
+  // completes immediately, causing execute_phase to return prematurely.
+  // Instead, we skip the fork entirely and poll the phase's objection
+  // count until it drops to 0.
+  {
+    auto phaseMapIt = executePhaseBlockingPhaseMap.find(procId);
+    if (joinType == ForkJoinType::JoinAny &&
+        phaseMapIt != executePhaseBlockingPhaseMap.end()) {
+      uint64_t phaseAddr = phaseMapIt->second;
+      // Clear the mapping so nested forks aren't affected
+      executePhaseBlockingPhaseMap.erase(phaseMapIt);
+
+      // Set a dummy handle value so subsequent sim.disable_fork doesn't crash
+      setValue(procId, forkOp.getHandle(), InterpretedValue(0ULL, 64));
+
+      // Check objection count for this specific phase.
+      auto objIt = phaseObjectionHandles.find(phaseAddr);
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (objIt != phaseObjectionHandles.end())
+        handle = objIt->second;
+
+      int64_t count = 0;
+      if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+        count = __moore_objection_get_count(handle);
+
+      // Check if the master_phase_process child is still alive.
+      // If it is, keep polling even if objection count is 0 (the child
+      // hasn't had a chance to call raise_objection yet).
+      bool masterChildAlive = false;
+      auto childIt = masterPhaseProcessChild.find(phaseAddr);
+      if (childIt != masterPhaseProcessChild.end()) {
+        ProcessId childProcId = childIt->second;
+        auto childStateIt = processStates.find(childProcId);
+        if (childStateIt != processStates.end()) {
+          // Child is alive if it's not halted
+          masterChildAlive = !childStateIt->second.halted;
+        }
+      }
+
+      auto &yieldCount = executePhaseYieldCounts[procId];
+      bool shouldKeepPolling = (count > 0) ||
+                               (count <= 0 && masterChildAlive) ||
+                               (count <= 0 && yieldCount < 10);
+
+      if (shouldKeepPolling) {
+        ++yieldCount;
+        if (count > 0)
+          yieldCount = 0; // Reset when objections are active
+        auto &state = processStates[procId];
+        state.waiting = true;
+
+        SimTime currentTime = scheduler.getCurrentTime();
+        SimTime targetTime;
+        if (currentTime.deltaStep < 2000)
+          targetTime = currentTime.nextDelta();
+        else
+          targetTime = currentTime.advanceTime(1000); // 1 ps
+
+        // Re-arm the mapping so next iteration detects the join_any again
+        executePhaseBlockingPhaseMap[procId] = phaseAddr;
+
+        // Re-execute this same fork op on the next delta
+        auto forkIt = mlir::Block::iterator(forkOp.getOperation());
+        scheduler.getEventScheduler().schedule(
+            targetTime, SchedulingRegion::Active,
+            Event([this, procId, forkIt]() {
+              auto &st = processStates[procId];
+              st.waiting = false;
+              st.currentOp = forkIt;
+              scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+            }));
+        return success();
+      }
+
+      // Objections are at 0 and master child is done — phase is complete
+      yieldCount = 0;
+      // Skip the fork entirely — continue to next op after the fork
+      return success();
+    }
+  }
+
   // Create a fork group
   ForkId forkId = forkJoinManager.createFork(procId, joinType);
 
@@ -11823,6 +12692,20 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
 
     // Store the child state
     registerProcessState(childId, std::move(childState));
+
+    // Propagate execute_phase blocking info from parent to child.
+    // When execute_phase for a task phase creates an outer sim.fork join,
+    // the child needs to know the phase address for join_any interception.
+    auto phaseIt = executePhaseBlockingPhaseMap.find(procId);
+    if (phaseIt != executePhaseBlockingPhaseMap.end()) {
+      executePhaseBlockingPhaseMap[childId] = phaseIt->second;
+    }
+
+    // Record the master_phase_process child process ID so the join_any
+    // polling can check if the traversal is still running.
+    if (isMasterPhaseProcessFork && masterPhaseAddr != 0) {
+      masterPhaseProcessChild[masterPhaseAddr] = childId;
+    }
 
     // Set up the callback to execute the child process
     if (auto *proc = scheduler.getProcess(childId))
@@ -14161,6 +15044,74 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                    << "  llvm.call: __moore_class_srandom(0x"
                    << llvm::format_hex(objAddr, 16)
                    << ", seed=" << seed << ")\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_class_get_randstate - serialize per-object RNG state.
+    // Implements SystemVerilog obj.get_randstate() (IEEE 1800-2017 §18.13).
+    // Signature: (objPtr: ptr) -> !llvm.struct<(ptr, i64)>
+    if (calleeName == "__moore_class_get_randstate") {
+      if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+        uint64_t objAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+
+        std::string stateStr;
+        auto &rng = getObjectRng(objAddr);
+        std::ostringstream oss;
+        oss << rng;
+        stateStr = oss.str();
+
+        int64_t ptrVal = 0;
+        int64_t lenVal = 0;
+        if (!stateStr.empty()) {
+          interpreterStrings.push_back(std::move(stateStr));
+          const std::string &stored = interpreterStrings.back();
+          ptrVal = reinterpret_cast<int64_t>(stored.data());
+          lenVal = static_cast<int64_t>(stored.size());
+          dynamicStrings[ptrVal] = {stored.data(), lenVal};
+        }
+
+        APInt packedResult(128, 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(ptrVal)), 0);
+        packedResult.insertBits(APInt(64, static_cast<uint64_t>(lenVal)), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_class_get_randstate(0x"
+                   << llvm::format_hex(objAddr, 16)
+                   << ") len=" << lenVal << "\n");
+      }
+      return success();
+    }
+
+    // Handle __moore_class_set_randstate - restore per-object RNG state.
+    // Implements SystemVerilog obj.set_randstate(state) (IEEE 1800-2017 §18.13).
+    // Signature: (objPtr: ptr, stateStruct: !llvm.struct<(ptr, i64)>) -> void
+    if (calleeName == "__moore_class_set_randstate") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t objAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
+
+        if (!stateVal.isX()) {
+          APInt bits = stateVal.getAPInt();
+          uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
+          uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
+
+          std::string stateStr =
+              resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
+
+          if (!stateStr.empty()) {
+            std::istringstream iss(stateStr);
+            auto &rng = getObjectRng(objAddr);
+            iss >> rng;
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_class_set_randstate(0x"
+                   << llvm::format_hex(objAddr, 16) << ")\n");
       }
       return success();
     }

@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 754 - February 9, 2026
+
+### Runtime VTable Override (Critical Fix)
+
+- Fixed `exec_task` dispatching base class `uvm_component::run_phase` instead
+  of derived class override (e.g., `apb_base_test::run_phase`).
+- Root cause: The direct resolution path in `call_indirect` used the statically-
+  loaded function pointer from `addressToFunction` without checking whether the
+  self object's runtime vtable has a different (derived) method at that slot.
+- Fix: After resolving `calleeName` from `addressToFunction`, trace the SSA chain
+  (cast → load → GEP) to find the method index, read the self object's runtime
+  vtable pointer from memory (byte offset 4), and override if the runtime vtable
+  has a different function at that slot.
+- All 3 `call_indirect` paths now perform runtime vtable override.
+
+### UVM Phase Sequencing
+
+- Per-process `executePhaseBlockingPhaseMap` replaces global variable.
+- `master_phase_process` fork detection by name in `interpretSimFork`.
+- `masterPhaseProcessChild` alive tracking for join_any polling.
+- Native `wait_for_self_and_siblings_to_drop` with yield-before-return.
+- Result: All 6 available AVIPs reach `run_phase` with correct derived dispatch.
+
+### Debug Output Cleanup
+
+- Removed 29 debug `llvm::errs()` traces from LLHDProcessInterpreter.cpp.
+
+### Validation
+
+- `python3 build/bin/llvm-lit test/Tools/circt-sim/`: 210/210 PASS (100%)
+- All 6 available AVIPs: exit 0, UVM_FATAL at expected BFM gap only.
+
 ## Iteration 753 - February 9, 2026
 
 ### OpenTitan Strict LEC Audit Lane in `run_formal_all.sh`
