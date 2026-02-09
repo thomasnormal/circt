@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 747 - February 9, 2026
+
+### Conservative Global Formal Filter Handling for `UNKNOWN`
+
+- Hardened `utils/run_mutation_cover.sh` built-in global propagation filters to
+  handle inconclusive formal outcomes conservatively instead of treating them as
+  infrastructure errors:
+  - circt-lec global filter:
+    - `LEC_RESULT=EQ` => `not_propagated`
+    - `LEC_RESULT=NEQ|UNKNOWN` => `propagated`
+  - circt-bmc differential global filter:
+    - same `BMC_RESULT` in (`SAT`,`UNSAT`) => `not_propagated`
+    - different results or any `BMC_RESULT=UNKNOWN` => `propagated`
+- This avoids false `errors` inflation for valid-but-inconclusive formal runs
+  and ensures potentially relevant mutants are retained for dynamic detection.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/run-mutation-cover-global-circt-lec-unknown.test`
+  - `test/Tools/run-mutation-cover-global-circt-bmc-unknown.test`
+- Updated docs:
+  - `docs/FormalRegression.md` now documents conservative `UNKNOWN`
+    classification for built-in LEC/BMC global filters.
+- Updated plan tracking:
+  - `PROJECT_PLAN.md` now notes conservative `UNKNOWN` handling in mutation
+    matrix/global formal filtering status.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-lec-filter.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-lec-unknown.test test/Tools/run-mutation-cover-global-circt-bmc-unknown.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix-global-circt-lec-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-propagate-filter.test test/Tools/run-mutation-cover-global-filter-conflict.test`: PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-unknown-conservative --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 746 - February 9, 2026
 
 ### Mutation Mode Family Expansion (MCY/Yosys-Compatible)
@@ -38469,3 +38512,78 @@ CIRCT/slang correctly enforces LRM restrictions.
   `XPROP_ONLY`).
 - Full non-smoke OpenTitan matrix must be re-run after each closure batch to
   maintain parity tracking fidelity.
+
+## Iteration 737 - February 9, 2026
+
+### OpenTitan Parity Closure Batch: usbdev + dma/keymgr_dpe + LEC
+
+1. `usbdev` parse closure in `utils/run_opentitan_circt_verilog.sh`:
+   - added missing `prim_sec_anchor_buf.sv` / `prim_sec_anchor_flop.sv` to the
+     `usbdev` dependency set.
+2. Added full parse targets to `utils/run_opentitan_circt_verilog.sh`:
+   - `dma`
+   - `keymgr_dpe`
+   - with complete dependency/file lists aligned to the sim runner.
+3. OpenTitan LEC default closure in `utils/run_opentitan_circt_lec.py`:
+   - enabled x-optimistic equivalence by default for OpenTitan harness runs
+     (`LEC_X_OPTIMISTIC` default from `0` -> `1`).
+   - this removes dependency on `LEC_ACCEPT_XPROP_ONLY=1` for
+     `aes_sbox_canright` in the default OpenTitan flow.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-default-x-optimistic.test`
+    - verifies OpenTitan LEC harness passes `--x-optimistic` by default.
+  - `test/Tools/run-opentitan-verilog-targets.test`
+    - verifies `usbdev` filelist includes `prim_sec_anchor_*`
+    - verifies `dma` and `keymgr_dpe` target cases are present.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_opentitan_circt_verilog.sh`: PASS
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-no-assume-known.test test/Tools/run-opentitan-verilog-targets.test test/Tools/run-opentitan-formal-e2e.test`:
+    - 6/6 PASS
+- OpenTitan direct target checks:
+  - `utils/run_opentitan_circt_verilog.sh usbdev --ir-hw`: PASS
+  - `utils/run_opentitan_circt_verilog.sh dma --ir-hw`: PASS
+  - `utils/run_opentitan_circt_verilog.sh keymgr_dpe --ir-hw`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh usbdev --timeout=180`: PASS
+- OpenTitan E2E:
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-lec --verilog-targets gpio,uart,spi_device,usbdev,i2c,dma,keymgr_dpe --out-dir /tmp/opentitan-e2e-verilog-all`:
+    - summary: `pass=7 fail=0`
+  - `utils/run_opentitan_formal_e2e.sh --skip-lec --sim-targets usbdev --verilog-targets usbdev --out-dir /tmp/opentitan-e2e-usbdev`:
+    - summary: `pass=2 fail=0`
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --out-dir /tmp/opentitan-e2e-lec-strict`:
+    - summary: `pass=1 fail=0`
+  - `utils/run_opentitan_formal_e2e.sh --sim-targets usbdev --verilog-targets usbdev,dma,keymgr_dpe --out-dir /tmp/opentitan-e2e-closure-123`:
+    - summary: `pass=5 fail=0`
+- OpenTitan LEC direct:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` OK
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- `SIM i2c` timeout remains open in non-smoke OpenTitan E2E.
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state LEC for
+  `aes_sbox_canright` still reports `XPROP_ONLY`.
