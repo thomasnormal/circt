@@ -35,10 +35,10 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.7--in-line-constraints--randomize_4	xfail	Inline constraint with variable select
 18.7--in-line-constraints--randomize_6	xfail	Inline constraint with class variable
 18.7.1--local-scope-resolution_1	xfail	Local scope resolution in constraints
-18.8--disabling-random-variables-with-rand_mode_0	xfail	rand_mode toggle not propagated
-18.8--disabling-random-variables-with-rand_mode_1	xfail	rand_mode toggle not propagated (randc)
-18.8--disabling-random-variables-with-rand_mode_2	xfail	rand_mode toggle not propagated (re-enable)
-18.8--disabling-random-variables-with-rand_mode_3	xfail	rand_mode toggle not propagated (static)
+18.8--disabling-random-variables-with-rand_mode_0	pass
+18.8--disabling-random-variables-with-rand_mode_1	pass
+18.8--disabling-random-variables-with-rand_mode_2	pass
+18.8--disabling-random-variables-with-rand_mode_3	xfail	static rand_mode not shared across instances
 18.9--controlling-constraints-with-constraint_mode_0	pass	constraint_mode toggle
 18.11.1--in-line-constraint-checker_0	xfail	Inline constraint checker
 18.11.1--in-line-constraint-checker_1	xfail	Inline randc constraint checker

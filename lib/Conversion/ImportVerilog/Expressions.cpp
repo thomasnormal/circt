@@ -3502,22 +3502,24 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (isRandMode) {
           if (auto *property =
                   namedExpr->symbol.as_if<slang::ast::ClassPropertySymbol>()) {
-            if (!memberAttr)
+            if (!memberAttr) {
               memberAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
                                                         property->name);
-            classObj = context.getInlineConstraintThisRef();
-            if (!classObj)
-              classObj = context.getImplicitThisRef();
+              classObj = context.getInlineConstraintThisRef();
+              if (!classObj)
+                classObj = context.getImplicitThisRef();
+            }
           }
         } else {
           if (auto *constraint = namedExpr->symbol.as_if<
                   slang::ast::ConstraintBlockSymbol>()) {
-            if (!memberAttr)
+            if (!memberAttr) {
               memberAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
                                                         constraint->name);
-            classObj = context.getInlineConstraintThisRef();
-            if (!classObj)
-              classObj = context.getImplicitThisRef();
+              classObj = context.getInlineConstraintThisRef();
+              if (!classObj)
+                classObj = context.getImplicitThisRef();
+            }
           }
         }
       }
@@ -5337,16 +5339,17 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!propertyAttr) {
           propertyAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
                                                       propertySymbol->name);
+          classObj = context.getInlineConstraintThisRef();
+          if (!classObj)
+            classObj = context.getImplicitThisRef();
+          if (!classObj) {
+            mlir::emitError(loc)
+                << "rand_mode() requires a class object receiver";
+            return {};
+          }
         }
-        classObj = context.getInlineConstraintThisRef();
-        if (!classObj)
-          classObj = context.getImplicitThisRef();
-        if (!classObj) {
-          mlir::emitError(loc)
-              << "rand_mode() requires a class object receiver";
-          return {};
-        }
-      } else {
+      }
+      if (!classObj) {
         classObj = context.convertRvalueExpression(*receiverExpr);
         if (!classObj)
           return {};
@@ -5450,16 +5453,17 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!constraintAttr) {
           constraintAttr = mlir::FlatSymbolRefAttr::get(builder.getContext(),
                                                         constraintSymbol->name);
+          classObj = context.getInlineConstraintThisRef();
+          if (!classObj)
+            classObj = context.getImplicitThisRef();
+          if (!classObj) {
+            mlir::emitError(loc)
+                << "constraint_mode() requires a class object receiver";
+            return {};
+          }
         }
-        classObj = context.getInlineConstraintThisRef();
-        if (!classObj)
-          classObj = context.getImplicitThisRef();
-        if (!classObj) {
-          mlir::emitError(loc)
-              << "constraint_mode() requires a class object receiver";
-          return {};
-        }
-      } else {
+      }
+      if (!classObj) {
         classObj = context.convertRvalueExpression(*receiverExpr);
         if (!classObj)
           return {};
