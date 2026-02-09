@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 757 - February 9, 2026
+
+### MutationCover Consensus Chain Mode
+
+- Extended `utils/run_mutation_cover.sh` chained formal global filtering with a
+  new `consensus` mode for `--formal-global-propagate-circt-chain`.
+- `consensus` runs both circt-lec and differential circt-bmc and only classifies
+  a mutant as `not_propagated` when both tools agree.
+- Added consensus telemetry and persisted counters in:
+  - `metrics.tsv`
+  - `summary.json`
+  - CLI summary output
+  - per-mutant metadata + reuse note tags
+- Updated `utils/run_mutation_matrix.sh` default-chain option docs to include
+  `consensus`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test`
+    - invalid-mode expectation now includes `consensus` in accepted values.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-circt-lec-filter.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test test/Tools/run-mutation-matrix-global-circt-lec-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test`:
+    - 11/11 PASS
+
+### Remaining Limitations
+
+- OpenTitan strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity still
+  reports `XPROP_ONLY` for `aes_sbox_canright`; tracked separately in
+  `opentitan/LEC_STRICT`.
+
 ## Iteration 756 - February 9, 2026
 
 ### OpenTitan LEC Diagnostic Tagging for Case-Level Tracking
