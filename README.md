@@ -224,6 +224,10 @@ global filters:
 rewrites bare `--formal-global-propagate-circt-lec` /
 `--formal-global-propagate-circt-bmc` to explicit executables before dispatch,
 so unresolved toolchains fail fast with a direct CLI diagnostic.
+It also runs native global-filter preflight checks:
+- validates `--formal-global-propagate-circt-chain` mode values
+- auto-injects LEC/BMC built-in tools for chain mode when omitted
+- rejects conflicting non-chain global filter mode combinations early.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified
