@@ -182,6 +182,7 @@ FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL=0
 FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED=""
 FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED=""
 BMC_ORIG_CACHE_DIR=""
+BMC_ORIG_CACHE_PERSIST_DIR=""
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -410,6 +411,12 @@ fi
 mkdir -p "$WORK_DIR/mutations"
 BMC_ORIG_CACHE_DIR="${WORK_DIR}/.global_bmc_orig_cache"
 mkdir -p "$BMC_ORIG_CACHE_DIR"
+if [[ "$REUSE_CACHE_MODE" != "off" && -n "$REUSE_CACHE_DIR" ]]; then
+  BMC_ORIG_CACHE_PERSIST_DIR="${REUSE_CACHE_DIR}/global_bmc_orig_cache"
+  if [[ "$REUSE_CACHE_MODE" == "read-write" ]]; then
+    mkdir -p "$BMC_ORIG_CACHE_PERSIST_DIR"
+  fi
+fi
 SUMMARY_FILE="${SUMMARY_FILE:-${WORK_DIR}/summary.tsv}"
 PAIR_FILE="${PAIR_FILE:-${WORK_DIR}/pair_qualification.tsv}"
 RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
@@ -869,6 +876,36 @@ cache_copy_file() {
 
   cp "$src" "$tmp"
   mv "$tmp" "$dst"
+}
+
+hydrate_bmc_orig_cache() {
+  local src=""
+  local dst=""
+
+  if [[ -z "$BMC_ORIG_CACHE_PERSIST_DIR" || ! -d "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
+    return 0
+  fi
+  mkdir -p "$BMC_ORIG_CACHE_DIR"
+  for src in "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.log "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.meta; do
+    [[ -f "$src" ]] || continue
+    dst="${BMC_ORIG_CACHE_DIR}/$(basename "$src")"
+    cp "$src" "$dst" 2>/dev/null || true
+  done
+}
+
+publish_bmc_orig_cache() {
+  local src=""
+  local dst=""
+
+  if [[ -z "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
+    return 0
+  fi
+  mkdir -p "$BMC_ORIG_CACHE_PERSIST_DIR"
+  for src in "$BMC_ORIG_CACHE_DIR"/*.orig.log "$BMC_ORIG_CACHE_DIR"/*.orig.meta; do
+    [[ -f "$src" ]] || continue
+    dst="${BMC_ORIG_CACHE_PERSIST_DIR}/$(basename "$src")"
+    cache_copy_file "$src" "$dst"
+  done
 }
 
 publish_reuse_cache() {
@@ -1799,6 +1836,7 @@ if [[ -n "$REUSE_SUMMARY_FILE" ]]; then
 fi
 load_reuse_pairs
 load_reuse_summary
+hydrate_bmc_orig_cache
 
 if [[ "$SKIP_BASELINE" -eq 0 ]]; then
   baseline_dir="${WORK_DIR}/baseline"
@@ -2090,6 +2128,14 @@ if [[ -n "$COVERAGE_THRESHOLD" ]]; then
 fi
 
 if [[ "$REUSE_CACHE_MODE" == "off" ]]; then
+  BMC_ORIG_CACHE_WRITE_STATUS="disabled"
+elif [[ "$REUSE_CACHE_MODE" == "read" ]]; then
+  BMC_ORIG_CACHE_WRITE_STATUS="read_only"
+else
+  BMC_ORIG_CACHE_WRITE_STATUS="pending_write"
+fi
+
+if [[ "$REUSE_CACHE_MODE" == "off" ]]; then
   REUSE_CACHE_WRITE_STATUS="disabled"
 elif [[ "$REUSE_CACHE_MODE" == "read" ]]; then
   REUSE_CACHE_WRITE_STATUS="read_only"
@@ -2103,12 +2149,20 @@ write_reuse_manifest "$REUSE_MANIFEST_FILE" "run"
 write_reuse_manifest "${PAIR_FILE}.manifest.json" "pair_qualification"
 write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
 
+if [[ "$BMC_ORIG_CACHE_WRITE_STATUS" == "pending_write" ]]; then
+  if publish_bmc_orig_cache; then
+    BMC_ORIG_CACHE_WRITE_STATUS="written"
+  else
+    BMC_ORIG_CACHE_WRITE_STATUS="write_error"
+  fi
+fi
+
 if [[ "$REUSE_CACHE_WRITE_STATUS" == "pending_write" ]]; then
   if ! publish_reuse_cache; then
     REUSE_CACHE_WRITE_STATUS="write_error"
   fi
 fi
-if [[ "$REUSE_CACHE_WRITE_STATUS" == "write_error" ]]; then
+if [[ "$REUSE_CACHE_WRITE_STATUS" == "write_error" || "$BMC_ORIG_CACHE_WRITE_STATUS" == "write_error" ]]; then
   errors=$((errors + 1))
   if [[ "$FAIL_ON_ERRORS" -eq 1 ]]; then
     gate_status="FAIL_ERRORS"
@@ -2142,6 +2196,7 @@ fi
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
+  printf "bmc_orig_cache_write_status\t%s\n" "$BMC_ORIG_CACHE_WRITE_STATUS"
   printf "reuse_cache_write_status\t%s\n" "$REUSE_CACHE_WRITE_STATUS"
   printf "errors\t%s\n" "$errors"
   printf "mutation_coverage_percent\t%s\n" "$coverage_pct"
@@ -2173,6 +2228,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
+  "bmc_orig_cache_write_status": "$(json_escape "$BMC_ORIG_CACHE_WRITE_STATUS")",
   "reuse_cache_write_status": "$(json_escape "$REUSE_CACHE_WRITE_STATUS")",
   "reuse_cache_dir": "$(json_escape "$REUSE_CACHE_DIR")",
   "reuse_cache_entry_dir": "$(json_escape "$REUSE_CACHE_ENTRY_DIR")",
@@ -2197,6 +2253,7 @@ echo "Reuse manifest: ${REUSE_MANIFEST_FILE}"
 echo "Reuse pair source: ${REUSE_PAIR_SOURCE}"
 echo "Reuse summary source: ${REUSE_SUMMARY_SOURCE}"
 echo "Reuse cache mode: ${REUSE_CACHE_MODE}"
+echo "BMC orig cache write status: ${BMC_ORIG_CACHE_WRITE_STATUS}"
 echo "Reuse cache write status: ${REUSE_CACHE_WRITE_STATUS}"
 if [[ "$REUSE_CACHE_MODE" != "off" ]]; then
   echo "Reuse cache entry: ${REUSE_CACHE_ENTRY_DIR}"

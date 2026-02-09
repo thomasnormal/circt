@@ -157,6 +157,9 @@ Execution controls:
     `<work_dir>/.global_bmc_orig_cache` keyed by resolved BMC command +
     arguments, reducing repeated original-design solver invocations across
     mutants.
+  - cross-run optimization (when `--reuse-cache-dir` is enabled): original
+    BMC cache entries are hydrated from and published to
+    `<reuse-cache-dir>/global_bmc_orig_cache`.
 - Built-in chained circt-lec/circt-bmc global filter:
   - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
   - requires both `--formal-global-propagate-circt-lec` and
@@ -218,6 +221,8 @@ Generated artifacts (default under `./mutation-cover-results`):
     BMC results in built-in differential BMC mode.
   - `bmc_orig_cache_miss_mutants`: count of mutants that required a fresh
     original-design BMC run in built-in differential BMC mode.
+  - `bmc_orig_cache_write_status`: write status for cross-run original-BMC
+    cache publication (`disabled|read_only|written|write_error`).
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
