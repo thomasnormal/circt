@@ -18339,6 +18339,17 @@ ninja -C build circt-verilog
   - Reduces stale-artifact failure churn without weakening explicit OCSP/CRL
     policy checks.
 
+### Iteration 699
+- Added retry/backoff controls for Ed25519 CRL/OCSP refresh hooks:
+  - `--lane-state-manifest-ed25519-crl-refresh-retries`
+  - `--lane-state-manifest-ed25519-crl-refresh-delay-secs`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-retries`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-delay-secs`
+  - retry/backoff policy now contributes to lane-state config hash
+- Planning impact:
+  - Hardens 24/7 closure flows against transient revocation-fetch failures.
+  - Keeps resume safety strict by rejecting refresh-policy drift across workers.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18351,6 +18362,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
+  - Add timeout and jitter policy for refresh hooks to bound stuck fetches and
+    synchronized retry storms.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

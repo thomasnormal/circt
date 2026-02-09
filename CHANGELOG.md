@@ -32754,6 +32754,58 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 699 - February 9, 2026
+
+### Lane-State Refresh Retry/Backoff Controls
+
+- Extended Ed25519 refresh hooks in `utils/run_formal_all.sh` with retry policy:
+  - `--lane-state-manifest-ed25519-crl-refresh-retries <n>`
+  - `--lane-state-manifest-ed25519-crl-refresh-delay-secs <n>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-retries <n>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-delay-secs <n>`
+- Hook execution behavior:
+  - retries are applied on refresh command failure and unreadable post-refresh
+    artifact file
+  - delay is applied between retry attempts
+  - refresh attempt count is `retries + 1`
+- Resume safety:
+  - retry/backoff policy now contributes to lane-state config hash material,
+    preventing unsafe seed/resume policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for retry/delay options without refresh command
+    - positive flaky OCSP refresh case that fails first attempt and passes with
+      `--lane-state-manifest-ed25519-ocsp-refresh-retries 1`
+  - `docs/FormalRegression.md`
+    - added retry/backoff CLI examples and policy semantics for CRL/OCSP
+      refresh hooks
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep with retry/delay policy enabled:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh ... --with-opentitan ... --with-avip ... --lane-state-manifest-ed25519-crl-file ... --lane-state-manifest-ed25519-crl-refresh-cmd ... --lane-state-manifest-ed25519-crl-refresh-retries 1 --lane-state-manifest-ed25519-crl-refresh-delay-secs 0 --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-refresh-cmd ... --lane-state-manifest-ed25519-ocsp-refresh-retries 1 --lane-state-manifest-ed25519-ocsp-refresh-delay-secs 0 --reset-lane-state`:
+    - PASS
+  - same command with `--resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-seed`
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-resume`
+
+### Remaining Limitations
+
+- Refresh hooks remain command-string driven; no native AIA/CDP fetch engine
+  with schema-validated policy yet.
+- Hook execution still lacks timeout/jitter policy controls.
+
 ## Iteration 698 - February 9, 2026
 
 ### Lane-State CRL/OCSP Refresh Hooks
