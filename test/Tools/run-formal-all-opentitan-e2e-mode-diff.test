@@ -10,12 +10,16 @@
 // RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=DIFFTSV < %t/out/opentitan-e2e-mode-diff.tsv
 // RUN: FileCheck %s --check-prefix=DIFFRES < %t/out/opentitan-e2e-mode-diff-results.txt
+// RUN: FileCheck %s --check-prefix=DIFFMETRICS < %t/out/opentitan-e2e-mode-diff-metrics.tsv
 // RUN: FileCheck %s --check-prefix=CASES < %t/out/expected-failure-cases-summary.tsv
 
 // SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
 // SUM: opentitan{{[[:space:]]+}}E2E{{[[:space:]]+}}2{{[[:space:]]+}}2{{[[:space:]]+}}0
 // SUM: opentitan{{[[:space:]]+}}E2E_STRICT{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1
-// SUM: opentitan{{[[:space:]]+}}E2E_MODE_DIFF{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1
+// SUM: opentitan{{[[:space:]]+}}E2E_MODE_DIFF{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1{{.*}}same_status=1{{.*}}strict_only_fail=1
 // DIFFTSV: FAIL{{[[:space:]]+}}LEC:aes_sbox_canright{{[[:space:]]+}}strict_only_fail{{[[:space:]]+}}PASS{{[[:space:]]+}}FAIL
 // DIFFRES: FAIL{{[[:space:]]+}}LEC:aes_sbox_canright{{[[:space:]]+}}strict_only_fail;e2e=PASS;e2e_strict=FAIL{{[[:space:]]+}}opentitan{{[[:space:]]+}}E2E_MODE_DIFF
+// DIFFMETRICS: metric{{[[:space:]]+}}value
+// DIFFMETRICS: same_status{{[[:space:]]+}}1
+// DIFFMETRICS: strict_only_fail{{[[:space:]]+}}1
 // CASES: opentitan{{[[:space:]]+}}E2E_MODE_DIFF{{[[:space:]]+}}base{{[[:space:]]+}}LEC:aes_sbox_canright{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_mode_diff

@@ -89,6 +89,9 @@ utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opent
 When both lanes run, formal-all also emits a normalized mode-diff artifact:
 `<out-dir>/opentitan-e2e-mode-diff.tsv` and fail-like cases in
 `<out-dir>/opentitan-e2e-mode-diff-results.txt` (`mode=E2E_MODE_DIFF`).
+Classification counts are also exported to
+`<out-dir>/opentitan-e2e-mode-diff-metrics.tsv` and embedded in the
+`E2E_MODE_DIFF` summary string (`strict_only_fail`, `same_status`, etc.).
 
 ## Mutation Coverage Harness (Certitude-Style Classification)
 
@@ -451,6 +454,9 @@ lane_id    status    exit_code    coverage_percent    gate_status    lane_dir   
 
 Execution controls:
 - `--lane-jobs <N>`: run up to `N` lanes concurrently.
+- `--lane-schedule-policy fifo|cache-aware`: lane dispatch strategy.
+  `cache-aware` schedules one lane per generated-cache key before same-key
+  followers to reduce lock contention when `--reuse-cache-dir` is enabled.
 - `--jobs-per-lane <N>`: per-lane mutant worker count passed through to
   `run_mutation_cover.sh`.
 - `--default-reuse-pair-file <path>`: default

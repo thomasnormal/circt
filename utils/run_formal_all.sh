@@ -6498,9 +6498,8 @@ results_tsv="$OUT_DIR/summary.tsv"
 
 printf "suite\tmode\ttotal\tpass\tfail\txfail\txpass\terror\tskip\tsummary\n" >> "$results_tsv"
 
-record_result() {
-  local suite="$1" mode="$2" total="$3" pass="$4" fail="$5" xfail="$6" xpass="$7" error="$8" skip="$9"
-  local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+record_result_with_summary() {
+  local suite="$1" mode="$2" total="$3" pass="$4" fail="$5" xfail="$6" xpass="$7" error="$8" skip="$9" summary="${10}"
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
     "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary" >> "$results_tsv"
   if [[ -n "$LANE_STATE_TSV" ]]; then
@@ -6511,6 +6510,12 @@ record_result() {
       "$lane_id" "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$updated_at_utc" "$LANE_STATE_COMPAT_POLICY_VERSION" "$LANE_STATE_ACTIVE_CONFIG_HASH")" "current-run"
     lane_state_write_file
   fi
+}
+
+record_result() {
+  local suite="$1" mode="$2" total="$3" pass="$4" fail="$5" xfail="$6" xpass="$7" error="$8" skip="$9"
+  local summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+  record_result_with_summary "$suite" "$mode" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
 }
 
 record_simple_result() {
@@ -6973,12 +6978,14 @@ if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]]; th
   opentitan_e2e_strict_case_results="$OUT_DIR/opentitan-e2e-strict-results.txt"
   opentitan_e2e_mode_diff_tsv="$OUT_DIR/opentitan-e2e-mode-diff.tsv"
   opentitan_e2e_mode_diff_results="$OUT_DIR/opentitan-e2e-mode-diff-results.txt"
+  opentitan_e2e_mode_diff_metrics_tsv="$OUT_DIR/opentitan-e2e-mode-diff-metrics.tsv"
   if [[ -s "$opentitan_e2e_default_case_results" && -s "$opentitan_e2e_strict_case_results" ]]; then
     opentitan_e2e_mode_diff_counts="$(
       OPENTITAN_E2E_DEFAULT_CASE_RESULTS="$opentitan_e2e_default_case_results" \
       OPENTITAN_E2E_STRICT_CASE_RESULTS="$opentitan_e2e_strict_case_results" \
       OPENTITAN_E2E_MODE_DIFF_TSV="$opentitan_e2e_mode_diff_tsv" \
       OPENTITAN_E2E_MODE_DIFF_RESULTS="$opentitan_e2e_mode_diff_results" \
+      OPENTITAN_E2E_MODE_DIFF_METRICS_TSV="$opentitan_e2e_mode_diff_metrics_tsv" \
       python3 - <<'PY'
 import csv
 import os
@@ -6988,6 +6995,7 @@ default_path = Path(os.environ["OPENTITAN_E2E_DEFAULT_CASE_RESULTS"])
 strict_path = Path(os.environ["OPENTITAN_E2E_STRICT_CASE_RESULTS"])
 diff_tsv_path = Path(os.environ["OPENTITAN_E2E_MODE_DIFF_TSV"])
 diff_results_path = Path(os.environ["OPENTITAN_E2E_MODE_DIFF_RESULTS"])
+metrics_tsv_path = Path(os.environ["OPENTITAN_E2E_MODE_DIFF_METRICS_TSV"])
 
 
 def load_rows(path: Path):
@@ -7015,6 +7023,15 @@ def load_rows(path: Path):
 default_rows = load_rows(default_path)
 strict_rows = load_rows(strict_path)
 bases = sorted(set(default_rows.keys()) | set(strict_rows.keys()))
+classification_keys = [
+    "same_status",
+    "strict_only_fail",
+    "strict_only_pass",
+    "status_diff",
+    "missing_in_e2e",
+    "missing_in_e2e_strict",
+]
+classification_counts = {k: 0 for k in classification_keys}
 
 with diff_tsv_path.open("w", newline="") as f:
   writer = csv.writer(f, delimiter="\t")
@@ -7055,6 +7072,7 @@ with diff_tsv_path.open("w", newline="") as f:
     else:
       classification = "status_diff"
       status = "FAIL"
+    classification_counts[classification] += 1
     writer.writerow(
         [
             status,
@@ -7084,15 +7102,49 @@ with diff_results_path.open("w") as f:
       )
       f.write(f"FAIL\t{base}\t{detail}\topentitan\tE2E_MODE_DIFF\n")
 
-print(f"{len(bases)}\t{len(bases) - fail_count}\t{fail_count}")
+with metrics_tsv_path.open("w", newline="") as f:
+  writer = csv.writer(f, delimiter="\t")
+  writer.writerow(["metric", "value"])
+  writer.writerow(["total_cases", len(bases)])
+  writer.writerow(["pass_cases", len(bases) - fail_count])
+  writer.writerow(["fail_cases", fail_count])
+  for key in classification_keys:
+    writer.writerow([key, classification_counts[key]])
+
+print(
+    "\t".join(
+        [
+            str(len(bases)),
+            str(len(bases) - fail_count),
+            str(fail_count),
+            str(classification_counts["same_status"]),
+            str(classification_counts["strict_only_fail"]),
+            str(classification_counts["strict_only_pass"]),
+            str(classification_counts["status_diff"]),
+            str(classification_counts["missing_in_e2e"]),
+            str(classification_counts["missing_in_e2e_strict"]),
+        ]
+    )
+)
 PY
 )"
-    IFS=$'\t' read -r opentitan_e2e_mode_diff_total opentitan_e2e_mode_diff_pass opentitan_e2e_mode_diff_fail <<< "$opentitan_e2e_mode_diff_counts"
+    IFS=$'\t' read -r \
+      opentitan_e2e_mode_diff_total \
+      opentitan_e2e_mode_diff_pass \
+      opentitan_e2e_mode_diff_fail \
+      opentitan_e2e_mode_diff_same_status \
+      opentitan_e2e_mode_diff_strict_only_fail \
+      opentitan_e2e_mode_diff_strict_only_pass \
+      opentitan_e2e_mode_diff_status_diff \
+      opentitan_e2e_mode_diff_missing_in_e2e \
+      opentitan_e2e_mode_diff_missing_in_e2e_strict <<< "$opentitan_e2e_mode_diff_counts"
     if [[ -n "$opentitan_e2e_mode_diff_total" && -n "$opentitan_e2e_mode_diff_pass" && -n "$opentitan_e2e_mode_diff_fail" ]]; then
-      record_result "opentitan" "E2E_MODE_DIFF" \
+      opentitan_e2e_mode_diff_summary="total=${opentitan_e2e_mode_diff_total} pass=${opentitan_e2e_mode_diff_pass} fail=${opentitan_e2e_mode_diff_fail} xfail=0 xpass=0 error=0 skip=0 same_status=${opentitan_e2e_mode_diff_same_status:-0} strict_only_fail=${opentitan_e2e_mode_diff_strict_only_fail:-0} strict_only_pass=${opentitan_e2e_mode_diff_strict_only_pass:-0} status_diff=${opentitan_e2e_mode_diff_status_diff:-0} missing_in_e2e=${opentitan_e2e_mode_diff_missing_in_e2e:-0} missing_in_e2e_strict=${opentitan_e2e_mode_diff_missing_in_e2e_strict:-0}"
+      record_result_with_summary "opentitan" "E2E_MODE_DIFF" \
         "$opentitan_e2e_mode_diff_total" \
         "$opentitan_e2e_mode_diff_pass" \
-        "$opentitan_e2e_mode_diff_fail" 0 0 0 0
+        "$opentitan_e2e_mode_diff_fail" 0 0 0 0 \
+        "$opentitan_e2e_mode_diff_summary"
     fi
   fi
 fi
