@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: not env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --bmc-orig-cache-eviction-policy bogus > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: Invalid --bmc-orig-cache-eviction-policy value: bogus (expected lru|fifo|cost-lru).

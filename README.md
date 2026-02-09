@@ -252,6 +252,11 @@ Matrix default numeric/cache options now also fail fast natively:
 `--default-formal-global-propagate-bmc-ignore-asserts-until`,
 `--default-bmc-orig-cache-max-*`, and
 `--default-bmc-orig-cache-eviction-policy`.
+`circt-mut cover` now also fail-fast validates its corresponding formal
+numeric/cache controls (`--formal-global-propagate-*_timeout-seconds`,
+`--formal-global-propagate-bmc-bound`,
+`--formal-global-propagate-bmc-ignore-asserts-until`,
+`--bmc-orig-cache-max-*`, `--bmc-orig-cache-eviction-policy`).
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast

@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 819 - February 9, 2026
+
+### Native Validation for Cover Numeric/Cache Formal Controls
+
+1. Extended `circt-mut cover` native preflight to validate formal numeric/cache
+   controls before script dispatch:
+   - `--formal-global-propagate-timeout-seconds`
+   - `--formal-global-propagate-lec-timeout-seconds`
+   - `--formal-global-propagate-bmc-timeout-seconds`
+   - `--formal-global-propagate-bmc-bound`
+   - `--formal-global-propagate-bmc-ignore-asserts-until`
+   - `--bmc-orig-cache-max-entries`
+   - `--bmc-orig-cache-max-bytes`
+   - `--bmc-orig-cache-max-age-seconds`
+   - `--bmc-orig-cache-eviction-policy`
+2. This closes a cover-side parity gap where malformed numeric/cache values
+   previously failed only inside `run_mutation_cover.sh`.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-cover-global-timeout-invalid-native.test`
+  - `test/Tools/circt-mut-cover-bmc-bound-invalid-native.test`
+  - `test/Tools/circt-mut-cover-bmc-cache-eviction-invalid-native.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (80/80)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-lane-bool-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 818 - February 9, 2026
 
 ### Native Validation for Lane Boolean Formal Fields
