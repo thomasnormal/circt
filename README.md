@@ -234,6 +234,8 @@ Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
 if unresolved.
+`circt-mut cover` also pre-resolves `--mutations-yosys`, and native
+`circt-mut generate` now fail-fast resolves `--yosys` before execution.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified

@@ -283,6 +283,8 @@ Execution controls:
     including bare `auto` forms, before script dispatch.
   - explicit built-in Z3 options are pre-resolved natively:
     `--formal-global-propagate-z3`, `--formal-global-propagate-bmc-z3`.
+  - mutation-generation tool option `--mutations-yosys` is now pre-resolved
+    natively for fast-fail diagnostics before dispatch.
   - native preflight now validates chain-mode values, injects missing built-in
     LEC/BMC tools for `--formal-global-propagate-circt-chain`, and rejects
     conflicting non-chain global-filter mode combinations before dispatch.
@@ -298,6 +300,9 @@ Execution controls:
     `--default-formal-global-propagate-bmc-z3`.
   - chain mode auto-injects default built-in LEC/BMC tools when omitted, and
     conflicting non-chain default global-filter modes are rejected early.
+- `circt-mut generate` migration note:
+  - native generate now fail-fast resolves `--yosys` executable before
+    execution and cache-key generation.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache

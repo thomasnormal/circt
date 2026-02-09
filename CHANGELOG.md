@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 813 - February 9, 2026
+
+### Native Yosys Tool Resolution for Mutation Generation Paths
+
+1. Extended native `circt-mut` preprocessing to resolve mutation-generation
+   Yosys executables before script dispatch/execution:
+   - cover preflight now resolves `--mutations-yosys`
+   - native generate now resolves `--yosys` at startup (fail-fast on missing).
+2. This improves mutation-generation UX and reliability:
+   - immediate diagnostics for missing toolchains
+   - normalized executable paths used earlier in the workflow
+   - avoids deferred shell-script failures later in a campaign.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-cover-mutations-yosys-rewrite.test`
+  - `test/Tools/circt-mut-cover-mutations-yosys-missing.test`
+  - `test/Tools/circt-mut-generate-yosys-missing.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (64/64)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (116/116)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-yosys-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 812 - February 9, 2026
 
 ### Native Z3 Preflight Resolution for `circt-mut` Cover/Matrix
