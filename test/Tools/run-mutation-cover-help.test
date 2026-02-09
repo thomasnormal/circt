@@ -17,3 +17,4 @@
 // CHECK: --generate-mutations
 // CHECK: --mutations-modes
 // CHECK: --mutations-yosys
+// CHECK: --formal-global-propagate-cmd
