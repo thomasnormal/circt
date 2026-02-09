@@ -1,12 +1,12 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \"\([^\"]*\)\".*/\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \([^ ]*\).*/\1/p" "$script" | tail -n1)\nif [[ "$mode" == "arith" ]]; then\n  echo "100 M_ARITH_A" > "$out"\n  echo "101 M_ARITH_B" >> "$out"\nelif [[ "$mode" == "control" ]]; then\n  echo "200 M_CTRL_A" > "$out"\n  echo "201 M_CTRL_B" >> "$out"\nelse\n  echo "300 M_DEFAULT" > "$out"\nfi\n' > %t/fake-yosys.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" "$script" | tail -n1)\nif [[ "$mode" == "inv" ]]; then\n  echo "100 M_INV" > "$out"\nelif [[ "$mode" == "const0" ]]; then\n  echo "101 M_CONST0" > "$out"\nelif [[ "$mode" == "cnot0" ]]; then\n  echo "200 M_CNOT0" > "$out"\nelif [[ "$mode" == "cnot1" ]]; then\n  echo "201 M_CNOT1" > "$out"\nelse\n  echo "300 M_DEFAULT" > "$out"\nfi\n' > %t/fake-yosys.sh
 // RUN: chmod +x %t/fake-yosys.sh
 
 // RUN: %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 4 --seed 7 --modes arith,control --yosys %t/fake-yosys.sh
 // RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
 
-// OUT: 1 M_ARITH_A
-// OUT: 2 M_ARITH_B
-// OUT: 3 M_CTRL_A
-// OUT: 4 M_CTRL_B
+// OUT: 1 M_INV
+// OUT: 2 M_CONST0
+// OUT: 3 M_CNOT0
+// OUT: 4 M_CNOT1

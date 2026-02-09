@@ -22,6 +22,8 @@ Optional:
                             Default --reuse-summary-file for lanes that do not set reuse_summary_file
   --default-mutations-modes CSV
                             Default --mutations-modes for generated-mutation lanes
+                            (concrete: inv,const0,const1,cnot0,cnot1;
+                            families: arith,control,balanced,all)
   --default-mutations-mode-counts CSV
                             Default --mutations-mode-counts for generated-mutation lanes
   --default-mutations-profiles CSV

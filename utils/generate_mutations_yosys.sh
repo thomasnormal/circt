@@ -16,6 +16,8 @@ Optional:
   --seed N                  Random seed for mutate (default: 1)
   --yosys PATH              Yosys executable (default: yosys)
   --mode NAME               Mutate mode (repeatable)
+                            Concrete: inv,const0,const1,cnot0,cnot1
+                            Families: arith,control,balanced,all
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
   --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)
   --mode-counts CSV         Comma-separated NAME=COUNT mode allocations
@@ -141,6 +143,24 @@ fi
 declare -a PROFILE_MODE_LIST=()
 declare -a PROFILE_CFG_LIST=()
 declare -a PROFILE_SELECT_LIST=()
+
+mode_family_targets() {
+  local mode_name="$1"
+  case "$mode_name" in
+    arith)
+      printf "%s\n" "inv" "const0" "const1"
+      ;;
+    control)
+      printf "%s\n" "cnot0" "cnot1"
+      ;;
+    balanced|all)
+      printf "%s\n" "inv" "const0" "const1" "cnot0" "cnot1"
+      ;;
+    *)
+      printf "%s\n" "$mode_name"
+      ;;
+  esac
+}
 
 append_profile() {
   local profile_name="$1"
@@ -323,6 +343,8 @@ if [[ "$mode_counts_enabled" -eq 0 ]]; then
 fi
 
 declare -a MODE_OUT_FILES
+declare -a MODE_TARGET_LIST=()
+declare -a MODE_TARGET_COUNTS=()
 
 for idx in "${!MODE_LIST[@]}"; do
   mode="${MODE_LIST[$idx]}"
@@ -339,6 +361,25 @@ for idx in "${!MODE_LIST[@]}"; do
   fi
   [[ "$list_count" -le 0 ]] && continue
 
+  mapfile -t family_targets < <(mode_family_targets "$mode")
+  family_count="${#family_targets[@]}"
+  family_base=$((list_count / family_count))
+  family_extra=$((list_count % family_count))
+  for family_idx in "${!family_targets[@]}"; do
+    family_mode="${family_targets[$family_idx]}"
+    family_list_count="$family_base"
+    if [[ "$family_idx" -lt "$family_extra" ]]; then
+      family_list_count=$((family_list_count + 1))
+    fi
+    [[ "$family_list_count" -le 0 ]] && continue
+    MODE_TARGET_LIST+=("$family_mode")
+    MODE_TARGET_COUNTS+=("$family_list_count")
+  done
+done
+
+for idx in "${!MODE_TARGET_LIST[@]}"; do
+  mode="${MODE_TARGET_LIST[$idx]}"
+  list_count="${MODE_TARGET_COUNTS[$idx]}"
   script_file="${WORK_DIR}/mutate.${idx}.ys"
   log_file="${WORK_DIR}/mutate.${idx}.log"
   sources_file="${WORK_DIR}/sources.${idx}.txt"
