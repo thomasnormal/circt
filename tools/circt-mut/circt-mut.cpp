@@ -974,6 +974,61 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     }
   }
 
+  auto validateDefaultRegex = [&](StringRef value, const Regex &pattern,
+                                  StringRef flag, StringRef expected) -> bool {
+    if (value.empty())
+      return true;
+    if (pattern.match(value))
+      return true;
+    result.error = (Twine("Invalid ") + flag + " value: " + value +
+                    " (expected " + expected + ").")
+                       .str();
+    return false;
+  };
+  if (!validateDefaultRegex(defaults.globalFilterTimeoutSeconds,
+                            Regex("^[0-9]+$"),
+                            "--default-formal-global-propagate-timeout-seconds",
+                            "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(
+          defaults.globalFilterLECTimeoutSeconds, Regex("^[0-9]+$"),
+          "--default-formal-global-propagate-lec-timeout-seconds",
+          "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(
+          defaults.globalFilterBMCTimeoutSeconds, Regex("^[0-9]+$"),
+          "--default-formal-global-propagate-bmc-timeout-seconds",
+          "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(defaults.globalFilterBMCBound,
+                            Regex("^[1-9][0-9]*$"),
+                            "--default-formal-global-propagate-bmc-bound",
+                            "positive integer"))
+    return result;
+  if (!validateDefaultRegex(
+          defaults.globalFilterBMCIgnoreAssertsUntil, Regex("^[0-9]+$"),
+          "--default-formal-global-propagate-bmc-ignore-asserts-until",
+          "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(defaults.bmcOrigCacheMaxEntries, Regex("^[0-9]+$"),
+                            "--default-bmc-orig-cache-max-entries",
+                            "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(defaults.bmcOrigCacheMaxBytes, Regex("^[0-9]+$"),
+                            "--default-bmc-orig-cache-max-bytes",
+                            "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(defaults.bmcOrigCacheMaxAgeSeconds,
+                            Regex("^[0-9]+$"),
+                            "--default-bmc-orig-cache-max-age-seconds",
+                            "0-9 integer"))
+    return result;
+  if (!validateDefaultRegex(defaults.bmcOrigCacheEvictionPolicy,
+                            Regex("^(lru|fifo|cost-lru)$"),
+                            "--default-bmc-orig-cache-eviction-policy",
+                            "lru|fifo|cost-lru"))
+    return result;
+
   if (!lanesTSVPath.empty() &&
       !preflightMatrixLaneTools(argv0, lanesTSVPath, defaults, result.error))
     return result;

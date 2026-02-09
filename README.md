@@ -242,6 +242,12 @@ Lane timeout/cache/gate override fields now also get native validation
 (`global_propagate_*_timeout_seconds`, `global_propagate_bmc_bound`,
 `global_propagate_bmc_ignore_asserts_until`, BMC orig-cache limits/policy, and
 `skip_baseline`/`fail_on_undetected`/`fail_on_errors`).
+Matrix default numeric/cache options now also fail fast natively:
+`--default-formal-global-propagate-*_timeout-seconds`,
+`--default-formal-global-propagate-bmc-bound`,
+`--default-formal-global-propagate-bmc-ignore-asserts-until`,
+`--default-bmc-orig-cache-max-*`, and
+`--default-bmc-orig-cache-eviction-policy`.
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast

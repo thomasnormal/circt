@@ -312,6 +312,16 @@ Execution controls:
     `bmc_orig_cache_max_entries`, `bmc_orig_cache_max_bytes`,
     `bmc_orig_cache_max_age_seconds`, `bmc_orig_cache_eviction_policy`,
     `skip_baseline`, `fail_on_undetected`, `fail_on_errors`.
+  - matrix default numeric/cache controls are also validated natively:
+    `--default-formal-global-propagate-timeout-seconds`,
+    `--default-formal-global-propagate-lec-timeout-seconds`,
+    `--default-formal-global-propagate-bmc-timeout-seconds`,
+    `--default-formal-global-propagate-bmc-bound`,
+    `--default-formal-global-propagate-bmc-ignore-asserts-until`,
+    `--default-bmc-orig-cache-max-entries`,
+    `--default-bmc-orig-cache-max-bytes`,
+    `--default-bmc-orig-cache-max-age-seconds`,
+    `--default-bmc-orig-cache-eviction-policy`.
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.
