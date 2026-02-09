@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -20,6 +20,8 @@ Optional:
                             Default --reuse-pair-file for lanes that do not set reuse_pair_file
   --default-reuse-summary-file FILE
                             Default --reuse-summary-file for lanes that do not set reuse_summary_file
+  --default-mutations-modes CSV
+                            Default --mutations-modes for generated-mutation lanes
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
@@ -42,6 +44,7 @@ CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
+DEFAULT_MUTATIONS_MODES=""
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
@@ -56,6 +59,7 @@ while [[ $# -gt 0 ]]; do
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
+    --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
@@ -119,6 +123,7 @@ declare -a MUTATIONS_SEED
 declare -a MUTATIONS_YOSYS
 declare -a REUSE_PAIR_FILE
 declare -a REUSE_SUMMARY_FILE
+declare -a MUTATIONS_MODES
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -127,7 +132,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -147,6 +152,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   MUTATIONS_YOSYS+=("${mutations_yosys:--}")
   REUSE_PAIR_FILE+=("${reuse_pair_file:--}")
   REUSE_SUMMARY_FILE+=("${reuse_summary_file:--}")
+  MUTATIONS_MODES+=("${mutations_modes:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -168,6 +174,7 @@ run_lane() {
   local rc=1
   local lane_reuse_pair_file=""
   local lane_reuse_summary_file=""
+  local lane_mutations_modes=""
 
   mkdir -p "$lane_dir"
 
@@ -225,6 +232,10 @@ run_lane() {
   fi
 
   if [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
+    lane_mutations_modes="${MUTATIONS_MODES[$i]}"
+    if [[ "$lane_mutations_modes" == "-" || -z "$lane_mutations_modes" ]]; then
+      lane_mutations_modes="$DEFAULT_MUTATIONS_MODES"
+    fi
     if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
       cmd+=(--mutations-top "${MUTATIONS_TOP[$i]}")
     fi
@@ -233,6 +244,9 @@ run_lane() {
     fi
     if [[ "${MUTATIONS_YOSYS[$i]}" != "-" && -n "${MUTATIONS_YOSYS[$i]}" ]]; then
       cmd+=(--mutations-yosys "${MUTATIONS_YOSYS[$i]}")
+    fi
+    if [[ -n "$lane_mutations_modes" ]]; then
+      cmd+=(--mutations-modes "$lane_mutations_modes")
     fi
   fi
 

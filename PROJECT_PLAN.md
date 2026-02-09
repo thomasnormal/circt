@@ -91,8 +91,9 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Reuse compatibility manifests and policy | **DONE** | 0 | Added sidecar compat hash manifests + `--reuse-compat-mode` guards |
 | - Content-addressed reuse cache | **DONE** | 0 | Added `--reuse-cache-dir` + cache read/read-write modes keyed by compat hash |
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
+| - Multi-mode mutation mix generation | **DONE** | 0 | Added `--mutations-modes` / `--modes` to combine arithmetic/control mutation modes deterministically |
 | - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
-| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, and reuse-compat policy pass-through; full external-suite wiring still pending |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, and generated-lane mode-mix controls; full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |

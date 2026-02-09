@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 737 - February 9, 2026
+
+### Multi-Mode Mutation Mix Generation
+
+- Extended `utils/generate_mutations_yosys.sh` with multi-mode generation:
+  - `--mode <name>` (repeatable)
+  - `--modes <csv>`
+- New generation behavior:
+  - splits requested mutation count across selected modes
+  - runs mode-specific `yosys mutate -list` invocations
+  - merges and de-duplicates mutations by mutation-spec
+  - rewrites output IDs to deterministic sequential IDs (`1..N`)
+
+### Cover and Matrix Integration
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--mutations-modes <csv>`
+    - pass-through to `generate_mutations_yosys.sh --modes`.
+- Extended `utils/run_mutation_matrix.sh` with generated-lane mode controls:
+  - lane TSV optional column: `mutations_modes`
+  - `--default-mutations-modes <csv>` for generated lanes without
+    lane-specific mode overrides.
+
+### Tests and Docs Updates
+
+- Added lit regressions:
+  - `test/Tools/run-mutation-generate-modes.test`
+  - `test/Tools/run-mutation-cover-generate-modes.test`
+  - `test/Tools/run-mutation-matrix-generate-modes.test`
+- Updated:
+  - `test/Tools/run-mutation-generate-help.test`
+    - checks `--mode` and `--modes`
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--mutations-modes`
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-mutations-modes`
+  - `docs/FormalRegression.md`
+    - documented mode-mix controls for cover and matrix flows
+  - `PROJECT_PLAN.md`
+    - marked multi-mode mutation mix generation as done.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - generator mode-mix run (`arith,control`) emits deterministic merged list:
+    PASS
+  - `run_mutation_cover.sh --generate-mutations ... --mutations-modes` path:
+    PASS
+  - matrix generated lane with `mutations_modes` override: PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-modes --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 736 - February 9, 2026
 
 ### Content-Addressed Mutation Reuse Cache
