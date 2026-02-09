@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 716 - February 9, 2026
+
+### Refresh-Policy Manifest Signer Cert Anchoring
+
+- Extended refresh-policy profile-manifest signer keyring mode in
+  `utils/run_formal_all.sh` with signer-certificate-aware rows:
+  - row format now supports optional trailing fields:
+    - `cert_file_path`
+    - `cert_sha256`
+- Added new CLI option:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file`
+- New validation and trust behavior in signer keyring mode:
+  - optional keyring-row `cert_sha256` must be 64 hex chars
+  - `cert_sha256` requires `cert_file_path`
+  - signer cert public key must match signer keyring public key
+  - optional cert SHA pin is enforced
+  - when keyring CA file is configured:
+    - selected signer row must include `cert_file_path`
+    - signer cert must verify via `openssl verify -CAfile`.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material with:
+  - refresh-policy signer keyring CA file path
+  - resolved signer keyring CA SHA256
+  - resolved signer cert SHA256
+- This prevents silent trust-anchor or signer-cert drift across resume/merge.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: `--...manifest-keyring-ca-file` requires keyring TSV mode
+    - positive: profile-manifest signer keyring with cert+cert-sha and CA
+      anchoring
+    - negative: CA anchoring with signer row missing `cert_file_path`
+    - fixed fixture formatting bug where `%s` in `RUN:` was interpreted by `lit`
+      substitution and corrupted SHA columns
+  - `docs/FormalRegression.md`
+    - documented new keyring row format with optional cert fields
+    - documented `--...manifest-keyring-ca-file` semantics and constraints.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-keyring-cert-sweep-20260209-052516 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - PASS
+    - summary:
+      - sv-tests BMC/LEC: 1/1 PASS each
+      - verilator-verification BMC/LEC: 1/1 PASS each
+      - yosys/tests/sva BMC/LEC: 1/1 PASS each
+      - OpenTitan LEC: 1/1 PASS
+      - AVIP compile lanes: 9/9 PASS
+
 ## Iteration 715 - February 9, 2026
 
 ### Refresh-Policy Manifest Signer Keyring Mode
