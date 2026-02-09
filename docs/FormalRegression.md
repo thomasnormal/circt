@@ -140,6 +140,9 @@ Lane-state semantics:
   - URI mode requires `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
   - URI mode is mutually exclusive with
     `--lane-state-manifest-ed25519-crl-refresh-cmd`.
+  - For `https://` URIs, metadata now attempts to capture the full observed peer
+    certificate chain as `cert_chain_sha256` (leaf-first when available), while
+    preserving `tls_peer_sha256` compatibility.
 - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp` resolves
   the CRL refresh URI from the selected key certificate
   `CRL Distribution Points` extension (keyring mode).
@@ -273,6 +276,7 @@ Lane-state semantics:
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256`
+    - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-length-min`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs`
 - CRL mode enforces freshness from CRL `nextUpdate`; stale CRLs are rejected
@@ -287,6 +291,9 @@ Lane-state semantics:
   - URI mode requires `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
   - URI mode is mutually exclusive with
     `--lane-state-manifest-ed25519-ocsp-refresh-cmd`.
+  - For `https://` URIs, metadata now attempts to capture the full observed peer
+    certificate chain as `cert_chain_sha256` (leaf-first when available), while
+    preserving `tls_peer_sha256` compatibility.
 - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia` resolves
   the OCSP refresh URI from the selected key certificate
   `Authority Information Access` extension (keyring mode).
@@ -319,6 +326,7 @@ Lane-state semantics:
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-length-min`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs`
 - Refresh hooks receive
