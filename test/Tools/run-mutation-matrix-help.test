@@ -8,6 +8,7 @@
 // CHECK: --default-reuse-summary-file
 // CHECK: --default-mutations-modes
 // CHECK: --default-formal-global-propagate-cmd
+// CHECK: --default-formal-global-propagate-circt-lec
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs

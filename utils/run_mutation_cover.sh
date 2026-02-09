@@ -38,6 +38,24 @@ Optional:
   --formal-global-propagate-cmd CMD
                              Optional per-mutant propagation filter cmd run once
                              before per-test qualification/detection
+  --formal-global-propagate-circt-lec PATH
+                             Use circt-lec as built-in per-mutant global
+                             propagation filter (mutually exclusive with
+                             --formal-global-propagate-cmd)
+  --formal-global-propagate-circt-lec-args ARGS
+                             Extra args passed to circt-lec global filter
+  --formal-global-propagate-c1 NAME
+                             circt-lec -c1 module name (default: top)
+  --formal-global-propagate-c2 NAME
+                             circt-lec -c2 module name (default: top)
+  --formal-global-propagate-z3 PATH
+                             Optional z3 path passed to circt-lec --z3-path
+  --formal-global-propagate-assume-known-inputs
+                             Pass --assume-known-inputs to circt-lec global
+                             propagation filter
+  --formal-global-propagate-accept-xprop-only
+                             Pass --accept-xprop-only to circt-lec global
+                             propagation filter
   --mutation-limit N         Process first N mutations (default: all)
   --mutations-top NAME       Top module name when auto-generating mutations
   --mutations-modes CSV      Comma-separated mutate modes for auto-generation
@@ -89,6 +107,15 @@ MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
 FORMAL_GLOBAL_PROPAGATE_CMD=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS=""
+FORMAL_GLOBAL_PROPAGATE_C1="top"
+FORMAL_GLOBAL_PROPAGATE_C2="top"
+FORMAL_GLOBAL_PROPAGATE_Z3=""
+FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=0
+FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=0
+FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED=""
+FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED=""
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -125,6 +152,13 @@ while [[ $# -gt 0 ]]; do
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --formal-global-propagate-cmd) FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
+    --formal-global-propagate-circt-lec) FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
+    --formal-global-propagate-circt-lec-args) FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS="$2"; shift 2 ;;
+    --formal-global-propagate-c1) FORMAL_GLOBAL_PROPAGATE_C1="$2"; shift 2 ;;
+    --formal-global-propagate-c2) FORMAL_GLOBAL_PROPAGATE_C2="$2"; shift 2 ;;
+    --formal-global-propagate-z3) FORMAL_GLOBAL_PROPAGATE_Z3="$2"; shift 2 ;;
+    --formal-global-propagate-assume-known-inputs) FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --formal-global-propagate-accept-xprop-only) FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=1; shift ;;
     --mutation-limit) MUTATION_LIMIT="$2"; shift 2 ;;
     --generate-mutations) GENERATE_MUTATIONS="$2"; shift 2 ;;
     --mutations-top) MUTATIONS_TOP="$2"; shift 2 ;;
@@ -214,6 +248,41 @@ if [[ -z "$MUTATIONS_FILE" && "$GENERATE_MUTATIONS" -eq 0 ]]; then
   echo "Provide one mutation source: --mutations-file or --generate-mutations." >&2
   exit 1
 fi
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" && -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
+  echo "Use either --formal-global-propagate-cmd or --formal-global-propagate-circt-lec, not both." >&2
+  exit 1
+fi
+
+resolve_tool_path() {
+  local tool="$1"
+  local resolved=""
+  if [[ "$tool" == */* ]]; then
+    if [[ -x "$tool" ]]; then
+      printf "%s\n" "$tool"
+      return 0
+    fi
+    return 1
+  fi
+  resolved="$(command -v "$tool" 2>/dev/null || true)"
+  if [[ -n "$resolved" ]]; then
+    printf "%s\n" "$resolved"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
+  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC")"; then
+    echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3" ]]; then
+  if ! FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_Z3")"; then
+    echo "Unable to resolve --formal-global-propagate-z3 executable: $FORMAL_GLOBAL_PROPAGATE_Z3" >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$WORK_DIR/mutations"
 SUMMARY_FILE="${SUMMARY_FILE:-${WORK_DIR}/summary.tsv}"
@@ -269,6 +338,9 @@ CREATE_MUTATED_SCRIPT_HASH=""
 FORMAL_ACTIVATE_CMD_HASH=""
 FORMAL_PROPAGATE_CMD_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CMD_HASH=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH=""
+FORMAL_GLOBAL_PROPAGATE_Z3_HASH=""
 REUSE_COMPAT_SCHEMA_VERSION=1
 REUSE_CACHE_ENTRY_DIR=""
 REUSE_PAIR_SOURCE="none"
@@ -451,6 +523,9 @@ build_reuse_compat_hash() {
   FORMAL_ACTIVATE_CMD_HASH="$(hash_string "$FORMAL_ACTIVATE_CMD")"
   FORMAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_PROPAGATE_CMD")"
   FORMAL_GLOBAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CMD")"
+  FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED")"
+  FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS")"
+  FORMAL_GLOBAL_PROPAGATE_Z3_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED")"
 
   MUTATIONS_SET_HASH="$(
     for i in "${!MUTATION_IDS[@]}"; do
@@ -469,6 +544,13 @@ create_mutated_script_hash=${CREATE_MUTATED_SCRIPT_HASH}
 formal_activate_cmd_hash=${FORMAL_ACTIVATE_CMD_HASH}
 formal_propagate_cmd_hash=${FORMAL_PROPAGATE_CMD_HASH}
 formal_global_propagate_cmd_hash=${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}
+formal_global_propagate_circt_lec_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}
+formal_global_propagate_circt_lec_args_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}
+formal_global_propagate_z3_hash=${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}
+formal_global_propagate_c1=${FORMAL_GLOBAL_PROPAGATE_C1}
+formal_global_propagate_c2=${FORMAL_GLOBAL_PROPAGATE_C2}
+formal_global_propagate_assume_known_inputs=${FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS}
+formal_global_propagate_accept_xprop_only=${FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY}
 EOF
   )"
   REUSE_COMPAT_HASH="$(hash_string "$compat_payload")"
@@ -548,7 +630,14 @@ write_reuse_manifest() {
   "create_mutated_script_sha256": "${CREATE_MUTATED_SCRIPT_HASH}",
   "formal_activate_cmd_sha256": "${FORMAL_ACTIVATE_CMD_HASH}",
   "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}",
-  "formal_global_propagate_cmd_sha256": "${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}"
+  "formal_global_propagate_cmd_sha256": "${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}",
+  "formal_global_propagate_circt_lec_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}",
+  "formal_global_propagate_circt_lec_args_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}",
+  "formal_global_propagate_z3_sha256": "${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}",
+  "formal_global_propagate_c1": "$(json_escape "$FORMAL_GLOBAL_PROPAGATE_C1")",
+  "formal_global_propagate_c2": "$(json_escape "$FORMAL_GLOBAL_PROPAGATE_C2")",
+  "formal_global_propagate_assume_known_inputs": ${FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS},
+  "formal_global_propagate_accept_xprop_only": ${FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY}
 }
 EOF
 }
@@ -625,6 +714,21 @@ run_command() {
   return "$exit_code"
 }
 
+run_command_argv() {
+  local run_dir="$1"
+  local log_file="$2"
+  shift 2
+  local exit_code=0
+  set +e
+  (
+    cd "$run_dir"
+    "$@"
+  ) >"$log_file" 2>&1
+  exit_code=$?
+  set -e
+  return "$exit_code"
+}
+
 classify_activate() {
   local run_dir="$1"
   local log_file="$2"
@@ -686,6 +790,50 @@ classify_propagate_cmd() {
 
 classify_propagate() {
   classify_propagate_cmd "$1" "$2" "$FORMAL_PROPAGATE_CMD"
+}
+
+classify_global_propagate_circt_lec() {
+  local run_dir="$1"
+  local log_file="$2"
+  local rc=0
+  local -a lec_cmd
+  local -a extra_args
+
+  if [[ -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" ]]; then
+    printf "propagated\t-1\n"
+    return
+  fi
+
+  lec_cmd=("$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" "--run-smtlib")
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED" ]]; then
+    lec_cmd+=("--z3-path=$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED")
+  fi
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS" -eq 1 ]]; then
+    lec_cmd+=("--assume-known-inputs")
+  fi
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY" -eq 1 ]]; then
+    lec_cmd+=("--accept-xprop-only")
+  fi
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS" ]]; then
+    read -r -a extra_args <<< "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS"
+    lec_cmd+=("${extra_args[@]}")
+  fi
+  lec_cmd+=("-c1=$FORMAL_GLOBAL_PROPAGATE_C1" "-c2=$FORMAL_GLOBAL_PROPAGATE_C2" "$ORIG_DESIGN" "$MUTANT_DESIGN")
+
+  rc=0
+  if ! run_command_argv "$run_dir" "$log_file" "${lec_cmd[@]}"; then
+    rc=$?
+  fi
+
+  if grep -Eq 'LEC_RESULT=EQ' "$log_file"; then
+    printf "not_propagated\t%s\n" "$rc"
+    return
+  fi
+  if grep -Eq 'LEC_RESULT=NEQ' "$log_file"; then
+    printf "propagated\t%s\n" "$rc"
+    return
+  fi
+  printf "error\t%s\n" "$rc"
 }
 
 run_test_and_classify() {
@@ -783,6 +931,7 @@ process_mutation() {
       printf "reused_pairs\t0\n"
       printf "hinted_mutant\t0\n"
       printf "hint_hit\t0\n"
+      printf "global_filtered_not_propagated\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -794,8 +943,12 @@ process_mutation() {
   export MUTATION_SPEC="$mutation_spec"
   export MUTATION_WORKDIR="$mutation_dir"
 
-  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" ]]; then
+    read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_lec "$mutation_dir" "$mutation_dir/global_propagate.log")
+  elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
     read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
+  fi
+  if [[ -n "$global_filter_state" ]]; then
     case "$global_filter_state" in
       not_propagated)
         global_filtered_not_propagated=1
