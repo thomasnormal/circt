@@ -39591,3 +39591,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 739 - February 9, 2026
+
+### Deterministic OpenTitan LEC Artifact Paths
+
+1. `utils/run_formal_all.sh` OpenTitan LEC lanes now run with deterministic
+   workdirs:
+   - default lane: `--workdir <out-dir>/opentitan-lec-work`
+   - strict lane: `--workdir <out-dir>/opentitan-lec-strict-work`
+2. `utils/run_opentitan_formal_e2e.sh` now runs LEC with deterministic
+   workdir:
+   - `--workdir <out-dir>/lec-workdir`
+   - cleans prior workdir before each run to avoid stale-artifact ambiguity.
+3. This removes temp-dir noise from case artifacts and makes expected-failure
+   case tracking and triage stable across reruns.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-lec.test`
+    - verifies default OpenTitan LEC lane passes deterministic workdir.
+- Updated:
+  - `test/Tools/run-formal-all-opentitan-lec-strict.test`
+    - verifies strict OpenTitan LEC lane passes deterministic strict workdir.
+  - `test/Tools/run-opentitan-formal-e2e.test`
+    - verifies OpenTitan E2E LEC invocation passes deterministic workdir.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+  - `bash -n utils/run_opentitan_formal_e2e.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-formal-e2e.test test/Tools/run-opentitan-formal-e2e-lec-modes.test test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec.test`:
+    - 5/5 PASS
+- OpenTitan lane checks:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-workdir-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$'`:
+    - summary: `total=1 pass=1 fail=0`
+    - case artifact: `/tmp/formal-all-opentitan-lec-workdir-followup/opentitan-lec-work/aes_sbox_canright`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-workdir-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
+    - case artifact: `/tmp/formal-all-opentitan-lec-strict-workdir-followup/opentitan-lec-strict-work/aes_sbox_canright#XPROP_ONLY`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-workdir-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+    - LEC case artifact: `/tmp/formal-all-opentitan-e2e-workdir-followup/opentitan-formal-e2e/lec-workdir/aes_sbox_canright`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
