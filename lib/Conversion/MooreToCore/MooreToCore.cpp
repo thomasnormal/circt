@@ -21932,7 +21932,16 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
     DenseMap<StringRef, BoundInfo> varBounds;
 
     // Helper: extract property name from read(class.property_ref(@prop))
+    // Helper: extract property name, looking through zext/sext/trunc which
+    // slang inserts when widening narrow types to i32 before comparison.
     auto getPropertyName = [](Value v) -> StringRef {
+      // Look through zext/sext/trunc
+      if (auto zextOp = v.getDefiningOp<ZExtOp>())
+        v = zextOp.getInput();
+      else if (auto sextOp = v.getDefiningOp<SExtOp>())
+        v = sextOp.getInput();
+      else if (auto truncOp = v.getDefiningOp<TruncOp>())
+        v = truncOp.getInput();
       if (auto readOp = v.getDefiningOp<ReadOp>())
         if (auto propRef =
                 readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
@@ -21951,22 +21960,13 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
       return std::nullopt;
     };
 
-    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
-      auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
-      if (!exprOp)
-        continue;
-
-      Value cond = exprOp.getCondition();
-      Operation *defOp = cond.getDefiningOp();
-      if (!defOp)
-        continue;
-
-      bool isSoft = exprOp.getIsSoft();
-
-      // Try to match: sge/sle/sgt/slt/uge/ule/ugt/ult/eq(read(prop), const)
-      // or the reversed operand order.
-      if (defOp->getNumOperands() != 2)
-        continue;
+    // Helper: try to extract range bounds from a single comparison op.
+    // Returns true if the op was matched and bounds were updated.
+    auto tryExtractComparisonBounds =
+        [&](Operation *defOp,
+            bool isSoft) -> bool {
+      if (!defOp || defOp->getNumOperands() != 2)
+        return false;
       Value lhs = defOp->getOperand(0);
       Value rhs = defOp->getOperand(1);
 
@@ -21979,14 +21979,13 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         varOnLhs = false;
       }
       if (propName.empty() || !constVal)
-        continue;
+        return false;
 
       auto &bounds = varBounds[propName];
       bounds.propName = propName;
       bounds.isSoft = isSoft;
 
       int64_t cv = *constVal;
-      // x >= const or const <= x
       if (isa<SgeOp>(defOp)) {
         bounds.isSigned = true;
         if (varOnLhs) {
@@ -22050,7 +22049,40 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
       } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
         bounds.lower = cv;
         bounds.upper = cv;
+      } else {
+        return false;
       }
+      return true;
+    };
+
+    for (auto &constraintOp : constraintBlock.getBody().getOps()) {
+      auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
+      if (!exprOp)
+        continue;
+
+      Value cond = exprOp.getCondition();
+      Operation *defOp = cond.getDefiningOp();
+      if (!defOp)
+        continue;
+
+      bool isSoft = exprOp.getIsSoft();
+
+      // Try to decompose and(cmp1, cmp2) compound constraints.
+      // Slang compiles `inside {[a:b]}` into `and(uge(x, a), ule(x, b))`.
+      if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+        Operation *lhsOp = defOp->getOperand(0).getDefiningOp();
+        Operation *rhsOp = defOp->getOperand(1).getDefiningOp();
+        if (lhsOp && rhsOp) {
+          bool matched = tryExtractComparisonBounds(lhsOp, isSoft);
+          matched |= tryExtractComparisonBounds(rhsOp, isSoft);
+          if (matched)
+            continue;
+        }
+      }
+
+      // Try direct comparison match.
+      if (tryExtractComparisonBounds(defOp, isSoft))
+        continue;
     }
 
     // Also look for set membership patterns: or(eq(prop, c1), eq(prop, c2))
@@ -22185,6 +22217,13 @@ extractPredicate(Value condition) {
     return {"", std::nullopt};
 
   auto getPropertyName = [](Value v) -> StringRef {
+    // Look through zext/sext/trunc
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
     if (auto readOp = v.getDefiningOp<ReadOp>())
       if (auto propRef = readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
         return propRef.getProperty();
@@ -23259,6 +23298,36 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       softConstraints = extractSoftConstraints(classDecl, cache, classSym);
       distConstraints = extractDistConstraints(classDecl, cache, classSym);
       solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
+
+      // Walk parent class hierarchy to inherit constraints (IEEE 1800-2017
+      // §18.5.2). Child class constraints are already collected above;
+      // now collect from each ancestor class.
+      {
+        ClassDeclOp parentDecl = classDecl;
+        while (auto baseAttr = parentDecl.getBaseAttr()) {
+          ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+          auto *baseSym = mod.lookupSymbol(baseAttr);
+          if (!baseSym)
+            break;
+          auto baseClassDecl = dyn_cast<ClassDeclOp>(baseSym);
+          if (!baseClassDecl)
+            break;
+
+          auto parentRange =
+              extractRangeConstraints(baseClassDecl, cache, classSym);
+          rangeConstraints.append(parentRange.begin(), parentRange.end());
+
+          auto parentSoft =
+              extractSoftConstraints(baseClassDecl, cache, classSym);
+          softConstraints.append(parentSoft.begin(), parentSoft.end());
+
+          auto parentDist =
+              extractDistConstraints(baseClassDecl, cache, classSym);
+          distConstraints.append(parentDist.begin(), parentDist.end());
+
+          parentDecl = baseClassDecl;
+        }
+      }
     }
 
     // Extract conditional constraints (implications and if-else)
@@ -23266,6 +23335,27 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     if (classDecl) {
       conditionalConstraints =
           extractConditionalConstraints(classDecl, cache, classSym);
+
+      // Also inherit conditional constraints from parent classes
+      {
+        ClassDeclOp parentDecl = classDecl;
+        while (auto baseAttr = parentDecl.getBaseAttr()) {
+          ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+          auto *baseSym = mod.lookupSymbol(baseAttr);
+          if (!baseSym)
+            break;
+          auto baseClassDecl = dyn_cast<ClassDeclOp>(baseSym);
+          if (!baseClassDecl)
+            break;
+
+          auto parentConds =
+              extractConditionalConstraints(baseClassDecl, cache, classSym);
+          conditionalConstraints.append(parentConds.begin(),
+                                        parentConds.end());
+
+          parentDecl = baseClassDecl;
+        }
+      }
     }
 
     // Also extract constraints from the inline constraint region (if present)

@@ -31,11 +31,12 @@ repository (1,036 tests across 15 IEEE chapters).
 
 ### Simulation: 0 Failures, 0 Unexpected Passes, 0 Timeouts
 
-912 tests found, 858 PASS, 54 XFAIL (should-fail tests), 0 FAIL, 0 XPASS, 0 TIMEOUT.
-All tests properly categorized in `utils/sv-tests-sim-expect.txt` (152 entries):
+912 tests found, 696 eligible, 696 PASS+XFAIL, 0 FAIL, 0 XPASS, 0 TIMEOUT.
+All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
 - 6 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
-- 146 `compile-only` (class-only definitions, UVM tests that exceed 120s timeout)
-- 0 `xfail` — all former constraint xfails reclassified as compile-only
+- 46 `compile-only` (class-only definitions, SVA UVM tests, event sequence controls)
+- 54 `xfail` (Ch18 constraint tests that timeout in 120s UVM simulation)
+- 4 `pass` (UVM tests now passing)
 
 ### What's Needed for True 100%
 
@@ -57,9 +58,9 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (152 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 178 | 178 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find, wand/wor nets |
+| circt-sim | 200 | 200 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find, wand/wor nets, constraint solver, rand_mode, constraint guards, soft constraints |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
-| ImportVerilog | 266 | 266 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
+| ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
 ## UVM Simulation Feature Status
 
@@ -118,15 +119,15 @@ to commercial simulators like Cadence Xcelium.
 
 | AVIP | HvlTop | HdlTop | Combined | Notes |
 |------|--------|--------|----------|-------|
-| APB | Runs | Runs | Runs | `apb_base_test` completes at ~200 ns sim time |
-| AHB | Runs | Runs | Runs | `AhbBaseTest` completes at ~200 ns sim time |
-| UART | Runs | Runs* | Runs* | `UartBaseTest` at ~300 ns; *bind assertions need slang fix |
-| I2S | Runs | Runs* | Runs* | `I2sBaseTest` at ~200 ns; *bind assertions need slang fix |
-| I3C | Runs | Runs | Runs | `i3c_base_test` at ~200 ns; pullup/wire/generate all work |
-| SPI | Runs | Runs* | Runs* | `SpiBaseTest` at ~800 ns; *bind assertions need slang fix |
-| AXI4 | Runs | N/A | N/A | `axi4_base_test`; UVM_FATAL cannot get BFM (HvlTop-only, needs combined mode) |
-| AXI4Lite | Runs* | N/A | N/A | `Axi4LiteBaseTest`; *exits early due to vtable dispatch gap in `uvm_task_phase::m_traverse` |
-| JTAG | Runs | N/A | N/A | `HvlTop` at ~500 ns; DriveToBfm has internal failure (llhd.drv type mismatch) |
+| APB | Runs | Runs | Runs | `apb_base_test` completes; exit code 0 |
+| AHB | Runs | Runs | Runs | `AhbBaseTest` completes; exit code 0 |
+| UART | Runs | Runs | Runs | `UartBaseTest` completes; exit code 0 |
+| I2S | Runs | Runs | Runs | `I2sBaseTest` completes; exit code 0 |
+| I3C | Runs | Runs | Runs | `i3c_base_test` completes; exit code 0 |
+| SPI | Runs | Runs | Runs | `SpiBaseTest` completes; exit code 0 |
+| AXI4 | Runs | Runs | Runs | `axi4_base_test` completes; exit code 0 |
+| AXI4Lite | Runs | Runs | Runs | `Axi4LiteBaseTest` completes; exit code 0 |
+| JTAG | Runs | Runs | Runs | `HvlTop` completes; exit code 0 |
 
 ## Key Fixes History
 
@@ -189,3 +190,8 @@ to commercial simulators like Cadence Xcelium.
 | MooreToCore early-exit | Skip entire pass when no Moore ops remain; avoids expensive full-module scans in second pipeline invocation |
 | pre/post_randomize callbacks | User-defined `pre_randomize()`/`post_randomize()` methods called during `randomize()`; Public visibility prevents SymbolDCE removal |
 | Class property initializers (no ctor) | `moore.class.new` emits property initializer assignments for classes without explicit constructors (IEEE 1800-2017 section 8.8) |
+| Constraint implication/if-else/set-membership | Extract `->`, `if/else`, `inside` constraints from `ConstraintExprOp` in MooreToCore; lowers to conditional range application |
+| rand_mode receiver resolution | Fix `rand_mode()` to use implicit class receiver; correct return value semantics (IEEE 1800-2017 §18.8) |
+| Soft range constraints from ConstraintExprOp | Extract soft constraints from `ConstraintExprOp` with `isSoft` flag; apply as default ranges when no hard constraint overrides |
+| Constraint guard null checks | Support `if (next == null) b1 == 5;` guards; pre-save pointer predicates before `randomize_basic`; `LLVM::ICmpOp` for pointer comparison (IEEE 1800-2017 §18.5.13) |
+| Function lookup cache pre-population | Pre-populate interpreter function lookup cache during initialization; eliminates repeated O(n) searches during simulation |

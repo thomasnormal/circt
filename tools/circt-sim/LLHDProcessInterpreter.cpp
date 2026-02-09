@@ -7448,6 +7448,51 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                      << " (width=" << width << ")\n");
           return success();
         }
+        // Handle ProbeOp input - this happens when interface ports are
+        // passed through module instances. Pattern:
+        //   %ptr = llhd.prb %sig : !llvm.ptr
+        //   %ref = unrealized_conversion_cast %ptr : !llvm.ptr to !llhd.ref<!llvm.ptr>
+        //   hw.instance @mod(port: %ref)
+        //   // Inside @mod: %val = llhd.prb %port : !llvm.ptr
+        // We need to re-probe the original signal (%sig) to get its current value.
+        if (auto innerProbeOp = input.getDefiningOp<llhd::ProbeOp>()) {
+          Value innerSignal = innerProbeOp.getSignal();
+          SignalId innerSigId = resolveSignalId(innerSignal);
+          if (innerSigId != 0) {
+            // Check for pending epsilon drives first (blocking assignment)
+            auto pendingIt = pendingEpsilonDrives.find(innerSigId);
+            if (pendingIt != pendingEpsilonDrives.end()) {
+              setValue(procId, probeOp.getResult(), pendingIt->second);
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  Re-probe of cast-from-prb signal " << innerSigId
+                         << " = " << pendingIt->second.getUInt64()
+                         << " (from pending epsilon drive)\n");
+              return success();
+            }
+            const SignalValue &sigVal = scheduler.getSignalValue(innerSigId);
+            InterpretedValue val;
+            if (sigVal.isUnknown()) {
+              if (auto encoded = getEncodedUnknownForType(probeOp.getResult().getType()))
+                val = InterpretedValue(*encoded);
+              else
+                val = InterpretedValue::makeX(
+                    getTypeWidth(probeOp.getResult().getType()));
+            } else {
+              val = InterpretedValue::fromSignalValue(sigVal);
+            }
+            setValue(procId, probeOp.getResult(), val);
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  Re-probe of cast-from-prb signal " << innerSigId
+                       << " = "
+                       << (sigVal.isUnknown() ? "X"
+                                              : std::to_string(sigVal.getValue()))
+                       << "\n");
+            return success();
+          }
+          // If signal not found, fall through to other handlers
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Cast-from-prb: could not resolve inner signal\n");
+        }
       }
     }
 
