@@ -300,6 +300,10 @@ Execution controls:
     `--default-mutations-yosys`.
   - generated lanes in `--lanes-tsv` now get native preflight validation for
     lane `mutations_yosys` executables (with default/`yosys` fallback).
+  - lane-level formal tool fields in `--lanes-tsv` now get native preflight
+    validation with effective default fallback:
+    `global_propagate_circt_lec`, `global_propagate_circt_bmc`,
+    `global_propagate_z3`, `global_propagate_bmc_z3`.
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.

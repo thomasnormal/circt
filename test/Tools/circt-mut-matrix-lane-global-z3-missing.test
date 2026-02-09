@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n' > %t/fake-circt-lec.sh
+// RUN: chmod +x %t/fake-circt-lec.sh
+// RUN: bash -lc 'row="lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\t-\t-\t-"; for _ in $(seq 1 8); do row="${row}\t-"; done; row="${row}\t%t/fake-circt-lec.sh"; for _ in $(seq 1 11); do row="${row}\t-"; done; row="${row}\tdoes-not-exist-z3"; printf "%b\n" "$row" > %t/lanes.tsv'
+// RUN: not env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv %t/lanes.tsv > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: circt-mut matrix: unable to resolve lane global_propagate_z3 executable in --lanes-tsv at line 1 (lane lane1): does-not-exist-z3

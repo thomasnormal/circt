@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 816 - February 9, 2026
+
+### Native Matrix Lane Formal-Tool Preflight
+
+1. Extended `circt-mut matrix` native preprocessing to validate lane-level
+   formal tool options from `--lanes-tsv` before script dispatch:
+   - `global_propagate_circt_lec`
+   - `global_propagate_circt_bmc`
+   - `global_propagate_z3`
+   - `global_propagate_bmc_z3`
+2. Added lane/default effective-mode preflight checks:
+   - chain mode validation (`lec-then-bmc|bmc-then-lec|consensus|auto`)
+   - chain requirements (both LEC/BMC tools required via lane or defaults)
+   - conflict checks matching cover semantics (`cmd|circt-lec|circt-bmc`
+     mutually exclusive unless chain mode is selected).
+3. Result:
+   - matrix lane configuration issues now fail fast with lane+line diagnostics
+     instead of late runtime failures.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-matrix-lane-global-circt-lec-missing.test`
+  - `test/Tools/circt-mut-matrix-lane-global-z3-missing.test`
+  - `test/Tools/circt-mut-matrix-lane-global-filter-conflict-native.test`
+- Updated:
+  - `test/Tools/circt-mut-forward-matrix.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (72/72)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-lane-formal-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 815 - February 9, 2026
 
 ### Native Matrix Lane `mutations_yosys` Preflight
