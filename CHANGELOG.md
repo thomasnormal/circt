@@ -34343,6 +34343,52 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OCSP mode is still pinned-response-file based (no live responder URL).
 - No CRL/OCSP distribution-point fetch/refresh automation yet.
 
+## Iteration 691 - February 9, 2026
+
+### Lane-State Ed25519 OCSP nextUpdate Policy
+
+- Added `--lane-state-manifest-ed25519-ocsp-require-next-update` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - rejects OCSP responses missing `Next Update` when enabled
+  - continues enforcing stale `Next Update` rejection when present.
+- Lane-state trust-contract updates:
+  - `lane_state_ed25519_ocsp_require_next_update` now contributes to lane-state
+    config hash material, so resume/merge detects strict-policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency check for nextUpdate policy without OCSP response
+    - negative missing-nextUpdate rejection case
+    - positive strict nextUpdate-enabled OCSP case (`openssl ocsp -nmin`)
+  - `docs/FormalRegression.md`
+    - documented nextUpdate-required OCSP policy option.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, OCSP strict policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-nextupdate-sweep-20260209-015350/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-nextupdate-sweep-20260209-015350/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode remains pinned-response-file based (no live responder URL mode).
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
 ## Iteration 679 - February 8, 2026
 
 ### Lane-State Compatibility Policy Versioning

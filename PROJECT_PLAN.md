@@ -18255,6 +18255,15 @@ ninja -C build circt-verilog
   - Prevents replay of old but syntactically valid OCSP responses.
   - Tightens revocation policy from status-only to status + freshness.
 
+### Iteration 691
+- Added OCSP `nextUpdate` policy control for Ed25519 lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-require-next-update`
+  - enforces presence of `Next Update` in OCSP responses when policy is enabled.
+- Planning impact:
+  - Tightens revocation response quality by preventing indefinite-lifetime OCSP
+    acceptance under strict policy.
+  - Moves OCSP handling toward production PKI policy controls.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18267,7 +18276,6 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add OCSP responder-identity policy controls (currently response-file based
     only).
-  - Add OCSP `nextUpdate` policy controls for responses that include it.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
