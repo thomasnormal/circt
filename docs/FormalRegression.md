@@ -109,6 +109,10 @@ Execution controls:
   automatic reuse discovery/publish.
 - `--reuse-cache-mode off|read|read-write`: cache read/write policy
   (default `read-write` when cache dir is provided).
+- `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
+  cache entries (`0` disables limit, default `0`).
+- `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
+  byte footprint (`0` disables limit, default `0`).
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes. Supports concrete Yosys modes
@@ -154,9 +158,10 @@ Execution controls:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
   - per-run optimization: original-design BMC outcomes are cached in
-    `<work_dir>/.global_bmc_orig_cache` keyed by resolved BMC command +
-    arguments, reducing repeated original-design solver invocations across
-    mutants.
+    `<work_dir>/.global_bmc_orig_cache` keyed by resolved BMC command,
+    original-design path, and original-design SHA-256, reducing repeated
+    original-design solver invocations across mutants while preventing stale
+    hits when design contents change at the same path.
   - cross-run optimization (when `--reuse-cache-dir` is enabled): original
     BMC cache entries are hydrated from and published to
     `<reuse-cache-dir>/global_bmc_orig_cache`.
@@ -223,6 +228,17 @@ Generated artifacts (default under `./mutation-cover-results`):
     original-design BMC run in built-in differential BMC mode.
   - `bmc_orig_cache_write_status`: write status for cross-run original-BMC
     cache publication (`disabled|read_only|written|write_error`).
+  - `bmc_orig_cache_max_entries` / `bmc_orig_cache_max_bytes`: configured cache
+    limits.
+  - `bmc_orig_cache_entries` / `bmc_orig_cache_bytes`: post-run local cache
+    footprint.
+  - `bmc_orig_cache_pruned_entries` / `bmc_orig_cache_pruned_bytes`: local
+    cache entries/bytes evicted to satisfy limits.
+  - `bmc_orig_cache_persist_entries` / `bmc_orig_cache_persist_bytes`: post-run
+    persisted cache footprint.
+  - `bmc_orig_cache_persist_pruned_entries` /
+    `bmc_orig_cache_persist_pruned_bytes`: persisted cache evictions under
+    limits.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
@@ -305,6 +321,10 @@ Execution controls:
   `run_mutation_cover.sh --formal-global-propagate-bmc-assume-known-inputs`.
 - `--default-formal-global-propagate-bmc-ignore-asserts-until <n>`: default
   `run_mutation_cover.sh --formal-global-propagate-bmc-ignore-asserts-until`.
+- `--default-bmc-orig-cache-max-entries <n>`: default
+  `run_mutation_cover.sh --bmc-orig-cache-max-entries`.
+- `--default-bmc-orig-cache-max-bytes <n>`: default
+  `run_mutation_cover.sh --bmc-orig-cache-max-bytes`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -314,7 +334,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]
 ```
 
 Notes:
@@ -375,6 +395,10 @@ Notes:
 - `global_propagate_bmc_ignore_asserts_until` (optional) overrides
   `--default-formal-global-propagate-bmc-ignore-asserts-until` for a specific
   lane.
+- `bmc_orig_cache_max_entries` (optional) overrides
+  `--default-bmc-orig-cache-max-entries` for a specific lane.
+- `bmc_orig_cache_max_bytes` (optional) overrides
+  `--default-bmc-orig-cache-max-bytes` for a specific lane.
 - `global_propagate_cmd`, `global_propagate_circt_lec`, and
   `global_propagate_circt_bmc` are mutually exclusive within a lane.
 

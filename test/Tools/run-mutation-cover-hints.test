@@ -34,7 +34,7 @@
 
 // RESULTS: mutation_id{{.*}}test_id{{.*}}result
 // RESULTS: 1{{.*}}t2{{.*}}detected
-// RESULTS-NOT: 1{{.*}}t1
+// RESULTS-NOT: ^1{{[[:space:]]+}}t1{{[[:space:]]+}}
 
 // METRICS: hinted_mutants{{.*}}1
 // METRICS: hint_hits{{.*}}1

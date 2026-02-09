@@ -1,5 +1,65 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 760 - February 9, 2026
+
+### MutationCover BMC Original-Cache Correctness Hardening
+
+- Fixed stale-cache risk in `utils/run_mutation_cover.sh` differential
+  `circt-bmc` global filtering:
+  - BMC original-design cache key now includes original-design content hash
+    (`SHA-256`) in addition to command/path inputs.
+  - Added cached file-hash lookup helper (`hash_file_cached`) to avoid repeated
+    hashing overhead.
+  - Global filter logs now include `orig_design_sha256` in the cache header for
+    traceability.
+- Added bounded-cache controls for original-design BMC cache lifecycle:
+  - new options:
+    - `--bmc-orig-cache-max-entries`
+    - `--bmc-orig-cache-max-bytes`
+  - pruning is applied to both local and persisted cache stores, with telemetry
+    exported in `metrics.tsv` and `summary.json`:
+    - `bmc_orig_cache_entries`, `bmc_orig_cache_bytes`
+    - `bmc_orig_cache_pruned_entries`, `bmc_orig_cache_pruned_bytes`
+    - `bmc_orig_cache_persist_entries`, `bmc_orig_cache_persist_bytes`
+    - `bmc_orig_cache_persist_pruned_entries`,
+      `bmc_orig_cache_persist_pruned_bytes`
+- Added regression:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-design-hash.test`
+    - verifies persisted original-design cache is invalidated when design
+      content changes at the same file path.
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-prune.test`
+    - verifies bounded-cache pruning keeps persisted orig-cache entry count
+      within configured limits across runs.
+- Test hygiene fix:
+  - `test/Tools/run-mutation-cover-hints.test`
+    - tightened `RESULTS-NOT` matcher to avoid false positive matching on
+      `result-t1.txt` substrings in unrelated rows.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-persist.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-design-hash.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-prune.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test`:
+    - 5/5 PASS
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover*.test test/Tools/run-mutation-matrix*.test`:
+    - 49/49 PASS
+- External cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-post-cachehash --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - `opentitan LEC_STRICT FAIL total=1 pass=0 fail=1` (expected strict X-prop gap, diagnostic tag `#XPROP_ONLY`)
+
 ## Iteration 759 - February 9, 2026
 
 ### Differential BMC Original-Design Cache (MutationCover)
