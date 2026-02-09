@@ -80,6 +80,14 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Auto sampling (@posedge) | MISSING | — | Event-driven trigger not connected |
 | - Wildcard bins | MISSING | — | Pattern matching logic needed |
 | - start()/stop() | MISSING | — | Runtime stubs only |
+| **Mutation coverage (Certitude-style)** | IN_PROGRESS | New toolchain | **P0** |
+| - Native mutation harness (`run_mutation_cover.sh`) | **DONE** | 0 | Added with formal pre-qualification + reporting |
+| - 4-way classes (`not_activated`, `not_propagated`, `propagated_not_detected`, `detected`) | **DONE** | 0 | Mutant + pair-level artifacts |
+| - Formal activation/propagation pruning | **DONE** | 0 | Per test-mutant pair pre-qualification |
+| - Improvement + metric report modes | **DONE** | 0 | `improvement.tsv` + `metrics.tsv` outputs |
+| - Single-host parallel scheduler/resume | MISSING | — | Needed for large AVIP/suite throughput |
+| - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | MISSING | — | Hook into recurring formal gate matrix |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |
