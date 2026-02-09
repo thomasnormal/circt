@@ -494,6 +494,10 @@ unknown_profile_keys = sorted(
   set(profile.keys()) - {
       "auto_uri_policy",
       "auto_uri_allowed_schemes",
+      "refresh_retries",
+      "refresh_delay_secs",
+      "refresh_timeout_secs",
+      "refresh_jitter_secs",
       "refresh_metadata_require_transport",
       "refresh_metadata_require_status",
       "refresh_metadata_require_uri_regex",
@@ -517,6 +521,30 @@ if unknown_profile_keys:
 
 emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_policy", "shared_auto_uri_policy")
 emit_if_string(profile, f"profiles.{profile_name}", "auto_uri_allowed_schemes", "shared_auto_uri_allowed_schemes")
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_retries",
+    "shared_refresh_retries",
+)
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_delay_secs",
+    "shared_refresh_delay_secs",
+)
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_timeout_secs",
+    "shared_refresh_timeout_secs",
+)
+emit_if_nonneg_int(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_jitter_secs",
+    "shared_refresh_jitter_secs",
+)
 emit_if_string(
     profile,
     f"profiles.{profile_name}",
@@ -593,6 +621,10 @@ for artifact in ("crl", "ocsp"):
       - {
           "auto_uri_policy",
           "auto_uri_allowed_schemes",
+          "refresh_retries",
+          "refresh_delay_secs",
+          "refresh_timeout_secs",
+          "refresh_jitter_secs",
           "refresh_metadata_require_transport",
           "refresh_metadata_require_status",
           "refresh_metadata_require_uri_regex",
@@ -613,6 +645,30 @@ for artifact in ("crl", "ocsp"):
     raise SystemExit(1)
   emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_policy", f"{artifact}_auto_uri_policy")
   emit_if_string(section, f"profiles.{profile_name}.{artifact}", "auto_uri_allowed_schemes", f"{artifact}_auto_uri_allowed_schemes")
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_retries",
+      f"{artifact}_refresh_retries",
+  )
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_delay_secs",
+      f"{artifact}_refresh_delay_secs",
+  )
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_timeout_secs",
+      f"{artifact}_refresh_timeout_secs",
+  )
+  emit_if_nonneg_int(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_jitter_secs",
+      f"{artifact}_refresh_jitter_secs",
+  )
   emit_if_string(
       section,
       f"profiles.{profile_name}.{artifact}",
@@ -2348,6 +2404,14 @@ PROFILE_SHARED_AUTO_URI_POLICY=""
 PROFILE_SHARED_AUTO_URI_POLICY_SET=0
 PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_SHARED_REFRESH_RETRIES=""
+PROFILE_SHARED_REFRESH_RETRIES_SET=0
+PROFILE_SHARED_REFRESH_DELAY_SECS=""
+PROFILE_SHARED_REFRESH_DELAY_SECS_SET=0
+PROFILE_SHARED_REFRESH_TIMEOUT_SECS=""
+PROFILE_SHARED_REFRESH_TIMEOUT_SECS_SET=0
+PROFILE_SHARED_REFRESH_JITTER_SECS=""
+PROFILE_SHARED_REFRESH_JITTER_SECS_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TRANSPORT=""
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TRANSPORT_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_STATUS=""
@@ -2372,6 +2436,14 @@ PROFILE_CRL_AUTO_URI_POLICY=""
 PROFILE_CRL_AUTO_URI_POLICY_SET=0
 PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_CRL_REFRESH_RETRIES=""
+PROFILE_CRL_REFRESH_RETRIES_SET=0
+PROFILE_CRL_REFRESH_DELAY_SECS=""
+PROFILE_CRL_REFRESH_DELAY_SECS_SET=0
+PROFILE_CRL_REFRESH_TIMEOUT_SECS=""
+PROFILE_CRL_REFRESH_TIMEOUT_SECS_SET=0
+PROFILE_CRL_REFRESH_JITTER_SECS=""
+PROFILE_CRL_REFRESH_JITTER_SECS_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT=""
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_STATUS=""
@@ -2396,6 +2468,14 @@ PROFILE_OCSP_AUTO_URI_POLICY=""
 PROFILE_OCSP_AUTO_URI_POLICY_SET=0
 PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES=""
 PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=0
+PROFILE_OCSP_REFRESH_RETRIES=""
+PROFILE_OCSP_REFRESH_RETRIES_SET=0
+PROFILE_OCSP_REFRESH_DELAY_SECS=""
+PROFILE_OCSP_REFRESH_DELAY_SECS_SET=0
+PROFILE_OCSP_REFRESH_TIMEOUT_SECS=""
+PROFILE_OCSP_REFRESH_TIMEOUT_SECS_SET=0
+PROFILE_OCSP_REFRESH_JITTER_SECS=""
+PROFILE_OCSP_REFRESH_JITTER_SECS_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT=""
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_STATUS=""
@@ -2433,6 +2513,22 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         shared_auto_uri_allowed_schemes)
           PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        shared_refresh_retries)
+          PROFILE_SHARED_REFRESH_RETRIES="$profile_value"
+          PROFILE_SHARED_REFRESH_RETRIES_SET=1
+          ;;
+        shared_refresh_delay_secs)
+          PROFILE_SHARED_REFRESH_DELAY_SECS="$profile_value"
+          PROFILE_SHARED_REFRESH_DELAY_SECS_SET=1
+          ;;
+        shared_refresh_timeout_secs)
+          PROFILE_SHARED_REFRESH_TIMEOUT_SECS="$profile_value"
+          PROFILE_SHARED_REFRESH_TIMEOUT_SECS_SET=1
+          ;;
+        shared_refresh_jitter_secs)
+          PROFILE_SHARED_REFRESH_JITTER_SECS="$profile_value"
+          PROFILE_SHARED_REFRESH_JITTER_SECS_SET=1
           ;;
         shared_refresh_metadata_require_transport)
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TRANSPORT="$profile_value"
@@ -2482,6 +2578,22 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_CRL_AUTO_URI_ALLOWED_SCHEMES_SET=1
           ;;
+        crl_refresh_retries)
+          PROFILE_CRL_REFRESH_RETRIES="$profile_value"
+          PROFILE_CRL_REFRESH_RETRIES_SET=1
+          ;;
+        crl_refresh_delay_secs)
+          PROFILE_CRL_REFRESH_DELAY_SECS="$profile_value"
+          PROFILE_CRL_REFRESH_DELAY_SECS_SET=1
+          ;;
+        crl_refresh_timeout_secs)
+          PROFILE_CRL_REFRESH_TIMEOUT_SECS="$profile_value"
+          PROFILE_CRL_REFRESH_TIMEOUT_SECS_SET=1
+          ;;
+        crl_refresh_jitter_secs)
+          PROFILE_CRL_REFRESH_JITTER_SECS="$profile_value"
+          PROFILE_CRL_REFRESH_JITTER_SECS_SET=1
+          ;;
         crl_refresh_metadata_require_transport)
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT="$profile_value"
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT_SET=1
@@ -2529,6 +2641,22 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         ocsp_auto_uri_allowed_schemes)
           PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES="$profile_value"
           PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES_SET=1
+          ;;
+        ocsp_refresh_retries)
+          PROFILE_OCSP_REFRESH_RETRIES="$profile_value"
+          PROFILE_OCSP_REFRESH_RETRIES_SET=1
+          ;;
+        ocsp_refresh_delay_secs)
+          PROFILE_OCSP_REFRESH_DELAY_SECS="$profile_value"
+          PROFILE_OCSP_REFRESH_DELAY_SECS_SET=1
+          ;;
+        ocsp_refresh_timeout_secs)
+          PROFILE_OCSP_REFRESH_TIMEOUT_SECS="$profile_value"
+          PROFILE_OCSP_REFRESH_TIMEOUT_SECS_SET=1
+          ;;
+        ocsp_refresh_jitter_secs)
+          PROFILE_OCSP_REFRESH_JITTER_SECS="$profile_value"
+          PROFILE_OCSP_REFRESH_JITTER_SECS_SET=1
           ;;
         ocsp_refresh_metadata_require_transport)
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT="$profile_value"
@@ -2637,6 +2765,62 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" !
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_OCSP_AUTO_URI_ALLOWED_SCHEMES"
   elif [[ "$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$PROFILE_SHARED_AUTO_URI_ALLOWED_SCHEMES"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_RETRIES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$PROFILE_CRL_REFRESH_RETRIES"
+  elif [[ "$PROFILE_SHARED_REFRESH_RETRIES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$PROFILE_SHARED_REFRESH_RETRIES"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_RETRIES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$PROFILE_OCSP_REFRESH_RETRIES"
+  elif [[ "$PROFILE_SHARED_REFRESH_RETRIES_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$PROFILE_SHARED_REFRESH_RETRIES"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_DELAY_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS="$PROFILE_CRL_REFRESH_DELAY_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_DELAY_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS="$PROFILE_SHARED_REFRESH_DELAY_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_DELAY_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS="$PROFILE_OCSP_REFRESH_DELAY_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_DELAY_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS="$PROFILE_SHARED_REFRESH_DELAY_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_TIMEOUT_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS="$PROFILE_CRL_REFRESH_TIMEOUT_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_TIMEOUT_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS="$PROFILE_SHARED_REFRESH_TIMEOUT_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_TIMEOUT_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS="$PROFILE_OCSP_REFRESH_TIMEOUT_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_TIMEOUT_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS="$PROFILE_SHARED_REFRESH_TIMEOUT_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_JITTER_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS="$PROFILE_CRL_REFRESH_JITTER_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_JITTER_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS="$PROFILE_SHARED_REFRESH_JITTER_SECS"
+  fi
+fi
+if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_JITTER_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS="$PROFILE_OCSP_REFRESH_JITTER_SECS"
+  elif [[ "$PROFILE_SHARED_REFRESH_JITTER_SECS_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS="$PROFILE_SHARED_REFRESH_JITTER_SECS"
   fi
 fi
 if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" ]]; then

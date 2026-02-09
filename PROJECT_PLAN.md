@@ -18041,6 +18041,20 @@ ninja -C build circt-verilog
     policy convergence across 24/7 closure lanes.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 726
+- Extended refresh policy profiles to carry refresh execution-control defaults:
+  - shared/per-artifact profile keys now support:
+    - `refresh_retries`
+    - `refresh_delay_secs`
+    - `refresh_timeout_secs`
+    - `refresh_jitter_secs`
+- Planner impact:
+  - Moves retry/timeout behavior from lane-local CLI wiring into centrally
+    auditable profile policy, reducing drift across 24/7 workers.
+  - Preserves per-run CLI override control while enabling deterministic
+    rollouts of refresh resilience policy.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
