@@ -3929,6 +3929,56 @@ def parse_context_int_arithmetic_presets(value, field_name: str):
     return presets
 
 
+def parse_context_int_arithmetic_compat_profiles(value, field_name: str):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not value:
+        fail(
+            f"error: invalid {field_name}: expected non-empty object"
+        )
+    profiles = {}
+    for profile_name, profile_spec in value.items():
+        validate_context_key_name(profile_name, field_name)
+        profile_field = f"{field_name}.{profile_name}"
+        if not isinstance(profile_spec, dict) or not profile_spec:
+            fail(
+                f"error: invalid {profile_field}: expected non-empty object"
+            )
+        unknown_keys = sorted(
+            set(profile_spec.keys()) - {"schema_versions", "int_arithmetic"}
+        )
+        if unknown_keys:
+            fail(
+                f"error: invalid {profile_field}: unknown key '{unknown_keys[0]}'"
+            )
+        schema_versions = profile_spec.get("schema_versions")
+        if not isinstance(schema_versions, list) or not schema_versions:
+            fail(
+                f"error: invalid {profile_field}.schema_versions: expected non-empty array"
+            )
+        validated_schema_versions = set()
+        for idx, schema_version in enumerate(schema_versions):
+            schema_field = f"{profile_field}.schema_versions[{idx}]"
+            if not isinstance(schema_version, str) or not schema_version.strip():
+                fail(
+                    f"error: invalid {schema_field}: expected non-empty string"
+                )
+            validated_schema_versions.add(schema_version.strip())
+        if "int_arithmetic" not in profile_spec:
+            fail(
+                f"error: invalid {profile_field}.int_arithmetic: expected non-empty object"
+            )
+        profile_int_arithmetic = parse_context_int_arithmetic(
+            profile_spec["int_arithmetic"],
+            f"{profile_field}.int_arithmetic",
+        )
+        profiles[profile_name] = {
+            "schema_versions": validated_schema_versions,
+            "int_arithmetic": profile_int_arithmetic,
+        }
+    return profiles
+
+
 def parse_context_schema_import_registry(value, field_name: str):
     if value is None:
         return None
@@ -4102,7 +4152,13 @@ def parse_context_schema_import_modules(
                 )
             unknown_keys = sorted(
                 set(import_payload.keys())
-                - {"imports", "regex_defs", "limits", "int_arithmetic_presets"}
+                - {
+                    "imports",
+                    "regex_defs",
+                    "limits",
+                    "int_arithmetic_presets",
+                    "int_arithmetic_compat_profiles",
+                }
             )
             if unknown_keys:
                 fail(
@@ -6385,6 +6441,8 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             "int_arithmetic",
             "int_arithmetic_ref",
             "int_arithmetic_presets",
+            "int_arithmetic_compat_ref",
+            "int_arithmetic_compat_profiles",
             "all_of",
             "any_of",
         }
@@ -6430,6 +6488,7 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
     imported_regex_defs = {}
     imported_limit_overrides = {}
     imported_int_arithmetic_presets = {}
+    imported_int_arithmetic_compat_profiles = {}
     for _, import_payload, import_field in import_modules:
         import_regex_defs = parse_regex_definitions(
             import_payload.get("regex_defs"),
@@ -6459,6 +6518,22 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
                         f"error: invalid {import_field}.int_arithmetic_presets.{preset_name}: duplicate int arithmetic preset from imports"
                     )
                 imported_int_arithmetic_presets[preset_name] = preset_spec
+        import_int_arithmetic_compat_profiles = parse_context_int_arithmetic_compat_profiles(
+            import_payload.get("int_arithmetic_compat_profiles"),
+            f"{import_field}.int_arithmetic_compat_profiles",
+        )
+        if import_int_arithmetic_compat_profiles is not None:
+            for (
+                profile_name,
+                profile_spec,
+            ) in import_int_arithmetic_compat_profiles.items():
+                if profile_name in imported_int_arithmetic_compat_profiles:
+                    fail(
+                        f"error: invalid {import_field}.int_arithmetic_compat_profiles.{profile_name}: duplicate int arithmetic compatibility profile from imports"
+                    )
+                imported_int_arithmetic_compat_profiles[
+                    profile_name
+                ] = profile_spec
     inline_regex_defs = parse_regex_definitions(
         payload.get("regex_defs"),
         f"{field_name}.regex_defs",
@@ -6498,10 +6573,31 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             int_arithmetic_presets[preset_name] = preset_spec
     if not int_arithmetic_presets:
         int_arithmetic_presets = None
+    inline_int_arithmetic_compat_profiles = parse_context_int_arithmetic_compat_profiles(
+        payload.get("int_arithmetic_compat_profiles"),
+        f"{field_name}.int_arithmetic_compat_profiles",
+    )
+    int_arithmetic_compat_profiles = dict(imported_int_arithmetic_compat_profiles)
+    if inline_int_arithmetic_compat_profiles is not None:
+        for (
+            profile_name,
+            profile_spec,
+        ) in inline_int_arithmetic_compat_profiles.items():
+            if profile_name in int_arithmetic_compat_profiles:
+                fail(
+                    f"error: invalid {field_name}.int_arithmetic_compat_profiles.{profile_name}: duplicate int arithmetic compatibility profile"
+                )
+            int_arithmetic_compat_profiles[profile_name] = profile_spec
+    if not int_arithmetic_compat_profiles:
+        int_arithmetic_compat_profiles = None
     int_arithmetic = parse_context_int_arithmetic(
         payload.get("int_arithmetic"),
         f"{field_name}.int_arithmetic",
     )
+    if "int_arithmetic_ref" in payload and "int_arithmetic_compat_ref" in payload:
+        fail(
+            f"error: invalid {field_name}: cannot set both int_arithmetic_ref and int_arithmetic_compat_ref"
+        )
     if "int_arithmetic_ref" in payload:
         if "int_arithmetic" in payload:
             fail(
@@ -6521,6 +6617,32 @@ def parse_selector_profile_route_context_schema(raw: str, expected_version_raw: 
             fail(
                 f"error: invalid {field_name}.int_arithmetic_ref: unknown int arithmetic preset '{int_arithmetic_ref}'"
             )
+    if "int_arithmetic_compat_ref" in payload:
+        if "int_arithmetic" in payload:
+            fail(
+                f"error: invalid {field_name}: cannot set both int_arithmetic and int_arithmetic_compat_ref"
+            )
+        int_arithmetic_compat_ref = payload["int_arithmetic_compat_ref"]
+        validate_context_key_name(
+            int_arithmetic_compat_ref,
+            f"{field_name}.int_arithmetic_compat_ref",
+        )
+        if not int_arithmetic_compat_profiles:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_compat_ref: int_arithmetic_compat_profiles are not configured"
+            )
+        compat_profile = int_arithmetic_compat_profiles.get(
+            int_arithmetic_compat_ref
+        )
+        if compat_profile is None:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_compat_ref: unknown int arithmetic compatibility profile '{int_arithmetic_compat_ref}'"
+            )
+        if schema_version not in compat_profile["schema_versions"]:
+            fail(
+                f"error: invalid {field_name}.int_arithmetic_compat_ref: compatibility profile '{int_arithmetic_compat_ref}' is incompatible with schema_version '{schema_version}'"
+            )
+        int_arithmetic = compat_profile["int_arithmetic"]
     all_of_clauses = None
     if "all_of" in payload:
         all_of_raw = payload["all_of"]
