@@ -18359,6 +18359,12 @@ ninja -C build circt-verilog
   - policy modes: `first` (default), `last`, `require_single`
   - strict dependency on corresponding auto-URI mode, plus config-hash
     binding for deterministic resume behavior.
+- Iteration 710 adds a shared auto-URI policy default knob:
+  - `--lane-state-manifest-ed25519-refresh-auto-uri-policy`
+  - effective precedence: per-artifact policy > shared policy > built-in
+    default
+  - lets long-running farms set one default policy for CRL/OCSP discovery while
+    preserving targeted per-artifact overrides.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 

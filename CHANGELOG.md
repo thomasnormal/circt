@@ -32828,6 +32828,49 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No recursive/chain-aware validation of discovery targets beyond metadata
   policy gates and existing transport constraints.
 
+## Iteration 710 - February 9, 2026
+
+### Lane-State Ed25519 Shared Auto-URI Policy Default
+
+- Added `--lane-state-manifest-ed25519-refresh-auto-uri-policy` in
+  `utils/run_formal_all.sh` as a shared default for cert-driven CRL/OCSP
+  auto-discovery URI selection.
+- Effective precedence:
+  - per-artifact flags
+    (`--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`,
+    `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`)
+  - then shared flag
+    (`--lane-state-manifest-ed25519-refresh-auto-uri-policy`)
+  - then built-in default (`first`)
+- Added shared-policy enum validation:
+  - accepts `first|last|require_single`
+  - rejects invalid values with field-qualified diagnostics.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative invalid shared-policy enum check
+    - positive CRL/OCSP `last` coverage via shared policy flag
+    - positive precedence coverage where per-artifact policy overrides shared
+      policy
+  - `docs/FormalRegression.md`
+    - documented shared auto-URI policy default and precedence semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+
+### Remaining Limitations
+
+- Shared defaults are still CLI-only; there is no named/versioned policy
+  profile registry yet.
+
 ## Iteration 709 - February 9, 2026
 
 ### Lane-State Ed25519 Auto-URI Selection Policy
