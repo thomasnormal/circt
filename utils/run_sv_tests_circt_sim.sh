@@ -8,6 +8,7 @@ SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
 CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-120}"
+CIRCT_SIM_TIMEOUT_SECS="${CIRCT_SIM_TIMEOUT_SECS:-300}"
 CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
 
 # Run a command with memory limit
@@ -15,6 +16,14 @@ run_limited() {
   (
     ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
     timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+  )
+}
+
+# Run simulation with longer timeout (UVM tests need >120s for 25MB MLIR files)
+run_sim_limited() {
+  (
+    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
+    timeout --signal=KILL $CIRCT_SIM_TIMEOUT_SECS "$@"
   )
 }
 
@@ -313,7 +322,7 @@ while IFS= read -r -d '' sv; do
   # Run simulation
   sim_output=""
   sim_exit=0
-  if sim_output="$(run_limited "${sim_cmd[@]}" 2> "$sim_log")"; then
+  if sim_output="$(run_sim_limited "${sim_cmd[@]}" 2> "$sim_log")"; then
     sim_exit=0
   else
     sim_exit=$?
