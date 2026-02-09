@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 781 - February 9, 2026
+
+### Mutation Cover: Verilog Input Support in Default Mutator
+
+1. Extended `utils/create_mutated_yosys.sh` design ingestion:
+   - `.il` -> `read_rtlil`
+   - `.v` -> `read_verilog`
+   - `.sv` -> `read_verilog -sv`
+2. This closes a default-mutator mismatch where the mutation flow accepted
+   `.v/.sv` designs but the helper always emitted `read_rtlil`.
+
+### Tests
+
+- Added:
+  - `test/Tools/run-mutation-create-mutated-yosys-verilog-input.test`
+    - validates `.sv` input maps to `read_verilog -sv` and still applies the
+      mutation spec.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/create_mutated_yosys.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-create-mutated-yosys-basic.test test/Tools/run-mutation-create-mutated-yosys-verilog-input.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-matrix-default-create-mutated.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-cover-default-create-mutated.test test/Tools/run-mutation-create-mutated-yosys*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (70/70)
+
 ## Iteration 780 - February 9, 2026
 
 ### Mutation Cover: Built-In Mutant Materialization Default
