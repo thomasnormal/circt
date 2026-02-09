@@ -18096,6 +18096,18 @@ ninja -C build circt-verilog
     maintainability of mixed-arithmetic policy schemas.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 730
+- Added expression-level arithmetic preset references:
+  - new int-expression operator:
+    `with_int_arithmetic_ref([int_arithmetic_ref, expr])`
+  - resolves through schema `int_arithmetic_presets` and applies per-expression
+    arithmetic semantics without inlining mode objects.
+- Planner impact:
+  - reduces repeated arithmetic-mode objects in large schemas.
+  - aligns expression-level arithmetic with existing schema/clause preset-ref
+    mechanisms for more maintainable policy migration.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:

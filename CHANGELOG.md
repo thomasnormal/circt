@@ -36743,3 +36743,68 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No schema-version migration policy exists yet for arithmetic-default behavior
   changes.
 - OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
+
+## Iteration 730 - February 9, 2026
+
+### Yosys SVA Expression-Level Arithmetic Preset References
+
+- Extended integer expression parsing in `utils/run_yosys_sva_circt_bmc.sh`
+  with a preset-ref operator:
+  - `with_int_arithmetic_ref([int_arithmetic_ref, expr])`
+- `with_int_arithmetic_ref` resolves `int_arithmetic_ref` through schema
+  `int_arithmetic_presets` and applies that arithmetic mode only to the nested
+  expression.
+- Added strict parser diagnostics for expression-level ref validation:
+  - missing/unconfigured `int_arithmetic_presets`
+  - unknown expression-level preset ref
+  - invalid ref field type/shape
+- Threaded arithmetic preset maps through `parse_int_expression` and
+  `parse_bool_expression` plumbing so ref resolution works consistently in
+  `int_expr` and bool `cmp` expression trees.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`
+    - positive route-context case using `with_int_arithmetic_ref` with schema
+      `int_arithmetic_presets`
+    - negative case for unknown expression-level arithmetic preset ref
+
+### Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Focused lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-summary-history-drop-events-rewrite-profile-route-auto.test`:
+    - 1/1 PASS
+- Drop-event rewrite lit cluster:
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-yosys-sva-bmc-summary-history-drop-events.*\\.test$')`:
+    - 16/16 PASS
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Expression-level arithmetic preset refs are explicit per expression; there is
+  no schema-wide rewrite/migration helper for automatic ref insertion.
+- No schema-version migration policy exists yet for arithmetic-default behavior
+  changes.
+- OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
