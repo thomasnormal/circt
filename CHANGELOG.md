@@ -32828,6 +32828,74 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No recursive/chain-aware validation of discovery targets beyond metadata
   policy gates and existing transport constraints.
 
+## Iteration 709 - February 9, 2026
+
+### Lane-State Ed25519 Auto-URI Selection Policy
+
+- Added explicit URI selection policy controls in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`
+- Supported modes:
+  - `first` (default)
+  - `last`
+  - `require_single`
+- Policy behavior:
+  - policy flags require corresponding auto-discovery mode flags
+  - resolver now filters to supported `file/http/https` candidates before
+    selection
+  - `require_single` fails with explicit diagnostics when multiple usable URIs
+    exist
+  - policy values are included in lane-state config hash material for deterministic
+    resume behavior.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for policy flags without auto mode
+    - positive `last` policy coverage for CRL and OCSP auto-discovery
+    - negative `require_single` multi-URI rejection coverage
+    - negative invalid-policy enum coverage
+  - `docs/FormalRegression.md`
+    - documented auto-URI policy modes and semantics for CRL and OCSP refresh.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Policy remains per-invocation CLI; no centralized profile/registry for
+  enforcing site-wide defaults.
+- Discovery target trust still depends on sidecar policy gates and existing
+  transport constraints (no chain-attested fetch evidence yet).
+
 ## Iteration 707 - February 9, 2026
 
 ### Lane-State Built-In CRL/OCSP Refresh URI Mode
