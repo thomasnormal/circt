@@ -84,6 +84,12 @@
 // RUN: FileCheck %s --check-prefix=LANESTATEKEYRINGRESUME < %t/out-lane-state-keyring-resume/summary.tsv
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-keyring-missing-id --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-keyring-signed.tsv --resume-from-lane-state --lane-state-hmac-keyring-tsv %t/lane-state-keyring.tsv --lane-state-hmac-key-id missing --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=LANESTATEKEYRINGMISSINGID
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-keyring-sha-bad --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-keyring-signed.tsv --resume-from-lane-state --lane-state-hmac-keyring-tsv %t/lane-state-keyring.tsv --lane-state-hmac-keyring-sha256 0000000000000000000000000000000000000000000000000000000000000000 --lane-state-hmac-key-id lane-ring-a --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=LANESTATEKEYRINGSHABAD
+// RUN: KEYA_SHA=$(sha256sum %t/lane-state-ring-a.key | cut -d' ' -f1) && printf "lane-ring-baddate\t%t/lane-state-ring-a.key\t2026/02/09\t\tactive\t${KEYA_SHA}\n" > %t/lane-state-keyring-baddate.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-keyring-baddate --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-keyring-baddate-state.tsv --reset-lane-state --lane-state-hmac-keyring-tsv %t/lane-state-keyring-baddate.tsv --lane-state-hmac-key-id lane-ring-baddate --include-lane-regex "^$"' 2>&1 | FileCheck %s --check-prefix=LANESTATEKEYRINGBADDATE
+// RUN: KEYA_SHA=$(sha256sum %t/lane-state-ring-a.key | cut -d' ' -f1) && printf "lane-ring-future\t%t/lane-state-ring-a.key\t2099-01-01\t\tactive\t${KEYA_SHA}\n" > %t/lane-state-keyring-future.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-keyring-future-seed --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-keyring-future-state.tsv --reset-lane-state --lane-state-hmac-keyring-tsv %t/lane-state-keyring-future.tsv --lane-state-hmac-key-id lane-ring-future --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=LANESTATEKEYRINGWINDOW
+// RUN: KEYA_SHA=$(sha256sum %t/lane-state-ring-a.key | cut -d' ' -f1) && printf "lane-ring-a\t%t/lane-state-ring-a.key\t2099-01-01\t\tactive\t${KEYA_SHA}\n" > %t/lane-state-keyring-future-verify.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lane-state-keyring-future-verify --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --lane-state-tsv %t/lane-state-keyring-signed.tsv --resume-from-lane-state --lane-state-hmac-keyring-tsv %t/lane-state-keyring-future-verify.tsv --lane-state-hmac-key-id lane-ring-a --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=LANESTATEKEYRINGWINDOW
 // RUN: printf '#!/usr/bin/env bash\necho "sv-tests SVA summary: total=10 pass=9 fail=0 xfail=1 xpass=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
 // RUN: printf '#!/usr/bin/env bash\necho "sv-tests LEC summary: total=10 pass=10 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
 // RUN: chmod +x %t/utils/run_sv_tests_circt_bmc.sh %t/utils/run_sv_tests_circt_lec.sh
@@ -266,6 +272,8 @@
 // LANESTATEKEYRINGRESUME: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}10{{[[:space:]]+}}9{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0
 // LANESTATEKEYRINGMISSINGID: lane state HMAC keyring missing key_id 'missing'
 // LANESTATEKEYRINGSHABAD: lane state HMAC keyring SHA256 mismatch:
+// LANESTATEKEYRINGBADDATE: invalid lane state HMAC keyring row {{.*}} not_before: expected YYYY-MM-DD
+// LANESTATEKEYRINGWINDOW: lane state HMAC key_id '{{.*}}' not active at generated_at_utc
 // CASEUNMATCHED: unmatched expected failure cases:
 // CASEUNMATCHED: sv-tests LEC id_kind=base id=missing_case status=FAIL
 // CASEOT: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_xprop

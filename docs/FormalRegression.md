@@ -91,6 +91,8 @@ Lane-state semantics:
 - `--lane-state-hmac-keyring-tsv` resolves keys by `hmac_key_id` from a keyring
   row format:
   - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+- Keyring `not_before` / `not_after` fields (when set) are enforced against
+  lane-state manifest `generated_at_utc`.
 - `--lane-state-hmac-keyring-sha256` can pin exact keyring content hash.
 - `--lane-state-hmac-key-file` and `--lane-state-hmac-keyring-tsv` are mutually
   exclusive.

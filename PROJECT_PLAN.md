@@ -18166,6 +18166,16 @@ ninja -C build circt-verilog
   - Improves distributed closure security posture with keyring content pinning
     and explicit key-id routing.
 
+### Iteration 682
+- Added lane-state key-window enforcement for keyring mode:
+  - validates `not_before` / `not_after` keyring dates
+  - enforces key active window against manifest `generated_at_utc` during both
+    manifest emission and verification
+- Planning impact:
+  - Closes signer-lifecycle gap for rotated keys by preventing out-of-window
+    manifest generation or replay.
+  - Tightens checkpoint provenance guarantees for long-running 24/7 closure.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18176,8 +18186,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add lane-state signer lifecycle policy (time-window + revocation enforcement
-    for manifests).
+  - Add asymmetric signer support (Ed25519/cert-backed manifests) for lane-state
+    provenance.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
