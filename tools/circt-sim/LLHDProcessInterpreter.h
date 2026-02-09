@@ -937,7 +937,8 @@ private:
   ProcessId resolveProcessHandle(uint64_t handle);
 
   /// Register a process execution state and its stable handle mapping.
-  void registerProcessState(ProcessId procId, ProcessExecutionState &&state);
+  void registerProcessState(ProcessId procId, ProcessExecutionState &&state,
+                            std::optional<uint32_t> initialSeed = std::nullopt);
 
   /// Resume any processes awaiting completion of the target process.
   void notifyProcessAwaiters(ProcessId procId);

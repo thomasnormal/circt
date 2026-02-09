@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --ir-hw -o %t.mlir
+// RUN: circt-verilog %s --ir-llhd --no-uvm-auto-include -o %t.mlir
 // RUN: circt-sim %t.mlir --max-time=200000000000 2>&1 | FileCheck %s
 
 // Test that wait(condition) works with signal-based conditions.

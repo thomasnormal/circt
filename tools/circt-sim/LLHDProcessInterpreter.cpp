@@ -4216,14 +4216,17 @@ ProcessId LLHDProcessInterpreter::resolveProcessHandle(uint64_t handle) {
   return InvalidProcessId;
 }
 
-void LLHDProcessInterpreter::registerProcessState(ProcessId procId,
-                                                  ProcessExecutionState &&state) {
+void LLHDProcessInterpreter::registerProcessState(
+    ProcessId procId, ProcessExecutionState &&state,
+    std::optional<uint32_t> initialSeed) {
   auto insertResult = processStates.try_emplace(procId, std::move(state));
   if (!insertResult.second)
     insertResult.first->second = std::move(state);
 
-  insertResult.first->second.randomGenerator.seed(
-      static_cast<uint32_t>(procId) ^ 0xC0FFEEu);
+  // If an explicit seed was provided (e.g. from a parent RNG during fork),
+  // use it; otherwise fall back to the default deterministic seed.
+  uint32_t seed = initialSeed.value_or(static_cast<uint32_t>(procId) ^ 0xC0FFEEu);
+  insertResult.first->second.randomGenerator.seed(seed);
 
   uint64_t handle =
       reinterpret_cast<uint64_t>(&insertResult.first->second);
@@ -6227,6 +6230,31 @@ arith_dispatch:
     }
 
     if (failed(funcResult)) {
+      // Check if the failure was actually a suspension that we should propagate
+      // rather than swallow. When a virtual method call causes the process to
+      // suspend (e.g., wait_for_state inside sync_phase called from
+      // process_phase), interpretFuncBody returns success() with
+      // state.waiting=true. But if the function body reached a point that
+      // returns failure() (e.g., the while-loop fallthrough at the end of
+      // interpretFuncBody), AND the process is actually in waiting state,
+      // it means the suspension was set but the function body loop exited
+      // without returning success(). In this case, the suspension is valid
+      // and we should propagate it, not treat it as an error.
+      auto &suspState = processStates[procId];
+      if (suspState.waiting) {
+        // The function suspended -- this is not an error. Propagate the
+        // suspension so the caller can save a call stack frame.
+        // callDepth was already decremented above (line after interpretFuncBody).
+        if (indAddedToVisited) {
+          auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
+          if (depthRef > 0)
+            --depthRef;
+        }
+        LLVM_DEBUG(llvm::dbgs() << "  call_indirect: '" << calleeName
+                                << "' returned failure but process is waiting"
+                                << " -- treating as suspension\n");
+        return success();
+      }
       // Don't propagate internal failures from virtual method calls.
       // During UVM phase traversal, individual component methods may fail
       // (e.g., unimplemented sequencer interfaces, missing config_db entries).
@@ -12560,15 +12588,16 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
 
-    // Even though the process is deferred, we must still signal termination
-    // to the main simulation loop. Without this, UVM_FATAL -> die() ->
-    // sim.terminate gets deferred indefinitely when forked children are stuck
-    // waiting for events that will never arrive (e.g., missing BFMs in
-    // HVL-only AVIPs like AXI4Lite). The main loop's control.shouldContinue()
-    // must return false to prevent an infinite hang.
+    // For fatal/failure cases (UVM_FATAL -> die() -> sim.terminate), we must
+    // signal termination immediately to prevent infinite hangs when forked
+    // children are stuck waiting for events that will never arrive (e.g.,
+    // missing BFMs in HVL-only AVIPs). But for normal completion
+    // (finish_on_completion -> $finish), the forked children (phase hopper)
+    // need to keep running - they are NOT stuck, they just haven't finished
+    // their work yet. Setting terminationRequested=true here would kill them.
     // Skip during global init - UVM's m_uvm_get_root() can trigger
     // sim.terminate re-entrantly, and we must let init finish.
-    if (!inGlobalInit) {
+    if (!inGlobalInit && !success) {
       terminationRequested = true;
       if (terminateCallback) {
         terminateCallback(success, verbose);
@@ -12791,8 +12820,13 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
     // in the parent module (needed for virtual method dispatch via call_indirect)
     childState.processOrInitialOp = parentState.processOrInitialOp;
 
-    // Store the child state
-    registerProcessState(childId, std::move(childState));
+    // Derive the child's RNG seed from the parent's RNG (IEEE 1800-2017
+    // §18.13-18.14: hierarchical seeding for forked threads).
+    uint32_t childSeed =
+        static_cast<uint32_t>(parentState.randomGenerator());
+
+    // Store the child state with the derived seed
+    registerProcessState(childId, std::move(childState), childSeed);
 
     // Propagate execute_phase blocking info from parent to child.
     // When execute_phase for a task phase creates an outer sim.fork join,
