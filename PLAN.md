@@ -6,120 +6,122 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 200/200 | 100% |
+| circt-sim unit tests | 206/206 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
 | sv-tests simulation | 696/696 eligible pass+xfail | 100% |
-| sv-tests xfail (runtime gaps) | 41 | See breakdown below |
+| sv-tests xfail (runtime gaps) | ~35 | See breakdown below |
 | sv-tests compile-only | 73 | Class-only + SVA UVM |
 | AVIPs passing | 9/9 | APB, AHB, UART, I2S, I3C, SPI, AXI4, AXI4Lite, JTAG |
 | sv-tests BMC | 26/26 | 100% (Codex) |
 | sv-tests LEC | 23/23 | 100% (Codex) |
+| Coverage collection | Working | Parametric `with function sample()` fixed |
 
-### xfail Breakdown (41 tests)
+### Recent Fixes (This Session)
+
+1. **Constraint extraction improvements**: zext/sext lookup, compound range decomposition, constraint inheritance, VariableOp support for static blocks
+2. **Per-object RNG state**: `__moore_class_srandom(objPtr, seed)` with std::mt19937 per object address
+3. **Virtual interface clock propagation**: ContinuousAssignOp at module level → llhd.process for signal watching
+4. **Distribution constraint extraction**: `traceToPropertyName()` replaces BlockArgument-based lookup
+5. **Parametric covergroup sampling**: Fix 0% coverage - evaluate per-coverpoint expressions with bound formal parameters
+
+### xfail Breakdown (~35 tests remaining)
 
 | Category | Count | Tests | Difficulty |
 |----------|-------|-------|------------|
-| Constraint inheritance | 1 | 18.5.2 | Medium |
-| Distribution constraints | 1 | 18.5.4 | Medium |
 | Foreach/array-reduction constraints | 2 | 18.5.8.* | Hard |
 | Global constraints | 1 | 18.5.9 | Hard |
-| Static constraint blocks | 1 | 18.5.11 | Medium |
 | Functions in constraints | 1 | 18.5.12 | Hard |
 | Soft constraint priorities | 2 | 18.5.14.1 | Medium |
 | Infeasible constraint detection | 2 | 18.6.3 | Hard |
 | Inline constraints (randomize with) | 4 | 18.7.* | Medium-Hard |
 | Inline variable/constraint checker | 4 | 18.11.* | Medium-Hard |
-| rand_mode static sharing | 1 | 18.8._3 | Medium |
-| Random stability/seeding | 10 | 18.13-18.15 | Medium |
-| UVM stream_unpack | 6 | uvm_agent_*, uvm_monitor_*, uvm_scoreboard_* | Hard |
+| Random stability/seeding | 7 | 18.13-18.15 | Medium |
+| UVM virtual interface clock | 6 | uvm_agent_*, uvm_monitor_*, uvm_scoreboard_* | Hard |
 | UVM resource_db | 1 | uvm_resource_db_read_by_name | Medium |
-| ConstraintExprOp extraction gaps | 4 | (hidden in above) | Medium |
+| SVA runtime assertions | 17 | 16.2-16.17 (compile-only) | Hard |
 
 ## Workstreams
 
-### Track 1: Constraint Solver Improvements
+### Track 1: Constraint Solver Improvements (**ACTIVE**)
 **Goal**: Fix the constraint extraction pipeline and add missing constraint features.
 
-**Root Cause Analysis**: The `extractRangeConstraints` pipeline has fundamental gaps:
-1. `getPropertyName()` doesn't look through `zext`/`sext` (slang widens narrow types to i32)
-2. Compound expressions (`and(uge, ule)` from `inside {[a:b]}`) aren't decomposed
-3. `ConstraintInsideOp` is never created by ImportVerilog (dead code) - slang compiles `inside` to comparison trees
-4. Constraint extraction only iterates current class body, not parent classes (no inheritance)
-5. Cross-variable constraints (`b2 == b`) silently skipped (both sides are property reads)
+**Recently Completed**:
+- ✅ Fix `getPropertyName()` zext/sext lookup
+- ✅ Compound range decomposition (`and(uge, ule)` → min/max)
+- ✅ Constraint inheritance (parent class hierarchy walking)
+- ✅ Distribution constraint extraction via `traceToPropertyName()`
+- ✅ VariableOp support for static constraint blocks
+- ✅ Constraint guard null checks
+- ✅ Soft range constraints
+- ✅ Implication/if-else/set-membership constraints
+- ✅ rand_mode receiver resolution
 
-**Tasks (priority order)**:
-1. **Fix `getPropertyName()` to look through zext/sext** - Fixes ConstraintExprOp extraction for narrow types
-2. **Decompose `and(cmp, cmp)` compound constraints** - Handles `inside {[a:b]}` patterns
-3. **Walk parent class hierarchy for constraint inheritance** - `classDecl.getBaseAttr()` chain
-4. **Add ConstraintExprOp extraction to inline constraint regions** - Fixes 18.7.* tests
-5. **Implement cross-variable constraint solving** - `b2 == b` patterns (rejection sampling or copy-after)
-6. **Distribution constraint extraction from ConstraintExprOp** - Currently only from ConstraintDistOp
+**Next Tasks (priority order)**:
+1. **Inline constraint ConstraintExprOp extraction** - Fixes 18.7.* tests (4 tests)
+2. **Infeasible constraint detection** - Return 0 from randomize() when unsatisfiable (2 tests)
+3. **Foreach iterative constraints** - Loop over array elements (2 tests)
+4. **Functions in constraints** - Evaluate function calls during solving (1 test)
+5. **Cross-variable constraint solving** - `b2 == b` patterns (hard)
 
-**Tests affected**: ~12 tests could be fixed
-
-### Track 2: Random Stability & Seeding
+### Track 2: Random Stability & Seeding (**ACTIVE**)
 **Goal**: Implement deterministic random number generation per IEEE 1800-2017 §18.13-18.14.
 
-**Current state**: `randomize()` uses a global mt19937 RNG. No per-object or per-thread seeding.
+**Recently Completed**:
+- ✅ Per-object RNG state (std::mt19937 per object address)
+- ✅ `srandom(seed)` method → `__moore_class_srandom` in ImportVerilog + interpreter
+- ✅ Pending seed bridging for legacy `@srandom_NNNN` stubs
 
-**Tasks**:
-1. **Per-object RNG state** - Each class instance gets its own RNG seed based on object creation order
-2. **`srandom(seed)` method** - Set object-specific RNG seed
-3. **`get_randstate()` / `set_randstate()`** - Save/restore RNG state as string
-4. **Thread stability** - Fork contexts get isolated RNG state
-5. **Manual seed in `randomize(seed)`** - Override RNG for one call
+**Next Tasks**:
+1. **`get_randstate()` / `set_randstate()`** - Save/restore RNG state as string (2 tests)
+2. **Thread stability** - Fork contexts get isolated RNG state (3 tests)
+3. **Manual seed in `randomize(seed)`** - Override RNG for one call (2 tests)
 
-**Tests affected**: 10 tests (18.13.3-5, 18.14.*, 18.15.*)
+### Track 3: Coverage Collection (**ACTIVE**)
+**Goal**: Get coverage working end-to-end for all AVIPs.
 
-### Track 3: UVM Testbench Fixes
-**Goal**: Fix the remaining 7 UVM testbench failures.
+**Recently Completed**:
+- ✅ Parametric covergroup `with function sample()` fix (was causing 0% coverage)
+- ✅ Coverage reporting framework (`__moore_coverage_report()`)
+- ✅ Coverpoint expression evaluation with formal parameter binding
 
-**Stream_unpack (6 tests)**:
-- Error: `interpretOperation failed for process 3` on `moore.stream_unpack`
-- Root cause: `StreamUnpackOpConversion` in MooreToCore doesn't handle `!moore.ref<open_uarray<i1>>` type
-- These tests use UVM infrastructure with virtual interface patterns
-- Virtual interface clock connections are one-time stores, not continuous drives
+**Next Tasks**:
+1. **Recompile AVIPs** with coverage fix to verify non-zero hits
+2. **Coverpoint `iff` guard evaluation** - Currently stored as metadata string only
+3. **Automatic sampling triggers** - `@(posedge clk)` event-driven sampling
+4. **Wildcard bin matching** - Pattern matching for `wildcard bins`
+5. **Cross coverage verification** - Validate cross bins hit counting
 
-**resource_db (1 test)**:
-- `uvm_resource_db::read_by_name` fails - the interceptor needs to be extended
+### Track 4: UVM Testbench Fixes (**ACTIVE**)
+**Goal**: Fix remaining UVM test failures.
 
-**Tasks**:
-1. **Fix StreamUnpackOp for open_uarray<i1> type** - Add type handling in MooreToCore conversion
-2. **Fix virtual interface clock propagation** - Continuous drive instead of one-time store
-3. **Extend resource_db interceptor** - Support `read_by_name` pattern
+**Recently Completed**:
+- ✅ Virtual interface clock propagation (ContinuousAssignOp → llhd.process)
+- ✅ Expanded traceToMemoryPtr (struct_create/extract, extractvalue/insertvalue)
+- ✅ Edge detection (posedge/negedge/anyedge)
 
-**Tests affected**: 7 tests
-
-### Track 4: Advanced Constraint Features
-**Goal**: Implement harder constraint features needed for complex UVM testbenches.
-
-**Tasks**:
-1. **Foreach iterative constraints** (18.5.8.1) - Loop over array elements with constraints
-2. **Array reduction constraints** (18.5.8.2) - `array.sum()` in constraint context
-3. **Global constraints** (18.5.9) - Cross-object constraint sharing
-4. **Functions in constraints** (18.5.12) - Evaluate function calls during solving
-5. **Infeasible constraint detection** (18.6.3) - Return 0 from randomize() when unsatisfiable
-6. **Static constraint block sharing** (18.5.11) - Share constraint state across instances
-
-**Tests affected**: ~8 tests
+**Next Tasks**:
+1. **Virtual interface DUT clock sensitivity** - `always @(posedge vif.clk)` in DUT modules
+2. **resource_db read_by_name** - Extend interceptor for UVM resource_db pattern
+3. **SVA concurrent assertions** - Runtime eval for `assert property` (17 compile-only tests)
+4. **Process await/kill** - `process::await()` and `process::kill()` (sv-tests timeouts)
 
 ## Priority Matrix
 
 | Priority | Track | Next Task | Impact |
 |----------|-------|-----------|--------|
-| P0 | Track 1 | Fix getPropertyName zext/sext + compound decomposition | Unblocks ~5 tests |
-| P0 | Track 1 | Constraint inheritance (parent walking) | Unblocks 1 test + AVIP correctness |
-| P1 | Track 2 | Per-object RNG state + srandom | Unblocks 5 tests |
-| P1 | Track 3 | StreamUnpackOp type fix | Unblocks 6 UVM tests |
-| P2 | Track 1 | Inline constraint ConstraintExprOp extraction | Unblocks 4 tests |
-| P2 | Track 4 | Distribution from ConstraintExprOp | Unblocks 1 test |
-| P3 | Track 4 | Foreach/global/functions constraints | Hard, 4 tests |
+| P0 | Track 3 | Recompile AVIPs with coverage fix | 9 AVIPs get real coverage |
+| P0 | Track 1 | Inline constraint extraction | Unblocks 4 tests |
+| P1 | Track 2 | get/set_randstate | Unblocks 2 tests |
+| P1 | Track 4 | Virtual interface DUT clock | Unblocks 6 UVM tests |
+| P2 | Track 1 | Infeasible constraint detection | Unblocks 2 tests |
+| P2 | Track 3 | Coverpoint iff evaluation | AVIP coverage accuracy |
+| P3 | Track 4 | SVA concurrent assertions | 17 compile-only tests |
 
 ## Testing Targets
 
 | Suite | Command | Expected |
 |-------|---------|----------|
-| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 200+ pass |
+| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 206+ pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
 | sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh ~/sv-tests` | 0 fail, 0 timeout |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |

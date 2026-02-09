@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 722 (Sim) - February 9, 2026
+
+### Parametric Covergroup Sampling Fix (0% → Real Coverage)
+
+- **Root cause**: Parametric covergroups (`with function sample(cfg, packet)`) passed 2 raw
+  object pointers to `CovergroupSampleOp` instead of evaluating all N coverpoint expressions.
+  All 9 AVIPs reported 0 hits / 0% coverage.
+- **Fix** (`a358f23f6`): In ImportVerilog/Expressions.cpp, the explicit-argument sample path now:
+  - Finds the sample `SubroutineSymbol` from the covergroup body
+  - Uses `visitSymbolReferences()` to collect the actual `FormalArgumentSymbol` pointers
+    from coverpoint expressions (may differ from `getArguments()` copies due to `copyArg()`)
+  - Binds formal symbols to actual argument values by name + pointer
+  - Evaluates each coverpoint expression in that scope
+- New test: `coverage-parametric-sample.sv` (2 coverpoints, 2 samples, verified non-zero hits)
+
+### Constraint Solver Improvements
+
+- **Compound range decomposition** (`8ba20049d`): `and(uge(x, min), ule(x, max))` from
+  `inside {[a:b]}` now correctly extracted as `[min, max]` range constraints.
+- **zext/sext property lookup**: `getPropertyName()` looks through `ZExtOp`/`SExtOp` that
+  slang inserts for narrow integer types (e.g., `bit [7:0]` widened to `i32`).
+- **Constraint inheritance**: Walk parent class hierarchy via `classDecl.getBaseAttr()` chain.
+- **Distribution constraint fix**: `traceToPropertyName()` replaces BlockArgument-based lookup
+  for dist, soft, and range constraint extraction. Supports both non-static
+  (`ClassPropertyRefOp`) and static (`VariableOp`) constraint blocks.
+
+### Per-Object RNG State (IEEE 1800-2017 §18.13)
+
+- **ImportVerilog** (`a358f23f6`): Emit `__moore_class_srandom(objPtr, seed)` for class
+  `srandom()` calls (non-process classes only).
+- **Interpreter** (`c07ce5ed5`): `perObjectRng` map with `std::mt19937` per object address.
+  `getObjectRng()` creates default seed from object address. `pendingSrandomSeed` bridges
+  old-style `@srandom_NNNN` stubs. `lastRandomizeObjAddr` associates range calls with RNG.
+- New test: `random-srandom-seed.sv` (same seed → same random value)
+
+### Virtual Interface Clock Propagation
+
+- **MooreToCore** (`c07ce5ed5`): `ContinuousAssignOp` at module level (not inside process/func)
+  now creates an `llhd.process` that watches source signals (via `llhd.prb`) and continuously
+  stores updated values to memory-backed destinations (interface struct fields).
+- **Interpreter**: `traceToMemoryPtr` depth increased 10→16, expanded to follow
+  `hw.struct_create`, `hw.struct_extract`, `llvm.extractvalue`, `llvm.insertvalue`.
+- Edge detection: `waitForRisingEdge` now distinguishes posedge vs anyedge.
+
+### Test Results
+
+- circt-sim: **206/206** (100%) - 6 new tests
+- sv-tests simulation: 696/696 eligible (100%), 0 failures
+- AVIPs: **9/9** pass (APB, AHB, UART, I2S, I3C, SPI, AXI4, AXI4Lite, JTAG)
+
 ## Iteration 721 - February 9, 2026
 
 ### Refresh Metadata TLS-Linkage Policy Gates
