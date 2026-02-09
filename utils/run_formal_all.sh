@@ -31,6 +31,9 @@ Options:
   --fail-on-new-e2e-mode-diff-strict-only-fail
                          Fail when OpenTitan E2E mode-diff strict_only_fail
                          count increases vs baseline
+  --fail-on-new-e2e-mode-diff-status-diff
+                         Fail when OpenTitan E2E mode-diff status_diff
+                         count increases vs baseline
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1630,6 +1633,7 @@ FAIL_ON_NEW_XPASS=0
 FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
+FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
@@ -1898,6 +1902,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_FAILURE_CASES=1; shift ;;
     --fail-on-new-e2e-mode-diff-strict-only-fail)
       FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
+    --fail-on-new-e2e-mode-diff-status-diff)
+      FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1; shift ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
@@ -3714,6 +3720,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_PASSRATE_REGRESSION=1
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
+  FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -6909,6 +6916,7 @@ rows = []
 total = 0
 passed = 0
 failed = 0
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
 with results_path.open() as f:
   reader = csv.DictReader(f, delimiter="\t")
   for row in reader:
@@ -6920,7 +6928,12 @@ with results_path.open() as f:
     if not kind and not target:
       continue
     total += 1
-    case_status = "PASS" if status == "PASS" else "FAIL"
+    if status == "PASS":
+      case_status = "PASS"
+    elif status in fail_like_statuses:
+      case_status = status
+    else:
+      case_status = "FAIL"
     if case_status == "PASS":
       passed += 1
     else:
@@ -8784,7 +8797,8 @@ fi
 if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_PASSRATE_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
-      "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" ]]; then
+      "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
+      "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
   BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
@@ -8792,6 +8806,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_PASSRATE_REGRESSION="$FAIL_ON_PASSRATE_REGRESSION" \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
+  FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -8925,6 +8940,9 @@ fail_on_new_failure_cases = os.environ.get("FAIL_ON_NEW_FAILURE_CASES", "0") == 
 fail_on_new_e2e_mode_diff_strict_only_fail = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL", "0") == "1"
 )
+fail_on_new_e2e_mode_diff_status_diff = (
+    os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF", "0") == "1"
+)
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
@@ -9017,23 +9035,36 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new failure cases observed (baseline={len(baseline_case_set)} current={len(current_case_set)}, window={baseline_window}): {sample}"
                 )
-    if (
-        fail_on_new_e2e_mode_diff_strict_only_fail
-        and suite == "opentitan"
-        and mode == "E2E_MODE_DIFF"
-    ):
-        baseline_strict_only_fail_values = []
-        for counts in parsed_counts:
-            if "strict_only_fail" in counts:
-                baseline_strict_only_fail_values.append(int(counts["strict_only_fail"]))
-        if baseline_strict_only_fail_values:
-            baseline_strict_only_fail = min(baseline_strict_only_fail_values)
-            current_counts = parse_result_summary(current_row.get("summary", ""))
-            current_strict_only_fail = int(current_counts.get("strict_only_fail", 0))
-            if current_strict_only_fail > baseline_strict_only_fail:
-                gate_errors.append(
-                    f"{suite} {mode}: strict_only_fail increased ({baseline_strict_only_fail} -> {current_strict_only_fail}, window={baseline_window})"
+    if suite == "opentitan" and mode == "E2E_MODE_DIFF":
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        if fail_on_new_e2e_mode_diff_strict_only_fail:
+            baseline_strict_only_fail_values = []
+            for counts in parsed_counts:
+                if "strict_only_fail" in counts:
+                    baseline_strict_only_fail_values.append(
+                        int(counts["strict_only_fail"])
+                    )
+            if baseline_strict_only_fail_values:
+                baseline_strict_only_fail = min(baseline_strict_only_fail_values)
+                current_strict_only_fail = int(
+                    current_counts.get("strict_only_fail", 0)
                 )
+                if current_strict_only_fail > baseline_strict_only_fail:
+                    gate_errors.append(
+                        f"{suite} {mode}: strict_only_fail increased ({baseline_strict_only_fail} -> {current_strict_only_fail}, window={baseline_window})"
+                    )
+        if fail_on_new_e2e_mode_diff_status_diff:
+            baseline_status_diff_values = []
+            for counts in parsed_counts:
+                if "status_diff" in counts:
+                    baseline_status_diff_values.append(int(counts["status_diff"]))
+            if baseline_status_diff_values:
+                baseline_status_diff = min(baseline_status_diff_values)
+                current_status_diff = int(current_counts.get("status_diff", 0))
+                if current_status_diff > baseline_status_diff:
+                    gate_errors.append(
+                        f"{suite} {mode}: status_diff increased ({baseline_status_diff} -> {current_status_diff}, window={baseline_window})"
+                    )
     if fail_on_passrate_regression:
         baseline_rate = max(
             pass_rate(

@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 787 - February 9, 2026
+
+### FormalAll: OpenTitan E2E Mode-Diff `status_diff` Strict Gate
+
+1. Extended `utils/run_formal_all.sh` strict gate controls with:
+   - `--fail-on-new-e2e-mode-diff-status-diff`
+2. Enabled this guard under `--strict-gate` defaults, alongside
+   `--fail-on-new-e2e-mode-diff-strict-only-fail`.
+3. Added baseline-window comparison logic for
+   `opentitan/E2E_MODE_DIFF status_diff`:
+   - parse `status_diff` from baseline summary telemetry
+   - fail only when current `status_diff` exceeds the baseline window minimum.
+4. Closed tech debt in OpenTitan E2E case export:
+   - preserve fail-like statuses (`FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`)
+     instead of collapsing all non-pass rows to `FAIL`.
+   - this makes `status_diff` tracking semantically meaningful for strict-vs-
+     default OpenTitan E2E drift.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-strict-gate-e2e-mode-diff-status-diff.test`
+    - seeds baseline with `status_diff=1`
+    - verifies gate failure when rerun increases to `status_diff=2`.
+- Existing mode-diff/strict-gate coverage revalidated:
+  - `test/Tools/run-formal-all-opentitan-e2e-mode-diff.test`
+  - `test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-fail.test`
+  - `test/Tools/run-formal-all-strict-gate-failure-cases.test`
+  - `test/Tools/run-formal-all-strict-gate.test`
+  - `test/Tools/run-formal-all-help.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-e2e-mode-diff-status-diff.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-fail.test test/Tools/run-formal-all-opentitan-e2e-mode-diff.test test/Tools/run-formal-all-strict-gate-failure-cases.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-help.test`:
+    - 6/6 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS (`aes_sbox_canright OK`)
+- OpenTitan dual-lane + status-diff gate check:
+  - baseline seed:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-mode-diff-statusdiff-baseline-run --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$' --baseline-file /tmp/formal-all-opentitan-e2e-mode-diff-statusdiff-baselines.tsv --update-baselines`:
+      - `E2E`: `total=12 pass=12 fail=0`
+      - `E2E_STRICT`: `total=12 pass=11 fail=1`
+      - `E2E_MODE_DIFF`: `total=12 pass=11 fail=1 same_status=11 strict_only_fail=1 strict_only_pass=0 status_diff=0`
+  - gate rerun:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-mode-diff-statusdiff-gate-run --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$' --baseline-file /tmp/formal-all-opentitan-e2e-mode-diff-statusdiff-baselines.tsv --fail-on-new-e2e-mode-diff-status-diff`:
+      - PASS (no `status_diff` increase).
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+- `E2E_MODE_DIFF` strict gate still treats `strict_only_pass` as telemetry-only
+  (no dedicated non-regression gate yet).
+
 ## Iteration 786 - February 9, 2026
 
 ### Mutation Cover: Install-Tree Auto Tool Discovery
