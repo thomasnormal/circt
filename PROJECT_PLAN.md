@@ -18348,6 +18348,11 @@ ninja -C build circt-verilog
   (`file://`, `http://`, `https://`) with command/URI mutual-exclusion,
   required metadata sidecars for URI mode, and config-hash binding of refresh
   URI settings.
+- Iteration 708 adds key-certificate-driven refresh URI auto-discovery:
+  - CRL: `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp`
+  - OCSP: `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia`
+  - Auto modes are metadata-gated, mutually exclusive with cmd/explicit URI,
+    and included in lane-state config-hash policy material.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18361,8 +18366,11 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
-    policy for refresh commands.
+  - Extend cert-driven AIA/CDP auto-discovery with explicit URI selection
+    policy (single vs priority list) and failure diagnostics for multi-URI
+    certificates.
+  - Add recursive refresh trust-evidence capture (peer cert chain + issuer
+    linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active
     transport-chain capture/verification in refresh tooling (issuer/path
     validation evidence).

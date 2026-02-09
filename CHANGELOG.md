@@ -32754,6 +32754,80 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 708 - February 9, 2026
+
+### Lane-State Ed25519 Cert-Driven Refresh URI Auto-Discovery
+
+- Added certificate-extension auto-discovery modes in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia`
+- Auto-discovery behavior:
+  - resolves URI from selected key certificate in
+    `--lane-state-manifest-ed25519-keyring-tsv` for
+    `--lane-state-manifest-ed25519-key-id`
+  - CRL auto mode reads cert `CRL Distribution Points`
+  - OCSP auto mode reads cert `Authority Information Access` (OCSP entry)
+  - accepted schemes: `file://`, `http://`, `https://`
+- Policy and dependency rules:
+  - auto modes require refresh artifact path + keyring mode + key id
+  - auto modes require corresponding refresh metadata file
+  - cmd/explicit-uri/auto-uri are mutually exclusive per artifact kind
+  - retry/delay/timeout/jitter and metadata-file dependency gates now treat
+    auto mode as a first-class refresh mode.
+- Lane-state compatibility:
+  - auto-mode flags are now included in lane-state config hash material.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for CRL/OCSP auto-uri without artifact paths
+    - positive CRL auto-uri and OCSP auto-uri manifest provenance checks
+    - negative auto-uri metadata-required checks
+    - negative explicit-uri + auto-uri conflict checks
+    - updated Ed25519 cert fixture to embed CDP/AIA URIs for deterministic
+      auto-discovery coverage
+    - updated expected diagnostics for expanded mode sets
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP auto-uri flags, constraints, and retry semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Auto-discovery currently selects the first matching URI in CDP/AIA extension
+  output (no explicit priority policy for multi-URI certificates).
+- No recursive/chain-aware validation of discovery targets beyond metadata
+  policy gates and existing transport constraints.
+
 ## Iteration 707 - February 9, 2026
 
 ### Lane-State Built-In CRL/OCSP Refresh URI Mode
