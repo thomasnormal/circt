@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "SCRIPT:$(basename "$0")"\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/scripts/generate_mutations_yosys.sh
+// RUN: chmod +x %t/scripts/generate_mutations_yosys.sh
+// RUN: CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut generate --cache-dir %t/cache --design %t/design.v --out %t/mutations.txt --count 2 > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK: SCRIPT:generate_mutations_yosys.sh
+// CHECK: ARG:--cache-dir
+// CHECK: ARG:--design
+// CHECK: ARG:--out
+// CHECK: ARG:--count
