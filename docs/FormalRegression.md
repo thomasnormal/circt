@@ -217,7 +217,9 @@ Execution controls:
 - `--reuse-manifest-file <path>`: write run compatibility manifest
   (default `<work-dir>/reuse_manifest.json`)
 - `--reuse-cache-dir <path>`: content-addressed compatibility cache root for
-  automatic reuse discovery/publish.
+  automatic reuse discovery/publish. For generated-mutation runs, this also
+  enables cached mutation-list generation under
+  `<reuse-cache-dir>/generated_mutations`.
 - `--reuse-cache-mode off|read|read-write`: cache read/write policy
   (default `read-write` when cache dir is provided).
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
@@ -464,7 +466,8 @@ Execution controls:
 - `--default-bmc-orig-cache-eviction-policy lru|fifo|cost-lru`: default
   `run_mutation_cover.sh --bmc-orig-cache-eviction-policy`.
 - `--reuse-cache-dir <path>`: pass-through
-  `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
+  `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes; this also enables
+  shared generated-mutation cache reuse across lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
   policy for each lane's `run_mutation_cover.sh` invocation.
 - `--include-lane-regex <regex>`: run only lane IDs matching any provided
@@ -1243,8 +1246,8 @@ Expected-failure cases file:
 - `--expected-failure-cases-file` expects TSV with required columns:
   - `suite	mode	id`
 - Optional columns:
-  - `id_kind` (`base`, `base_diag`, `path`, `aggregate`, `base_regex`, or
-    `path_regex`,
+  - `id_kind` (`base`, `base_diag`, `path`, `aggregate`, `base_regex`,
+    `base_diag_regex`, or `path_regex`,
     default: `base`)
   - `status` (`ANY`, `FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`; default: `ANY`)
   - `expires_on` (`YYYY-MM-DD`)
@@ -1254,8 +1257,9 @@ Expected-failure cases file:
 - `id_kind=base_diag` matches `<base>#<DIAG>` where `<DIAG>` is parsed from a
   trailing diagnostic suffix in observed artifact paths (for example
   `aes_sbox_canright#XPROP_ONLY`).
-- `id_kind=base_regex` / `path_regex` treat `id` as a Python regular
-  expression matched against observed `base` / `path`, respectively.
+- `id_kind=base_regex` / `base_diag_regex` / `path_regex` treat `id` as a
+  Python regular expression matched against observed `base` / `base_diag` /
+  `path`, respectively.
   Use `path_regex` for full-path matching; prefer `base_diag` for strict
   OpenTitan diagnostic class matching.
 - `--fail-on-unexpected-failure-cases` fails if observed fail-like test cases are

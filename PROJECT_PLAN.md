@@ -217,12 +217,18 @@ See CHANGELOG.md on recent progress.
 18. `run_formal_all.sh` expected-failure case matching now supports
     `id_kind=base_diag` (`<base>#<DIAG>`), enabling stable strict OpenTitan
     diagnostic tracking (`XPROP_ONLY`) without path-regex coupling.
+19. `run_formal_all.sh` expected-failure case matching now supports
+    `id_kind=base_diag_regex` for one-to-many strict diagnostic matching across
+    implementation sets while remaining path-independent.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
 19. Added initial `circt-mut` binary frontend with
     `cover|matrix|generate` subcommands to provide a stable mutation CLI while
     preserving script backend compatibility during migration.
+20. Mutation generation now supports content-addressed list caching under
+    `--reuse-cache-dir/generated_mutations`, reducing repeated Yosys
+    `mutate -list` work across iterative cover/matrix runs.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for

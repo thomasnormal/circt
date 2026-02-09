@@ -1,0 +1,26 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\necho "sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_bmc.sh
+// RUN: printf '#!/usr/bin/env bash\necho "sv-tests LEC summary: total=1 pass=1 fail=0 error=0 skip=0"\n' > %t/utils/run_sv_tests_circt_lec.sh
+// RUN: printf '#!/usr/bin/env bash\necho "verilator-verification summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0"\n' > %t/utils/run_verilator_verification_circt_bmc.sh
+// RUN: printf '#!/usr/bin/env bash\necho "verilator-verification LEC summary: total=1 pass=1 fail=0 error=0 skip=0"\n' > %t/utils/run_verilator_verification_circt_lec.sh
+// RUN: printf '#!/usr/bin/env bash\necho "yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0"\n' > %t/utils/run_yosys_sva_circt_bmc.sh
+// RUN: printf '#!/usr/bin/env bash\necho "yosys LEC summary: total=1 pass=1 fail=0 error=0 skip=0"\n' > %t/utils/run_yosys_sva_circt_lec.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nout = os.environ.get(\"OUT\", \"\")\nif not out:\n  sys.exit(7)\nos.makedirs(os.path.dirname(out), exist_ok=True)\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n  f.write(\"FAIL\\taes_sbox_canright\\t/tmp/fake-canright/aes_sbox_canright#XPROP_ONLY\\topentitan\\tLEC_STRICT\\n\")\nprint(\"Running LEC on 1 AES S-Box implementation(s)...\")\nprint(\"aes_sbox_canright        FAIL (XPROP_ONLY) (logs in /tmp/fake-canright)\")\nprint(\"LEC failures: 1\")\nsys.exit(1)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_sv_tests_circt_bmc.sh %t/utils/run_sv_tests_circt_lec.sh %t/utils/run_verilator_verification_circt_bmc.sh %t/utils/run_verilator_verification_circt_lec.sh %t/utils/run_yosys_sva_circt_bmc.sh %t/utils/run_yosys_sva_circt_lec.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
+//
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC_STRICT\t^aes_sbox_.*#XPROP_ONLY$\tbase_diag_regex\tFAIL\t2099-01-01\tknown_strict_xprop_regex\n' > %t/expected-failure-cases-base-diag-regex.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC_STRICT$' --expected-failure-cases-file %t/expected-failure-cases-base-diag-regex.tsv --fail-on-unexpected-failure-cases
+// RUN: FileCheck %s --check-prefix=CASEOK < %t/out/expected-failure-cases-summary.tsv
+//
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC_STRICT\t[\tbase_diag_regex\tFAIL\t2099-01-01\tbad_regex\n' > %t/expected-failure-cases-base-diag-bad-regex.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-bad-regex --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex "^opentitan/LEC_STRICT$" --expected-failure-cases-file %t/expected-failure-cases-base-diag-bad-regex.tsv --fail-on-unexpected-failure-cases' 2>&1 | FileCheck %s --check-prefix=BADREGEX
+//
+// CASEOK: suite{{[[:space:]]+}}mode{{[[:space:]]+}}id_kind{{[[:space:]]+}}id{{[[:space:]]+}}status{{[[:space:]]+}}expires_on{{[[:space:]]+}}matched_count
+// CASEOK: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}base_diag_regex
+// CASEOK: 2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_strict_xprop_regex
+//
+// BADREGEX: invalid expected-failure-cases row
+// BADREGEX: invalid regex

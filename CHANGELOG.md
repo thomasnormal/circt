@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 769 - February 9, 2026
+
+### Mutation Generation Cache (Yosys `mutate -list`)
+
+- Extended `utils/generate_mutations_yosys.sh` with:
+  - `--cache-dir <dir>`
+- Added content-addressed mutation-list caching keyed by:
+  - design content hash
+  - generation parameters (count/seed/top/modes/mode-counts/profiles/cfg/select)
+  - resolved Yosys path
+- On cache hit, generation reuses a cached mutation list and skips invoking
+  Yosys.
+- `utils/run_mutation_cover.sh` now automatically enables generation caching
+  when both conditions are true:
+  - `--generate-mutations` is used
+  - `--reuse-cache-dir` is set
+  Cache location: `<reuse-cache-dir>/generated_mutations`.
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-generate-cache.test`
+  - `test/Tools/run-mutation-cover-generate-cache.test`
+  - `test/Tools/run-mutation-matrix-generate-cache.test`
+- Updated:
+  - `test/Tools/run-mutation-generate-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-help.test test/Tools/run-mutation-generate-basic.test test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate.test`: PASS (6/6)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (63/63)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-generate-cache --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 768 - February 9, 2026
 
 ### `circt-mut` Binary Frontend (Initial Migration Step)
@@ -39639,6 +39686,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OpenTitan canonical E2E lane:
   - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-baseline-now --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
     - summary: `total=12 pass=12 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 741 - February 9, 2026
+
+### Expected-Failure Regex Matching by Diagnostic Class (`base_diag_regex`)
+
+1. Extended `utils/run_formal_all.sh` expected-failure case matcher with new
+   `id_kind=base_diag_regex`:
+   - treats `id` as a Python regex matched against `<base>#<DIAG>` values
+     derived from case rows (for example `aes_sbox_canright#XPROP_ONLY`).
+2. This enables one-to-many strict OpenTitan LEC diagnostic expectations
+   without tying matching to artifact paths or enumerating every base exactly.
+3. Existing match kinds remain unchanged:
+   - `base`, `base_diag`, `path`, `aggregate`, `base_regex`, `path_regex`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test`
+    - verifies matching with `id_kind=base_diag_regex`
+    - verifies invalid regex rejection for `base_diag_regex`.
+- Retained/validated:
+  - `test/Tools/run-formal-all-expected-failure-cases-base-diag.test`
+  - `test/Tools/run-formal-all-expected-failure-cases-regex.test`
+  - `test/Tools/run-formal-all-help.test`
+  - `test/Tools/run-formal-all-opentitan-lec-strict.test`
+  - `test/Tools/run-formal-all-opentitan-lec.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-help.test`:
+    - 4/4 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec.test`:
+    - 6/6 PASS
+- OpenTitan strict case matching checks:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-base-diag-regex-match --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --expected-failure-cases-file /tmp/opentitan-lec-strict-base-diag-regex-cases.tsv --fail-on-unexpected-failure-cases`:
+    - `expected-failure-cases totals: observed_fail_like=1 matched_expected=1 unexpected_observed=0 expired_expected=0 unmatched_expected=0`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+- OpenTitan lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-base-diag-regex-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-base-diag-regex-lane --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
 
 ### Remaining Limitations
 
