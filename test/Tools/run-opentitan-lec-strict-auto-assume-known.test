@@ -7,9 +7,9 @@
 // RUN: chmod +x %t/bin/circt-verilog
 // RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-opt
 // RUN: chmod +x %t/bin/circt-opt
-// RUN: printf '#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = \"--assume-known-inputs\" ]; then echo \"bad flag\"; exit 1; fi; done\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '#!/bin/sh\nhave_assume=0\nhave_xopt=0\nfor arg in \"$@\"; do\n  [ \"$arg\" = \"--assume-known-inputs\" ] && have_assume=1\n  [ \"$arg\" = \"--x-optimistic\" ] && have_xopt=1\ndone\n[ $have_assume -eq 1 ] || exit 1\n[ $have_xopt -eq 0 ] || exit 1\nexit 0\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/bin/circt-lec
-// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 LEC_X_OPTIMISTIC=0 LEC_ASSUME_KNOWN_INPUTS=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 LEC_X_OPTIMISTIC=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
 // RUN: FileCheck %s --check-prefix=RESULTPASS < %t/results.tsv
 
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
