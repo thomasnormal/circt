@@ -492,6 +492,9 @@ Execution controls:
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes; this also enables
   shared generated-mutation cache reuse across lanes.
+  Generated-mutation cache writes are coordinated by per-key locking in
+  `generate_mutations_yosys.sh`, preventing duplicate generation work when
+  multiple lanes request the same cache key concurrently.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
   policy for each lane's `run_mutation_cover.sh` invocation.
 - `--include-lane-regex <regex>`: run only lane IDs matching any provided

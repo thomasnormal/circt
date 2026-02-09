@@ -53,6 +53,21 @@ declare -a MODE_COUNT_LIST=()
 declare -a PROFILE_LIST=()
 declare -a CFG_LIST=()
 declare -a SELECT_LIST=()
+CACHE_LOCK_DIR=""
+CACHE_LOCK_STALE_SECONDS=3600
+CACHE_LOCK_POLL_SECONDS=0.1
+
+cleanup() {
+  if [[ -n "${WORK_DIR:-}" && -d "${WORK_DIR:-}" ]]; then
+    rm -rf "$WORK_DIR"
+  fi
+  if [[ -n "${CACHE_LOCK_DIR:-}" ]]; then
+    rm -f "${CACHE_LOCK_DIR}/pid" 2>/dev/null || true
+    rmdir "$CACHE_LOCK_DIR" 2>/dev/null || true
+    CACHE_LOCK_DIR=""
+  fi
+}
+trap cleanup EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -168,6 +183,57 @@ elapsed_ns_since() {
 }
 
 SCRIPT_START_NS="$(current_epoch_ns)"
+mkdir -p "$(dirname "$OUT_FILE")"
+
+file_mtime_epoch() {
+  local path="$1"
+  local ts=0
+  ts="$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || printf "0")"
+  if [[ ! "$ts" =~ ^[0-9]+$ ]]; then
+    ts=0
+  fi
+  printf "%s\n" "$ts"
+}
+
+release_cache_lock() {
+  if [[ -n "${CACHE_LOCK_DIR:-}" ]]; then
+    rm -f "${CACHE_LOCK_DIR}/pid" 2>/dev/null || true
+    rmdir "$CACHE_LOCK_DIR" 2>/dev/null || true
+    CACHE_LOCK_DIR=""
+  fi
+}
+
+acquire_cache_lock() {
+  local cache_path="$1"
+  local lock_dir="${cache_path}.lock"
+  local now_sec=0
+  local lock_mtime=0
+  local lock_age=0
+
+  while true; do
+    if mkdir "$lock_dir" 2>/dev/null; then
+      CACHE_LOCK_DIR="$lock_dir"
+      printf "%s\n" "$$" > "${lock_dir}/pid" 2>/dev/null || true
+      return 0
+    fi
+
+    if [[ -d "$lock_dir" ]]; then
+      now_sec="$(date +%s 2>/dev/null || printf "0")"
+      lock_mtime="$(file_mtime_epoch "$lock_dir")"
+      lock_age=0
+      if [[ "$now_sec" =~ ^[0-9]+$ ]] && [[ "$lock_mtime" =~ ^[0-9]+$ ]] && [[ "$now_sec" -ge "$lock_mtime" ]]; then
+        lock_age=$((now_sec - lock_mtime))
+      fi
+      if [[ "$lock_age" -ge "$CACHE_LOCK_STALE_SECONDS" ]]; then
+        rm -f "${lock_dir}/pid" 2>/dev/null || true
+        rmdir "$lock_dir" 2>/dev/null || true
+        continue
+      fi
+    fi
+
+    sleep "$CACHE_LOCK_POLL_SECONDS"
+  done
+}
 
 yosys_resolved="$(command -v "$YOSYS_BIN" 2>/dev/null || printf "%s" "$YOSYS_BIN")"
 if [[ -n "$MODES_CSV" ]]; then
@@ -434,12 +500,32 @@ EOF
     echo "Mutation cache file: $cache_file"
     exit 0
   fi
+  acquire_cache_lock "$cache_file"
+  if [[ -s "$cache_file" ]]; then
+    cache_saved_runtime_ns=0
+    cache_meta_file="${cache_file}.meta"
+    if [[ -f "$cache_meta_file" ]]; then
+      cache_saved_runtime_ns="$(awk -F$'\t' '$1=="generation_runtime_ns"{print $2}' "$cache_meta_file" | head -n1)"
+      cache_saved_runtime_ns="${cache_saved_runtime_ns:-0}"
+      if [[ ! "$cache_saved_runtime_ns" =~ ^[0-9]+$ ]]; then
+        cache_saved_runtime_ns=0
+      fi
+    fi
+    cp "$cache_file" "$OUT_FILE"
+    release_cache_lock
+    echo "Generated mutations: $(wc -l < "$OUT_FILE") (cache hit)"
+    echo "Mutation file: $OUT_FILE"
+    echo "Mutation generation runtime_ns: $(elapsed_ns_since "$SCRIPT_START_NS")"
+    echo "Mutation cache saved_runtime_ns: $cache_saved_runtime_ns"
+    echo "Mutation cache status: hit"
+    echo "Mutation cache file: $cache_file"
+    exit 0
+  fi
 fi
 
 
 mkdir -p "$(dirname "$OUT_FILE")"
 WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
 
 case "$DESIGN" in
   *.il) read_cmd="read_rtlil \"$DESIGN\"" ;;
@@ -583,6 +669,7 @@ if [[ -n "$cache_file" && -n "$cache_key" ]]; then
   printf "generation_runtime_ns\t%s\n" "$generation_runtime_ns" > "$cache_meta_tmp"
   mv "$cache_tmp" "$cache_file"
   mv "$cache_meta_tmp" "$cache_meta_file"
+  release_cache_lock
 fi
 
 generation_runtime_ns="${generation_runtime_ns:-$(elapsed_ns_since "$SCRIPT_START_NS")}"

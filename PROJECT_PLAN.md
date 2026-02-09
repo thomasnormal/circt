@@ -249,6 +249,9 @@ See CHANGELOG.md on recent progress.
     `generated_mutations_cache_saved_runtime_ns`), and matrix `results.tsv`
     now surfaces generated-cache status/hit/miss/saved-runtime columns for
     lane-level CI triage without opening per-lane metrics files.
+24. Generated mutation-list caching now uses per-key process locking in
+    `generate_mutations_yosys.sh`, preventing duplicate `yosys mutate -list`
+    synthesis across concurrent matrix lanes targeting the same cache key.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
