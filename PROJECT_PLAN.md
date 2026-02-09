@@ -231,6 +231,9 @@ See CHANGELOG.md on recent progress.
     detailed `yosys/tests/sva` BMC case rows (`yosys-bmc-results.txt`) in
     addition to summary counters, enabling per-case BMC expectations without
     collapsing to aggregate-only IDs.
+26. Strict OpenTitan LEC lane now supports first-class unknown-source dump
+    control via `run_formal_all.sh --opentitan-lec-strict-dump-unknown-sources`
+    (wired to `LEC_DUMP_UNKNOWN_SOURCES=1` in the strict lane harness).
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.

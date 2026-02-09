@@ -40165,3 +40165,55 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 774 - February 9, 2026
+
+### OpenTitan Strict LEC Triage Control: Unknown-Source Dump Wiring
+
+1. Added explicit strict-lane control in `utils/run_formal_all.sh`:
+   - `--opentitan-lec-strict-dump-unknown-sources`
+   - forwards `LEC_DUMP_UNKNOWN_SOURCES=1` to strict OpenTitan LEC runs
+     (`opentitan/LEC_STRICT`).
+2. Extended `utils/run_opentitan_circt_lec.py` to consume
+   `LEC_DUMP_UNKNOWN_SOURCES=1` and append `--dump-unknown-sources` to
+   `circt-lec` invocations (when running SMT-LIB mode, non-smoke).
+3. This provides a first-class, reproducible strict-lane triage path for the
+   remaining `XPROP_ONLY` gap without hard-coding ad hoc `CIRCT_LEC_ARGS`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-dump-unknown-sources.test`
+    - verifies `run_opentitan_circt_lec.py` forwards
+      `--dump-unknown-sources` when `LEC_DUMP_UNKNOWN_SOURCES=1`.
+  - `test/Tools/run-formal-all-opentitan-lec-strict-dump-unknown.test`
+    - verifies `run_formal_all.sh` strict lane wiring sets
+      `LEC_DUMP_UNKNOWN_SOURCES=1` and preserves strict-lane mode semantics.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-dump-unknown-sources.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-formal-all-opentitan-lec-strict-dump-unknown.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test`:
+    - 7/7 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-dump-unknown-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-lec-strict-dump-unknown-sources --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-post-strict-dump-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
