@@ -26,6 +26,7 @@
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=METRICS < %t/out/metrics.tsv
 // RUN: FileCheck %s --check-prefix=IMPROVE < %t/out/improvement.tsv
+// RUN: FileCheck %s --check-prefix=JSON < %t/out/summary.json
 
 // SUMMARY: mutation_id{{.*}}classification
 // SUMMARY: 1{{.*}}not_activated
@@ -45,3 +46,8 @@
 // IMPROVE: not_propagated{{.*}}improve_observability_or_outputs
 // IMPROVE: propagated_not_detected{{.*}}improve_checkers_scoreboards_assertions
 // IMPROVE: detected{{.*}}retain_as_detection_evidence
+
+// JSON: "detected_mutants": 1
+// JSON: "propagated_not_detected_mutants": 1
+// JSON: "mutation_coverage_percent": 50.00
+// JSON: "gate_status": "PASS"
