@@ -7,6 +7,7 @@
 // CHECK: --default-reuse-pair-file
 // CHECK: --default-reuse-summary-file
 // CHECK: --default-mutations-modes
+// CHECK: --default-formal-global-propagate-cmd
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs

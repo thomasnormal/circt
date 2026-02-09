@@ -35,6 +35,9 @@ Optional:
   --mutant-format EXT        Mutant file extension: il|v|sv (default: il)
   --formal-activate-cmd CMD  Optional per-(test,mutant) activation classification cmd
   --formal-propagate-cmd CMD Optional per-(test,mutant) propagation classification cmd
+  --formal-global-propagate-cmd CMD
+                             Optional per-mutant propagation filter cmd run once
+                             before per-test qualification/detection
   --mutation-limit N         Process first N mutations (default: all)
   --mutations-top NAME       Top module name when auto-generating mutations
   --mutations-modes CSV      Comma-separated mutate modes for auto-generation
@@ -85,6 +88,7 @@ CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
+FORMAL_GLOBAL_PROPAGATE_CMD=""
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -120,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
+    --formal-global-propagate-cmd) FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --mutation-limit) MUTATION_LIMIT="$2"; shift 2 ;;
     --generate-mutations) GENERATE_MUTATIONS="$2"; shift 2 ;;
     --mutations-top) MUTATIONS_TOP="$2"; shift 2 ;;
@@ -263,6 +268,7 @@ MUTATIONS_SET_HASH=""
 CREATE_MUTATED_SCRIPT_HASH=""
 FORMAL_ACTIVATE_CMD_HASH=""
 FORMAL_PROPAGATE_CMD_HASH=""
+FORMAL_GLOBAL_PROPAGATE_CMD_HASH=""
 REUSE_COMPAT_SCHEMA_VERSION=1
 REUSE_CACHE_ENTRY_DIR=""
 REUSE_PAIR_SOURCE="none"
@@ -444,6 +450,7 @@ build_reuse_compat_hash() {
   CREATE_MUTATED_SCRIPT_HASH="$(hash_file "$CREATE_MUTATED_SCRIPT")"
   FORMAL_ACTIVATE_CMD_HASH="$(hash_string "$FORMAL_ACTIVATE_CMD")"
   FORMAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_PROPAGATE_CMD")"
+  FORMAL_GLOBAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CMD")"
 
   MUTATIONS_SET_HASH="$(
     for i in "${!MUTATION_IDS[@]}"; do
@@ -461,6 +468,7 @@ mutant_format=${MUTANT_FORMAT}
 create_mutated_script_hash=${CREATE_MUTATED_SCRIPT_HASH}
 formal_activate_cmd_hash=${FORMAL_ACTIVATE_CMD_HASH}
 formal_propagate_cmd_hash=${FORMAL_PROPAGATE_CMD_HASH}
+formal_global_propagate_cmd_hash=${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}
 EOF
   )"
   REUSE_COMPAT_HASH="$(hash_string "$compat_payload")"
@@ -539,7 +547,8 @@ write_reuse_manifest() {
   "create_mutated_script": "$(json_escape "$CREATE_MUTATED_SCRIPT")",
   "create_mutated_script_sha256": "${CREATE_MUTATED_SCRIPT_HASH}",
   "formal_activate_cmd_sha256": "${FORMAL_ACTIVATE_CMD_HASH}",
-  "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}"
+  "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}",
+  "formal_global_propagate_cmd_sha256": "${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}"
 }
 EOF
 }
@@ -645,18 +654,19 @@ classify_activate() {
   esac
 }
 
-classify_propagate() {
+classify_propagate_cmd() {
   local run_dir="$1"
   local log_file="$2"
+  local propagate_cmd="$3"
   local rc=0
 
-  if [[ -z "$FORMAL_PROPAGATE_CMD" ]]; then
+  if [[ -z "$propagate_cmd" ]]; then
     printf "propagated\t-1\n"
     return
   fi
 
   rc=0
-  if ! run_command "$run_dir" "$FORMAL_PROPAGATE_CMD" "$log_file"; then
+  if ! run_command "$run_dir" "$propagate_cmd" "$log_file"; then
     rc=$?
   fi
   if grep -Eiq '(^|[^[:alnum:]_])NOT_PROPAGATED([^[:alnum:]_]|$)' "$log_file"; then
@@ -672,6 +682,10 @@ classify_propagate() {
     1) printf "propagated\t1\n" ;;
     *) printf "error\t%s\n" "$rc" ;;
   esac
+}
+
+classify_propagate() {
+  classify_propagate_cmd "$1" "$2" "$FORMAL_PROPAGATE_CMD"
 }
 
 run_test_and_classify() {
@@ -745,6 +759,9 @@ process_mutation() {
   local hinted_test=""
   local hinted_mutant=0
   local hint_hit=0
+  local global_filter_state=""
+  local global_filter_rc="-1"
+  local global_filtered_not_propagated=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -777,6 +794,30 @@ process_mutation() {
   export MUTATION_SPEC="$mutation_spec"
   export MUTATION_WORKDIR="$mutation_dir"
 
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
+    read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
+    case "$global_filter_state" in
+      not_propagated)
+        global_filtered_not_propagated=1
+        activated_any=1
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "-" "activated" "not_propagated" "-1" "$global_filter_rc" "global_filter_not_propagated" >> "$pair_local"
+        ;;
+      propagated)
+        ;;
+      error)
+        mutation_errors=$((mutation_errors + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "global_filter_error_continue" >> "$pair_local"
+        ;;
+      *)
+        mutation_errors=$((mutation_errors + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "-" "activated" "error" "-1" "$global_filter_rc" "global_filter_invalid_state" >> "$pair_local"
+        ;;
+    esac
+  fi
+
   hinted_test="${REUSE_DETECTED_TEST[$mutation_id]:-}"
   if [[ -n "$hinted_test" ]]; then
     hinted_mutant=1
@@ -789,91 +830,93 @@ process_mutation() {
     ORDERED_TESTS+=("$test_id")
   done
 
-  for test_id in "${ORDERED_TESTS[@]}"; do
-    export TEST_ID="$test_id"
-    test_dir="${mutation_dir}/${test_id}"
-    mkdir -p "$test_dir"
-    reuse_key="${mutation_id}"$'\t'"${test_id}"
-    reuse_hit=0
-    run_note="run_detection"
+  if [[ "$global_filtered_not_propagated" -eq 0 ]]; then
+    for test_id in "${ORDERED_TESTS[@]}"; do
+      export TEST_ID="$test_id"
+      test_dir="${mutation_dir}/${test_id}"
+      mkdir -p "$test_dir"
+      reuse_key="${mutation_id}"$'\t'"${test_id}"
+      reuse_hit=0
+      run_note="run_detection"
 
-    if [[ -n "$REUSE_PAIR_FILE" && -n "${REUSE_ACTIVATION[$reuse_key]+x}" ]]; then
-      activate_state="${REUSE_ACTIVATION[$reuse_key]}"
-      activate_rc="${REUSE_ACTIVATE_EXIT[$reuse_key]}"
-      propagate_state="${REUSE_PROPAGATION[$reuse_key]}"
-      propagate_rc="${REUSE_PROPAGATE_EXIT[$reuse_key]}"
-      reuse_hit=1
-      reused_pairs=$((reused_pairs + 1))
-      run_note="cached_run_detection"
-    else
-      read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
-    fi
-    if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
-      if [[ "$run_note" == "cached_run_detection" ]]; then
-        run_note="hinted_cached_run_detection"
+      if [[ -n "$REUSE_PAIR_FILE" && -n "${REUSE_ACTIVATION[$reuse_key]+x}" ]]; then
+        activate_state="${REUSE_ACTIVATION[$reuse_key]}"
+        activate_rc="${REUSE_ACTIVATE_EXIT[$reuse_key]}"
+        propagate_state="${REUSE_PROPAGATION[$reuse_key]}"
+        propagate_rc="${REUSE_PROPAGATE_EXIT[$reuse_key]}"
+        reuse_hit=1
+        reused_pairs=$((reused_pairs + 1))
+        run_note="cached_run_detection"
       else
-        run_note="hinted_run_detection"
+        read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
       fi
-    fi
-
-    if [[ "$activate_state" == "error" ]]; then
-      mutation_errors=$((mutation_errors + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "error" "-" "$activate_rc" "-1" "activation_error" >> "$pair_local"
-      continue
-    fi
-    if [[ "$activate_state" == "not_activated" ]]; then
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" \
-        "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_activation" || printf "skipped_no_activation")" >> "$pair_local"
-      continue
-    fi
-
-    activated_any=1
-    if [[ "$reuse_hit" -eq 0 ]]; then
-      read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
-    fi
-    if [[ "$propagate_state" == "error" ]]; then
-      mutation_errors=$((mutation_errors + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "propagation_error" >> "$pair_local"
-      continue
-    fi
-    if [[ "$propagate_state" != "not_propagated" && "$propagate_state" != "propagated" ]]; then
-      mutation_errors=$((mutation_errors + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "invalid_propagation_state" >> "$pair_local"
-      continue
-    fi
-    if [[ "$propagate_state" == "not_propagated" ]]; then
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" \
-        "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_propagation" || printf "skipped_no_propagation")" >> "$pair_local"
-      continue
-    fi
-
-    propagated_any=1
-    relevant_pairs=$((relevant_pairs + 1))
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "$run_note" >> "$pair_local"
-
-    read -r test_result test_exit result_file test_note < <(run_test_and_classify "$test_dir" "$test_id" "$test_dir/test.log")
-    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "$test_id" "$test_result" "$test_exit" "$result_file" "$test_note" >> "$results_local"
-
-    if [[ "$test_result" == "error" ]]; then
-      mutation_errors=$((mutation_errors + 1))
-      continue
-    fi
-    if [[ "$test_result" == "detected" ]]; then
-      mutant_class="detected"
-      detected_by_test="$test_id"
       if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
-        hint_hit=1
+        if [[ "$run_note" == "cached_run_detection" ]]; then
+          run_note="hinted_cached_run_detection"
+        else
+          run_note="hinted_run_detection"
+        fi
       fi
-      break
-    fi
-  done
+
+      if [[ "$activate_state" == "error" ]]; then
+        mutation_errors=$((mutation_errors + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "$test_id" "error" "-" "$activate_rc" "-1" "activation_error" >> "$pair_local"
+        continue
+      fi
+      if [[ "$activate_state" == "not_activated" ]]; then
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" \
+          "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_activation" || printf "skipped_no_activation")" >> "$pair_local"
+        continue
+      fi
+
+      activated_any=1
+      if [[ "$reuse_hit" -eq 0 ]]; then
+        read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
+      fi
+      if [[ "$propagate_state" == "error" ]]; then
+        mutation_errors=$((mutation_errors + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "propagation_error" >> "$pair_local"
+        continue
+      fi
+      if [[ "$propagate_state" != "not_propagated" && "$propagate_state" != "propagated" ]]; then
+        mutation_errors=$((mutation_errors + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "invalid_propagation_state" >> "$pair_local"
+        continue
+      fi
+      if [[ "$propagate_state" == "not_propagated" ]]; then
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+          "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" \
+          "$([[ "$reuse_hit" -eq 1 ]] && printf "cached_no_propagation" || printf "skipped_no_propagation")" >> "$pair_local"
+        continue
+      fi
+
+      propagated_any=1
+      relevant_pairs=$((relevant_pairs + 1))
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "$run_note" >> "$pair_local"
+
+      read -r test_result test_exit result_file test_note < <(run_test_and_classify "$test_dir" "$test_id" "$test_dir/test.log")
+      printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "$test_result" "$test_exit" "$result_file" "$test_note" >> "$results_local"
+
+      if [[ "$test_result" == "error" ]]; then
+        mutation_errors=$((mutation_errors + 1))
+        continue
+      fi
+      if [[ "$test_result" == "detected" ]]; then
+        mutant_class="detected"
+        detected_by_test="$test_id"
+        if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
+          hint_hit=1
+        fi
+        break
+      fi
+    done
+  fi
 
   if [[ "$mutant_class" != "detected" ]]; then
     if [[ "$propagated_any" -eq 1 ]]; then
@@ -895,6 +938,7 @@ process_mutation() {
     printf "reused_pairs\t%s\n" "$reused_pairs"
     printf "hinted_mutant\t%s\n" "$hinted_mutant"
     printf "hint_hit\t%s\n" "$hint_hit"
+    printf "global_filtered_not_propagated\t%s\n" "$global_filtered_not_propagated"
   } > "$meta_local"
 }
 
@@ -998,6 +1042,7 @@ count_propagated_not_detected=0
 count_reused_pairs=0
 count_hinted_mutants=0
 count_hint_hits=0
+count_global_filtered_not_propagated=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -1063,6 +1108,15 @@ for i in "${!MUTATION_IDS[@]}"; do
   fi
   if [[ "$local_hint_hit" =~ ^[0-9]+$ ]]; then
     count_hint_hits=$((count_hint_hits + local_hint_hit))
+  fi
+
+  local_global_filtered=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filtered="$(awk -F$'\t' '$1=="global_filtered_not_propagated"{print $2}' "$meta_local" | head -n1)"
+    local_global_filtered="${local_global_filtered:-0}"
+  fi
+  if [[ "$local_global_filtered" =~ ^[0-9]+$ ]]; then
+    count_global_filtered_not_propagated=$((count_global_filtered_not_propagated + local_global_filtered))
   fi
 done
 
@@ -1142,6 +1196,7 @@ fi
   printf "reused_pairs\t%s\n" "$count_reused_pairs"
   printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
   printf "hint_hits\t%s\n" "$count_hint_hits"
+  printf "global_filtered_not_propagated_mutants\t%s\n" "$count_global_filtered_not_propagated"
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
@@ -1161,6 +1216,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "reused_pairs": $count_reused_pairs,
   "hinted_mutants": $count_hinted_mutants,
   "hint_hits": $count_hint_hits,
+  "global_filtered_not_propagated_mutants": $count_global_filtered_not_propagated,
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
@@ -1176,7 +1232,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

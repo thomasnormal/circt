@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 738 - February 9, 2026
+
+### Global Formal Mutant Relevance Filter
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--formal-global-propagate-cmd <cmd>`
+    - runs once per mutant before per-test qualification/detection
+    - supports the same `PROPAGATED`/`NOT_PROPAGATED` output and exit-code
+      conventions as `--formal-propagate-cmd`
+    - classifies formally non-propagating mutants as `not_propagated` without
+      executing testbench pairs.
+- Added run metrics/JSON tracking:
+  - `global_filtered_not_propagated_mutants`
+  - included in log summary output.
+- Reuse compatibility manifests now include
+  `formal_global_propagate_cmd_sha256`.
+
+### Matrix Integration
+
+- Extended `utils/run_mutation_matrix.sh` with:
+  - lane TSV optional column: `global_propagate_cmd`
+  - `--default-formal-global-propagate-cmd <cmd>` for lanes without a
+    lane-specific override.
+
+### Tests and Docs Updates
+
+- Added lit regressions:
+  - `test/Tools/run-mutation-cover-global-propagate-filter.test`
+  - `test/Tools/run-mutation-matrix-global-propagate-filter.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--formal-global-propagate-cmd`
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-formal-global-propagate-cmd`
+  - `docs/FormalRegression.md`
+    - documented global propagation filter options for cover and matrix
+  - `PROJECT_PLAN.md`
+    - marked global formal propagation filter as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - cover global filter path (`--formal-global-propagate-cmd`):
+    PASS (`M_EQ` classified as `not_propagated`, pair runs skipped)
+  - matrix default global filter pass-through
+    (`--default-formal-global-propagate-cmd`): PASS
+  - multi-mode generation regression sanity (`--mutations-modes arith,control`):
+    PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-global-filter --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 737 - February 9, 2026
 
 ### Multi-Mode Mutation Mix Generation

@@ -106,6 +106,9 @@ Execution controls:
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes.
+- `--formal-global-propagate-cmd <cmd>`: per-mutant formal propagation filter
+  run once before per-test qualification/detection. Mutants proven
+  `NOT_PROPAGATED` are classified as `not_propagated` without running tests.
 
 `tests.tsv` format (tab-separated):
 
@@ -163,6 +166,9 @@ Execution controls:
   lane-specific summary hint file.
 - `--default-mutations-modes <csv>`: default
   `run_mutation_cover.sh --mutations-modes` for generated-mutation lanes.
+- `--default-formal-global-propagate-cmd <cmd>`: default
+  `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
+  lane-specific global filter command.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -172,7 +178,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]
 ```
 
 Notes:
@@ -186,6 +192,8 @@ Notes:
   `--default-reuse-summary-file` for a specific lane.
 - `mutations_modes` (optional) overrides `--default-mutations-modes` for a
   generated-mutation lane.
+- `global_propagate_cmd` (optional) overrides
+  `--default-formal-global-propagate-cmd` for a specific lane.
 
 Shard/route a run to selected lane IDs:
 
