@@ -57,6 +57,8 @@ Options:
                          Refresh only mode rows matching REGEX
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
+                         id_kind supports:
+                         base|path|aggregate|base_regex|path_regex
   --fail-on-unexpected-failure-cases
                          Fail when observed failing cases are not expected
   --fail-on-expired-expected-failure-cases
@@ -7387,6 +7389,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
@@ -7573,12 +7576,23 @@ if expected_path is not None:
             f"suite/mode/id must be non-empty at data row {idx + 1}"
         )
       id_kind = row.get("id_kind", "base").strip().lower() or "base"
-      if id_kind not in {"base", "path", "aggregate"}:
+      if id_kind not in {"base", "path", "aggregate", "base_regex", "path_regex"}:
         raise SystemExit(
             "invalid expected-failure-cases row for "
             f"suite={suite} mode={mode} id={case_id}: "
-            "id_kind must be one of base,path,aggregate"
+            "id_kind must be one of "
+            "base,path,aggregate,base_regex,path_regex"
         )
+      id_re = None
+      if id_kind in {"base_regex", "path_regex"}:
+        try:
+          id_re = re.compile(case_id)
+        except re.error as ex:
+          raise SystemExit(
+              "invalid expected-failure-cases row for "
+              f"suite={suite} mode={mode} id={case_id}: "
+              f"invalid regex ({ex})"
+          )
       status = row.get("status", "ANY").strip().upper() or "ANY"
       if status != "ANY" and status not in fail_like_statuses:
         raise SystemExit(
@@ -7611,6 +7625,7 @@ if expected_path is not None:
               "mode": mode,
               "id_kind": id_kind,
               "id": case_id,
+              "id_re": id_re,
               "status": status,
               "expires_on": expires_on,
               "expires_date": expires_date,
@@ -7626,13 +7641,20 @@ for row in expected_rows:
     if obs["suite"] != row["suite"] or obs["mode"] != row["mode"]:
       continue
     if row["id_kind"] == "base":
-      observed_id = obs["base"]
+      if obs["base"] != row["id"]:
+        continue
     elif row["id_kind"] == "path":
-      observed_id = obs["path"]
+      if obs["path"] != row["id"]:
+        continue
+    elif row["id_kind"] == "base_regex":
+      if row["id_re"] is None or row["id_re"].search(obs["base"]) is None:
+        continue
+    elif row["id_kind"] == "path_regex":
+      if row["id_re"] is None or row["id_re"].search(obs["path"]) is None:
+        continue
     else:
-      observed_id = "__aggregate__"
-    if observed_id != row["id"]:
-      continue
+      if row["id"] != "__aggregate__":
+        continue
     if row["status"] != "ANY" and obs["status"] != row["status"]:
       continue
     matches.append(idx)

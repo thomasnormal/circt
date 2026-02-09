@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 762 - February 9, 2026
+
+### Strict LEC Expected-Case Regex Matching
+
+- Extended `utils/run_formal_all.sh` expected-failure case matcher with
+  regex-capable selectors:
+  - `id_kind=base_regex`
+  - `id_kind=path_regex`
+- This enables stable strict OpenTitan LEC expected-case tracking against
+  diagnostic-tagged artifact paths (e.g. `#XPROP_ONLY`) even when temp run
+  directories change between runs.
+- Added regex validation in expected-case parsing:
+  - malformed regex values now fail early with row-qualified diagnostics.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-expected-failure-cases-regex.test`
+    - verifies `path_regex` matching for strict OpenTitan LEC case paths.
+    - verifies invalid regex rows fail with explicit diagnostics.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-strict-gate.test`:
+    - 4/4 PASS
+- External cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-regex-cases --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - `opentitan LEC_STRICT FAIL total=1 pass=0 fail=1` (expected strict X-prop gap, path includes `#XPROP_ONLY`)
+
 ## Iteration 761 - February 9, 2026
 
 ### BMC Original-Cache Capacity Policy in Matrix Lanes
