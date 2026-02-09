@@ -384,6 +384,14 @@ Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.json`. Matrix runs also emit gate-status aggregation in
 `gate_summary.tsv`.
 
+`metrics.tsv`/`summary.json` include global-filter runtime telemetry:
+- `global_filter_lec_runtime_ns`
+- `global_filter_bmc_runtime_ns`
+- `global_filter_cmd_runtime_ns`
+- `global_filter_lec_runs`
+- `global_filter_bmc_runs`
+- `global_filter_cmd_runs`
+
 When `--reuse-cache-dir` is set, generated mutation lists are now cached by
 design+generator options to avoid repeated Yosys mutation-list synthesis across
 runs/lanes.

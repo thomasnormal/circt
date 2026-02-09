@@ -21,14 +21,28 @@
 // RUN: FileCheck %s --check-prefix=METRICS < %t/out/metrics.tsv
 // RUN: FileCheck %s --check-prefix=PAIR < %t/out/pair_qualification.tsv
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: FileCheck %s --check-prefix=JSON < %t/out/summary.json
 
 // SUMMARY: mutation_id{{.*}}classification
 // SUMMARY: 1{{.*}}not_propagated
 // SUMMARY: 2{{.*}}propagated_not_detected
 
 // METRICS: global_filtered_not_propagated_mutants{{.*}}1
+// METRICS-DAG: global_filter_lec_runs{{.*}}0
+// METRICS-DAG: global_filter_bmc_runs{{.*}}0
+// METRICS-DAG: global_filter_cmd_runs{{.*}}2
+// METRICS-DAG: global_filter_lec_runtime_ns{{.*}}0
+// METRICS-DAG: global_filter_bmc_runtime_ns{{.*}}0
+// METRICS-DAG: global_filter_cmd_runtime_ns{{.*[0-9]+}}
 
 // PAIR: 1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated
 
 // RESULTS: mutation_id{{.*}}test_id{{.*}}result
 // RESULTS: 2{{.*}}t{{.*}}survived
+
+// JSON-DAG: "global_filter_lec_runs": 0
+// JSON-DAG: "global_filter_bmc_runs": 0
+// JSON-DAG: "global_filter_cmd_runs": 2
+// JSON-DAG: "global_filter_lec_runtime_ns": 0
+// JSON-DAG: "global_filter_bmc_runtime_ns": 0
+// JSON-DAG: "global_filter_cmd_runtime_ns":
