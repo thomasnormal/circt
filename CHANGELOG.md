@@ -1,5 +1,74 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 803 - February 9, 2026
+
+### OpenTitan LEC Strict 4-State Closure (`LEC_X_OPTIMISTIC=0`)
+
+1. Fixed OpenTitan LEC harness strict-mode behavior in
+   `utils/run_opentitan_circt_lec.py`:
+   - `LEC_ASSUME_KNOWN_INPUTS` is now honored.
+   - Strict mode now defaults to known-input assumptions when
+     `LEC_X_OPTIMISTIC=0` and no explicit override is provided.
+   - `--assume-known-inputs` is forwarded to `circt-lec` under that policy.
+2. Fixed strict lane wiring in `utils/run_formal_all.sh`:
+   - `opentitan/LEC_STRICT` no longer forces `LEC_ASSUME_KNOWN_INPUTS=0`,
+     which previously overrode strict-mode defaults and preserved
+     `XPROP_ONLY`.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-strict-auto-assume-known.test`
+    - verifies strict mode auto-adds `--assume-known-inputs` and does not add
+      `--x-optimistic`.
+- Updated:
+  - `test/Tools/run-opentitan-lec-no-assume-known.test`
+    - now verifies explicit strict opt-out (`LEC_ASSUME_KNOWN_INPUTS=0`)
+      suppresses `--assume-known-inputs`.
+  - `test/Tools/run-formal-all-opentitan-lec-strict.test`
+    - now verifies strict lane no longer injects `LEC_ASSUME_KNOWN_INPUTS=0`.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-no-assume-known.test test/Tools/run-opentitan-lec-strict-auto-assume-known.test test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test`:
+    - 9/9 PASS
+- OpenTitan strict LEC checks:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_X_OPTIMISTIC=0 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` OK
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-4state --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - `LEC_STRICT`: `total=1 pass=1 fail=0`
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --lec-strict-x --out-dir /tmp/opentitan-e2e-lec-strict-4state`:
+    - summary: `pass=1 fail=0`
+- OpenTitan canonical lane checks:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-4state --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - `E2E`: `total=12 pass=12 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-strict-4state --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E_STRICT$'`:
+    - `E2E_STRICT`: `total=12 pass=12 fail=0`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-dual-4state --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$'`:
+    - `E2E`: `total=12 pass=11 fail=1` (`SIM:i2c` timeout)
+    - `E2E_STRICT`: `total=12 pass=12 fail=0`
+    - `E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=1`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `utils/run_opentitan_formal_e2e.sh --sim-targets usbdev --verilog-targets usbdev,dma,keymgr_dpe --lec-strict-x --out-dir /tmp/opentitan-e2e-4state-closure`:
+    - summary: `pass=5 fail=0`
+
+### Remaining Limitations
+
+- OpenTitan default E2E still shows intermittent `SIM:i2c` timeout behavior
+  (`strict_only_pass=1` in latest dual-lane mode-diff run).
+
 ## Iteration 802 - February 9, 2026
 
 ### BMC Drift Hardening: Timeout/Unknown Telemetry + Strict Gates
