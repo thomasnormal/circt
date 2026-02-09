@@ -5542,6 +5542,40 @@ arith_dispatch:
     return success();
   }
 
+  if (auto arithMinSIOp = dyn_cast<mlir::arith::MinSIOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithMinSIOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithMinSIOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithMinSIOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(arithMinSIOp.getType())));
+    } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      unsigned w = std::max(lhsVal.getBitWidth(), rhsVal.getBitWidth());
+      normalizeWidths(lhsVal, rhsVal, w);
+      setValue(procId, arithMinSIOp.getResult(),
+               InterpretedValue(lhsVal.slt(rhsVal) ? lhsVal : rhsVal));
+    }
+    return success();
+  }
+
+  if (auto arithMaxSIOp = dyn_cast<mlir::arith::MaxSIOp>(op)) {
+    InterpretedValue lhs = getValue(procId, arithMaxSIOp.getLhs());
+    InterpretedValue rhs = getValue(procId, arithMaxSIOp.getRhs());
+    if (lhs.isX() || rhs.isX()) {
+      setValue(procId, arithMaxSIOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(arithMaxSIOp.getType())));
+    } else {
+      APInt lhsVal = lhs.getAPInt();
+      APInt rhsVal = rhs.getAPInt();
+      unsigned w = std::max(lhsVal.getBitWidth(), rhsVal.getBitWidth());
+      normalizeWidths(lhsVal, rhsVal, w);
+      setValue(procId, arithMaxSIOp.getResult(),
+               InterpretedValue(lhsVal.sgt(rhsVal) ? lhsVal : rhsVal));
+    }
+    return success();
+  }
+
   if (auto arithIndexCastOp = dyn_cast<mlir::arith::IndexCastOp>(op)) {
     InterpretedValue input = getValue(procId, arithIndexCastOp.getIn());
     if (input.isX()) {
