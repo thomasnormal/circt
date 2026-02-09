@@ -1,0 +1,43 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M1\n2 M2\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\necho \"create:${spec}\" >> \"$HITS\"\ncp \"$design\" \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho ACTIVATED\nexit 1\n' > %t/fake-activate.sh
+// RUN: chmod +x %t/fake-activate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho PROPAGATED\nexit 1\n' > %t/fake-propagate.sh
+// RUN: chmod +x %t/fake-propagate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"test:${MUTATION_SPEC}\" >> \"$HITS\"\necho SURVIVED > result.txt\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+
+// RUN: env HITS=%t/hits.txt %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-activate-cmd "bash %t/fake-activate.sh" \
+// RUN:   --formal-propagate-cmd "bash %t/fake-propagate.sh" \
+// RUN:   --work-dir %t/out \
+// RUN:   --jobs 2
+// RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=FIRST
+
+// RUN: env HITS=%t/hits.txt %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --formal-activate-cmd "bash %t/fake-activate.sh" \
+// RUN:   --formal-propagate-cmd "bash %t/fake-propagate.sh" \
+// RUN:   --work-dir %t/out \
+// RUN:   --jobs 2 \
+// RUN:   --resume \
+// RUN:   --skip-baseline
+// RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=SECOND
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// FIRST: 5
+// SECOND: 5
+// SUMMARY: mutation_id{{.*}}classification
+// SUMMARY: 1{{.*}}propagated_not_detected
+// SUMMARY: 2{{.*}}propagated_not_detected

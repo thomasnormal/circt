@@ -26,6 +26,8 @@ Optional:
   --formal-activate-cmd CMD  Optional per-(test,mutant) activation classification cmd
   --formal-propagate-cmd CMD Optional per-(test,mutant) propagation classification cmd
   --mutation-limit N         Process first N mutations (default: all)
+  --jobs N                   Worker processes for per-mutant execution (default: 1)
+  --resume                   Reuse existing per-mutant artifacts when present
   --coverage-threshold PCT   Hard-fail if detected/relevant * 100 below threshold
   --skip-baseline            Skip baseline sanity checks for test manifest
   --fail-on-undetected       Hard-fail if any propagated_not_detected mutant remains
@@ -63,6 +65,8 @@ MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
 MUTATION_LIMIT=0
+JOBS=1
+RESUME=0
 COVERAGE_THRESHOLD=""
 SKIP_BASELINE=0
 FAIL_ON_UNDETECTED=0
@@ -84,6 +88,8 @@ while [[ $# -gt 0 ]]; do
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --mutation-limit) MUTATION_LIMIT="$2"; shift 2 ;;
+    --jobs) JOBS="$2"; shift 2 ;;
+    --resume) RESUME=1; shift ;;
     --coverage-threshold) COVERAGE_THRESHOLD="$2"; shift 2 ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
     --fail-on-undetected) FAIL_ON_UNDETECTED=1; shift ;;
@@ -126,6 +132,10 @@ if [[ ! "$MUTATION_LIMIT" =~ ^[0-9]+$ ]]; then
   echo "Invalid --mutation-limit value: $MUTATION_LIMIT" >&2
   exit 1
 fi
+if [[ ! "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --jobs value: $JOBS" >&2
+  exit 1
+fi
 if [[ -n "$COVERAGE_THRESHOLD" ]] && ! [[ "$COVERAGE_THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid --coverage-threshold value: $COVERAGE_THRESHOLD" >&2
   exit 1
@@ -138,15 +148,15 @@ RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
 METRICS_FILE="${METRICS_FILE:-${WORK_DIR}/metrics.tsv}"
 IMPROVEMENT_FILE="${IMPROVEMENT_FILE:-${WORK_DIR}/improvement.tsv}"
 
-printf "mutation_id\tclassification\trelevant_pairs\tdetected_by_test\tmutant_design\tmutation_spec\n" > "$SUMMARY_FILE"
-printf "mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\tpropagate_exit\tnote\n" > "$PAIR_FILE"
-printf "mutation_id\ttest_id\tresult\ttest_exit\tresult_file\tnote\n" > "$RESULTS_FILE"
-
 declare -A TEST_CMD
 declare -A TEST_RESULT_FILE
 declare -A TEST_KILL_PATTERN
 declare -A TEST_SURVIVE_PATTERN
 declare -a TEST_ORDER
+
+declare -a MUTATION_IDS
+declare -a MUTATION_SPECS
+MALFORMED_MUTATION_LINES=0
 
 load_tests_manifest() {
   local line=""
@@ -175,6 +185,34 @@ load_tests_manifest() {
     echo "Tests manifest has no usable entries: $TESTS_MANIFEST" >&2
     exit 1
   fi
+}
+
+load_mutations() {
+  local raw_line=""
+  local line=""
+  local mutation_id=""
+  local mutation_spec=""
+  local count=0
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    line="${raw_line#"${raw_line%%[![:space:]]*}"}"
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+    if [[ "$MUTATION_LIMIT" -gt 0 && "$count" -ge "$MUTATION_LIMIT" ]]; then
+      break
+    fi
+
+    mutation_id="${line%%[[:space:]]*}"
+    mutation_spec="${line#"$mutation_id"}"
+    mutation_spec="${mutation_spec#"${mutation_spec%%[![:space:]]*}"}"
+    mutation_spec="${mutation_spec//$'\t'/ }"
+    if [[ -z "$mutation_id" || -z "$mutation_spec" ]]; then
+      MALFORMED_MUTATION_LINES=$((MALFORMED_MUTATION_LINES + 1))
+      continue
+    fi
+    MUTATION_IDS+=("$mutation_id")
+    MUTATION_SPECS+=("$mutation_spec")
+    count=$((count + 1))
+  done < "$MUTATIONS_FILE"
 }
 
 run_command() {
@@ -279,15 +317,139 @@ run_test_and_classify() {
   printf "error\t%s\t%s\tno_pattern_match\n" "$rc" "$result_file"
 }
 
-load_tests_manifest
+process_mutation() {
+  local mutation_id="$1"
+  local mutation_spec="$2"
+  local mutation_dir="${WORK_DIR}/mutations/${mutation_id}"
+  local mutant_design="${mutation_dir}/mutant.${MUTANT_FORMAT}"
+  local summary_local="${mutation_dir}/mutant_summary.tsv"
+  local pair_local="${mutation_dir}/pair_qualification.tsv"
+  local results_local="${mutation_dir}/results.tsv"
+  local meta_local="${mutation_dir}/local_metrics.tsv"
 
-errors=0
-total_mutants=0
-count_not_activated=0
-count_not_propagated=0
-count_detected=0
-count_propagated_not_detected=0
-count_relevant=0
+  if [[ "$RESUME" -eq 1 && -f "$summary_local" && -f "$pair_local" && -f "$results_local" && -f "$meta_local" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$mutation_dir"
+  : > "$pair_local"
+  : > "$results_local"
+
+  local activated_any=0
+  local propagated_any=0
+  local detected_by_test="-"
+  local relevant_pairs=0
+  local mutant_class="not_activated"
+  local mutation_errors=0
+  local create_rc=0
+  local test_id=""
+  local test_dir=""
+  local activate_state=""
+  local activate_rc=""
+  local propagate_state=""
+  local propagate_rc=""
+  local test_result=""
+  local test_exit=""
+  local result_file=""
+  local test_note=""
+
+  printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
+
+  set +e
+  "$CREATE_MUTATED_SCRIPT" \
+    -i "$mutation_dir/input.txt" \
+    -o "$mutant_design" \
+    -d "$DESIGN" > "$mutation_dir/create_mutated.log" 2>&1
+  create_rc=$?
+  set -e
+  if [[ "$create_rc" -ne 0 ]]; then
+    mutation_errors=$((mutation_errors + 1))
+    mutant_class="not_activated+error"
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$mutation_id" "$mutant_class" "0" "-" "$mutant_design" "$mutation_spec" > "$summary_local"
+    printf "errors\t%s\n" "$mutation_errors" > "$meta_local"
+    return 0
+  fi
+
+  export BASELINE=0
+  export ORIG_DESIGN="$DESIGN"
+  export MUTANT_DESIGN="$mutant_design"
+  export MUTATION_ID="$mutation_id"
+  export MUTATION_SPEC="$mutation_spec"
+  export MUTATION_WORKDIR="$mutation_dir"
+
+  for test_id in "${TEST_ORDER[@]}"; do
+    export TEST_ID="$test_id"
+    test_dir="${mutation_dir}/${test_id}"
+    mkdir -p "$test_dir"
+
+    read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
+    if [[ "$activate_state" == "error" ]]; then
+      mutation_errors=$((mutation_errors + 1))
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "error" "-" "$activate_rc" "-1" "activation_error" >> "$pair_local"
+      continue
+    fi
+    if [[ "$activate_state" == "not_activated" ]]; then
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" "skipped_no_activation" >> "$pair_local"
+      continue
+    fi
+
+    activated_any=1
+    read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
+    if [[ "$propagate_state" == "error" ]]; then
+      mutation_errors=$((mutation_errors + 1))
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "propagation_error" >> "$pair_local"
+      continue
+    fi
+    if [[ "$propagate_state" == "not_propagated" ]]; then
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" "skipped_no_propagation" >> "$pair_local"
+      continue
+    fi
+
+    propagated_any=1
+    relevant_pairs=$((relevant_pairs + 1))
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "run_detection" >> "$pair_local"
+
+    read -r test_result test_exit result_file test_note < <(run_test_and_classify "$test_dir" "$test_id" "$test_dir/test.log")
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$mutation_id" "$test_id" "$test_result" "$test_exit" "$result_file" "$test_note" >> "$results_local"
+
+    if [[ "$test_result" == "error" ]]; then
+      mutation_errors=$((mutation_errors + 1))
+      continue
+    fi
+    if [[ "$test_result" == "detected" ]]; then
+      mutant_class="detected"
+      detected_by_test="$test_id"
+      break
+    fi
+  done
+
+  if [[ "$mutant_class" != "detected" ]]; then
+    if [[ "$propagated_any" -eq 1 ]]; then
+      mutant_class="propagated_not_detected"
+    elif [[ "$activated_any" -eq 1 ]]; then
+      mutant_class="not_propagated"
+    else
+      mutant_class="not_activated"
+    fi
+  fi
+  if [[ "$mutation_errors" -gt 0 ]]; then
+    mutant_class="${mutant_class}+error"
+  fi
+
+  printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
+    "$mutation_id" "$mutant_class" "$relevant_pairs" "$detected_by_test" "$mutant_design" "$mutation_spec" > "$summary_local"
+  printf "errors\t%s\n" "$mutation_errors" > "$meta_local"
+}
+
+load_tests_manifest
+load_mutations
 
 if [[ "$SKIP_BASELINE" -eq 0 ]]; then
   baseline_dir="${WORK_DIR}/baseline"
@@ -310,138 +472,85 @@ if [[ "$SKIP_BASELINE" -eq 0 ]]; then
   done
 fi
 
-while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
-  line="${raw_line#"${raw_line%%[![:space:]]*}"}"
-  [[ -z "$line" ]] && continue
-  [[ "${line:0:1}" == "#" ]] && continue
-  if [[ "$MUTATION_LIMIT" -gt 0 && "$total_mutants" -ge "$MUTATION_LIMIT" ]]; then
-    break
-  fi
+worker_fail=0
+if [[ "$JOBS" -le 1 ]]; then
+  for i in "${!MUTATION_IDS[@]}"; do
+    process_mutation "${MUTATION_IDS[$i]}" "${MUTATION_SPECS[$i]}"
+  done
+else
+  active_jobs=0
+  for i in "${!MUTATION_IDS[@]}"; do
+    process_mutation "${MUTATION_IDS[$i]}" "${MUTATION_SPECS[$i]}" &
+    active_jobs=$((active_jobs + 1))
+    if [[ "$active_jobs" -ge "$JOBS" ]]; then
+      if ! wait -n; then
+        worker_fail=1
+      fi
+      active_jobs=$((active_jobs - 1))
+    fi
+  done
+  while [[ "$active_jobs" -gt 0 ]]; do
+    if ! wait -n; then
+      worker_fail=1
+    fi
+    active_jobs=$((active_jobs - 1))
+  done
+fi
 
-  mutation_id="${line%%[[:space:]]*}"
-  mutation_spec="${line#"$mutation_id"}"
-  mutation_spec="${mutation_spec#"${mutation_spec%%[![:space:]]*}"}"
-  mutation_spec="${mutation_spec//$'\t'/ }"
-  if [[ -z "$mutation_id" || -z "$mutation_spec" ]]; then
+printf "mutation_id\tclassification\trelevant_pairs\tdetected_by_test\tmutant_design\tmutation_spec\n" > "$SUMMARY_FILE"
+printf "mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\tpropagate_exit\tnote\n" > "$PAIR_FILE"
+printf "mutation_id\ttest_id\tresult\ttest_exit\tresult_file\tnote\n" > "$RESULTS_FILE"
+
+errors="$MALFORMED_MUTATION_LINES"
+if [[ "$worker_fail" -ne 0 ]]; then
+  errors=$((errors + 1))
+fi
+
+total_mutants=0
+count_not_activated=0
+count_not_propagated=0
+count_detected=0
+count_propagated_not_detected=0
+
+for i in "${!MUTATION_IDS[@]}"; do
+  mutation_id="${MUTATION_IDS[$i]}"
+  mutation_dir="${WORK_DIR}/mutations/${mutation_id}"
+  summary_local="${mutation_dir}/mutant_summary.tsv"
+  pair_local="${mutation_dir}/pair_qualification.tsv"
+  results_local="${mutation_dir}/results.tsv"
+  meta_local="${mutation_dir}/local_metrics.tsv"
+
+  if [[ ! -f "$summary_local" ]]; then
     errors=$((errors + 1))
     continue
   fi
 
   total_mutants=$((total_mutants + 1))
-  mutation_dir="${WORK_DIR}/mutations/${mutation_id}"
-  mkdir -p "$mutation_dir"
-  printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
-  mutant_design="${mutation_dir}/mutant.${MUTANT_FORMAT}"
+  cat "$summary_local" >> "$SUMMARY_FILE"
+  [[ -f "$pair_local" ]] && cat "$pair_local" >> "$PAIR_FILE"
+  [[ -f "$results_local" ]] && cat "$results_local" >> "$RESULTS_FILE"
 
-  create_rc=0
-  set +e
-  "$CREATE_MUTATED_SCRIPT" \
-    -i "$mutation_dir/input.txt" \
-    -o "$mutant_design" \
-    -d "$DESIGN" > "$mutation_dir/create_mutated.log" 2>&1
-  create_rc=$?
-  set -e
-  if [[ "$create_rc" -ne 0 ]]; then
-    errors=$((errors + 1))
-    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "error" "0" "-" "$mutant_design" "$mutation_spec" >> "$SUMMARY_FILE"
-    continue
-  fi
-
-  export BASELINE=0
-  export ORIG_DESIGN="$DESIGN"
-  export MUTANT_DESIGN="$mutant_design"
-  export MUTATION_ID="$mutation_id"
-  export MUTATION_SPEC="$mutation_spec"
-  export MUTATION_WORKDIR="$mutation_dir"
-
-  activated_any=0
-  propagated_any=0
-  detected_by_test="-"
-  relevant_pairs=0
-  mutant_class="not_activated"
-  mutant_has_error=0
-
-  for test_id in "${TEST_ORDER[@]}"; do
-    export TEST_ID="$test_id"
-    test_dir="${mutation_dir}/${test_id}"
-    mkdir -p "$test_dir"
-
-    read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
-    if [[ "$activate_state" == "error" ]]; then
-      mutant_has_error=1
-      errors=$((errors + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "error" "-" "$activate_rc" "-1" "activation_error" >> "$PAIR_FILE"
-      continue
-    fi
-    if [[ "$activate_state" == "not_activated" ]]; then
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "not_activated" "-" "$activate_rc" "-1" "skipped_no_activation" >> "$PAIR_FILE"
-      continue
-    fi
-
-    activated_any=1
-    read -r propagate_state propagate_rc < <(classify_propagate "$test_dir" "$test_dir/propagate.log")
-    if [[ "$propagate_state" == "error" ]]; then
-      mutant_has_error=1
-      errors=$((errors + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "error" "$activate_rc" "$propagate_rc" "propagation_error" >> "$PAIR_FILE"
-      continue
-    fi
-    if [[ "$propagate_state" == "not_propagated" ]]; then
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-        "$mutation_id" "$test_id" "activated" "not_propagated" "$activate_rc" "$propagate_rc" "skipped_no_propagation" >> "$PAIR_FILE"
-      continue
-    fi
-
-    propagated_any=1
-    relevant_pairs=$((relevant_pairs + 1))
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "$test_id" "activated" "propagated" "$activate_rc" "$propagate_rc" "run_detection" >> "$PAIR_FILE"
-
-    read -r test_result test_exit result_file test_note < <(run_test_and_classify "$test_dir" "$test_id" "$test_dir/test.log")
-    printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-      "$mutation_id" "$test_id" "$test_result" "$test_exit" "$result_file" "$test_note" >> "$RESULTS_FILE"
-
-    if [[ "$test_result" == "error" ]]; then
-      mutant_has_error=1
-      errors=$((errors + 1))
-      continue
-    fi
-    if [[ "$test_result" == "detected" ]]; then
-      mutant_class="detected"
-      detected_by_test="$test_id"
-      break
-    fi
-  done
-
-  if [[ "$mutant_class" != "detected" ]]; then
-    if [[ "$propagated_any" -eq 1 ]]; then
-      mutant_class="propagated_not_detected"
-    elif [[ "$activated_any" -eq 1 ]]; then
-      mutant_class="not_propagated"
-    else
-      mutant_class="not_activated"
-    fi
-  fi
-  if [[ "$mutant_has_error" -eq 1 ]]; then
-    mutant_class="${mutant_class}+error"
-  fi
-
-  case "$mutant_class" in
-    detected|detected+error) count_detected=$((count_detected + 1)) ;;
-    propagated_not_detected|propagated_not_detected+error)
-      count_propagated_not_detected=$((count_propagated_not_detected + 1))
-      ;;
-    not_propagated|not_propagated+error) count_not_propagated=$((count_not_propagated + 1)) ;;
-    not_activated|not_activated+error) count_not_activated=$((count_not_activated + 1)) ;;
+  classification="$(awk -F$'\t' 'NR==1{print $2}' "$summary_local")"
+  base_class="${classification%%+*}"
+  case "$base_class" in
+    detected) count_detected=$((count_detected + 1)) ;;
+    propagated_not_detected) count_propagated_not_detected=$((count_propagated_not_detected + 1)) ;;
+    not_propagated) count_not_propagated=$((count_not_propagated + 1)) ;;
+    not_activated) count_not_activated=$((count_not_activated + 1)) ;;
+    *) ;;
   esac
 
-  printf "%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$mutation_id" "$mutant_class" "$relevant_pairs" "$detected_by_test" "$mutant_design" "$mutation_spec" >> "$SUMMARY_FILE"
-done < "$MUTATIONS_FILE"
+  local_errors=0
+  if [[ -f "$meta_local" ]]; then
+    local_errors="$(awk -F$'\t' '$1=="errors"{print $2}' "$meta_local" | head -n1)"
+    local_errors="${local_errors:-0}"
+  fi
+  if [[ "$local_errors" =~ ^[0-9]+$ ]]; then
+    errors=$((errors + local_errors))
+  else
+    errors=$((errors + 1))
+  fi
+done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
 coverage_pct="100.00"

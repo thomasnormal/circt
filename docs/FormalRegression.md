@@ -71,6 +71,11 @@ utils/run_mutation_cover.sh \
   --coverage-threshold 90
 ```
 
+Execution controls:
+- `--jobs <N>`: run per-mutant execution with up to `N` local workers.
+- `--resume`: reuse existing per-mutant artifacts in `<work-dir>/mutations/*`
+  and rebuild global reports without re-running completed mutants.
+
 `tests.tsv` format (tab-separated):
 
 ```text

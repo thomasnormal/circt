@@ -6,3 +6,5 @@
 // CHECK: --formal-propagate-cmd
 // CHECK: --coverage-threshold
 // CHECK: --fail-on-undetected
+// CHECK: --jobs
+// CHECK: --resume
