@@ -78,6 +78,7 @@ utils/run_mutation_cover.sh \
   --design /path/to/design.il \
   --tests-manifest /path/to/tests.tsv \
   --generate-mutations 1000 \
+  --mutations-modes arith,control \
   --mutations-yosys yosys \
   --mutations-seed 1
 ```
@@ -102,6 +103,9 @@ Execution controls:
   automatic reuse discovery/publish.
 - `--reuse-cache-mode off|read|read-write`: cache read/write policy
   (default `read-write` when cache dir is provided).
+- `--mutations-modes <csv>`: pass-through mode mix for auto-generation
+  (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
+  operator-family mixes.
 
 `tests.tsv` format (tab-separated):
 
@@ -157,6 +161,8 @@ Execution controls:
 - `--default-reuse-summary-file <path>`: default
   `run_mutation_cover.sh --reuse-summary-file` for lanes that do not set a
   lane-specific summary hint file.
+- `--default-mutations-modes <csv>`: default
+  `run_mutation_cover.sh --mutations-modes` for generated-mutation lanes.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -166,7 +172,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]
 ```
 
 Notes:
@@ -178,6 +184,8 @@ Notes:
   specific lane.
 - `reuse_summary_file` (optional) overrides
   `--default-reuse-summary-file` for a specific lane.
+- `mutations_modes` (optional) overrides `--default-mutations-modes` for a
+  generated-mutation lane.
 
 Shard/route a run to selected lane IDs:
 

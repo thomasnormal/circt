@@ -15,4 +15,5 @@
 // CHECK: --jobs
 // CHECK: --resume
 // CHECK: --generate-mutations
+// CHECK: --mutations-modes
 // CHECK: --mutations-yosys

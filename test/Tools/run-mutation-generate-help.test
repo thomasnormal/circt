@@ -6,3 +6,5 @@
 // CHECK: --count
 // CHECK: --seed
 // CHECK: --yosys
+// CHECK: --mode
+// CHECK: --modes

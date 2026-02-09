@@ -1,0 +1,31 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \"\([^\"]*\)\".*/\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \([^ ]*\).*/\1/p" "$script" | tail -n1)\nif [[ "$mode" == "arith" ]]; then\n  echo "10 M_ARITH_1" > "$out"\n  echo "11 M_ARITH_2" >> "$out"\nelif [[ "$mode" == "control" ]]; then\n  echo "20 M_CTRL_1" > "$out"\n  echo "21 M_CTRL_2" >> "$out"\nelse\n  echo "30 M_DEFAULT" > "$out"\nfi\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SURVIVED > result.txt\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+
+// RUN: %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --generate-mutations 4 \
+// RUN:   --mutations-modes arith,control \
+// RUN:   --mutations-yosys %t/fake-yosys.sh \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --work-dir %t/out
+
+// RUN: FileCheck %s --check-prefix=GEN < %t/out/generated_mutations.txt
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
+
+// GEN: 1 M_ARITH_1
+// GEN: 2 M_ARITH_2
+// GEN: 3 M_CTRL_1
+// GEN: 4 M_CTRL_2
+
+// SUMMARY: 1{{.*}}propagated_not_detected
+// SUMMARY: 2{{.*}}propagated_not_detected
+// SUMMARY: 3{{.*}}propagated_not_detected
+// SUMMARY: 4{{.*}}propagated_not_detected
