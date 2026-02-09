@@ -6682,12 +6682,17 @@ if log_path.exists():
     m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
     if m:
       impl = m.group(1)
-      rows.append(("XFAIL", impl, impl, "opentitan", "LEC"))
+      rows.append(("XFAIL", impl, f"{impl}#XPROP_ONLY", "opentitan", "LEC"))
       continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\([^)]+\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\(([^)]+)\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
     if m:
       impl = m.group(1)
-      rows.append(("FAIL", impl, m.group(2) or impl, "opentitan", "LEC"))
+      diag_raw = (m.group(2) or "").strip()
+      diag = diag_raw if re.fullmatch(r"[A-Z0-9_]+", diag_raw) else ""
+      detail = m.group(3) or impl
+      if diag and "#" not in detail:
+        detail = f"{detail}#{diag}"
+      rows.append(("FAIL", impl, detail, "opentitan", "LEC"))
 
 rows.sort(key=lambda r: (r[1], r[0], r[2]))
 with out_path.open("w") as f:
@@ -6753,12 +6758,17 @@ if log_path.exists():
     m = re.match(r"^\s*([A-Za-z0-9_]+)\s+XPROP_ONLY\s+\(accepted\)\s*$", line)
     if m:
       impl = m.group(1)
-      rows.append(("XFAIL", impl, impl, "opentitan", "LEC_STRICT"))
+      rows.append(("XFAIL", impl, f"{impl}#XPROP_ONLY", "opentitan", "LEC_STRICT"))
       continue
-    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\([^)]+\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
+    m = re.match(r"^\s*([A-Za-z0-9_]+)\s+FAIL(?:\s+\(([^)]+)\))?(?:\s+\(logs in ([^)]+)\))?\s*$", line)
     if m:
       impl = m.group(1)
-      rows.append(("FAIL", impl, m.group(2) or impl, "opentitan", "LEC_STRICT"))
+      diag_raw = (m.group(2) or "").strip()
+      diag = diag_raw if re.fullmatch(r"[A-Z0-9_]+", diag_raw) else ""
+      detail = m.group(3) or impl
+      if diag and "#" not in detail:
+        detail = f"{detail}#{diag}"
+      rows.append(("FAIL", impl, detail, "opentitan", "LEC_STRICT"))
 
 rows.sort(key=lambda r: (r[1], r[0], r[2]))
 with out_path.open("w") as f:
