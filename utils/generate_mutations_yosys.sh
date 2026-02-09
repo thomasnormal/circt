@@ -17,6 +17,10 @@ Optional:
   --yosys PATH              Yosys executable (default: yosys)
   --mode NAME               Mutate mode (repeatable)
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
+  --cfg KEY=VALUE           Mutate config entry (repeatable, becomes -cfg KEY VALUE)
+  --cfgs CSV                Comma-separated KEY=VALUE mutate config entries
+  --select EXPR             Additional mutate select expression (repeatable)
+  --selects CSV             Comma-separated mutate select expressions
   -h, --help                Show help
 
 Output format:
@@ -31,7 +35,11 @@ COUNT=1000
 SEED=1
 YOSYS_BIN="yosys"
 MODES_CSV=""
-declare -a MODE_LIST
+CFGS_CSV=""
+SELECTS_CSV=""
+declare -a MODE_LIST=()
+declare -a CFG_LIST=()
+declare -a SELECT_LIST=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +51,10 @@ while [[ $# -gt 0 ]]; do
     --yosys) YOSYS_BIN="$2"; shift 2 ;;
     --mode) MODE_LIST+=("$2"); shift 2 ;;
     --modes) MODES_CSV="$2"; shift 2 ;;
+    --cfg) CFG_LIST+=("$2"); shift 2 ;;
+    --cfgs) CFGS_CSV="$2"; shift 2 ;;
+    --select) SELECT_LIST+=("$2"); shift 2 ;;
+    --selects) SELECTS_CSV="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Unknown option: $1" >&2
@@ -78,9 +90,44 @@ if [[ -n "$MODES_CSV" ]]; then
     MODE_LIST+=("$mode")
   done
 fi
+if [[ -n "$CFGS_CSV" ]]; then
+  IFS=',' read -r -a cfgs_from_csv <<< "$CFGS_CSV"
+  for cfg in "${cfgs_from_csv[@]}"; do
+    cfg="${cfg#"${cfg%%[![:space:]]*}"}"
+    cfg="${cfg%"${cfg##*[![:space:]]}"}"
+    [[ -z "$cfg" ]] && continue
+    CFG_LIST+=("$cfg")
+  done
+fi
+if [[ -n "$SELECTS_CSV" ]]; then
+  IFS=',' read -r -a selects_from_csv <<< "$SELECTS_CSV"
+  for sel in "${selects_from_csv[@]}"; do
+    sel="${sel#"${sel%%[![:space:]]*}"}"
+    sel="${sel%"${sel##*[![:space:]]}"}"
+    [[ -z "$sel" ]] && continue
+    SELECT_LIST+=("$sel")
+  done
+fi
 if [[ "${#MODE_LIST[@]}" -eq 0 ]]; then
   MODE_LIST+=("")
 fi
+
+for cfg in "${CFG_LIST[@]}"; do
+  key="${cfg%%=*}"
+  value="${cfg#*=}"
+  if [[ -z "$key" || "$value" == "$cfg" ]]; then
+    echo "Invalid --cfg entry: $cfg (expected KEY=VALUE)." >&2
+    exit 1
+  fi
+  if [[ ! "$key" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "Invalid --cfg key: $key (expected [A-Za-z0-9_]+)." >&2
+    exit 1
+  fi
+  if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+    echo "Invalid --cfg value for $key: $value (expected integer)." >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$(dirname "$OUT_FILE")"
 WORK_DIR="$(mktemp -d)"
@@ -126,10 +173,24 @@ for idx in "${!MODE_LIST[@]}"; do
     mode_arg="-mode $mode"
   fi
 
+  mutate_cmd="mutate -list $list_count -seed $SEED -none"
+  for cfg in "${CFG_LIST[@]}"; do
+    key="${cfg%%=*}"
+    value="${cfg#*=}"
+    mutate_cmd+=" -cfg $key $value"
+  done
+  if [[ -n "$mode_arg" ]]; then
+    mutate_cmd+=" $mode_arg"
+  fi
+  mutate_cmd+=" -o \"$mode_out_file\" -s \"$sources_file\""
+  for sel in "${SELECT_LIST[@]}"; do
+    mutate_cmd+=" $sel"
+  done
+
   {
     echo "$read_cmd"
     echo "$prep_cmd"
-    echo "mutate -list $list_count -seed $SEED -none $mode_arg -o \"$mode_out_file\" -s \"$sources_file\""
+    echo "$mutate_cmd"
   } > "$script_file"
 
   "$YOSYS_BIN" -ql "$log_file" "$script_file"

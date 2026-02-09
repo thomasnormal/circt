@@ -106,6 +106,12 @@ Execution controls:
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes.
+- `--mutations-cfg <csv>`: pass-through mutate config entries for
+  auto-generation (`generate_mutations_yosys.sh --cfgs`), e.g. mutation
+  weight tuning such as `weight_pq_w=2,weight_cover=5`.
+- `--mutations-select <csv>`: pass-through mutate select expressions for
+  auto-generation (`generate_mutations_yosys.sh --selects`) to constrain
+  mutation targets.
 - `--formal-global-propagate-cmd <cmd>`: per-mutant formal propagation filter
   run once before per-test qualification/detection. Mutants proven
   `NOT_PROPAGATED` are classified as `not_propagated` without running tests.
@@ -189,6 +195,10 @@ Execution controls:
   lane-specific summary hint file.
 - `--default-mutations-modes <csv>`: default
   `run_mutation_cover.sh --mutations-modes` for generated-mutation lanes.
+- `--default-mutations-cfg <csv>`: default
+  `run_mutation_cover.sh --mutations-cfg` for generated-mutation lanes.
+- `--default-mutations-select <csv>`: default
+  `run_mutation_cover.sh --mutations-select` for generated-mutation lanes.
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.
@@ -235,7 +245,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]
 ```
 
 Notes:
@@ -248,6 +258,10 @@ Notes:
 - `reuse_summary_file` (optional) overrides
   `--default-reuse-summary-file` for a specific lane.
 - `mutations_modes` (optional) overrides `--default-mutations-modes` for a
+  generated-mutation lane.
+- `mutations_cfg` (optional) overrides `--default-mutations-cfg` for a
+  generated-mutation lane.
+- `mutations_select` (optional) overrides `--default-mutations-select` for a
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides
   `--default-formal-global-propagate-cmd` for a specific lane.

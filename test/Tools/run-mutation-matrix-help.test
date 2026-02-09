@@ -7,6 +7,8 @@
 // CHECK: --default-reuse-pair-file
 // CHECK: --default-reuse-summary-file
 // CHECK: --default-mutations-modes
+// CHECK: --default-mutations-cfg
+// CHECK: --default-mutations-select
 // CHECK: --default-formal-global-propagate-cmd
 // CHECK: --default-formal-global-propagate-circt-lec
 // CHECK: --default-formal-global-propagate-circt-lec-args
