@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 750 - February 9, 2026
+
+### Bidirectional Chained Global Formal Filtering
+
+- Extended `utils/run_mutation_cover.sh` chained global filter mode support:
+  - `--formal-global-propagate-circt-chain lec-then-bmc` (existing)
+  - `--formal-global-propagate-circt-chain bmc-then-lec` (new)
+- Chain semantics now support either engine as primary:
+  - `lec-then-bmc`: LEC first, BMC fallback on LEC `UNKNOWN`/error.
+  - `bmc-then-lec`: BMC first, LEC fallback on BMC `UNKNOWN`/error.
+- Improved validation diagnostics for chain mode values:
+  - expected: `lec-then-bmc|bmc-then-lec`.
+
+### Symmetric Chain Telemetry Metrics
+
+- Added BMC-primary chain telemetry to complement existing LEC-primary metrics:
+  - `chain_bmc_unknown_fallbacks`
+  - `chain_lec_resolved_not_propagated_mutants`
+- Aggregate outputs (`metrics.tsv`, `summary.json`, CLI summary) now include:
+  - `chain_lec_unknown_fallbacks`
+  - `chain_bmc_resolved_not_propagated_mutants`
+  - `chain_bmc_unknown_fallbacks`
+  - `chain_lec_resolved_not_propagated_mutants`
+
+### Tests and Documentation
+
+- Added tests:
+  - `test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test`
+  - `test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test`
+- Updated docs:
+  - `docs/FormalRegression.md` documents both chain modes and symmetric chain
+    telemetry metrics.
+  - `utils/run_mutation_matrix.sh --help` now lists accepted default chain
+    mode values.
+- Updated planning:
+  - `PROJECT_PLAN.md` tracks bidirectional chain mode support and symmetric
+    telemetry.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-cover-global-circt-chain-invalid-mode.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (27/27)
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-chain-bmc-then-lec --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 749 - February 9, 2026
 
 ### Chain Telemetry Metrics for Global Formal Filtering
