@@ -20,3 +20,4 @@
 // CHECK: --formal-global-propagate-cmd
 // CHECK: --formal-global-propagate-circt-lec
 // CHECK: --formal-global-propagate-circt-bmc
+// CHECK: --formal-global-propagate-bmc-ignore-asserts-until

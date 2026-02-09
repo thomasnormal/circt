@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 741 - February 9, 2026
+
+### Mutation Matrix BMC Ignore-Window Parity
+
+- Extended `utils/run_mutation_matrix.sh` with circt-bmc ignore-window controls:
+  - `--default-formal-global-propagate-bmc-ignore-asserts-until <n>`
+  - lane TSV optional column:
+    `global_propagate_bmc_ignore_asserts_until`
+- Added numeric validation:
+  - matrix default and per-lane `ignore_asserts_until` values must be
+    non-negative integers; invalid values produce lane/global config errors.
+- Completed parity with `run_mutation_cover.sh` BMC global filter options so
+  all cover-level BMC knobs can now be routed through matrix defaults/lanes.
+
+### Tests and Docs Updates
+
+- Updated tests:
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-filter.test`
+    - now verifies `--ignore-asserts-until` is forwarded through matrix default.
+  - `test/Tools/run-mutation-cover-global-circt-bmc-filter.test`
+    - now verifies direct cover-mode
+      `--formal-global-propagate-bmc-ignore-asserts-until` forwarding.
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-formal-global-propagate-bmc-ignore-asserts-until`.
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--formal-global-propagate-bmc-ignore-asserts-until`.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+    - documented matrix default + lane column for BMC ignore window.
+  - `PROJECT_PLAN.md`
+    - noted matrix CI integration now includes BMC `ignore_asserts_until`.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-filter.test` scenario: PASS
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-filter.test` scenario: PASS
+  - help output checks for new options: PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-bmc-ignore-window --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 740 - February 9, 2026
 
 ### BMC-Native Differential Global Mutant Filtering

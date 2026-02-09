@@ -10,6 +10,7 @@
 // CHECK: --default-formal-global-propagate-cmd
 // CHECK: --default-formal-global-propagate-circt-lec
 // CHECK: --default-formal-global-propagate-circt-bmc
+// CHECK: --default-formal-global-propagate-bmc-ignore-asserts-until
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs
