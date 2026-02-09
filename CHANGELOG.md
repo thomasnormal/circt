@@ -32828,6 +32828,81 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No recursive/chain-aware validation of discovery targets beyond metadata
   policy gates and existing transport constraints.
 
+## Iteration 711 - February 9, 2026
+
+### Lane-State Ed25519 Auto-URI Scheme Allowlist Controls
+
+- Added scheme-allowlist controls for cert-driven CRL/OCSP auto-discovery in
+  `utils/run_formal_all.sh`:
+  - shared default:
+    `--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes`
+  - per-artifact overrides:
+    - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes`
+    - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes`
+- Accepted allowlist values are comma-separated subsets of:
+  - `file`
+  - `http`
+  - `https`
+- Effective precedence:
+  - per-artifact allowlist
+  - then shared allowlist
+  - then built-in default (`file,http,https`)
+- Resolver behavior changes:
+  - cert URI candidates are now filtered by effective allowlist before
+    selection policy (`first|last|require_single`) is applied
+  - fails with explicit diagnostics when no URI matches the effective allowlist.
+- Lane-state compatibility:
+  - effective CRL/OCSP allowlists are now included in lane-state config hash
+    material for deterministic resume/merge behavior.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative invalid shared allowlist enum check
+    - negative per-artifact allowlist-without-auto-mode dependency checks
+    - negative shared-allowlist rejection case (no URI matches allowed schemes)
+    - positive precedence override case (per-artifact allowlist overrides shared)
+  - `docs/FormalRegression.md`
+    - documented shared + per-artifact allowlist flags and precedence.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Scheme allowlists remain CLI policy only (no named/versioned policy profile
+  registry).
+- Discovery target trust still depends on sidecar policy gates and existing
+  transport constraints.
+
 ## Iteration 710 - February 9, 2026
 
 ### Lane-State Ed25519 Shared Auto-URI Policy Default

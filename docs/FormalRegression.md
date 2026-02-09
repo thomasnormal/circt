@@ -145,11 +145,21 @@ Lane-state semantics:
       (`--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy`,
       `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy`)
       override the shared default.
+  - `--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes` sets a
+    shared default allowed-scheme set (comma-separated subset of
+    `file,http,https`) for both CRL and OCSP auto-URI modes.
+    - Specific flags
+      (`--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes`,
+      `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes`)
+      override the shared default.
   - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy` controls URI
     selection when multiple usable CDP URIs exist:
     - `first` (default)
     - `last`
     - `require_single` (fail when more than one usable URI is present)
+  - `--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes`
+    restricts cert-discovered CRL URI schemes to a comma-separated subset of
+    `file,http,https`.
   - Auto-URI mode requires
     `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
   - Auto-URI mode is mutually exclusive with
@@ -200,6 +210,9 @@ Lane-state semantics:
     - `first` (default)
     - `last`
     - `require_single` (fail when more than one usable URI is present)
+  - `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes`
+    restricts cert-discovered OCSP URI schemes to a comma-separated subset of
+    `file,http,https`.
   - Auto-URI mode requires
     `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
   - Auto-URI mode is mutually exclusive with

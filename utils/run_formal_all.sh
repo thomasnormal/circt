@@ -130,10 +130,18 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy MODE
                          URI selection policy for cert CDP auto mode:
                          first | last | require_single
+  --lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes LIST
+                         Allowed URI schemes for cert CDP auto mode
+                         (comma-separated subset of file,http,https)
   --lane-state-manifest-ed25519-refresh-auto-uri-policy MODE
                          Shared default URI selection policy for cert-driven
                          CRL/OCSP auto modes (specific per-artifact flags
                          override this): first | last | require_single
+  --lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes LIST
+                         Shared default allowed URI schemes for cert-driven
+                         CRL/OCSP auto modes (specific per-artifact flags
+                         override this): comma-separated subset of
+                         file,http,https
   --lane-state-manifest-ed25519-crl-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-crl-refresh-cmd or
@@ -183,6 +191,9 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy MODE
                          URI selection policy for cert AIA auto mode:
                          first | last | require_single
+  --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes LIST
+                         Allowed URI schemes for cert AIA auto mode
+                         (comma-separated subset of file,http,https)
   --lane-state-manifest-ed25519-ocsp-refresh-retries N
                          Retry count for
                          --lane-state-manifest-ed25519-ocsp-refresh-cmd or
@@ -266,6 +277,43 @@ Options:
 USAGE
 }
 
+normalize_auto_uri_allowed_schemes() {
+  local raw_value="$1"
+  local option_name="$2"
+  local token=""
+  local normalized=""
+  local seen=","
+  local IFS=','
+
+  read -r -a _scheme_tokens <<< "$raw_value"
+  if [[ "${#_scheme_tokens[@]}" -eq 0 ]]; then
+    echo "invalid ${option_name}: expected comma-separated subset of file,http,https" >&2
+    exit 1
+  fi
+  for token in "${_scheme_tokens[@]}"; do
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    token="${token,,}"
+    if [[ -z "$token" || ! "$token" =~ ^(file|http|https)$ ]]; then
+      echo "invalid ${option_name}: expected comma-separated subset of file,http,https" >&2
+      exit 1
+    fi
+    if [[ "$seen" == *",$token,"* ]]; then
+      continue
+    fi
+    if [[ -n "$normalized" ]]; then
+      normalized+=","
+    fi
+    normalized+="$token"
+    seen+="${token},"
+  done
+  if [[ -z "$normalized" ]]; then
+    echo "invalid ${option_name}: expected comma-separated subset of file,http,https" >&2
+    exit 1
+  fi
+  printf '%s\n' "$normalized"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATE_STR="$(date +%Y-%m-%d)"
@@ -342,8 +390,12 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="first"
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=0
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="file,http,https"
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
@@ -362,6 +414,8 @@ LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="first"
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET=0
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="file,http,https"
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
@@ -553,8 +607,12 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP=1; shift ;;
     --lane-state-manifest-ed25519-crl-refresh-auto-uri-policy)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$2"; LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-auto-uri-policy)
       LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$2"; LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-delay-secs)
@@ -589,6 +647,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA=1; shift ;;
     --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$2"; LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET=1; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$2"; LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET=1; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-retries)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-delay-secs)
@@ -748,6 +808,21 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY_SET" == "1" ]]; then
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_POLICY"
   fi
 fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes")"
+  if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
+  fi
+  if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" != "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$LANE_STATE_MANIFEST_ED25519_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes")"
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" ]]; then
+  LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES="$(normalize_auto_uri_allowed_schemes "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES" "--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes")"
+fi
 if [[ -n "$LANE_STATE_TSV" && -e "$LANE_STATE_TSV" && ! -r "$LANE_STATE_TSV" ]]; then
   echo "lane state file not readable: $LANE_STATE_TSV" >&2
   exit 1
@@ -808,6 +883,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI" && -z "$LANE_STATE_MANIF
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP" != "1" ]]; then
   echo "--lane-state-manifest-ed25519-crl-refresh-auto-uri-policy requires --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP" != "1" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes requires --lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp" >&2
   exit 1
 fi
 if [[ ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
@@ -960,6 +1039,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI" && -z "$LANE_STATE_MANI
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" != "1" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-policy requires --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES_SET" == "1" && "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" != "1" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes requires --lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia" >&2
   exit 1
 fi
 if [[ ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY" =~ ^(first|last|require_single)$ ]]; then
@@ -1765,7 +1848,8 @@ lane_state_ed25519_resolve_refresh_uri_from_cert_extension() {
   local key_id="$2"
   local selector="$3"
   local selection_policy="$4"
-  python3 - "$keyring_tsv" "$key_id" "$selector" "$selection_policy" <<'PY'
+  local allowed_schemes_csv="$5"
+  python3 - "$keyring_tsv" "$key_id" "$selector" "$selection_policy" "$allowed_schemes_csv" <<'PY'
 import re
 import subprocess
 import sys
@@ -1775,12 +1859,29 @@ keyring_path = Path(sys.argv[1])
 target_key_id = sys.argv[2].strip()
 selector = sys.argv[3].strip()
 selection_policy = sys.argv[4].strip()
+allowed_schemes_csv = sys.argv[5].strip()
 
 if selector not in {"crl_cdp", "ocsp_aia"}:
   print(f"invalid selector '{selector}'", file=sys.stderr)
   raise SystemExit(1)
 if selection_policy not in {"first", "last", "require_single"}:
   print(f"invalid selection policy '{selection_policy}'", file=sys.stderr)
+  raise SystemExit(1)
+allowed_schemes = set()
+for token in allowed_schemes_csv.split(","):
+  tok = token.strip().lower()
+  if tok not in {"file", "http", "https"}:
+    print(
+        f"invalid allowed schemes '{allowed_schemes_csv}': expected comma-separated subset of file,http,https",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  allowed_schemes.add(tok)
+if not allowed_schemes:
+  print(
+      f"invalid allowed schemes '{allowed_schemes_csv}': expected comma-separated subset of file,http,https",
+      file=sys.stderr,
+  )
   raise SystemExit(1)
 
 if selector == "crl_cdp":
@@ -1886,14 +1987,21 @@ if not uri_candidates:
   )
   raise SystemExit(1)
 
-usable_uri_candidates = [
-    candidate.strip()
-    for candidate in uri_candidates
-    if re.fullmatch(r"(file|http|https)://.+", candidate.strip())
-]
+usable_uri_candidates = []
+for candidate in uri_candidates:
+  candidate_uri = candidate.strip()
+  match = re.fullmatch(r"([a-z]+)://.+", candidate_uri)
+  if not match:
+    continue
+  candidate_scheme = match.group(1).lower()
+  if candidate_scheme not in {"file", "http", "https"}:
+    continue
+  if candidate_scheme not in allowed_schemes:
+    continue
+  usable_uri_candidates.append(candidate_uri)
 if not usable_uri_candidates:
   print(
-      f"lane state Ed25519 certificate {ext_label} has no supported file/http/https URI for key_id '{target_key_id}'",
+      f"lane state Ed25519 certificate {ext_label} has no URI matching allowed schemes '{allowed_schemes_csv}' for key_id '{target_key_id}'",
       file=sys.stderr,
   )
   raise SystemExit(1)
@@ -2116,7 +2224,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
           "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
           "$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
           "crl_cdp" \
-          "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY"
+          "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY" \
+          "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
       )"
     fi
     if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA" == "1" ]]; then
@@ -2125,7 +2234,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
           "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
           "$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
           "ocsp_aia" \
-          "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY"
+          "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY" \
+          "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
       )"
     fi
     LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON=""
@@ -3076,6 +3186,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_URI"
     printf "lane_state_ed25519_crl_refresh_auto_uri_from_cert_cdp=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_FROM_CERT_CDP"
     printf "lane_state_ed25519_crl_refresh_auto_uri_policy=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_POLICY"
+    printf "lane_state_ed25519_crl_refresh_auto_uri_allowed_schemes=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
     printf "lane_state_ed25519_crl_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES"
     printf "lane_state_ed25519_crl_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
@@ -3093,6 +3204,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_refresh_uri=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_URI"
     printf "lane_state_ed25519_ocsp_refresh_auto_uri_from_cert_aia=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_FROM_CERT_AIA"
     printf "lane_state_ed25519_ocsp_refresh_auto_uri_policy=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_POLICY"
+    printf "lane_state_ed25519_ocsp_refresh_auto_uri_allowed_schemes=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_AUTO_URI_ALLOWED_SCHEMES"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
     printf "lane_state_ed25519_ocsp_refresh_delay_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS"
     printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"

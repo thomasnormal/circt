@@ -18365,6 +18365,14 @@ ninja -C build circt-verilog
     default
   - lets long-running farms set one default policy for CRL/OCSP discovery while
     preserving targeted per-artifact overrides.
+- Iteration 711 adds auto-discovery URI scheme allowlists:
+  - shared default:
+    `--lane-state-manifest-ed25519-refresh-auto-uri-allowed-schemes`
+  - per-artifact overrides:
+    `--lane-state-manifest-ed25519-crl-refresh-auto-uri-allowed-schemes`,
+    `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-allowed-schemes`
+  - effective precedence: per-artifact allowlist > shared allowlist >
+    built-in `file,http,https`.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18381,6 +18389,8 @@ ninja -C build circt-verilog
   - Add policy profiles so production runs can centrally enforce
     `require_single`/`last` defaults instead of relying on per-invocation CLI
     selection.
+  - Add policy profiles for allowed URI schemes (e.g. globally disallow
+    `http`) with environment-specific defaults.
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active
