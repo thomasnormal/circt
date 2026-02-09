@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho INVOKED\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\t-\t-\t-\t-\t-\t-\tdoes-not-exist-yosys\n' > %t/lanes.tsv
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv %t/lanes.tsv > %t/log.txt
+// RUN: FileCheck %s < %t/log.txt
+//
+// CHECK: INVOKED

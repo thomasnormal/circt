@@ -232,6 +232,8 @@ It also runs native global-filter preflight checks:
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
 It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
 fail fast if the default Yosys executable is unavailable.
+Generated lanes in `--lanes-tsv` now also get native preflight validation for
+lane `mutations_yosys` values before script dispatch.
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast

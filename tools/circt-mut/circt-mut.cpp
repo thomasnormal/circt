@@ -407,6 +407,65 @@ struct MatrixRewriteResult {
   SmallVector<std::string, 32> rewrittenArgs;
 };
 
+static bool preflightMatrixLaneMutationsYosys(StringRef lanesTSVPath,
+                                              StringRef defaultMutationsYosys,
+                                              std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(lanesTSVPath);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut matrix: unable to read --lanes-tsv: ") +
+             lanesTSVPath)
+                .str();
+    return false;
+  }
+
+  SmallVector<StringRef, 128> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+    StringRef rawLine = lines[lineIdx];
+    StringRef trimmed = rawLine.trim();
+    if (trimmed.empty() || trimmed.starts_with("#"))
+      continue;
+
+    SmallVector<StringRef, 64> cols;
+    rawLine.split(cols, '\t', /*MaxSplit=*/-1, /*KeepEmpty=*/true);
+    auto getCol = [&](size_t idx) -> StringRef {
+      if (idx >= cols.size())
+        return StringRef();
+      return cols[idx].trim();
+    };
+
+    StringRef laneID = getCol(0);
+    StringRef mutationsFile = getCol(2);
+    StringRef generateCount = getCol(7);
+    StringRef laneMutationsYosys = getCol(10);
+
+    bool autoGenerateLane =
+        mutationsFile == "-" && !generateCount.empty() && generateCount != "-";
+    if (!autoGenerateLane)
+      continue;
+
+    StringRef requestedYosys = laneMutationsYosys;
+    if (requestedYosys.empty() || requestedYosys == "-") {
+      if (!defaultMutationsYosys.empty())
+        requestedYosys = defaultMutationsYosys;
+      else
+        requestedYosys = "yosys";
+    }
+
+    if (!resolveToolPath(requestedYosys)) {
+      std::string laneLabel = laneID.empty() ? "<unknown>" : laneID.str();
+      error = (Twine("circt-mut matrix: unable to resolve lane mutations_yosys "
+                     "executable in --lanes-tsv at line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + requestedYosys)
+                  .str();
+      return false;
+    }
+  }
+  return true;
+}
+
 static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                                              ArrayRef<StringRef> args) {
   MatrixRewriteResult result;
@@ -415,6 +474,8 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   bool hasDefaultGlobalFilterBMC = false;
   bool hasDefaultGlobalFilterChain = false;
   std::string defaultGlobalFilterChainMode;
+  std::string lanesTSVPath;
+  std::string defaultMutationsYosys;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
 
@@ -498,9 +559,40 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     }
     if (arg == "--default-mutations-yosys" ||
         arg.starts_with("--default-mutations-yosys=")) {
-      if (!resolveWithRequiredValue("--default-mutations-yosys"))
+      std::string requested;
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos)
+        requested = arg.substr(eqPos + 1).str();
+      else if (i + 1 < args.size())
+        requested = args[++i].str();
+      if (requested.empty()) {
+        result.error =
+            "circt-mut matrix: missing value for --default-mutations-yosys";
         return result;
+      }
+      auto resolved = resolveToolPath(requested);
+      if (!resolved) {
+        result.error =
+            (Twine("circt-mut matrix: unable to resolve "
+                   "--default-mutations-yosys executable: ") +
+             requested)
+                .str();
+        return result;
+      }
+      defaultMutationsYosys = *resolved;
+      result.rewrittenArgs.push_back("--default-mutations-yosys");
+      result.rewrittenArgs.push_back(*resolved);
       continue;
+    }
+    if (arg == "--lanes-tsv") {
+      if (i + 1 >= args.size()) {
+        result.error = "circt-mut matrix: missing value for --lanes-tsv";
+        return result;
+      }
+      lanesTSVPath = args[i + 1].str();
+    } else if (arg.starts_with("--lanes-tsv=")) {
+      constexpr StringRef lanesPrefix = "--lanes-tsv=";
+      lanesTSVPath = arg.substr(lanesPrefix.size()).str();
     }
     if (arg == "--default-formal-global-propagate-cmd" ||
         arg.starts_with("--default-formal-global-propagate-cmd="))
@@ -574,6 +666,11 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       return result;
     }
   }
+
+  if (!lanesTSVPath.empty() &&
+      !preflightMatrixLaneMutationsYosys(lanesTSVPath, defaultMutationsYosys,
+                                         result.error))
+    return result;
 
   result.ok = true;
   return result;

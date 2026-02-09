@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 815 - February 9, 2026
+
+### Native Matrix Lane `mutations_yosys` Preflight
+
+1. Extended `circt-mut matrix` native preprocessing to validate generated-lane
+   `mutations_yosys` tools from `--lanes-tsv` before script dispatch.
+2. Preflight behavior:
+   - only applies to generated-mutation lanes (`mutations_file=-` with
+     `generate_count` set).
+   - lane `mutations_yosys` is used when set; otherwise falls back to
+     `--default-mutations-yosys` and then `yosys`.
+   - unresolved executables now fail fast with lane+line diagnostics.
+3. This removes late matrix failures caused by lane-local Yosys tool issues
+   after long-running setup.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-matrix-lane-mutations-yosys-missing.test`
+  - `test/Tools/circt-mut-matrix-lane-mutations-yosys-static-ignored.test`
+- Updated:
+  - `test/Tools/circt-mut-forward-matrix.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (69/69)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-lane-yosys-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 814 - February 9, 2026
 
 ### Matrix Default Yosys Override + Native Preflight Resolution
