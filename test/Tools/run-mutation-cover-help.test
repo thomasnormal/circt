@@ -6,6 +6,7 @@
 // CHECK: --formal-propagate-cmd
 // CHECK: --coverage-threshold
 // CHECK: --fail-on-undetected
+// CHECK: --reuse-pair-file
 // CHECK: --jobs
 // CHECK: --resume
 // CHECK: --generate-mutations

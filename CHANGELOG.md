@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 730 - February 9, 2026
+
+### Mutation Qualification Cache Reuse
+
+- Extended `utils/run_mutation_cover.sh` with:
+  - `--reuse-pair-file <pair_qualification.tsv>`
+    - reuses prior activation/propagation classifications by
+      `(mutation_id, test_id)` and skips redundant formal qualification calls.
+  - cache-aware pair notes:
+    - `cached_no_activation`
+    - `cached_no_propagation`
+    - `cached_run_detection`
+- Added aggregate reuse accounting:
+  - `metrics.tsv` now emits `reused_pairs`
+  - `summary.json` now emits `reused_pairs`
+  - run summary log includes `reused_pairs=...`
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-cover-reuse.test`
+    - validates cached qualification reuse with formal commands that would fail
+      if invoked.
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--reuse-pair-file` option
+  - `docs/FormalRegression.md`
+    - documented iterative reuse flow for `pair_qualification.tsv`
+  - `PROJECT_PLAN.md`
+    - marked qualification-cache reuse as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation:
+  - cached-qualification run with two mutants:
+    - expected classes (`detected`, `not_activated`): PASS
+    - `reused_pairs=2` in metrics + JSON + summary log: PASS.
+
 ## Iteration 729 - February 9, 2026
 
 ### Mutation Matrix Parallel Lane Scheduling
