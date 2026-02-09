@@ -100,6 +100,32 @@ CIRCT_OPT="${CIRCT_OPT:-$CIRCT_DIR/build/bin/circt-opt}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
 
+ensure_executable_tool() {
+  local tool_path="$1"
+  local tool_name="$2"
+
+  if [[ ! -e "$tool_path" ]]; then
+    echo "$tool_name not found: $tool_path" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "$tool_path" ]]; then
+    echo "Warning: $tool_name is not executable ($tool_path); attempting chmod +x" >&2
+    if ! chmod +x "$tool_path"; then
+      echo "$tool_name is not executable and chmod +x failed: $tool_path" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ ! -x "$tool_path" ]]; then
+    echo "$tool_name is not executable: $tool_path" >&2
+    exit 1
+  fi
+}
+
+ensure_executable_tool "$CIRCT_VERILOG" "circt-verilog"
+ensure_executable_tool "$CIRCT_SIM" "circt-sim"
+
 # OpenTitan paths
 PRIM_RTL="$OPENTITAN_DIR/hw/ip/prim/rtl"
 PRIM_GENERIC_RTL="$OPENTITAN_DIR/hw/ip/prim_generic/rtl"
