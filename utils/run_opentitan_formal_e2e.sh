@@ -169,10 +169,13 @@ fi
 if [[ "$RUN_LEC" == "1" ]]; then
   lec_results="${OUT_DIR}/lec-results.tsv"
   lec_log="${LOG_DIR}/lec.log"
+  lec_workdir="${OUT_DIR}/lec-workdir"
+  rm -rf "$lec_workdir"
   lec_cmd=(
     "$LEC_SCRIPT"
     --opentitan-root "$OPENTITAN_ROOT"
     --results-file "$lec_results"
+    --workdir "$lec_workdir"
   )
   if [[ -n "$IMPL_FILTER" ]]; then
     lec_cmd+=(--impl-filter "$IMPL_FILTER")

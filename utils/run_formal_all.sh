@@ -6636,7 +6636,9 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     :
   else
     opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
+    opentitan_lec_workdir="$OUT_DIR/opentitan-lec-work"
     : > "$opentitan_case_results"
+    rm -rf "$opentitan_lec_workdir"
     opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
     if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
       opentitan_lec_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
@@ -6652,7 +6654,7 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     fi
     run_suite opentitan-lec \
       env "${opentitan_env[@]}" \
-      utils/run_opentitan_circt_lec.py "${opentitan_lec_args[@]}" || true
+      utils/run_opentitan_circt_lec.py --workdir "$opentitan_lec_workdir" "${opentitan_lec_args[@]}" || true
     if [[ ! -s "$opentitan_case_results" ]]; then
       OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec.log" \
       OPENTITAN_CASE_RESULTS_FILE="$opentitan_case_results" python3 - <<'PY'
@@ -6706,7 +6708,9 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
     :
   else
     opentitan_strict_case_results="$OUT_DIR/opentitan-lec-strict-results.txt"
+    opentitan_strict_workdir="$OUT_DIR/opentitan-lec-strict-work"
     : > "$opentitan_strict_case_results"
+    rm -rf "$opentitan_strict_workdir"
     opentitan_strict_args=(--opentitan-root "$OPENTITAN_DIR")
     if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
       opentitan_strict_args+=(--impl-filter "$OPENTITAN_LEC_IMPL_FILTER")
@@ -6721,7 +6725,7 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
     run_suite opentitan-lec-strict \
       env "${opentitan_strict_env[@]}" \
-      utils/run_opentitan_circt_lec.py "${opentitan_strict_args[@]}" || true
+      utils/run_opentitan_circt_lec.py --workdir "$opentitan_strict_workdir" "${opentitan_strict_args[@]}" || true
     if [[ ! -s "$opentitan_strict_case_results" ]]; then
       OPENTITAN_LOG_FILE="$OUT_DIR/opentitan-lec-strict.log" \
       OPENTITAN_CASE_RESULTS_FILE="$opentitan_strict_case_results" python3 - <<'PY'
