@@ -69,6 +69,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --resume-from-lan
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state --merge-lane-state-tsv /tmp/formal-lanes-worker-a.tsv --merge-lane-state-tsv /tmp/formal-lanes-worker-b.tsv
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-key-file /secrets/lane-state.key --lane-state-hmac-key-id ci-lane-key-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-keyring-tsv /secrets/lane-state-keyring.tsv --lane-state-hmac-keyring-sha256 <sha256> --lane-state-hmac-key-id ci-lane-key-1
 ```
 
 Lane-state semantics:
@@ -87,6 +88,12 @@ Lane-state semantics:
   `<lane-state>.manifest.json` and verifies signatures during resume/merge.
 - When `--lane-state-hmac-key-id` is set, manifest key-id must match on
   resume/merge (prevents accidental key drift).
+- `--lane-state-hmac-keyring-tsv` resolves keys by `hmac_key_id` from a keyring
+  row format:
+  - `<hmac_key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+- `--lane-state-hmac-keyring-sha256` can pin exact keyring content hash.
+- `--lane-state-hmac-key-file` and `--lane-state-hmac-keyring-tsv` are mutually
+  exclusive.
 
 Inspect and validate lane-state artifacts (single or federated files):
 

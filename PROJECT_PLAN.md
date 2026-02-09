@@ -18155,6 +18155,17 @@ ninja -C build circt-verilog
   - Moves lane-state toward a verifiable artifact contract suitable for CI
     promotion gates.
 
+### Iteration 681
+- Added lane-state HMAC keyring support in `utils/run_formal_all.sh`:
+  - `--lane-state-hmac-keyring-tsv`
+  - `--lane-state-hmac-keyring-sha256`
+  - key resolution by `--lane-state-hmac-key-id` with keyring SHA pinning.
+- Planning impact:
+  - Enables deterministic key rotation without abandoning signed lane-state
+    checkpoints.
+  - Improves distributed closure security posture with keyring content pinning
+    and explicit key-id routing.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18165,7 +18176,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add lane-state key rotation/signing-keyring policy (not single-key only).
+  - Add lane-state signer lifecycle policy (time-window + revocation enforcement
+    for manifests).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

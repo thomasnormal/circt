@@ -32811,6 +32811,67 @@ CIRCT/slang correctly enforces LRM restrictions.
   multi-artifact attestation model.
 - Resume granularity remains lane-level (no per-test replay).
 
+## Iteration 681 - February 9, 2026
+
+### Lane-State HMAC Keyring and SHA-Pinned Resolution
+
+- Extended `utils/run_formal_all.sh` lane-state signing with keyring-based key
+  resolution:
+  - `--lane-state-hmac-keyring-tsv <file>`
+  - `--lane-state-hmac-keyring-sha256 <hex>`
+  - existing `--lane-state-hmac-key-id <id>` now works with key-file or keyring
+- Added strict key-source validation:
+  - `--lane-state-hmac-key-file` and `--lane-state-hmac-keyring-tsv` are
+    mutually exclusive
+  - keyring mode requires `--lane-state-hmac-key-id`
+  - keyring SHA pin requires keyring TSV
+- Added keyring parsing/validation rules:
+  - row format: `<key_id>\t<key_file_path>\t[not_before]\t[not_after]\t[status]\t[key_sha256]`
+  - duplicate `key_id` rejected
+  - `status` accepts `active` or `revoked`; revoked key-id is rejected
+  - optional `key_sha256` pin is verified against resolved key file
+  - relative key paths are resolved against keyring directory
+- Lane-state config fingerprint now includes HMAC mode and resolved keyring SHA
+  pin material, preventing unsafe resume under key-source drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive keyring seed/resume flow
+    - negative key-source conflict
+    - negative keyring-without-lane-state
+    - negative keyring-sha-without-keyring
+    - negative keyring-without-key-id
+    - negative missing key-id in keyring
+    - negative keyring SHA mismatch
+  - `docs/FormalRegression.md`
+    - documented keyring flags, SHA pinning, and row format
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep with keyring + SHA pin:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-keyring-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-keyring-smoke.tsv --reset-lane-state --lane-state-hmac-keyring-tsv /tmp/formal-lane-state-ring.tsv --lane-state-hmac-keyring-sha256 <computed> --lane-state-hmac-key-id ci-lane-key-a`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, filtered `avip/*`)
+  - Resume replay:
+    - same command with `--resume-from-lane-state`:
+      - PASS (all lanes resumed)
+
+### Remaining Limitations
+
+- Keyring metadata fields `not_before` / `not_after` are currently parsed but
+  not enforced against manifest timestamps.
+- Lane-state signatures remain HMAC-only; no asymmetric signer trust-chain
+  support yet.
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 661 - February 8, 2026
 
 ### Dry-Run JSONL Sampled Diff Payloads

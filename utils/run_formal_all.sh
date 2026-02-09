@@ -93,6 +93,11 @@ Options:
   --lane-state-hmac-key-file FILE
                          HMAC key file used to sign and verify lane-state
                          manifests (<lane-state>.manifest.json)
+  --lane-state-hmac-keyring-tsv FILE
+                         HMAC keyring TSV used to resolve lane-state signing
+                         keys by key-id (<key_id>\t<key_file>\t...)
+  --lane-state-hmac-keyring-sha256 HEX
+                         Optional SHA256 pin for --lane-state-hmac-keyring-tsv
   --lane-state-hmac-key-id ID
                          Optional key identifier embedded in lane-state
                          manifests; verified on resume/merge when set
@@ -173,7 +178,12 @@ RESUME_FROM_LANE_STATE=0
 RESET_LANE_STATE=0
 declare -a MERGE_LANE_STATE_TSVS=()
 LANE_STATE_HMAC_KEY_FILE=""
+LANE_STATE_HMAC_KEYRING_TSV=""
+LANE_STATE_HMAC_KEYRING_SHA256=""
 LANE_STATE_HMAC_KEY_ID=""
+LANE_STATE_HMAC_EFFECTIVE_KEY_FILE=""
+LANE_STATE_HMAC_MODE="none"
+LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED=""
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -301,6 +311,10 @@ while [[ $# -gt 0 ]]; do
       MERGE_LANE_STATE_TSVS+=("$2"); shift 2 ;;
     --lane-state-hmac-key-file)
       LANE_STATE_HMAC_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-hmac-keyring-tsv)
+      LANE_STATE_HMAC_KEYRING_TSV="$2"; shift 2 ;;
+    --lane-state-hmac-keyring-sha256)
+      LANE_STATE_HMAC_KEYRING_SHA256="$2"; shift 2 ;;
     --lane-state-hmac-key-id)
       LANE_STATE_HMAC_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
@@ -368,6 +382,14 @@ if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_TSV" ]]; then
   echo "--lane-state-hmac-key-file requires --lane-state-tsv" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--lane-state-hmac-keyring-tsv requires --lane-state-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  echo "--lane-state-hmac-key-file and --lane-state-hmac-keyring-tsv are mutually exclusive" >&2
+  exit 1
+fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
   echo "--resume-from-lane-state and --reset-lane-state are mutually exclusive" >&2
   exit 1
@@ -390,8 +412,24 @@ if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && ! -r "$LANE_STATE_HMAC_KEY_FILE" ]]; the
   echo "lane state HMAC key file not readable: $LANE_STATE_HMAC_KEY_FILE" >&2
   exit 1
 fi
-if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
-  echo "--lane-state-hmac-key-id requires --lane-state-hmac-key-file" >&2
+if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && ! -r "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  echo "lane state HMAC keyring TSV not readable: $LANE_STATE_HMAC_KEYRING_TSV" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEYRING_SHA256" && -z "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  echo "--lane-state-hmac-keyring-sha256 requires --lane-state-hmac-keyring-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEYRING_SHA256" && ! "$LANE_STATE_HMAC_KEYRING_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-hmac-keyring-sha256: expected 64 hex chars" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  echo "--lane-state-hmac-key-id requires --lane-state-hmac-key-file or --lane-state-hmac-keyring-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && -z "$LANE_STATE_HMAC_KEY_ID" ]]; then
+  echo "--lane-state-hmac-keyring-tsv requires --lane-state-hmac-key-id" >&2
   exit 1
 fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
@@ -487,6 +525,138 @@ if [[ "$STRICT_GATE" == "1" ]]; then
 fi
 if [[ -z "$JSON_SUMMARY_FILE" ]]; then
   JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
+fi
+
+if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  mapfile -t lane_state_keyring_resolved < <(
+    LANE_STATE_HMAC_KEYRING_TSV="$LANE_STATE_HMAC_KEYRING_TSV" \
+    LANE_STATE_HMAC_KEYRING_SHA256="$LANE_STATE_HMAC_KEYRING_SHA256" \
+    LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
+    python3 - <<'PY'
+import hashlib
+import os
+import re
+import sys
+from pathlib import Path
+
+keyring_path = Path(os.environ["LANE_STATE_HMAC_KEYRING_TSV"])
+expected_sha = os.environ.get("LANE_STATE_HMAC_KEYRING_SHA256", "").strip()
+target_key_id = os.environ["LANE_STATE_HMAC_KEY_ID"].strip()
+
+keyring_bytes = keyring_path.read_bytes()
+actual_sha = hashlib.sha256(keyring_bytes).hexdigest()
+if expected_sha and actual_sha != expected_sha:
+  print(
+      f"lane state HMAC keyring SHA256 mismatch: expected {expected_sha}, found {actual_sha}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+rows = {}
+for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), start=1):
+  line = raw_line.strip()
+  if not line or line.startswith("#"):
+    continue
+  cols = raw_line.split("\t")
+  if len(cols) < 2:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: expected at least key_id and key_file_path",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if len(cols) > 6:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: expected at most 6 columns",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  key_id = cols[0].strip()
+  key_file_path = cols[1].strip()
+  not_before = cols[2].strip() if len(cols) >= 3 else ""
+  not_after = cols[3].strip() if len(cols) >= 4 else ""
+  status = cols[4].strip() if len(cols) >= 5 else ""
+  key_sha = cols[5].strip() if len(cols) >= 6 else ""
+  if not key_id:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: empty key_id",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if key_id in rows:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: duplicate key_id '{key_id}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if not key_file_path:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: empty key_file_path",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if status and status not in {"active", "revoked"}:
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: status must be active or revoked",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if key_sha and not re.fullmatch(r"[0-9a-f]{64}", key_sha):
+    print(
+        f"invalid lane state HMAC keyring row {keyring_path}:{line_no}: key_sha256 must be 64 hex chars",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  rows[key_id] = (key_file_path, not_before, not_after, status, key_sha)
+
+if target_key_id not in rows:
+  print(
+      f"lane state HMAC keyring missing key_id '{target_key_id}' in {keyring_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+key_file_path, _, _, status, key_sha = rows[target_key_id]
+if status == "revoked":
+  print(
+      f"lane state HMAC key_id '{target_key_id}' is revoked in keyring {keyring_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+key_path = Path(key_file_path)
+if not key_path.is_absolute():
+  key_path = (keyring_path.parent / key_path).resolve()
+if not key_path.is_file():
+  print(
+      f"lane state HMAC key file for key_id '{target_key_id}' not found: {key_path}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if key_sha:
+  actual_key_sha = hashlib.sha256(key_path.read_bytes()).hexdigest()
+  if actual_key_sha != key_sha:
+    print(
+        f"lane state HMAC key SHA256 mismatch for key_id '{target_key_id}': expected {key_sha}, found {actual_key_sha}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print(str(key_path))
+print(actual_sha)
+PY
+  )
+  if [[ "${#lane_state_keyring_resolved[@]}" -ne 2 ]]; then
+    echo "internal error: failed to resolve lane state HMAC keyring" >&2
+    exit 1
+  fi
+  LANE_STATE_HMAC_EFFECTIVE_KEY_FILE="${lane_state_keyring_resolved[0]}"
+  LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED="${lane_state_keyring_resolved[1]}"
+  LANE_STATE_HMAC_MODE="keyring"
+elif [[ -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  LANE_STATE_HMAC_EFFECTIVE_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE"
+  LANE_STATE_HMAC_MODE="key_file"
+else
+  LANE_STATE_HMAC_MODE="none"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -626,8 +796,9 @@ compute_lane_state_config_hash() {
     printf "yosys_dir=%s\n" "$YOSYS_DIR"
     printf "opentitan_dir=%s\n" "$OPENTITAN_DIR"
     printf "avip_glob=%s\n" "$AVIP_GLOB"
-    printf "lane_state_hmac_enabled=%s\n" "$(if [[ -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then echo 1; else echo 0; fi)"
+    printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
+    printf "lane_state_hmac_keyring_sha256=%s\n" "$LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -729,7 +900,7 @@ lane_state_write_file() {
 
 lane_state_emit_manifest() {
   local lane_state_file="$1"
-  if [[ -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  if [[ -z "$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" ]]; then
     return
   fi
   local manifest_file="${lane_state_file}.manifest.json"
@@ -738,7 +909,7 @@ lane_state_emit_manifest() {
   LANE_STATE_MANIFEST_PATH="$manifest_file" \
   LANE_STATE_FILE="$lane_state_file" \
   LANE_STATE_SHA256="$lane_state_sha" \
-  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE" \
+  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" \
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
   python3 - <<'PY'
 import hashlib
@@ -771,7 +942,7 @@ PY
 lane_state_verify_manifest() {
   local lane_state_file="$1"
   local source_label="$2"
-  if [[ -z "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  if [[ -z "$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" ]]; then
     return
   fi
   local manifest_file="${lane_state_file}.manifest.json"
@@ -784,7 +955,7 @@ lane_state_verify_manifest() {
   LANE_STATE_MANIFEST_PATH="$manifest_file" \
   LANE_STATE_FILE="$lane_state_file" \
   LANE_STATE_SHA256="$lane_state_sha" \
-  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE" \
+  LANE_STATE_HMAC_KEY_FILE="$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" \
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
   SOURCE_LABEL="$source_label" \
   python3 - <<'PY'
