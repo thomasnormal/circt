@@ -778,7 +778,7 @@
 // CASEUNMATCHED: unmatched expected failure cases:
 // CASEUNMATCHED: sv-tests LEC id_kind=base id=missing_case status=FAIL
 // CASEOT: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}base{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}XFAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_xprop
-// OPENTITANDETAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// OPENTITANDETAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
 // CASEAVIP: avip/foo_avip{{[[:space:]]+}}compile{{[[:space:]]+}}base{{[[:space:]]+}}foo_avip{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_avip_fail
 // AVIPDETAIL: FAIL{{[[:space:]]+}}foo_avip{{[[:space:]]+}}{{.*}}/foo_avip{{[[:space:]]+}}avip/foo_avip{{[[:space:]]+}}compile
 // EXPECTEDOK: sv-tests{{[[:space:]]+}}LEC{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}yes{{[[:space:]]+}}known_issue
@@ -850,7 +850,7 @@
 // CASEUNEXPECTED: sv-tests LEC FAIL base=basic02 path={{.*}}basic02.sv
 // CASEEXPIRED: expired expected failure cases:
 // CASEEXPIRED: sv-tests LEC id_kind=base id=basic02 expires_on=2000-01-01 matched_count=1
-// CASEAGG: yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}aggregate{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_yosys_bmc_gap
+// CASEAGG: yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}aggregate{{[[:space:]]+}}__aggregate__{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}0{{[[:space:]]+}}no{{[[:space:]]+}}known_yosys_bmc_gap
 //
 // STRICTXPASS: strict gate failures:
 // STRICTXPASS: verilator-verification BMC: xpass increased (0 -> 1, window=1)

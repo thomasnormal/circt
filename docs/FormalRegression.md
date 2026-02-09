@@ -59,6 +59,7 @@ utils/run_formal_all.sh --strict-gate
 - xpass non-regression
 - pass-rate non-regression
 - fail-like case-ID non-regression (`failure_cases` baseline telemetry)
+- OpenTitan `E2E_MODE_DIFF` `strict_only_fail` non-regression
 
 Use a trailing baseline window for trend-aware strict gates:
 
@@ -92,6 +93,11 @@ When both lanes run, formal-all also emits a normalized mode-diff artifact:
 Classification counts are also exported to
 `<out-dir>/opentitan-e2e-mode-diff-metrics.tsv` and embedded in the
 `E2E_MODE_DIFF` summary string (`strict_only_fail`, `same_status`, etc.).
+Use a targeted gate without enabling all strict-gate checks:
+
+```bash
+utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan ~/opentitan --fail-on-new-e2e-mode-diff-strict-only-fail --baseline-file /tmp/formal-baselines.tsv
+```
 
 ## Mutation Coverage Harness (Certitude-Style Classification)
 
@@ -551,6 +557,7 @@ Lane TSV schema (tab-separated):
 
 ```text
 lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]
 ```
 
 Notes:
@@ -597,6 +604,11 @@ Notes:
   `--default-formal-global-propagate-circt-chain` for a specific lane.
 - `global_propagate_bmc_args` (optional) overrides
   `--default-formal-global-propagate-circt-bmc-args` for a specific lane.
+- `skip_baseline` (optional) overrides matrix `--skip-baseline` for a lane.
+- `fail_on_undetected` (optional) overrides matrix `--fail-on-undetected` for
+  a lane.
+- `fail_on_errors` (optional) overrides matrix `--fail-on-errors` for a lane.
+  For these three booleans, accepted values are `1|0|true|false|yes|no|-`.
 - `global_propagate_bmc_bound` (optional) overrides
   `--default-formal-global-propagate-bmc-bound` for a specific lane.
 - `global_propagate_bmc_module` (optional) overrides
@@ -1033,6 +1045,7 @@ Fail only on specific gate classes:
 utils/run_formal_all.sh --fail-on-new-xpass
 utils/run_formal_all.sh --fail-on-passrate-regression
 utils/run_formal_all.sh --fail-on-new-failure-cases
+utils/run_formal_all.sh --fail-on-new-e2e-mode-diff-strict-only-fail
 ```
 
 Gate on known expected-failure budgets per suite/mode:
