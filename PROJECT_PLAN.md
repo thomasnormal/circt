@@ -18329,6 +18329,8 @@ ninja -C build circt-verilog
 ### Recent Lane-State Hardening (See CHANGELOG)
 - Iterations 698-700 delivered refresh command integration plus retry/delay and
   timeout/jitter controls for Ed25519 CRL/OCSP verification flows.
+- Iteration 701 adds signed CRL/OCSP refresh provenance emission in lane-state
+  manifests for post-run auditability of refresh attempt behavior.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18344,8 +18346,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Add signed refresh-artifact provenance (bind source metadata + fetch digest
-    chain into manifest policy).
+  - Bind external source metadata (AIA/CDP URL, transport status, cert chain)
+    into signed refresh provenance for stronger supply-chain attestations.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

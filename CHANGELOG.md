@@ -32754,6 +32754,59 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 701 - February 9, 2026
+
+### Lane-State Signed Refresh Provenance
+
+- Extended Ed25519 CRL/OCSP refresh hooks in `utils/run_formal_all.sh` to emit
+  signed per-artifact refresh provenance into lane-state manifests:
+  - `ed25519_crl_refresh_provenance`
+  - `ed25519_ocsp_refresh_provenance`
+- Provenance payload now records:
+  - artifact kind (`crl` or `ocsp`)
+  - max attempts, attempts used, final outcome
+  - per-attempt start/end UTC timestamps, exit code, timeout flag,
+    artifact-readable flag, observed artifact SHA256
+- Refresh provenance is included inside the signed manifest payload (HMAC or
+  Ed25519), so provenance integrity is covered by existing manifest signature
+  verification.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - added CRL refresh provenance coverage in keyring+CA+CRL mode
+    - added OCSP refresh provenance checks for:
+      - single-attempt refresh
+      - retry (`attempts_used: 2`)
+      - timeout-then-retry (`timed_out: true`)
+  - `docs/FormalRegression.md`
+    - documented signed refresh provenance semantics in lane-state mode
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep with refresh retry/timeout/jitter and provenance path:
+  - seed:
+    - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh ... --lane-state-tsv /tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/lane-state-provenance.tsv --reset-lane-state ... --lane-state-manifest-ed25519-crl-refresh-timeout-secs 1 --lane-state-manifest-ed25519-ocsp-refresh-timeout-secs 1 ...`
+    - PASS (sv-tests/verilator/yosys/OpenTitan/AVIP filtered suites)
+  - resume:
+    - same command with `--resume-from-lane-state`
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-provenance-seed`
+    - `/tmp/formal-all-ed25519-refresh-retry-sweep-20260209-030458/out-provenance-resume`
+
+### Remaining Limitations
+
+- Provenance currently covers refresh execution + observed artifact digests, but
+  not upstream fetch-source attestations (URL/transport/cert-chain metadata).
+
 ## Iteration 700 - February 9, 2026
 
 ### Lane-State Refresh Timeout/Jitter Controls
