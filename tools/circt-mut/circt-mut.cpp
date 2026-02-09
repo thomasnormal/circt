@@ -496,6 +496,12 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         return result;
       continue;
     }
+    if (arg == "--default-mutations-yosys" ||
+        arg.starts_with("--default-mutations-yosys=")) {
+      if (!resolveWithRequiredValue("--default-mutations-yosys"))
+        return result;
+      continue;
+    }
     if (arg == "--default-formal-global-propagate-cmd" ||
         arg.starts_with("--default-formal-global-propagate-cmd="))
       hasDefaultGlobalFilterCmd = true;

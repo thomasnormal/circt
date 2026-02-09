@@ -230,6 +230,8 @@ It also runs native global-filter preflight checks:
 - rejects conflicting non-chain global filter mode combinations early.
 `circt-mut matrix` now applies the same preflight model for default global
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
+It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
+fail fast if the default Yosys executable is unavailable.
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
@@ -265,6 +267,7 @@ Run multiple lanes with `circt-mut matrix`:
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
+  --default-mutations-yosys yosys \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
@@ -357,6 +360,7 @@ certitude_run \
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
+  --default-mutations-yosys yosys \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
@@ -392,7 +396,9 @@ Core input formats:
   `mutation_id<space>mutate_spec`
 - `lanes.tsv`:
   first columns are
-  `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`
+  `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`.
+  Generated-mutation lanes can leave `mutations_yosys` as `-` to inherit
+  matrix `--default-mutations-yosys`.
   with optional tail override `global_propagate_timeout_seconds` to set
   per-lane global formal timeout.
   Additional optional tail overrides:

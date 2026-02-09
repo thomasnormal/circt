@@ -36,6 +36,8 @@ Optional:
                             Default --mutations-cfg for generated-mutation lanes
   --default-mutations-select CSV
                             Default --mutations-select for generated-mutation lanes
+  --default-mutations-yosys PATH
+                            Default --mutations-yosys for generated-mutation lanes
   --default-formal-global-propagate-cmd CMD
                             Default --formal-global-propagate-cmd for lanes
                             without lane-specific global_propagate_cmd
@@ -170,6 +172,7 @@ DEFAULT_MUTATIONS_MODE_COUNTS=""
 DEFAULT_MUTATIONS_PROFILES=""
 DEFAULT_MUTATIONS_CFG=""
 DEFAULT_MUTATIONS_SELECT=""
+DEFAULT_MUTATIONS_YOSYS=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS=""
@@ -220,6 +223,7 @@ while [[ $# -gt 0 ]]; do
     --default-mutations-profiles) DEFAULT_MUTATIONS_PROFILES="$2"; shift 2 ;;
     --default-mutations-cfg) DEFAULT_MUTATIONS_CFG="$2"; shift 2 ;;
     --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
+    --default-mutations-yosys) DEFAULT_MUTATIONS_YOSYS="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --default-formal-global-propagate-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --default-formal-global-propagate-lec-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS="$2"; shift 2 ;;
@@ -584,6 +588,9 @@ lane_cache_schedule_key() {
     lane_mutations_seed="1"
   fi
   if [[ "$lane_mutations_yosys" == "-" || -z "$lane_mutations_yosys" ]]; then
+    lane_mutations_yosys="$DEFAULT_MUTATIONS_YOSYS"
+  fi
+  if [[ -z "$lane_mutations_yosys" || "$lane_mutations_yosys" == "-" ]]; then
     lane_mutations_yosys="yosys"
   fi
   if [[ "$lane_mutations_modes" == "-" || -z "$lane_mutations_modes" ]]; then
@@ -840,8 +847,12 @@ run_lane() {
     if [[ "${MUTATIONS_SEED[$i]}" != "-" && -n "${MUTATIONS_SEED[$i]}" ]]; then
       cmd+=(--mutations-seed "${MUTATIONS_SEED[$i]}")
     fi
-    if [[ "${MUTATIONS_YOSYS[$i]}" != "-" && -n "${MUTATIONS_YOSYS[$i]}" ]]; then
-      cmd+=(--mutations-yosys "${MUTATIONS_YOSYS[$i]}")
+    lane_mutations_yosys="${MUTATIONS_YOSYS[$i]}"
+    if [[ "$lane_mutations_yosys" == "-" || -z "$lane_mutations_yosys" ]]; then
+      lane_mutations_yosys="$DEFAULT_MUTATIONS_YOSYS"
+    fi
+    if [[ -n "$lane_mutations_yosys" && "$lane_mutations_yosys" != "-" ]]; then
+      cmd+=(--mutations-yosys "$lane_mutations_yosys")
     fi
     if [[ -n "$lane_mutations_modes" ]]; then
       cmd+=(--mutations-modes "$lane_mutations_modes")

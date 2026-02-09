@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 814 - February 9, 2026
+
+### Matrix Default Yosys Override + Native Preflight Resolution
+
+1. Extended `utils/run_mutation_matrix.sh` with
+   `--default-mutations-yosys <path>`:
+   - generated-mutation lanes now inherit this default when lane
+     `mutations_yosys` is `-`/empty.
+   - inherited value is used consistently in lane execution and
+     cache-schedule keying.
+2. Extended native `circt-mut matrix` preflight in
+   `tools/circt-mut/circt-mut.cpp` to resolve/rewrite
+   `--default-mutations-yosys` before dispatch.
+3. Result:
+   - matrix runs fail fast with direct diagnostics for missing default Yosys.
+   - generated lanes no longer require repeating lane-local `mutations_yosys`
+     when a matrix-wide default is intended.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/run-mutation-matrix-default-mutations-yosys.test`
+  - `test/Tools/circt-mut-matrix-default-mutations-yosys-rewrite.test`
+  - `test/Tools/circt-mut-matrix-default-mutations-yosys-missing.test`
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-matrix-default-mutations-yosys.test test/Tools/circt-mut-matrix-default-mutations-yosys-rewrite.test test/Tools/circt-mut-matrix-default-mutations-yosys-missing.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (67/67)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-matrix-default-yosys --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 813 - February 9, 2026
 
 ### Native Yosys Tool Resolution for Mutation Generation Paths
