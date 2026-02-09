@@ -32870,6 +32870,68 @@ CIRCT/slang correctly enforces LRM restrictions.
   support yet.
 - Resume granularity remains lane-level (no per-test replay).
 
+## Iteration 683 - February 9, 2026
+
+### Lane-State Ed25519 Manifest Signing/Verification
+
+- Added asymmetric lane-state manifest mode in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-private-key-file <file>`
+  - `--lane-state-manifest-ed25519-public-key-file <file>`
+  - `--lane-state-manifest-ed25519-key-id <id>`
+- Added manifest signature-mode metadata:
+  - `signature_mode: "ed25519"` (new)
+  - `ed25519_key_id` (optional)
+  - `signature_ed25519_base64`
+- Added strict mode and flag compatibility checks:
+  - Ed25519 private/public flags must be provided together
+  - Ed25519 mode is mutually exclusive with lane-state HMAC modes
+  - Ed25519 mode requires `openssl` availability
+- Added Ed25519 verification on resume/merge:
+  - verifies manifest signature against canonical payload using provided public
+    key
+  - enforces optional `ed25519_key_id` match when configured
+- Lane-state config fingerprint now includes Ed25519 signing inputs
+  (`sign_mode`, `ed25519_key_id`, public-key SHA256) to prevent unsafe replay
+  under signer drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive Ed25519 signed lane-state seed + resume
+    - negative Ed25519 signature verification failure with wrong public key
+    - negative Ed25519 key-id mismatch
+    - negative private/public flag dependency checks
+  - `docs/FormalRegression.md`
+    - documented Ed25519 lane-state manifest mode and flags
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External Ed25519 lane-state smoke:
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-ed25519-smoke-<ts>/out-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --lane-state-tsv /tmp/formal-all-ed25519-smoke-<ts>/lane-state.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file /tmp/formal-all-ed25519-smoke-<ts>/ed25519-private.pem --lane-state-manifest-ed25519-public-key-file /tmp/formal-all-ed25519-smoke-<ts>/ed25519-public.pem --lane-state-manifest-ed25519-key-id smoke-ed25519-1 --include-lane-regex '^sv-tests/BMC$'`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - same command with `--resume-from-lane-state`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+- Integrated filtered sweep with lane-state keyring mode (regression check):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-results-lane-window-smoke --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-lane-window-smoke.tsv --reset-lane-state --lane-state-hmac-keyring-tsv /tmp/formal-lane-state-ring.tsv --lane-state-hmac-keyring-sha256 <computed> --lane-state-hmac-key-id ci-lane-key-a`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, filtered `avip/*`)
+  - Resume replay:
+    - same command with `--resume-from-lane-state`:
+      - PASS (all lanes resumed)
+
+### Remaining Limitations
+
+- Ed25519 trust is still raw key-file based (no certificate-chain/trust-store
+  policy).
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 682 - February 9, 2026
 
 ### Lane-State Key-Window Enforcement (Keyring Mode)

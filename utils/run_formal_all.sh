@@ -101,6 +101,12 @@ Options:
   --lane-state-hmac-key-id ID
                          Optional key identifier embedded in lane-state
                          manifests; verified on resume/merge when set
+  --lane-state-manifest-ed25519-private-key-file FILE
+                         Ed25519 private key for lane-state manifest signing
+  --lane-state-manifest-ed25519-public-key-file FILE
+                         Ed25519 public key for lane-state manifest verification
+  --lane-state-manifest-ed25519-key-id ID
+                         Optional key identifier embedded in Ed25519 manifests
   --include-lane-regex REGEX
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
@@ -186,6 +192,11 @@ LANE_STATE_HMAC_KEY_NOT_BEFORE=""
 LANE_STATE_HMAC_KEY_NOT_AFTER=""
 LANE_STATE_HMAC_MODE="none"
 LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_SIGN_MODE="none"
+LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE=""
+LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE=""
+LANE_STATE_MANIFEST_ED25519_KEY_ID=""
+LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
@@ -319,6 +330,12 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_HMAC_KEYRING_SHA256="$2"; shift 2 ;;
     --lane-state-hmac-key-id)
       LANE_STATE_HMAC_KEY_ID="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-private-key-file)
+      LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-public-key-file)
+      LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-key-id)
+      LANE_STATE_MANIFEST_ED25519_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
       INCLUDE_LANE_REGEX="$2"; shift 2 ;;
     --exclude-lane-regex)
@@ -388,8 +405,24 @@ if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && -z "$LANE_STATE_TSV" ]]; then
   echo "--lane-state-hmac-keyring-tsv requires --lane-state-tsv" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-private-key-file requires --lane-state-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && -z "$LANE_STATE_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-public-key-file requires --lane-state-tsv" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_HMAC_KEY_FILE" && -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   echo "--lane-state-hmac-key-file and --lane-state-hmac-keyring-tsv are mutually exclusive" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-private-key-file is mutually exclusive with lane-state HMAC signing options" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-private-key-file is mutually exclusive with lane-state HMAC signing options" >&2
   exit 1
 fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && "$RESET_LANE_STATE" == "1" ]]; then
@@ -432,6 +465,22 @@ if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" && -z "$LAN
 fi
 if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" && -z "$LANE_STATE_HMAC_KEY_ID" ]]; then
   echo "--lane-state-hmac-keyring-tsv requires --lane-state-hmac-key-id" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-private-key-file requires --lane-state-manifest-ed25519-public-key-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-public-key-file requires --lane-state-manifest-ed25519-private-key-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
+  echo "lane state Ed25519 private key file not readable: $LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" ]]; then
+  echo "lane state Ed25519 public key file not readable: $LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" >&2
   exit 1
 fi
 if [[ -n "$EXPECTATIONS_DRY_RUN_REPORT_HMAC_KEY_FILE" && \
@@ -529,7 +578,16 @@ if [[ -z "$JSON_SUMMARY_FILE" ]]; then
   JSON_SUMMARY_FILE="$OUT_DIR/summary.json"
 fi
 
-if [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "lane-state Ed25519 manifest mode requires openssl in PATH" >&2
+    exit 1
+  fi
+  LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256="$(
+    sha256sum "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" | awk '{print $1}'
+  )"
+  LANE_STATE_MANIFEST_SIGN_MODE="ed25519"
+elif [[ -n "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   mapfile -t lane_state_keyring_resolved < <(
     LANE_STATE_HMAC_KEYRING_TSV="$LANE_STATE_HMAC_KEYRING_TSV" \
     LANE_STATE_HMAC_KEYRING_SHA256="$LANE_STATE_HMAC_KEYRING_SHA256" \
@@ -687,11 +745,14 @@ PY
   LANE_STATE_HMAC_KEY_NOT_BEFORE="${lane_state_keyring_resolved[2]}"
   LANE_STATE_HMAC_KEY_NOT_AFTER="${lane_state_keyring_resolved[3]}"
   LANE_STATE_HMAC_MODE="keyring"
+  LANE_STATE_MANIFEST_SIGN_MODE="hmac"
 elif [[ -n "$LANE_STATE_HMAC_KEY_FILE" ]]; then
   LANE_STATE_HMAC_EFFECTIVE_KEY_FILE="$LANE_STATE_HMAC_KEY_FILE"
   LANE_STATE_HMAC_MODE="key_file"
+  LANE_STATE_MANIFEST_SIGN_MODE="hmac"
 else
   LANE_STATE_HMAC_MODE="none"
+  LANE_STATE_MANIFEST_SIGN_MODE="none"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -834,6 +895,9 @@ compute_lane_state_config_hash() {
     printf "lane_state_hmac_mode=%s\n" "$LANE_STATE_HMAC_MODE"
     printf "lane_state_hmac_key_id=%s\n" "$LANE_STATE_HMAC_KEY_ID"
     printf "lane_state_hmac_keyring_sha256=%s\n" "$LANE_STATE_HMAC_KEYRING_SHA256_RESOLVED"
+    printf "lane_state_manifest_sign_mode=%s\n" "$LANE_STATE_MANIFEST_SIGN_MODE"
+    printf "lane_state_ed25519_key_id=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEY_ID"
+    printf "lane_state_ed25519_public_key_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -935,7 +999,7 @@ lane_state_write_file() {
 
 lane_state_emit_manifest() {
   local lane_state_file="$1"
-  if [[ -z "$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_SIGN_MODE" == "none" ]]; then
     return
   fi
   local manifest_file="${lane_state_file}.manifest.json"
@@ -948,11 +1012,17 @@ lane_state_emit_manifest() {
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
   LANE_STATE_HMAC_KEY_NOT_BEFORE="$LANE_STATE_HMAC_KEY_NOT_BEFORE" \
   LANE_STATE_HMAC_KEY_NOT_AFTER="$LANE_STATE_HMAC_KEY_NOT_AFTER" \
+  LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
+  LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" \
+  LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
   python3 - <<'PY'
+import base64
 import hashlib
 import hmac
 import json
 import os
+import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -991,14 +1061,62 @@ payload = {
     "lane_state_file": os.environ["LANE_STATE_FILE"],
     "lane_state_sha256": os.environ["LANE_STATE_SHA256"],
 }
-key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
-if key_id:
-  payload["hmac_key_id"] = key_id
-key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
-canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-payload["signature_hmac_sha256"] = hmac.new(
-    key_bytes, canonical_payload, hashlib.sha256
-).hexdigest()
+sign_mode = os.environ["LANE_STATE_MANIFEST_SIGN_MODE"]
+if sign_mode == "hmac":
+  payload["signature_mode"] = "hmac_sha256"
+  key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
+  if key_id:
+    payload["hmac_key_id"] = key_id
+  key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
+  canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  payload["signature_hmac_sha256"] = hmac.new(
+      key_bytes, canonical_payload, hashlib.sha256
+  ).hexdigest()
+elif sign_mode == "ed25519":
+  payload["signature_mode"] = "ed25519"
+  key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
+  if key_id:
+    payload["ed25519_key_id"] = key_id
+  canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  with tempfile.NamedTemporaryFile(delete=False) as payload_file:
+    payload_file.write(canonical_payload)
+    payload_path = payload_file.name
+  with tempfile.NamedTemporaryFile(delete=False) as signature_file:
+    signature_path = signature_file.name
+  try:
+    subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-sign",
+            "-inkey",
+            os.environ["LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE"],
+            "-rawin",
+            "-in",
+            payload_path,
+            "-out",
+            signature_path,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+  except subprocess.CalledProcessError as ex:
+    stderr = ex.stderr.decode("utf-8", errors="replace").strip()
+    print(
+        f"failed to sign lane-state manifest with Ed25519 key: {stderr or ex}",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  payload["signature_ed25519_base64"] = base64.b64encode(
+      Path(signature_path).read_bytes()
+  ).decode("ascii")
+  Path(payload_path).unlink(missing_ok=True)
+  Path(signature_path).unlink(missing_ok=True)
+else:
+  print(f"invalid lane-state manifest signing mode: {sign_mode}", file=os.sys.stderr)
+  raise SystemExit(1)
+
 Path(os.environ["LANE_STATE_MANIFEST_PATH"]).write_text(
     json.dumps(payload, sort_keys=True), encoding="utf-8"
 )
@@ -1008,7 +1126,7 @@ PY
 lane_state_verify_manifest() {
   local lane_state_file="$1"
   local source_label="$2"
-  if [[ -z "$LANE_STATE_HMAC_EFFECTIVE_KEY_FILE" ]]; then
+  if [[ "$LANE_STATE_MANIFEST_SIGN_MODE" == "none" ]]; then
     return
   fi
   local manifest_file="${lane_state_file}.manifest.json"
@@ -1025,13 +1143,19 @@ lane_state_verify_manifest() {
   LANE_STATE_HMAC_KEY_ID="$LANE_STATE_HMAC_KEY_ID" \
   LANE_STATE_HMAC_KEY_NOT_BEFORE="$LANE_STATE_HMAC_KEY_NOT_BEFORE" \
   LANE_STATE_HMAC_KEY_NOT_AFTER="$LANE_STATE_HMAC_KEY_NOT_AFTER" \
+  LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
+  LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" \
+  LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
   SOURCE_LABEL="$source_label" \
   python3 - <<'PY'
+import base64
 import hashlib
 import hmac
 import json
 import os
 import re
+import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -1042,6 +1166,8 @@ expected_file = os.environ["LANE_STATE_FILE"]
 expected_key_id = os.environ.get("LANE_STATE_HMAC_KEY_ID", "").strip()
 key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
 key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
+expected_sign_mode = os.environ["LANE_STATE_MANIFEST_SIGN_MODE"]
+expected_ed25519_key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
 
 def parse_window_date(value: str, field: str):
   if not value:
@@ -1093,45 +1219,128 @@ generated_at = payload.get("generated_at_utc")
 if not isinstance(generated_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", generated_at):
   print(f"invalid lane-state manifest for {source}: generated_at_utc must be UTC RFC3339 timestamp", file=os.sys.stderr)
   raise SystemExit(1)
-generated_date = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").date()
-window_start = parse_window_date(key_not_before, "not_before")
-window_end = parse_window_date(key_not_after, "not_after")
-if window_start and generated_date < window_start:
-  print(
-      f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
-      file=os.sys.stderr,
-  )
-  raise SystemExit(1)
-if window_end and generated_date > window_end:
-  print(
-      f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before or '-'}..{key_not_after})",
-      file=os.sys.stderr,
-  )
-  raise SystemExit(1)
+manifest_sign_mode = payload.get("signature_mode")
 
-signature = payload.get("signature_hmac_sha256")
-if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
-  print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 must be 64 hex chars", file=os.sys.stderr)
-  raise SystemExit(1)
+if expected_sign_mode == "hmac":
+  if manifest_sign_mode not in (None, "", "hmac_sha256"):
+    print(
+        f"invalid lane-state manifest for {source}: signature_mode mismatch (expected hmac_sha256, found {manifest_sign_mode})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  generated_date = datetime.strptime(generated_at, "%Y-%m-%dT%H:%M:%SZ").date()
+  window_start = parse_window_date(key_not_before, "not_before")
+  window_end = parse_window_date(key_not_after, "not_after")
+  if window_start and generated_date < window_start:
+    print(
+        f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before}..{key_not_after or '-'})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  if window_end and generated_date > window_end:
+    print(
+        f"lane state HMAC key_id '{expected_key_id}' not active at generated_at_utc {generated_at} (window {key_not_before or '-'}..{key_not_after})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
 
-manifest_key_id = payload.get("hmac_key_id", "")
-if manifest_key_id and not isinstance(manifest_key_id, str):
-  print(f"invalid lane-state manifest for {source}: hmac_key_id must be string", file=os.sys.stderr)
-  raise SystemExit(1)
-if expected_key_id and manifest_key_id != expected_key_id:
-  print(
-      f"invalid lane-state manifest for {source}: hmac_key_id mismatch (expected '{expected_key_id}', found '{manifest_key_id}')",
-      file=os.sys.stderr,
-  )
-  raise SystemExit(1)
+  signature = payload.get("signature_hmac_sha256")
+  if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-f]{64}", signature):
+    print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 must be 64 hex chars", file=os.sys.stderr)
+    raise SystemExit(1)
 
-sig_payload = dict(payload)
-del sig_payload["signature_hmac_sha256"]
-canonical_payload = json.dumps(sig_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
-expected_sig = hmac.new(key_bytes, canonical_payload, hashlib.sha256).hexdigest()
-if signature != expected_sig:
-  print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 mismatch", file=os.sys.stderr)
+  manifest_key_id = payload.get("hmac_key_id", "")
+  if manifest_key_id and not isinstance(manifest_key_id, str):
+    print(f"invalid lane-state manifest for {source}: hmac_key_id must be string", file=os.sys.stderr)
+    raise SystemExit(1)
+  if expected_key_id and manifest_key_id != expected_key_id:
+    print(
+        f"invalid lane-state manifest for {source}: hmac_key_id mismatch (expected '{expected_key_id}', found '{manifest_key_id}')",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+
+  sig_payload = dict(payload)
+  del sig_payload["signature_hmac_sha256"]
+  canonical_payload = json.dumps(sig_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  key_bytes = Path(os.environ["LANE_STATE_HMAC_KEY_FILE"]).read_bytes()
+  expected_sig = hmac.new(key_bytes, canonical_payload, hashlib.sha256).hexdigest()
+  if signature != expected_sig:
+    print(f"invalid lane-state manifest for {source}: signature_hmac_sha256 mismatch", file=os.sys.stderr)
+    raise SystemExit(1)
+elif expected_sign_mode == "ed25519":
+  if manifest_sign_mode != "ed25519":
+    print(
+        f"invalid lane-state manifest for {source}: signature_mode mismatch (expected ed25519, found {manifest_sign_mode})",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  manifest_key_id = payload.get("ed25519_key_id", "")
+  if manifest_key_id and not isinstance(manifest_key_id, str):
+    print(f"invalid lane-state manifest for {source}: ed25519_key_id must be string", file=os.sys.stderr)
+    raise SystemExit(1)
+  if expected_ed25519_key_id and manifest_key_id != expected_ed25519_key_id:
+    print(
+        f"invalid lane-state manifest for {source}: ed25519_key_id mismatch (expected '{expected_ed25519_key_id}', found '{manifest_key_id}')",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  signature_b64 = payload.get("signature_ed25519_base64")
+  if not isinstance(signature_b64, str) or not signature_b64.strip():
+    print(
+        f"invalid lane-state manifest for {source}: signature_ed25519_base64 must be non-empty string",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  try:
+    signature_bytes = base64.b64decode(signature_b64.encode("ascii"), validate=True)
+  except Exception:
+    print(
+        f"invalid lane-state manifest for {source}: signature_ed25519_base64 is not valid base64",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+
+  sig_payload = dict(payload)
+  del sig_payload["signature_ed25519_base64"]
+  canonical_payload = json.dumps(sig_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  with tempfile.NamedTemporaryFile(delete=False) as payload_file:
+    payload_file.write(canonical_payload)
+    payload_path = payload_file.name
+  with tempfile.NamedTemporaryFile(delete=False) as signature_file:
+    signature_file.write(signature_bytes)
+    signature_path = signature_file.name
+  try:
+    verify_result = subprocess.run(
+        [
+            "openssl",
+            "pkeyutl",
+            "-verify",
+            "-pubin",
+            "-inkey",
+            os.environ["LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE"],
+            "-rawin",
+            "-in",
+            payload_path,
+            "-sigfile",
+            signature_path,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if verify_result.returncode != 0:
+      stderr = verify_result.stderr.decode("utf-8", errors="replace").strip()
+      print(
+          f"invalid lane-state manifest for {source}: signature_ed25519_base64 verification failed ({stderr or 'openssl verify error'})",
+          file=os.sys.stderr,
+      )
+      raise SystemExit(1)
+  finally:
+    Path(payload_path).unlink(missing_ok=True)
+    Path(signature_path).unlink(missing_ok=True)
+else:
+  print(f"invalid lane-state manifest signing mode: {expected_sign_mode}", file=os.sys.stderr)
   raise SystemExit(1)
 PY
 }

@@ -70,6 +70,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-stat
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --reset-lane-state --merge-lane-state-tsv /tmp/formal-lanes-worker-a.tsv --merge-lane-state-tsv /tmp/formal-lanes-worker-b.tsv
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-key-file /secrets/lane-state.key --lane-state-hmac-key-id ci-lane-key-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-keyring-tsv /secrets/lane-state-keyring.tsv --lane-state-hmac-keyring-sha256 <sha256> --lane-state-hmac-key-id ci-lane-key-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-public-key-file /secrets/lane-state-ed25519-public.pem --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -96,6 +97,11 @@ Lane-state semantics:
 - `--lane-state-hmac-keyring-sha256` can pin exact keyring content hash.
 - `--lane-state-hmac-key-file` and `--lane-state-hmac-keyring-tsv` are mutually
   exclusive.
+- `--lane-state-manifest-ed25519-private-key-file` +
+  `--lane-state-manifest-ed25519-public-key-file` enable asymmetric lane-state
+  manifest signing/verification.
+- `--lane-state-manifest-ed25519-key-id` pins manifest `ed25519_key_id`.
+- Ed25519 mode is mutually exclusive with lane-state HMAC signing modes.
 
 Inspect and validate lane-state artifacts (single or federated files):
 
