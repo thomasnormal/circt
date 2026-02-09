@@ -1079,6 +1079,20 @@ LogicalResult SimulationContext::run() {
     if (!control.shouldContinue())
       break;
 
+    // Check $finish grace period (wall-clock). This handles the case where
+    // UVM runs entirely at simulation time 0 in delta cycles - advanceTime()
+    // is never called, so the post-advanceTime check wouldn't fire.
+    if (llhdInterpreter && llhdInterpreter->checkFinishGracePeriod()) {
+      if (verbosity >= 1) {
+        llvm::errs()
+            << "[circt-sim] $finish grace period expired at time "
+            << scheduler.getCurrentTime().realTime
+            << " fs - forcing termination\n";
+      }
+      control.finish(0);
+      break;
+    }
+
     bool hasReadyProcesses = scheduler.hasReadyProcesses();
 
     if (deltasExecuted == 0) {
@@ -1158,6 +1172,21 @@ LogicalResult SimulationContext::run() {
                        << stats.deltaCyclesExecuted << "\n";
         }
         // No more events
+        break;
+      }
+
+      // Check if the $finish grace period has expired. When UVM calls
+      // $finish(success) with active forked children (phase hopper), we
+      // allow a wall-clock grace period for cleanup phases to run before
+      // forcing exit.
+      if (llhdInterpreter && llhdInterpreter->checkFinishGracePeriod()) {
+        if (verbosity >= 1) {
+          llvm::errs()
+              << "[circt-sim] $finish grace period expired at time "
+              << scheduler.getCurrentTime().realTime
+              << " fs - forcing termination\n";
+        }
+        control.finish(0);
         break;
       }
     }
