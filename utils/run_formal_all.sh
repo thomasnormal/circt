@@ -43,6 +43,9 @@ Options:
   --fail-on-new-e2e-mode-diff-missing-in-e2e-strict
                          Fail when OpenTitan E2E mode-diff missing_in_e2e_strict
                          count increases vs baseline
+  --fail-on-new-opentitan-lec-strict-xprop-counter KEY
+                         Fail when OpenTitan strict LEC summary counter KEY
+                         increases vs baseline (repeatable)
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1646,6 +1649,7 @@ FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
 FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=0
 FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=0
+declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS=()
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
@@ -1922,6 +1926,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1; shift ;;
     --fail-on-new-e2e-mode-diff-missing-in-e2e-strict)
       FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1; shift ;;
+    --fail-on-new-opentitan-lec-strict-xprop-counter)
+      FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS+=("$2"); shift 2 ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
@@ -3742,6 +3748,16 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1
+fi
+for xprop_key in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}"; do
+  if [[ ! "$xprop_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-opentitan-lec-strict-xprop-counter: expected [a-z][a-z0-9_]*, got '$xprop_key'" >&2
+    exit 1
+  fi
+done
+OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV=""
+if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}" -gt 0 ]]; then
+  OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[*]}")"
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -6528,6 +6544,70 @@ extract_kv() {
   echo "$line" | tr ' ' '\n' | sed -n "s/^${key}=\([0-9]\+\)$/\\1/p"
 }
 
+summarize_opentitan_xprop_file() {
+  local xprop_file="$1"
+  if [[ ! -s "$xprop_file" ]]; then
+    echo ""
+    return 0
+  fi
+  XPROP_FILE="$xprop_file" python3 - <<'PY'
+import os
+import re
+from collections import defaultdict
+from pathlib import Path
+
+path = Path(os.environ["XPROP_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+def normalize(token: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "_", token.lower()).strip("_")
+    if not value:
+        value = "unknown"
+    return value
+
+counts = defaultdict(int)
+rows = 0
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        status = normalize(parts[0].strip())
+        diag = normalize(parts[3].strip())
+        result = normalize(parts[4].strip())
+        counters = parts[5].strip()
+        rows += 1
+        counts[f"xprop_status_{status}"] += 1
+        counts[f"xprop_diag_{diag}"] += 1
+        counts[f"xprop_result_{result}"] += 1
+        if counters:
+            for item in counters.split(","):
+                item = item.strip()
+                if not item or "=" not in item:
+                    continue
+                key, raw_val = item.split("=", 1)
+                key = normalize(key)
+                try:
+                    val = int(raw_val)
+                except ValueError:
+                    continue
+                counts[f"xprop_counter_{key}"] += val
+
+if rows <= 0:
+    print("")
+    raise SystemExit(0)
+
+counts["xprop_cases"] = rows
+parts = [f"{key}={counts[key]}" for key in sorted(counts)]
+print(" ".join(parts))
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -6787,7 +6867,12 @@ PY
         failures=0
       fi
       pass=$((total - failures))
-      record_result "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0
+      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=0"
+      xprop_summary="$(summarize_opentitan_xprop_file "$opentitan_xprop_summary")"
+      if [[ -n "$xprop_summary" ]]; then
+        summary="${summary} ${xprop_summary}"
+      fi
+      record_result_with_summary "opentitan" "LEC" "$total" "$pass" "$failures" 0 0 0 0 "$summary"
     fi
   fi
 fi
@@ -6869,7 +6954,12 @@ PY
         failures=0
       fi
       pass=$((total - failures))
-      record_result "opentitan" "LEC_STRICT" "$total" "$pass" "$failures" 0 0 0 0
+      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=0"
+      xprop_summary="$(summarize_opentitan_xprop_file "$opentitan_strict_xprop_summary")"
+      if [[ -n "$xprop_summary" ]]; then
+        summary="${summary} ${xprop_summary}"
+      fi
+      record_result_with_summary "opentitan" "LEC_STRICT" "$total" "$pass" "$failures" 0 0 0 0 "$summary"
     fi
   fi
 fi
@@ -8828,7 +8918,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E" == "1" || \
-      "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" == "1" ]]; then
+      "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" == "1" || \
+      -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
   BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
@@ -8840,6 +8931,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E="$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E" \
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT="$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" \
+  OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -8985,6 +9077,11 @@ fail_on_new_e2e_mode_diff_missing_in_e2e = (
 fail_on_new_e2e_mode_diff_missing_in_e2e_strict = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT", "0") == "1"
 )
+opentitan_lec_strict_xprop_counter_keys = [
+    token.strip()
+    for token in os.environ.get("OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS", "").split(",")
+    if token.strip()
+]
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
@@ -9155,6 +9252,21 @@ for key, current_row in summary.items():
                     gate_errors.append(
                         f"{suite} {mode}: missing_in_e2e_strict increased ({baseline_missing_in_e2e_strict} -> {current_missing_in_e2e_strict}, window={baseline_window})"
                     )
+    if suite == "opentitan" and mode == "LEC_STRICT" and opentitan_lec_strict_xprop_counter_keys:
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        for counter_key in opentitan_lec_strict_xprop_counter_keys:
+            baseline_values = []
+            for counts in parsed_counts:
+                if counter_key in counts:
+                    baseline_values.append(int(counts[counter_key]))
+            if not baseline_values:
+                continue
+            baseline_counter = min(baseline_values)
+            current_counter = int(current_counts.get(counter_key, 0))
+            if current_counter > baseline_counter:
+                gate_errors.append(
+                    f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})"
+                )
     if fail_on_passrate_regression:
         baseline_rate = max(
             pass_rate(

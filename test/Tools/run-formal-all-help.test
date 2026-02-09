@@ -3,5 +3,6 @@
 // CHECK: run_formal_all.sh [options]
 // CHECK: --update-baselines
 // CHECK: --fail-on-diff
+// CHECK: --fail-on-new-opentitan-lec-strict-xprop-counter
 // CHECK: --with-opentitan-lec-strict
 // CHECK: --opentitan-lec-impl-filter
