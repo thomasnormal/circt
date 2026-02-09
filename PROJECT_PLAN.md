@@ -133,8 +133,8 @@ See CHANGELOG.md on recent progress.
   - Reduce multi-clock edge-case divergence.
   - Expand full (not filtered) regular closure cadence on core suites.
 - LEC capability closure:
-  - Reduce/eliminate `LEC_ACCEPT_XPROP_ONLY=1` dependence for OpenTitan
-    `aes_sbox_canright`.
+  - Close strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan
+    `aes_sbox_canright` `XPROP_ONLY` gap.
   - Improve 4-state/X-prop semantic alignment and diagnostics.
 - DevEx/CI:
   - Promote lane-state inspector to required pre-resume CI gate.
@@ -220,6 +220,9 @@ See CHANGELOG.md on recent progress.
 19. `run_formal_all.sh` expected-failure case matching now supports
     `id_kind=base_diag_regex` for one-to-many strict diagnostic matching across
     implementation sets while remaining path-independent.
+22. `run_formal_all.sh` strict-gate now tracks fail-like case IDs via baseline
+    `failure_cases` telemetry and flags diagnostic drift even when aggregate
+    fail counts stay flat.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
