@@ -1,0 +1,25 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp \"$design\" \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho ACTIVATED\nexit 1\n' > %t/fake-activate.sh
+// RUN: chmod +x %t/fake-activate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho PROPAGATED\nexit 1\n' > %t/fake-propagate.sh
+// RUN: chmod +x %t/fake-propagate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${BASELINE:-0}\" == \"1\" ]]; then\n  echo SURVIVED > result.txt\nelse\n  sleep 1\n  echo DETECTED > result.txt\nfi\n' > %t/fake-test-a.sh
+// RUN: chmod +x %t/fake-test-a.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${BASELINE:-0}\" == \"1\" ]]; then\n  echo SURVIVED > result.txt\nelse\n  echo DETECTED > result.txt\nfi\n' > %t/fake-test-b.sh
+// RUN: chmod +x %t/fake-test-b.sh
+// RUN: printf 'ta\tbash %t/fake-test-a.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests-a.tsv
+// RUN: printf 'tb\tbash %t/fake-test-b.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests-b.tsv
+// RUN: printf 'lane_a\t%t/design.il\t%t/mutations.txt\t%t/tests-a.tsv\tbash %t/fake-activate.sh\tbash %t/fake-propagate.sh\t90\n' > %t/lanes.tsv
+// RUN: printf 'lane_b\t%t/design.il\t%t/mutations.txt\t%t/tests-b.tsv\tbash %t/fake-activate.sh\tbash %t/fake-propagate.sh\t90\n' >> %t/lanes.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh --jobs-per-lane 1 --lane-jobs 2 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+
+// LOG: Mutation matrix summary: pass=2 fail=0
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code
+// RESULTS-NEXT: lane_a{{.*}}PASS{{.*}}0
+// RESULTS-NEXT: lane_b{{.*}}PASS{{.*}}0

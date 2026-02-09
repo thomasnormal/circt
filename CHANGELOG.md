@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 729 - February 9, 2026
+
+### Mutation Matrix Parallel Lane Scheduling
+
+- Upgraded `utils/run_mutation_matrix.sh` with lane-level parallel execution:
+  - `--lane-jobs <N>` for concurrent lane scheduling
+  - deterministic final `results.tsv` ordering preserved by input lane order
+- `--stop-on-fail` semantics tightened:
+  - now explicitly requires `--lane-jobs=1` for deterministic fail-fast.
+
+### Test and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-matrix-parallel.test`
+    - validates parallel lane execution and stable output ordering
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--lane-jobs` option
+  - `docs/FormalRegression.md`
+    - documented `--lane-jobs` and fail-fast constraint
+  - `PROJECT_PLAN.md`
+    - CI lane integration note now includes parallel lane support.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - 2-lane parallel run (`--lane-jobs 2`) with expected ordered PASS rows: PASS.
+
 ## Iteration 728 - February 9, 2026
 
 ### Mutation Matrix Generated-Lane Support
