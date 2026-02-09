@@ -136,9 +136,17 @@ Lane-state semantics:
   - URI mode requires `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
   - URI mode is mutually exclusive with
     `--lane-state-manifest-ed25519-crl-refresh-cmd`.
+- `--lane-state-manifest-ed25519-crl-refresh-auto-uri-from-cert-cdp` resolves
+  the CRL refresh URI from the selected key certificate
+  `CRL Distribution Points` extension (keyring mode).
+  - Auto-URI mode requires
+    `--lane-state-manifest-ed25519-crl-refresh-metadata-file`.
+  - Auto-URI mode is mutually exclusive with
+    `--lane-state-manifest-ed25519-crl-refresh-cmd` and
+    `--lane-state-manifest-ed25519-crl-refresh-uri`.
 - `--lane-state-manifest-ed25519-crl-refresh-retries` and
   `--lane-state-manifest-ed25519-crl-refresh-delay-secs` control retry/backoff
-  for CRL refresh execution (command or URI mode).
+  for CRL refresh execution (command, URI, or auto-URI mode).
 - `--lane-state-manifest-ed25519-crl-refresh-timeout-secs` bounds each CRL
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-crl-refresh-jitter-secs` adds randomized
@@ -173,9 +181,17 @@ Lane-state semantics:
   - URI mode requires `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
   - URI mode is mutually exclusive with
     `--lane-state-manifest-ed25519-ocsp-refresh-cmd`.
+- `--lane-state-manifest-ed25519-ocsp-refresh-auto-uri-from-cert-aia` resolves
+  the OCSP refresh URI from the selected key certificate
+  `Authority Information Access` extension (keyring mode).
+  - Auto-URI mode requires
+    `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file`.
+  - Auto-URI mode is mutually exclusive with
+    `--lane-state-manifest-ed25519-ocsp-refresh-cmd` and
+    `--lane-state-manifest-ed25519-ocsp-refresh-uri`.
 - `--lane-state-manifest-ed25519-ocsp-refresh-retries` and
   `--lane-state-manifest-ed25519-ocsp-refresh-delay-secs` control retry/backoff
-  for OCSP refresh execution (command or URI mode).
+  for OCSP refresh execution (command, URI, or auto-URI mode).
 - `--lane-state-manifest-ed25519-ocsp-refresh-timeout-secs` bounds each OCSP
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs` adds randomized
