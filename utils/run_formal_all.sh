@@ -686,7 +686,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import re
 import subprocess
@@ -928,6 +928,33 @@ if cert_file_path:
       )
       raise SystemExit(1)
   if ca_file:
+    if crl_file:
+      crl_next_update_raw = run_openssl(
+          ["openssl", "crl", "-in", crl_file, "-noout", "-nextupdate", "-dateopt", "iso_8601"],
+          f"lane state Ed25519 CRL nextUpdate extraction failed for key_id '{target_key_id}'",
+      ).stdout.decode("utf-8", errors="replace").strip()
+      if not crl_next_update_raw.startswith("nextUpdate="):
+        print(
+            f"lane state Ed25519 CRL nextUpdate parse failed for key_id '{target_key_id}': expected nextUpdate=... in '{crl_next_update_raw}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      crl_next_update = crl_next_update_raw.split("=", 1)[1].strip()
+      try:
+        crl_next_update_dt = datetime.strptime(crl_next_update, "%Y-%m-%d %H:%M:%SZ").replace(tzinfo=timezone.utc)
+      except ValueError:
+        print(
+            f"lane state Ed25519 CRL nextUpdate parse failed for key_id '{target_key_id}': unsupported timestamp '{crl_next_update}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      now_utc = datetime.now(timezone.utc)
+      if crl_next_update_dt < now_utc:
+        print(
+            f"lane state Ed25519 CRL is stale for key_id '{target_key_id}': nextUpdate {crl_next_update} is before current UTC time {now_utc.strftime('%Y-%m-%d %H:%M:%SZ')}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     verify_cmd = ["openssl", "verify", "-CAfile", ca_file]
     if crl_file:
       verify_cmd.extend(["-crl_check", "-CRLfile", crl_file])
