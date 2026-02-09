@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nout = os.environ.get(\"OUT\", \"\")\nif not out:\n  sys.exit(7)\nworkdir = \"\"\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == \"--workdir\" and i + 1 < len(args):\n    workdir = args[i + 1]\nos.makedirs(os.path.dirname(out), exist_ok=True)\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n  f.write(\"FAIL\\taes_sbox_canright\\t\" + workdir + \"/aes_sbox_canright#XPROP_ONLY\\topentitan\\tLEC_STRICT\\n\")\nprint(\"Running LEC on 1 AES S-Box implementation(s)...\")\nprint(\"aes_sbox_canright        FAIL (XPROP_ONLY) (logs in \" + workdir + \"/aes_sbox_canright)\")\nprint(\"LEC failures: 1\")\nsys.exit(1)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
+//
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tLEC_STRICT\taes_sbox_canright#XPROP_ONLY\tbase_diag\tFAIL\t2099-01-01\tknown_strict_xprop\n' > %t/expected-failure-cases-base-diag.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-match --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC_STRICT$' --expected-failure-cases-file %t/expected-failure-cases-base-diag.tsv --fail-on-unexpected-failure-cases
+// RUN: FileCheck %s --check-prefix=MATCH < %t/out-match/expected-failure-cases-summary.tsv
+//
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-refresh --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/LEC_STRICT$' --refresh-expected-failure-cases-file %t/refreshed.tsv
+// RUN: FileCheck %s --check-prefix=REFRESH < %t/refreshed.tsv
+//
+// MATCH: suite{{[[:space:]]+}}mode{{[[:space:]]+}}id_kind{{[[:space:]]+}}id{{[[:space:]]+}}status{{[[:space:]]+}}expires_on{{[[:space:]]+}}matched_count
+// MATCH: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}base_diag{{[[:space:]]+}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1
+//
+// REFRESH: suite{{[[:space:]]+}}mode{{[[:space:]]+}}id{{[[:space:]]+}}id_kind{{[[:space:]]+}}status
+// REFRESH: opentitan{{[[:space:]]+}}LEC_STRICT{{[[:space:]]+}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}base_diag{{[[:space:]]+}}FAIL

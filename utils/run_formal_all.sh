@@ -58,7 +58,7 @@ Options:
   --expected-failure-cases-file FILE
                          TSV with expected failing test cases (suite/mode/id)
                          id_kind supports:
-                         base|path|aggregate|base_regex|path_regex
+                         base|base_diag|path|aggregate|base_regex|path_regex
   --fail-on-unexpected-failure-cases
                          Fail when observed failing cases are not expected
   --fail-on-expired-expected-failure-cases
@@ -7442,6 +7442,24 @@ def sample_rows(rows):
   return rows[:max_sample_rows]
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+
+
+def extract_diag_tag(path: str) -> str:
+  if "#" not in path:
+    return ""
+  candidate = path.rsplit("#", 1)[1].strip()
+  if re.fullmatch(r"[A-Z0-9_]+", candidate):
+    return candidate
+  return ""
+
+
+def derive_base_diag(base: str, path: str) -> str:
+  diag = extract_diag_tag(path)
+  if base and diag:
+    return f"{base}#{diag}"
+  return base
+
+
 result_sources = [
     ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
     ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
@@ -7481,6 +7499,7 @@ for default_suite, default_mode, path in result_sources:
         continue
       base = parts[1].strip() if len(parts) > 1 else ""
       file_path = parts[2].strip() if len(parts) > 2 else ""
+      diag = extract_diag_tag(file_path)
       detailed_pairs_observed.add((suite, mode))
       observed.append(
           {
@@ -7488,6 +7507,8 @@ for default_suite, default_mode, path in result_sources:
               "mode": mode,
               "status": status,
               "base": base,
+              "base_diag": derive_base_diag(base, file_path),
+              "diag": diag,
               "path": file_path,
           }
       )
@@ -7527,6 +7548,8 @@ if summary_path.exists():
                 "mode": mode,
                 "status": "FAIL",
                 "base": "__aggregate__",
+                "base_diag": "__aggregate__",
+                "diag": "",
                 "path": summary,
             }
         )
@@ -7537,6 +7560,8 @@ if summary_path.exists():
                 "mode": mode,
                 "status": "ERROR",
                 "base": "__aggregate__",
+                "base_diag": "__aggregate__",
+                "diag": "",
                 "path": summary,
             }
         )
@@ -7547,6 +7572,8 @@ if summary_path.exists():
                 "mode": mode,
                 "status": "XFAIL",
                 "base": "__aggregate__",
+                "base_diag": "__aggregate__",
+                "diag": "",
                 "path": summary,
             }
         )
@@ -7557,6 +7584,8 @@ if summary_path.exists():
                 "mode": mode,
                 "status": "XPASS",
                 "base": "__aggregate__",
+                "base_diag": "__aggregate__",
+                "diag": "",
                 "path": summary,
             }
         )
@@ -7584,12 +7613,12 @@ if expected_path is not None:
             f"suite/mode/id must be non-empty at data row {idx + 1}"
         )
       id_kind = row.get("id_kind", "base").strip().lower() or "base"
-      if id_kind not in {"base", "path", "aggregate", "base_regex", "path_regex"}:
+      if id_kind not in {"base", "base_diag", "path", "aggregate", "base_regex", "path_regex"}:
         raise SystemExit(
             "invalid expected-failure-cases row for "
             f"suite={suite} mode={mode} id={case_id}: "
             "id_kind must be one of "
-            "base,path,aggregate,base_regex,path_regex"
+            "base,base_diag,path,aggregate,base_regex,path_regex"
         )
       id_re = None
       if id_kind in {"base_regex", "path_regex"}:
@@ -7650,6 +7679,9 @@ for row in expected_rows:
       continue
     if row["id_kind"] == "base":
       if obs["base"] != row["id"]:
+        continue
+    elif row["id_kind"] == "base_diag":
+      if obs["base_diag"] != row["id"]:
         continue
     elif row["id_kind"] == "path":
       if obs["path"] != row["id"]:
@@ -7970,6 +8002,24 @@ if out_path.exists():
       }
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL"}
+
+
+def extract_diag_tag(path: str) -> str:
+  if "#" not in path:
+    return ""
+  candidate = path.rsplit("#", 1)[1].strip()
+  if re.fullmatch(r"[A-Z0-9_]+", candidate):
+    return candidate
+  return ""
+
+
+def derive_base_diag(base: str, path: str) -> str:
+  diag = extract_diag_tag(path)
+  if base and diag:
+    return f"{base}#{diag}"
+  return base
+
+
 result_sources = [
     ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
     ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
@@ -8006,6 +8056,7 @@ for default_suite, default_mode, path in result_sources:
         continue
       base = parts[1].strip() if len(parts) > 1 else ""
       file_path = parts[2].strip() if len(parts) > 2 else ""
+      diag = extract_diag_tag(file_path)
       detailed_pairs_observed.add((suite, mode))
       observed.append(
           {
@@ -8013,6 +8064,8 @@ for default_suite, default_mode, path in result_sources:
               "mode": mode,
               "status": status,
               "base": base,
+              "base_diag": derive_base_diag(base, file_path),
+              "diag": diag,
               "path": file_path,
           }
       )
@@ -8047,6 +8100,8 @@ if summary_path.exists():
                 "mode": mode,
                 "status": status,
                 "base": "__aggregate__",
+                "base_diag": "__aggregate__",
+                "diag": "",
                 "path": summary,
             }
         )
@@ -8057,6 +8112,8 @@ seen = set()
 def derive_case_id(obs_row):
   if obs_row["base"] == "__aggregate__":
     return ("aggregate", "__aggregate__")
+  if obs_row.get("diag") and obs_row["base"]:
+    return ("base_diag", obs_row["base_diag"])
   if obs_row["base"]:
     return ("base", obs_row["base"])
   return ("path", obs_row["path"])
