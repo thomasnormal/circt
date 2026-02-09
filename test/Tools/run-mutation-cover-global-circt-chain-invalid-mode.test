@@ -21,4 +21,4 @@
 // RUN:   --formal-global-propagate-circt-chain invalid-mode \
 // RUN:   2>&1 | FileCheck %s
 //
-// CHECK: Invalid --formal-global-propagate-circt-chain value: invalid-mode (expected lec-then-bmc|bmc-then-lec|consensus).
+// CHECK: Invalid --formal-global-propagate-circt-chain value: invalid-mode (expected lec-then-bmc|bmc-then-lec|consensus|auto).
