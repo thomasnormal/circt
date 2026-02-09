@@ -34532,6 +34532,53 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OCSP mode remains pinned-response-file based (no live responder URL mode).
 - No CRL/OCSP distribution-point fetch/refresh automation yet.
 
+## Iteration 695 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Responder EKU Enforcement
+
+- Added `--lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-responder-cert-file`
+  - validates pinned responder cert contains EKU `OCSP Signing`
+  - rejects responder certs that are chain-valid but missing OCSP-signing EKU.
+- Lane-state trust-contract updates:
+  - EKU requirement policy now contributes to lane-state config hash material
+    (`lane_state_ed25519_ocsp_require_responder_ocsp_signing`).
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency check for EKU requirement without responder cert file
+    - positive EKU-enabled responder-cert + OCSP response case
+    - negative responder-cert EKU missing case
+  - `docs/FormalRegression.md`
+    - documented responder EKU requirement option.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, strict OCSP + responder-id +
+  responder-cert pin + responder-EKU policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519-ocsp-responder' --lane-state-manifest-ed25519-ocsp-responder-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 ... --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519-ocsp-responder' --lane-state-manifest-ed25519-ocsp-responder-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 ... --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-responder-eku-sweep-20260209-021907/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-responder-eku-sweep-20260209-021907/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode remains pinned-response-file based (no live responder URL mode).
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
 ## Iteration 679 - February 8, 2026
 
 ### Lane-State Compatibility Policy Versioning

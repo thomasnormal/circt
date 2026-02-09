@@ -18295,6 +18295,15 @@ ninja -C build circt-verilog
   - Improves deterministic trust posture for 24/7 distributed closure and
     resume safety.
 
+### Iteration 695
+- Added OCSP responder EKU policy control for Ed25519 lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing`
+  - enforces that pinned responder cert includes EKU `OCSP Signing`.
+- Planning impact:
+  - Prevents acceptance of responder certs that are chain-valid but not scoped
+    for OCSP signing usage.
+  - Tightens OCSP signer policy toward production PKI role separation.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18305,8 +18314,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add explicit OCSP responder signer EKU/issuer linkage assertions to prevent
-    permissive acceptance of non-OCSP-signing certs in complex PKI chains.
+  - Add OCSP responder issuer/AKI-SKI linkage assertion controls for complex
+    multi-issuer PKI deployments.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
