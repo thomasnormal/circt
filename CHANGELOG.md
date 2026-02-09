@@ -36,8 +36,8 @@
   - `bash -n utils/generate_mutations_yosys.sh`: PASS
   - `bash -n utils/run_mutation_cover.sh`: PASS
 - Lit:
-  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-help.test test/Tools/run-mutation-generate-basic.test test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate.test`: PASS (6/6)
-  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (63/63)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-help.test test/Tools/run-mutation-generate-basic.test test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate.test test/Tools/run-mutation-matrix-generate-cache.test`: PASS (7/7)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (64/64)
 - External cadence:
   - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-generate-cache --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
   - summary:
