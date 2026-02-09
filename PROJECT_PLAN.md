@@ -18210,6 +18210,15 @@ ninja -C build circt-verilog
   - Closes a major provenance gap for multi-team 24/7 closure by preventing
     untrusted key injection in keyring distributions.
 
+### Iteration 686
+- Added Ed25519 certificate identity constraints for lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-cert-subject-regex`
+  - optional regex policy enforced against selected certificate subject.
+- Planning impact:
+  - Adds explicit identity-policy gating beyond chain validity, reducing risk of
+    accepting the wrong-but-trusted cert.
+  - Enables project-specific signer naming policy for distributed 24/7 closure.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18220,8 +18229,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add stricter certificate-policy controls (expiry/identity constraints,
-    revocation/CRL/OCSP integration) on top of CA-file trust anchors.
+  - Add certificate revocation integration (CRL/OCSP) on top of CA + subject
+    policy controls.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

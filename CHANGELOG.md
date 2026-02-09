@@ -33045,6 +33045,53 @@ CIRCT/slang correctly enforces LRM restrictions.
   revocation integration.
 - Resume granularity remains lane-level (no per-test replay).
 
+## Iteration 686 - February 9, 2026
+
+### Lane-State Ed25519 Certificate Identity Constraints
+
+- Added optional Ed25519 certificate subject policy in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-cert-subject-regex <regex>`
+- Policy semantics:
+  - requires Ed25519 keyring mode
+  - when cert is present for resolved key-id, certificate subject (RFC2253
+    output) must match configured regex
+  - invalid regex emits field-qualified error diagnostics
+- Added config-hash coverage for subject policy:
+  - `lane_state_ed25519_cert_subject_regex`
+- Extended certificate/keyring resolver diagnostics:
+  - clear subject-mismatch message including key-id and failing regex
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: subject-regex requires keyring mode
+    - positive: keyring+CA+subject-regex seed path
+    - negative: keyring+CA subject mismatch failure
+  - `docs/FormalRegression.md`
+    - documented `--lane-state-manifest-ed25519-cert-subject-regex`
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep with Ed25519 keyring+CA+subject policy:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-ed25519-ca-subject-sweep-<ts>/out-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-all-ed25519-ca-subject-sweep-<ts>/lane-state.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file /tmp/formal-all-ed25519-ca-subject-sweep-<ts>/ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /tmp/formal-all-ed25519-ca-subject-sweep-<ts>/ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <computed> --lane-state-manifest-ed25519-ca-file /tmp/formal-all-ed25519-ca-subject-sweep-<ts>/ed25519-cert.pem --lane-state-manifest-ed25519-cert-subject-regex 'CN=formal-ed25519-subject' --lane-state-manifest-ed25519-key-id ci-ed25519-subj`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, `avip/*` filtered)
+  - Resume replay (same command + `--resume-from-lane-state`):
+    - PASS (all lanes resumed)
+
+### Remaining Limitations
+
+- Certificate policy does not yet include CRL/OCSP revocation enforcement.
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 682 - February 9, 2026
 
 ### Lane-State Key-Window Enforcement (Keyring Mode)

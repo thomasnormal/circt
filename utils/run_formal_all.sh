@@ -115,6 +115,9 @@ Options:
   --lane-state-manifest-ed25519-ca-file FILE
                          Optional CA/trust-anchor PEM for Ed25519 keyring cert
                          verification
+  --lane-state-manifest-ed25519-cert-subject-regex REGEX
+                         Optional regex constraint applied to selected Ed25519
+                         certificate subject (keyring mode)
   --lane-state-manifest-ed25519-key-id ID
                          Optional key identifier embedded in Ed25519 manifests
   --include-lane-regex REGEX
@@ -208,6 +211,7 @@ LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_TSV=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CA_FILE=""
+LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED=""
@@ -360,6 +364,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ca-file)
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-cert-subject-regex)
+      LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
@@ -503,6 +509,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" && ! "$LANE_STATE_MANIFES
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
   echo "--lane-state-manifest-ed25519-ca-file requires --lane-state-manifest-ed25519-keyring-tsv" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-cert-subject-regex requires --lane-state-manifest-ed25519-keyring-tsv" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
@@ -653,6 +663,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
+      LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
 from datetime import datetime
@@ -667,6 +678,7 @@ keyring_path = Path(os.environ["LANE_STATE_MANIFEST_ED25519_KEYRING_TSV"])
 expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256", "").strip()
 target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
 ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
+cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
 actual_sha = hashlib.sha256(keyring_bytes).hexdigest()
@@ -875,6 +887,25 @@ if cert_file_path:
         file=sys.stderr,
     )
     raise SystemExit(1)
+  cert_subject = run_openssl(
+      ["openssl", "x509", "-in", str(cert_path), "-noout", "-subject", "-nameopt", "RFC2253"],
+      f"lane state Ed25519 certificate subject extraction failed for key_id '{target_key_id}'",
+  ).stdout.decode("utf-8", errors="replace").strip()
+  if cert_subject_regex:
+    try:
+      subject_match = re.search(cert_subject_regex, cert_subject) is not None
+    except re.error as ex:
+      print(
+          f"invalid --lane-state-manifest-ed25519-cert-subject-regex: {ex}",
+          file=sys.stderr,
+      )
+      raise SystemExit(1)
+    if not subject_match:
+      print(
+          f"lane state Ed25519 certificate subject mismatch for key_id '{target_key_id}': regex '{cert_subject_regex}' did not match '{cert_subject}'",
+          file=sys.stderr,
+      )
+      raise SystemExit(1)
   if ca_file:
     run_openssl(
         ["openssl", "verify", "-CAfile", ca_file, str(cert_path)],
@@ -1239,6 +1270,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_keyring_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED"
     printf "lane_state_ed25519_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SHA256"
     printf "lane_state_ed25519_ca_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CA_SHA256"
+    printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
