@@ -1,0 +1,59 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_A\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${BASELINE:-0}" == "1" ]]; then\n  echo SURVIVED > "result-${TEST_ID}.txt"\nelif [[ "${TEST_ID:-}" == "t1" ]]; then\n  echo DETECTED > "result-${TEST_ID}.txt"\nelse\n  echo SURVIVED > "result-${TEST_ID}.txt"\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't1\tbash %t/fake-test.sh\tresult-t1.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 't2\tbash %t/fake-test.sh\tresult-t2.txt\t^DETECTED$\t^SURVIVED$\n' >> %t/tests.tsv
+// RUN: printf 'mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\tpropagate_exit\tnote\n' > %t/reuse-pair.tsv
+// RUN: printf '1\tt1\tactivated\tpropagated\t1\t1\tcached\n' >> %t/reuse-pair.tsv
+// RUN: printf 'mutation_id\tclassification\trelevant_pairs\tdetected_by_test\tmutant_design\tmutation_spec\n' > %t/reuse-summary.tsv
+// RUN: printf '1\tdetected\t1\tt2\t-\t-\n' >> %t/reuse-summary.tsv
+// RUN: printf '{"schema_version":1,"compat_hash":"deadbeef"}\n' > %t/reuse-pair.tsv.manifest.json
+// RUN: printf '{"schema_version":1,"compat_hash":"deadbeef"}\n' > %t/reuse-summary.tsv.manifest.json
+
+// RUN: %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --reuse-pair-file %t/reuse-pair.tsv \
+// RUN:   --reuse-summary-file %t/reuse-summary.tsv \
+// RUN:   --reuse-compat-mode warn \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --work-dir %t/out-warn > %t/warn.log 2>&1
+
+// RUN: FileCheck %s --check-prefix=WARNLOG < %t/warn.log
+// RUN: FileCheck %s --check-prefix=PAIR < %t/out-warn/pair_qualification.tsv
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out-warn/results.tsv
+// RUN: FileCheck %s --check-prefix=METRICS < %t/out-warn/metrics.tsv
+
+// WARNLOG: Warning: Reuse pair file compatibility check failed
+// WARNLOG: Warning: Reuse summary file compatibility check failed
+
+// PAIR: mutation_id{{.*}}test_id{{.*}}note
+// PAIR: 1{{.*}}t1{{.*}}run_detection
+// PAIR-NOT: cached
+// PAIR-NOT: hinted
+
+// RESULTS: mutation_id{{.*}}test_id{{.*}}result
+// RESULTS: 1{{.*}}t1{{.*}}detected
+// RESULTS-NOT: 1{{.*}}t2
+
+// METRICS: reused_pairs{{.*}}0
+// METRICS: hinted_mutants{{.*}}0
+// METRICS: hint_hits{{.*}}0
+
+// RUN: not %S/../../utils/run_mutation_cover.sh \
+// RUN:   --design %t/design.il \
+// RUN:   --mutations-file %t/mutations.txt \
+// RUN:   --tests-manifest %t/tests.tsv \
+// RUN:   --reuse-pair-file %t/reuse-pair.tsv \
+// RUN:   --reuse-summary-file %t/reuse-summary.tsv \
+// RUN:   --reuse-compat-mode strict \
+// RUN:   --create-mutated-script %t/fake-create-mutated.sh \
+// RUN:   --work-dir %t/out-strict > %t/strict.log 2>&1
+// RUN: FileCheck %s --check-prefix=STRICTLOG < %t/strict.log
+
+// STRICTLOG: Reuse pair file compatibility check failed
