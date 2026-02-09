@@ -4,5 +4,6 @@
 // CHECK: --lanes-tsv
 // CHECK: --create-mutated-script
 // CHECK: --jobs-per-lane
+// CHECK: --default-reuse-pair-file
 // CHECK: --lane-jobs
 // CHECK: --stop-on-fail

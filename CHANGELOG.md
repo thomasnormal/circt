@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 731 - February 9, 2026
+
+### Mutation Matrix Reuse-Pair Integration
+
+- Extended `utils/run_mutation_matrix.sh` lane orchestration with reuse support:
+  - new lane TSV optional column: `reuse_pair_file`
+  - new CLI option: `--default-reuse-pair-file <path>`
+    - applies `run_mutation_cover.sh --reuse-pair-file` to lanes without an
+      explicit lane-level override.
+- Lane validation now treats missing configured reuse files as lane
+  configuration errors (`CONFIG_ERROR`), preserving deterministic aggregation.
+
+### Tests and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-matrix-reuse.test`
+    - validates lane-level reuse passthrough and confirms failing formal helper
+      scripts are not invoked when cached qualifications are present.
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-reuse-pair-file` help output
+  - `docs/FormalRegression.md`
+    - documents lane-level/global reuse file controls
+  - `PROJECT_PLAN.md`
+    - CI lane integration status updated to include reuse-pair passthrough.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - matrix lane with cached qualification + failing formal helpers: PASS
+    (`pass=1 fail=0`, cached pair notes present).
+
 ## Iteration 730 - February 9, 2026
 
 ### Mutation Qualification Cache Reuse

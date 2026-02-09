@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -16,6 +16,8 @@ Optional:
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
+  --default-reuse-pair-file FILE
+                            Default --reuse-pair-file for lanes that do not set reuse_pair_file
   --lane-jobs N             Number of concurrent lanes (default: 1)
   --stop-on-fail            Stop at first failed lane (requires --lane-jobs=1)
   -h, --help                Show help
@@ -33,6 +35,7 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
+DEFAULT_REUSE_PAIR_FILE=""
 LANE_JOBS=1
 STOP_ON_FAIL=0
 
@@ -43,6 +46,7 @@ while [[ $# -gt 0 ]]; do
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
+    --default-reuse-pair-file) DEFAULT_REUSE_PAIR_FILE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -71,6 +75,10 @@ if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --lane-jobs value: $LANE_JOBS" >&2
   exit 1
 fi
+if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
+  echo "Default reuse pair file not found: $DEFAULT_REUSE_PAIR_FILE" >&2
+  exit 1
+fi
 if [[ "$STOP_ON_FAIL" -eq 1 && "$LANE_JOBS" -gt 1 ]]; then
   echo "--stop-on-fail requires --lane-jobs=1 for deterministic stop semantics." >&2
   exit 1
@@ -90,6 +98,7 @@ declare -a GENERATE_COUNT
 declare -a MUTATIONS_TOP
 declare -a MUTATIONS_SEED
 declare -a MUTATIONS_YOSYS
+declare -a REUSE_PAIR_FILE
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -98,7 +107,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -116,6 +125,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   MUTATIONS_TOP+=("${mutations_top:--}")
   MUTATIONS_SEED+=("${mutations_seed:--}")
   MUTATIONS_YOSYS+=("${mutations_yosys:--}")
+  REUSE_PAIR_FILE+=("${reuse_pair_file:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -135,6 +145,7 @@ run_lane() {
   local gate="UNKNOWN"
   local lane_status="FAIL"
   local rc=1
+  local lane_reuse_pair_file=""
 
   mkdir -p "$lane_dir"
 
@@ -157,6 +168,20 @@ run_lane() {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
     return 0
+  fi
+
+  lane_reuse_pair_file="${REUSE_PAIR_FILE[$i]}"
+  if [[ "$lane_reuse_pair_file" == "-" || -z "$lane_reuse_pair_file" ]]; then
+    lane_reuse_pair_file="$DEFAULT_REUSE_PAIR_FILE"
+  fi
+  if [[ -n "$lane_reuse_pair_file" ]]; then
+    if [[ ! -f "$lane_reuse_pair_file" ]]; then
+      gate="CONFIG_ERROR"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      return 0
+    fi
+    cmd+=(--reuse-pair-file "$lane_reuse_pair_file")
   fi
 
   if [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
