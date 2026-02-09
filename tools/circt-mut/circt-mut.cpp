@@ -159,6 +159,132 @@ static int dispatchToScript(StringRef scriptPath,
   return rc;
 }
 
+static std::optional<std::string> resolveToolPath(StringRef tool) {
+  if (tool.contains('/')) {
+    if (existsAndExecutable(tool))
+      return std::string(tool);
+    return std::nullopt;
+  }
+  if (ErrorOr<std::string> found = sys::findProgramByName(tool))
+    return *found;
+  return std::nullopt;
+}
+
+static std::optional<std::string>
+resolveCoverCirctToolPath(const char *argv0, StringRef requested,
+                          StringRef toolName) {
+  if (requested != "auto")
+    return resolveToolPath(requested);
+
+  std::optional<std::string> scriptPath =
+      resolveScriptPath(argv0, "run_mutation_cover.sh");
+  std::string installCandidate;
+  std::string repoCandidate;
+  if (scriptPath) {
+    SmallString<256> scriptDir(*scriptPath);
+    sys::path::remove_filename(scriptDir);
+
+    SmallString<256> repoBuild(scriptDir);
+    sys::path::append(repoBuild, "..", "build", "bin", toolName);
+    sys::path::remove_dots(repoBuild, true);
+    repoCandidate = std::string(repoBuild.str());
+
+    StringRef dir = scriptDir;
+    StringRef dirBase = sys::path::filename(dir);
+    SmallString<256> parent(dir);
+    sys::path::remove_filename(parent);
+    StringRef parentBase = sys::path::filename(parent);
+    SmallString<256> grandParent(parent);
+    sys::path::remove_filename(grandParent);
+    StringRef grandParentBase = sys::path::filename(grandParent);
+    if (dirBase == "utils" && parentBase == "circt" && grandParentBase == "share") {
+      SmallString<256> installBin(scriptDir);
+      sys::path::append(installBin, "..", "..", "..", "bin");
+      sys::path::append(installBin, toolName);
+      sys::path::remove_dots(installBin, true);
+      installCandidate = std::string(installBin.str());
+    }
+  }
+
+  if (!installCandidate.empty() && existsAndExecutable(installCandidate))
+    return installCandidate;
+  if (auto found = resolveToolPath(toolName))
+    return found;
+  if (!repoCandidate.empty() && existsAndExecutable(repoCandidate))
+    return repoCandidate;
+
+  // Fallback: look next to circt-mut.
+  std::string mainExec =
+      sys::fs::getMainExecutable(argv0, reinterpret_cast<void *>(&printHelp));
+  if (!mainExec.empty()) {
+    SmallString<256> exeDir(mainExec);
+    sys::path::remove_filename(exeDir);
+    SmallString<256> sibling(exeDir);
+    sys::path::append(sibling, toolName);
+    if (existsAndExecutable(sibling))
+      return std::string(sibling.str());
+  }
+  return std::nullopt;
+}
+
+struct CoverRewriteResult {
+  bool ok = false;
+  std::string error;
+  SmallVector<std::string, 32> rewrittenArgs;
+};
+
+static CoverRewriteResult rewriteCoverArgs(const char *argv0,
+                                           ArrayRef<StringRef> args) {
+  CoverRewriteResult result;
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+
+    auto resolveWithOptionalValue =
+        [&](StringRef flag, StringRef toolName) -> bool {
+      std::string requested = "auto";
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        requested = arg.substr(eqPos + 1).str();
+        if (requested.empty())
+          requested = "auto";
+      } else if (i + 1 < args.size() && !args[i + 1].starts_with("--")) {
+        requested = args[++i].str();
+      }
+      auto resolved = resolveCoverCirctToolPath(argv0, requested, toolName);
+      if (!resolved) {
+        result.error =
+            (Twine("circt-mut cover: unable to resolve ") + flag +
+             " executable: " + requested +
+             " (searched repo build/bin, install-tree sibling bin, and PATH).")
+                .str();
+        return false;
+      }
+      result.rewrittenArgs.push_back(flag.str());
+      result.rewrittenArgs.push_back(*resolved);
+      return true;
+    };
+
+    if (arg == "--formal-global-propagate-circt-lec" ||
+        arg.starts_with("--formal-global-propagate-circt-lec=")) {
+      if (!resolveWithOptionalValue("--formal-global-propagate-circt-lec",
+                                    "circt-lec"))
+        return result;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-circt-bmc" ||
+        arg.starts_with("--formal-global-propagate-circt-bmc=")) {
+      if (!resolveWithOptionalValue("--formal-global-propagate-circt-bmc",
+                                    "circt-bmc"))
+        return result;
+      continue;
+    }
+
+    result.rewrittenArgs.push_back(arg.str());
+  }
+  result.ok = true;
+  return result;
+}
+
 static void splitCSV(StringRef csv, SmallVectorImpl<std::string> &out) {
   SmallVector<StringRef, 8> parts;
   csv.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -1157,6 +1283,30 @@ int main(int argc, char **argv) {
       return dispatchToScript(*scriptPath, forwardedArgs);
     }
     return runNativeGenerate(parseResult.opts);
+  }
+
+  if (firstArg == "cover") {
+    SmallVector<StringRef, 32> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+    CoverRewriteResult rewrite = rewriteCoverArgs(argv[0], forwardedArgs);
+    if (!rewrite.ok) {
+      errs() << rewrite.error << "\n";
+      return 1;
+    }
+
+    auto scriptPath = resolveScriptPath(argv[0], "run_mutation_cover.sh");
+    if (!scriptPath) {
+      errs() << "circt-mut: unable to locate script 'run_mutation_cover.sh'.\n";
+      errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+                " utils scripts.\n";
+      return 1;
+    }
+
+    SmallVector<StringRef, 32> rewrittenArgsRef;
+    for (const std::string &arg : rewrite.rewrittenArgs)
+      rewrittenArgsRef.push_back(arg);
+    return dispatchToScript(*scriptPath, rewrittenArgsRef);
   }
 
   auto scriptName = mapSubcommandToScript(firstArg);
