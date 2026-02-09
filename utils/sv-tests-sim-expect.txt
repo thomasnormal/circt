@@ -83,34 +83,34 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 uvm_resource_db_read_by_name	xfail	UVM resource_db: slow UVM simulation
 uvm_test_run_test	xfail	UVM run_test: slow UVM simulation
 
-# Ch16: SVA UVM tests that timeout (concurrent assertions not simulated)
-16.10--property-local-var-uvm	xfail	SVA UVM: concurrent property not simulated
-16.10--sequence-local-var-uvm	xfail	SVA UVM: concurrent sequence not simulated
-16.11--sequence-subroutine-uvm	xfail	SVA UVM: sequence subroutine not simulated
-16.12--property-interface-prec-uvm	xfail	SVA UVM: property interface prec not simulated
-16.12--property-interface-uvm	xfail	SVA UVM: property interface not simulated
-16.12--property-prec-uvm	xfail	SVA UVM: property precedence not simulated
-16.12--property-uvm	xfail	SVA UVM: property not simulated
-16.13--sequence-multiclock-uvm	xfail	SVA UVM: multi-clock sequence not simulated
-16.14--assume-property-uvm	xfail	SVA UVM: assume property not simulated
-16.15--property-iff-uvm-fail	xfail	SVA UVM: property iff fail not simulated
-16.15--property-iff-uvm	xfail	SVA UVM: property iff not simulated
-16.17--expect-uvm	xfail	SVA UVM: expect statement not simulated
-16.2--assert0-uvm	xfail	SVA UVM: assert0 not simulated
-16.2--assert-final-uvm	xfail	SVA UVM: assert final not simulated
-16.2--assert-uvm	xfail	SVA UVM: assert not simulated
-16.2--assume-uvm	xfail	SVA UVM: assume not simulated
-16.7--sequence-and-range-uvm	xfail	SVA UVM: sequence and range not simulated
-16.7--sequence-and-uvm	xfail	SVA UVM: sequence and not simulated
-16.7--sequence-intersect-uvm	xfail	SVA UVM: sequence intersect not simulated
-16.7--sequence-or-uvm	xfail	SVA UVM: sequence or not simulated
-16.7--sequence-throughout-uvm	xfail	SVA UVM: sequence throughout not simulated
-16.7--sequence-uvm	xfail	SVA UVM: sequence not simulated
-16.9--sequence-changed-uvm	xfail	SVA UVM: sequence changed not simulated
-16.9--sequence-fell-uvm	xfail	SVA UVM: sequence fell not simulated
-16.9--sequence-past-uvm	xfail	SVA UVM: sequence past not simulated
-16.9--sequence-rose-uvm	xfail	SVA UVM: sequence rose not simulated
-16.9--sequence-stable-uvm	xfail	SVA UVM: sequence stable not simulated
+# Ch16: SVA UVM tests (concurrent assertions not simulated, hang forever)
+16.10--property-local-var-uvm	compile-only	SVA UVM: concurrent property not simulated
+16.10--sequence-local-var-uvm	compile-only	SVA UVM: concurrent sequence not simulated
+16.11--sequence-subroutine-uvm	compile-only	SVA UVM: sequence subroutine not simulated
+16.12--property-interface-prec-uvm	compile-only	SVA UVM: property interface prec not simulated
+16.12--property-interface-uvm	compile-only	SVA UVM: property interface not simulated
+16.12--property-prec-uvm	compile-only	SVA UVM: property precedence not simulated
+16.12--property-uvm	compile-only	SVA UVM: property not simulated
+16.13--sequence-multiclock-uvm	compile-only	SVA UVM: multi-clock sequence not simulated
+16.14--assume-property-uvm	compile-only	SVA UVM: assume property not simulated
+16.15--property-iff-uvm-fail	compile-only	SVA UVM: property iff fail not simulated
+16.15--property-iff-uvm	compile-only	SVA UVM: property iff not simulated
+16.17--expect-uvm	compile-only	SVA UVM: expect statement not simulated
+16.2--assert0-uvm	compile-only	SVA UVM: assert0 not simulated
+16.2--assert-final-uvm	compile-only	SVA UVM: assert final not simulated
+16.2--assert-uvm	compile-only	SVA UVM: assert not simulated
+16.2--assume-uvm	compile-only	SVA UVM: assume not simulated
+16.7--sequence-and-range-uvm	compile-only	SVA UVM: sequence and range not simulated
+16.7--sequence-and-uvm	compile-only	SVA UVM: sequence and not simulated
+16.7--sequence-intersect-uvm	compile-only	SVA UVM: sequence intersect not simulated
+16.7--sequence-or-uvm	compile-only	SVA UVM: sequence or not simulated
+16.7--sequence-throughout-uvm	compile-only	SVA UVM: sequence throughout not simulated
+16.7--sequence-uvm	compile-only	SVA UVM: sequence not simulated
+16.9--sequence-changed-uvm	compile-only	SVA UVM: sequence changed not simulated
+16.9--sequence-fell-uvm	compile-only	SVA UVM: sequence fell not simulated
+16.9--sequence-past-uvm	compile-only	SVA UVM: sequence past not simulated
+16.9--sequence-rose-uvm	compile-only	SVA UVM: sequence rose not simulated
+16.9--sequence-stable-uvm	compile-only	SVA UVM: sequence stable not simulated
 
 # Ch9: Event sequence controls not supported
 9.4.3--event_sequence_controls	compile-only	Event sequence control not supported
