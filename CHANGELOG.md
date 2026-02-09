@@ -34242,6 +34242,58 @@ CIRCT/slang correctly enforces LRM restrictions.
 - No CRL distribution-point fetch/refresh automation yet.
 - Resume remains lane-level (no per-test replay).
 
+## Iteration 689 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Response Verification
+
+- Added `--lane-state-manifest-ed25519-ocsp-response-file` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-keyring-tsv`
+  - requires `--lane-state-manifest-ed25519-ca-file`
+  - verifies keyring certificate status from a pinned DER OCSP response via
+    `openssl ocsp -respin ...`
+  - rejects non-`good` statuses with explicit diagnostics.
+- Lane-state trust-contract updates:
+  - resolved OCSP response SHA256 now contributes to lane-state config hash
+    material
+  - Ed25519 lane-state manifests now include optional `ed25519_ocsp_sha256`
+  - resume/merge manifest verification now validates `ed25519_ocsp_sha256`
+    against expected policy.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative CLI dependency checks for OCSP mode (missing keyring / missing CA)
+    - positive CA+OCSP keyring manifest seed case
+    - negative revoked OCSP-status rejection case
+  - `docs/FormalRegression.md`
+    - documented OCSP response option and semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, OCSP policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-ocsp-response-file ... --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-ocsp-response-file ... --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-sweep-20260209-014109/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-sweep-20260209-014109/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode is currently pinned-response-file based (no live responder URL).
+- No OCSP response freshness policy (thisUpdate/nextUpdate) enforcement yet.
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
 ## Iteration 679 - February 8, 2026
 
 ### Lane-State Compatibility Policy Versioning
