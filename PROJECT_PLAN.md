@@ -18229,6 +18229,14 @@ ninja -C build circt-verilog
     resume/reset paths.
   - Hardens 24/7 distributed checkpoint trust against stale or compromised certs.
 
+### Iteration 688
+- Added CRL freshness enforcement for Ed25519 lane-state keyring mode:
+  - CRL `nextUpdate` is parsed and required to be >= current UTC time.
+  - Stale CRLs fail fast before certificate verification.
+- Planning impact:
+  - Prevents acceptance of revoked-status data from expired CRLs.
+  - Tightens revocation policy from "CRL present" to "CRL present and fresh".
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18239,8 +18247,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add certificate revocation integration (CRL/OCSP) on top of CA + subject
-    policy controls.
+  - Add OCSP revocation integration on top of CA + subject + CRL policy
+    controls.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

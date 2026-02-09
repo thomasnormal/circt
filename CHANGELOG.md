@@ -32856,6 +32856,14 @@ CIRCT/slang correctly enforces LRM restrictions.
     - 1/1 PASS
   - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
     - 5/5 PASS
+- Filtered external sweep (seed + resume, CRL-freshness policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-crl-file ... --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-crl-file ... --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-crl-freshness-sweep-20260209-013455/out-seed`
+    - `/tmp/formal-all-ed25519-crl-freshness-sweep-20260209-013455/out-resume`
 - Filtered external sweep (seed + resume, CRL-enabled lane-state policy):
   - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ca-file ... --lane-state-manifest-ed25519-crl-file ... --reset-lane-state`:
     - PASS
@@ -34197,7 +34205,41 @@ CIRCT/slang correctly enforces LRM restrictions.
 ### Remaining Limitations
 
 - Revocation policy currently supports explicit CRL files only (no OCSP).
-- No CRL freshness/nextUpdate enforcement policy yet.
+- Resume remains lane-level (no per-test replay).
+
+## Iteration 688 - February 9, 2026
+
+### Lane-State Ed25519 CRL Freshness Enforcement
+
+- Added CRL freshness checks in `utils/run_formal_all.sh` for
+  `--lane-state-manifest-ed25519-crl-file` mode:
+  - extracts CRL `nextUpdate` via
+    `openssl crl -noout -nextupdate -dateopt iso_8601`
+  - fails fast when `nextUpdate` is older than current UTC time
+  - emits field-qualified diagnostics for parse failures and stale CRLs.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - deterministic stale-CRL negative case (`-crl_nextupdate` in the past)
+    - existing positive CRL and revoked-certificate CRL cases remain
+  - `docs/FormalRegression.md`
+    - documented CRL freshness requirement.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+
+### Remaining Limitations
+
+- Revocation policy still relies on local CRL files only (no OCSP integration).
+- No CRL distribution-point fetch/refresh automation yet.
 - Resume remains lane-level (no per-test replay).
 
 ## Iteration 679 - February 8, 2026

@@ -115,6 +115,8 @@ Lane-state semantics:
 - `--lane-state-manifest-ed25519-crl-file` enables certificate revocation checks
   (`openssl verify -crl_check`) and requires
   `--lane-state-manifest-ed25519-ca-file`.
+- CRL mode enforces freshness from CRL `nextUpdate`; stale CRLs are rejected
+  before certificate verification.
 - `--lane-state-manifest-ed25519-cert-subject-regex` enforces certificate
   identity constraints for selected keyring entries.
 - `--lane-state-manifest-ed25519-key-id` pins manifest `ed25519_key_id`.
