@@ -137,10 +137,12 @@ split_csv() {
 }
 
 if [[ "$RUN_SIM" == "1" ]]; then
+  sim_workdir="${OUT_DIR}/sim-work"
+  mkdir -p "$sim_workdir"
   while IFS= read -r target; do
     [[ -z "$target" ]] && continue
     log_file="${LOG_DIR}/sim-${target}.log"
-    if env CIRCT_VERILOG="$CIRCT_VERILOG" OPENTITAN_DIR="$OPENTITAN_ROOT" \
+    if env CIRCT_VERILOG="$CIRCT_VERILOG" OPENTITAN_DIR="$OPENTITAN_ROOT" OUT_DIR="$sim_workdir" \
       "$SIM_SCRIPT" "$target" "--timeout=${SIM_TIMEOUT}" > "$log_file" 2>&1; then
       append_result "SIM" "$target" "PASS" "end_to_end" "$log_file"
       passes=$((passes + 1))
@@ -152,10 +154,12 @@ if [[ "$RUN_SIM" == "1" ]]; then
 fi
 
 if [[ "$RUN_VERILOG" == "1" ]]; then
+  verilog_workdir="${OUT_DIR}/verilog-work"
+  mkdir -p "$verilog_workdir"
   while IFS= read -r target; do
     [[ -z "$target" ]] && continue
     log_file="${LOG_DIR}/verilog-${target}.log"
-    if env CIRCT_VERILOG="$CIRCT_VERILOG" OPENTITAN_DIR="$OPENTITAN_ROOT" \
+    if env CIRCT_VERILOG="$CIRCT_VERILOG" OPENTITAN_DIR="$OPENTITAN_ROOT" OUT_DIR="$verilog_workdir" \
       "$VERILOG_SCRIPT" "$target" --ir-hw > "$log_file" 2>&1; then
       append_result "VERILOG" "$target" "PASS" "parse" "$log_file"
       passes=$((passes + 1))

@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/ot %t/bin
+// RUN: printf '#!/bin/sh\nif [ -z "$OUT_DIR" ]; then echo "missing OUT_DIR" >&2; exit 7; fi\nmkdir -p "$OUT_DIR"\necho "$OUT_DIR" > "$OUT_DIR/sim-env.txt"\necho "fake sim $1"\nexit 0\n' > %t/bin/fake-sim.sh
+// RUN: chmod +x %t/bin/fake-sim.sh
+// RUN: printf '#!/bin/sh\nif [ -z "$OUT_DIR" ]; then echo "missing OUT_DIR" >&2; exit 7; fi\nmkdir -p "$OUT_DIR"\necho "$OUT_DIR" > "$OUT_DIR/verilog-env.txt"\necho "fake verilog $1"\nexit 0\n' > %t/bin/fake-verilog.sh
+// RUN: chmod +x %t/bin/fake-verilog.sh
+// RUN: env %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out --skip-lec --sim-targets gpio --verilog-targets gpio --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh
+// RUN: test -f %t/out/sim-work/sim-env.txt
+// RUN: test -f %t/out/verilog-work/verilog-env.txt
+// RUN: grep -F "%t/out/sim-work" %t/out/sim-work/sim-env.txt
+// RUN: grep -F "%t/out/verilog-work" %t/out/verilog-work/verilog-env.txt
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+
+// RESULTS: kind{{[[:space:]]}}target{{[[:space:]]}}status
+// RESULTS: SIM{{[[:space:]]}}gpio{{[[:space:]]}}PASS
+// RESULTS: VERILOG{{[[:space:]]}}gpio{{[[:space:]]}}PASS
