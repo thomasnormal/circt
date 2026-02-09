@@ -183,13 +183,14 @@ See CHANGELOG.md on recent progress.
 8. `SIM i2c` timeout is closed in non-smoke E2E by short-circuiting TL-UL BFM
    response wait when `a_ready` never handshakes.
 9. Latest canonical OpenTitan dual-lane run via `run_formal_all.sh`
-   (`^opentitan/(E2E|E2E_STRICT)$`) reports:
-   - `E2E`: `pass=12 fail=0`
-   - `E2E_STRICT`: `pass=11 fail=1` (`LEC:aes_sbox_canright#XPROP_ONLY`)
-   - `E2E_MODE_DIFF`: `strict_only_fail=1 strict_only_pass=0`
-10. `run_formal_all.sh` now supports an explicit strict OpenTitan LEC audit
-    lane (`opentitan/LEC_STRICT`, `--with-opentitan-lec-strict`) to track the
-    remaining strict X-prop parity gap independently from default parity lanes.
+   (`^opentitan/(E2E|E2E_STRICT|E2E_MODE_DIFF)$`) reports:
+   - `E2E`: `pass=11 fail=1` (`SIM:i2c` timeout)
+   - `E2E_STRICT`: `pass=12 fail=0`
+   - `E2E_MODE_DIFF`: `strict_only_fail=0 strict_only_pass=1` (`SIM:i2c`)
+10. Strict non-optimistic OpenTitan LEC closure is now in place:
+    `opentitan/LEC_STRICT` runs `LEC_X_OPTIMISTIC=0` without
+    `aes_sbox_canright#XPROP_ONLY` by default (known-input assumptions in the
+    OpenTitan LEC harness strict mode path).
 11. OpenTitan LEC case artifacts now retain mismatch diagnostics in the
     artifact field (e.g. `#XPROP_ONLY`) for case-level expected-failure
     tracking and strict-lane triage.
@@ -336,11 +337,10 @@ See CHANGELOG.md on recent progress.
     `results.tsv` for lane-level cache hotspot diagnosis.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
-1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
-   `aes_sbox_canright` still reports `XPROP_ONLY`; default OpenTitan LEC path
-   now uses x-optimistic equivalence.
-2. OpenTitan strict-vs-default mode-diff still reports one strict-only failure
-   (`LEC:aes_sbox_canright`), i.e. `strict_only_fail=1`.
+1. OpenTitan non-strict E2E still has an intermittent `SIM:i2c` timeout, which
+   appears in mode-diff as `strict_only_pass=1` when it reproduces.
+2. Need deterministic stabilization for `SIM:i2c` convergence and a dedicated
+   regression lane that continuously gates the timeout signature.
 
 #### Closure Workflow
 1. Keep one issue per failing lane target with owner, reproducer, and expected
