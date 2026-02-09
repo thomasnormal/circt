@@ -136,3 +136,92 @@ See CHANGELOG.md on recent progress.
   - Gaps remain visible via machine-readable `results.tsv` outputs and can be
     tracked to closure.
 - Detailed logs and validation commands are tracked in `CHANGELOG.md`.
+
+### Non-Smoke OpenTitan End-to-End Parity Plan
+
+#### Scope (Required Lanes)
+1. `SIM` lane via `utils/run_opentitan_circt_sim.sh` on full-IP targets.
+2. `VERILOG` lane via `utils/run_opentitan_circt_verilog.sh --ir-hw` on
+   full-IP parse targets.
+3. `LEC` lane via `utils/run_opentitan_circt_lec.py` with
+   `LEC_SMOKE_ONLY=0` and strict handling of `XPROP_ONLY` by default.
+
+#### Fixed Target Matrix (Parity Gate Set)
+1. `SIM`: `gpio`, `uart`, `usbdev`, `i2c`, `spi_host`, `spi_device`.
+2. `VERILOG`: `gpio`, `uart`, `usbdev`, `i2c`, `spi_device`, `dma`,
+   `keymgr_dpe`.
+3. `LEC`: all AES S-Box implementations selected by default in
+   `run_opentitan_circt_lec.py` (unmasked by default, masked enabled in
+   separate lane).
+
+#### Gate Rules
+1. OpenTitan parity claims are allowed only when the full matrix above runs
+   through `utils/run_opentitan_formal_e2e.sh` with zero unexpected failures.
+2. Smoke-only OpenTitan runs cannot be used as parity evidence.
+3. `XPROP_ONLY` results count as failures in strict parity mode.
+4. `--allow-xprop-only` is permitted only for transitional tracking and must be
+   marked as non-parity status in summaries.
+
+#### Current Open Non-Smoke Gaps (from latest E2E run)
+1. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram`.
+2. `VERILOG spi_device`: `moore.builtin.readmemh` region-isolation verifier
+   failure.
+3. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` resolution issue.
+4. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
+
+#### Closure Workflow
+1. Keep one issue per failing lane target with owner, reproducer, and expected
+   check-in test.
+2. Require each fix to add/extend a lit test when feasible plus re-run the full
+   OpenTitan E2E gate.
+3. Move target from `failing` to `passing` only after two consecutive clean E2E
+   runs with archived artifacts.
+
+#### Tracking and Artifacts
+1. Canonical result file: `<out-dir>/results.tsv` from
+   `utils/run_opentitan_formal_e2e.sh`.
+2. Store per-target logs under `<out-dir>/logs/` and keep failure signatures in
+   `CHANGELOG.md`.
+3. Track matrix status in a table with columns:
+   `lane`, `target`, `status`, `owner`, `blocking_issue`, `last_clean_run`.
+
+### Tabby-CAD-Level Formal Parity Plan (P0-P2)
+
+#### P0 (Baseline Commercial Capability)
+1. SVA semantic correctness:
+   local vars, `disable iff`, multi-clock edge cases, sampled-value semantics.
+2. Proof strength:
+   robust unbounded flow (IC3/PDR + k-induction) with deterministic outcomes.
+3. 4-state/X-prop soundness:
+   consistent BMC/LEC treatment and no parity waivers for core benchmarks.
+4. Practical LEC:
+   retiming/clock-gating/reset-delta friendly equivalence with clear mismatch
+   diagnostics.
+5. Constraint soundness:
+   over-constraint and contradiction detection with actionable diagnostics.
+
+#### P1 (Adoption and Closure Efficiency)
+1. Coverage/vacuity stack in CI outputs.
+2. Compositional proving and partitioned closure.
+3. Capacity features (abstraction/refinement and scaling controls).
+4. Better debug UX (trace minimization, mismatch localization, replay tooling).
+
+#### P2 (Beyond Baseline)
+1. Formal app layer (connectivity/security/reset-focused app checks).
+2. Advanced liveness/fairness closure flow.
+3. Distributed formal execution with deterministic resume/replay.
+4. Cross-run analytics and trend-based release gates.
+
+#### Test and Progress Framework (Mandatory)
+1. Tiered test model:
+   unit/lit semantic tests, differential corpus tests, full-suite external
+   regressions (`~/sv-tests`, `~/verilator-verification`,
+   `~/yosys/tests/sva`, `~/mbit/*avip*`, `~/opentitan`).
+2. Each epic (`P0-*`, `P1-*`, `P2-*`) must define:
+   `entry criteria`, `exit criteria`, `required suites`, `required metrics`.
+3. Progress metrics:
+   semantic mismatch count, non-smoke OpenTitan fail count, strict LEC
+   `XPROP_ONLY` count, full-suite pass rates, flaky rate.
+4. Status discipline:
+   roadmap intent in `PROJECT_PLAN.md`; command-level evidence and results in
+   `CHANGELOG.md`.
