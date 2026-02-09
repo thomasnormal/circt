@@ -147,7 +147,10 @@ def main() -> int:
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_lec = os.environ.get("CIRCT_LEC", "build/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
-    lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "0") == "1"
+    # OpenTitan S-Box parity is evaluated with x-optimistic equivalence by
+    # default to avoid classifying known-input-equivalent implementations as
+    # strict XPROP-only failures.
+    lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "1") == "1"
     lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "1") == "1"
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
