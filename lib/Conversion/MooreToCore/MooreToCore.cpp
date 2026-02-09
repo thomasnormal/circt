@@ -23286,6 +23286,14 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
     }
 
+    // Also collect soft range constraints (from ConstraintExprOp with isSoft)
+    SmallVector<RangeConstraintInfo> softRangeConstraints;
+    for (const auto &constraint : rangeConstraints) {
+      if (constraint.isSoft && !hardConstrainedProps.contains(constraint.propertyName)) {
+        softRangeConstraints.push_back(constraint);
+      }
+    }
+
     // Distribution constraints also mark properties as having hard constraints
     for (const auto &dist : distConstraints) {
       hardConstrainedProps.insert(dist.propertyName);
@@ -23305,6 +23313,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       llvm::DenseSet<StringRef> allConstrainedProps;
       for (const auto &c : hardConstraints)
         allConstrainedProps.insert(c.propertyName);
+      for (const auto &c : softRangeConstraints)
+        allConstrainedProps.insert(c.propertyName);
       for (const auto &c : effectiveSoftConstraints)
         allConstrainedProps.insert(c.propertyName);
       for (const auto &c : distConstraints)
@@ -23316,6 +23326,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       // Sort constraints by solve order so that 'before' variables are
       // randomized first
       sortConstraintsBySolveOrder(hardConstraints, solveOrder);
+      sortConstraintsBySolveOrder(softRangeConstraints, solveOrder);
       sortConstraintsBySolveOrder(effectiveSoftConstraints, solveOrder);
       sortConstraintsBySolveOrder(distConstraints, solveOrder);
     }
@@ -23331,6 +23342,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       if (!dist.constraintName.empty())
         constraintsByProperty[dist.propertyName].push_back(dist.constraintName);
     }
+    for (const auto &soft : softRangeConstraints) {
+      if (!soft.constraintName.empty())
+        constraintsByProperty[soft.propertyName].push_back(
+            soft.constraintName);
+    }
     for (const auto &soft : effectiveSoftConstraints) {
       if (!soft.constraintName.empty())
         constraintsByProperty[soft.propertyName].push_back(
@@ -23339,6 +23355,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
+        !softRangeConstraints.empty() ||
         !distConstraints.empty() || !conditionalConstraints.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
@@ -23656,6 +23673,96 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
           // Store the soft constraint default value
           LLVM::StoreOp::create(rewriter, loc, defaultVal, fieldPtr);
+        }
+      }
+
+      // Apply soft range constraints - like hard constraints but with lower
+      // priority (applied after hard constraints, may be overridden).
+      if (!softRangeConstraints.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_with_range",
+                                              rangeFnTy);
+        auto rangesFnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+        auto rangesFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_randomize_with_ranges",
+                                               rangesFnTy);
+
+        for (const auto &constraint : softRangeConstraints) {
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(constraint.propertyName);
+          Value applyCond = randEnabled;
+          if (!constraint.constraintName.empty()) {
+            Value enabled = createConstraintEnabledCheck(
+                constraint.constraintName);
+            applyCond = arith::AndIOp::create(rewriter, loc, randEnabled,
+                                              enabled);
+          }
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          Value rangeResultVal;
+
+          if (constraint.isMultiRange) {
+            size_t numRanges = constraint.ranges.size();
+            auto arrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges * 2);
+            auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                                rewriter.getI64IntegerAttr(1));
+            auto rangesAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy,
+                                                       arrayTy, one);
+            for (size_t i = 0; i < numRanges; ++i) {
+              auto minIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2)));
+              auto minPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca, ValueRange{minIdx});
+              auto minVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].first));
+              LLVM::StoreOp::create(rewriter, loc, minVal, minPtr);
+              auto maxIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2 + 1)));
+              auto maxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca, ValueRange{maxIdx});
+              auto maxVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].second));
+              LLVM::StoreOp::create(rewriter, loc, maxVal, maxPtr);
+            }
+            auto numRangesVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
+            rangeResultVal = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangesFn),
+                ValueRange{rangesAlloca, numRangesVal}).getResult();
+          } else {
+            auto minVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(constraint.minValue));
+            auto maxVal = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(constraint.maxValue));
+            rangeResultVal = LLVM::CallOp::create(
+                rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+                ValueRange{minVal, maxVal}).getResult();
+          }
+
+          // Store the result to the field
+          auto pathIt = structInfo->propertyPath.find(constraint.propertyName);
+          if (pathIt != structInfo->propertyPath.end()) {
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0);
+            for (unsigned idx : pathIt->second)
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                                classPtr, gepIndices);
+            Type fieldIntTy = IntegerType::get(ctx, constraint.bitWidth);
+            Value truncatedVal = arith::TruncIOp::create(
+                rewriter, loc, fieldIntTy, rangeResultVal);
+            LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
+          }
         }
       }
 
