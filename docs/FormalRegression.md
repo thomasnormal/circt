@@ -72,6 +72,7 @@ utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-hmac-keyring-tsv /secrets/lane-state-keyring.tsv --lane-state-hmac-keyring-sha256 <sha256> --lane-state-hmac-key-id ci-lane-key-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-public-key-file /secrets/lane-state-ed25519-public.pem --lane-state-manifest-ed25519-key-id ci-ed25519-1
 utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-key-id ci-ed25519-1
+utils/run_formal_all.sh --lane-state-tsv /tmp/formal-lanes.tsv --lane-state-manifest-ed25519-private-key-file /secrets/lane-state-ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /secrets/lane-state-ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <sha256> --lane-state-manifest-ed25519-ca-file /secrets/lane-state-ed25519-ca.pem --lane-state-manifest-ed25519-key-id ci-ed25519-1
 ```
 
 Lane-state semantics:
@@ -103,9 +104,12 @@ Lane-state semantics:
   manifest signing/verification.
 - `--lane-state-manifest-ed25519-keyring-tsv` supports key-id based public-key
   trust-store resolution (`key_id`, `public_key_file_path`, optional
-  `not_before`, `not_after`, `status`, `key_sha256`).
+  `not_before`, `not_after`, `status`, `key_sha256`, `cert_file_path`,
+  `cert_sha256`).
 - `--lane-state-manifest-ed25519-keyring-sha256` can pin exact Ed25519 keyring
   content hash.
+- `--lane-state-manifest-ed25519-ca-file` enables certificate-chain validation
+  for keyring entries that provide `cert_file_path`.
 - `--lane-state-manifest-ed25519-key-id` pins manifest `ed25519_key_id`.
 - Ed25519 mode is mutually exclusive with lane-state HMAC signing modes.
 

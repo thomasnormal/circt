@@ -18199,6 +18199,17 @@ ninja -C build circt-verilog
   - Improves key rotation and signer lifecycle controls for 24/7 distributed
     closure.
 
+### Iteration 685
+- Added certificate-backed Ed25519 keyring trust-anchor enforcement:
+  - `--lane-state-manifest-ed25519-ca-file`
+  - keyring rows now optionally carry `cert_file_path` and `cert_sha256`
+  - resolved Ed25519 key-id can be certificate-verified against CA trust anchor.
+- Planning impact:
+  - Moves lane-state Ed25519 policy from raw-key trust toward explicit PKI-style
+    trust anchors.
+  - Closes a major provenance gap for multi-team 24/7 closure by preventing
+    untrusted key injection in keyring distributions.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18209,8 +18220,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add certificate-chain or external PKI trust-anchor support on top of
-    keyring-based Ed25519 policy.
+  - Add stricter certificate-policy controls (expiry/identity constraints,
+    revocation/CRL/OCSP integration) on top of CA-file trust anchors.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

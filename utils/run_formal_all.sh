@@ -112,6 +112,9 @@ Options:
   --lane-state-manifest-ed25519-keyring-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-keyring-tsv
+  --lane-state-manifest-ed25519-ca-file FILE
+                         Optional CA/trust-anchor PEM for Ed25519 keyring cert
+                         verification
   --lane-state-manifest-ed25519-key-id ID
                          Optional key identifier embedded in Ed25519 manifests
   --include-lane-regex REGEX
@@ -204,9 +207,12 @@ LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_TSV=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CA_FILE=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
 LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED=""
+LANE_STATE_MANIFEST_ED25519_CA_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER=""
 LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE=""
@@ -352,6 +358,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-keyring-sha256)
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ca-file)
+      LANE_STATE_MANIFEST_ED25519_CA_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$2"; shift 2 ;;
     --include-lane-regex)
@@ -493,6 +501,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" && ! "$LANE_STATE_MANIFES
   echo "invalid --lane-state-manifest-ed25519-keyring-sha256: expected 64 hex chars" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CA_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
+  echo "--lane-state-manifest-ed25519-ca-file requires --lane-state-manifest-ed25519-keyring-tsv" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_HMAC_KEY_ID" && -z "$LANE_STATE_HMAC_KEY_FILE" && -z "$LANE_STATE_HMAC_KEYRING_TSV" ]]; then
   echo "--lane-state-hmac-key-id requires --lane-state-hmac-key-file or --lane-state-hmac-keyring-tsv" >&2
   exit 1
@@ -521,6 +533,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && -z "$LANE_STATE_MANIFEST_
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" && ! -r "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
   echo "lane state Ed25519 keyring TSV not readable: $LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CA_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_CA_FILE" ]]; then
+  echo "lane state Ed25519 CA file not readable: $LANE_STATE_MANIFEST_ED25519_CA_FILE" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
@@ -636,17 +652,21 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
       LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+      LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
       python3 - <<'PY'
 import hashlib
 from datetime import datetime
 import os
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 keyring_path = Path(os.environ["LANE_STATE_MANIFEST_ED25519_KEYRING_TSV"])
 expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256", "").strip()
 target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
+ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
 actual_sha = hashlib.sha256(keyring_bytes).hexdigest()
@@ -658,6 +678,21 @@ if expected_sha and actual_sha != expected_sha:
   raise SystemExit(1)
 
 rows = {}
+
+def run_openssl(command, error_prefix: str):
+  result = subprocess.run(
+      command,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      check=False,
+  )
+  if result.returncode != 0:
+    stderr = result.stderr.decode("utf-8", errors="replace").strip()
+    stdout = result.stdout.decode("utf-8", errors="replace").strip()
+    detail = stderr or stdout or "openssl command failed"
+    print(f"{error_prefix}: {detail}", file=sys.stderr)
+    raise SystemExit(1)
+  return result
 
 def parse_date(value: str, field: str) -> str:
   if not value:
@@ -689,9 +724,9 @@ for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), s
         file=sys.stderr,
     )
     raise SystemExit(1)
-  if len(cols) > 6:
+  if len(cols) > 8:
     print(
-        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: expected at most 6 columns",
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: expected at most 8 columns",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -701,6 +736,8 @@ for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), s
   not_after = cols[3].strip() if len(cols) >= 4 else ""
   status = cols[4].strip() if len(cols) >= 5 else ""
   key_sha = cols[5].strip() if len(cols) >= 6 else ""
+  cert_file_path = cols[6].strip() if len(cols) >= 7 else ""
+  cert_sha = cols[7].strip() if len(cols) >= 8 else ""
   if not key_id:
     print(
         f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: empty key_id",
@@ -731,6 +768,18 @@ for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), s
         file=sys.stderr,
     )
     raise SystemExit(1)
+  if cert_sha and not re.fullmatch(r"[0-9a-f]{64}", cert_sha):
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: cert_sha256 must be 64 hex chars",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if cert_sha and not cert_file_path:
+    print(
+        f"invalid lane state Ed25519 keyring row {keyring_path}:{line_no}: cert_sha256 requires cert_file_path",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
   not_before = parse_date(not_before, f"row {keyring_path}:{line_no} not_before")
   not_after = parse_date(not_after, f"row {keyring_path}:{line_no} not_after")
   if not_before and not_after and not_before > not_after:
@@ -739,7 +788,15 @@ for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), s
         file=sys.stderr,
     )
     raise SystemExit(1)
-  rows[key_id] = (key_file_path, not_before, not_after, status, key_sha)
+  rows[key_id] = (
+      key_file_path,
+      not_before,
+      not_after,
+      status,
+      key_sha,
+      cert_file_path,
+      cert_sha,
+  )
 
 if target_key_id not in rows:
   print(
@@ -748,7 +805,7 @@ if target_key_id not in rows:
   )
   raise SystemExit(1)
 
-key_file_path, not_before, not_after, status, key_sha = rows[target_key_id]
+key_file_path, not_before, not_after, status, key_sha, cert_file_path, cert_sha = rows[target_key_id]
 if status == "revoked":
   print(
       f"lane state Ed25519 key_id '{target_key_id}' is revoked in keyring {keyring_path}",
@@ -773,14 +830,72 @@ if key_sha and actual_key_sha != key_sha:
   )
   raise SystemExit(1)
 
+cert_sha_resolved = ""
+if cert_file_path:
+  cert_path = Path(cert_file_path)
+  if not cert_path.is_absolute():
+    cert_path = (keyring_path.parent / cert_path).resolve()
+  if not cert_path.is_file():
+    print(
+        f"lane state Ed25519 certificate file for key_id '{target_key_id}' not found: {cert_path}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  cert_bytes = cert_path.read_bytes()
+  cert_sha_resolved = hashlib.sha256(cert_bytes).hexdigest()
+  if cert_sha and cert_sha_resolved != cert_sha:
+    print(
+        f"lane state Ed25519 certificate SHA256 mismatch for key_id '{target_key_id}': expected {cert_sha}, found {cert_sha_resolved}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  with tempfile.NamedTemporaryFile(delete=False) as cert_pub_file:
+    cert_pub_path = cert_pub_file.name
+  try:
+    cert_pub = run_openssl(
+        ["openssl", "x509", "-in", str(cert_path), "-pubkey", "-noout"],
+        f"lane state Ed25519 certificate public key extraction failed for key_id '{target_key_id}'",
+    ).stdout
+    Path(cert_pub_path).write_bytes(cert_pub)
+    cert_der = run_openssl(
+        ["openssl", "pkey", "-pubin", "-in", cert_pub_path, "-outform", "DER"],
+        f"lane state Ed25519 certificate public key conversion failed for key_id '{target_key_id}'",
+    ).stdout
+    key_der = run_openssl(
+        ["openssl", "pkey", "-pubin", "-in", str(key_path), "-outform", "DER"],
+        f"lane state Ed25519 public key conversion failed for key_id '{target_key_id}'",
+    ).stdout
+  finally:
+    Path(cert_pub_path).unlink(missing_ok=True)
+  cert_pub_sha = hashlib.sha256(cert_der).hexdigest()
+  key_pub_sha = hashlib.sha256(key_der).hexdigest()
+  if cert_pub_sha != key_pub_sha:
+    print(
+        f"lane state Ed25519 certificate/public key mismatch for key_id '{target_key_id}'",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if ca_file:
+    run_openssl(
+        ["openssl", "verify", "-CAfile", ca_file, str(cert_path)],
+        f"lane state Ed25519 certificate verify failed for key_id '{target_key_id}'",
+    )
+elif ca_file:
+  print(
+      f"lane state Ed25519 keyring key_id '{target_key_id}' missing cert_file_path while --lane-state-manifest-ed25519-ca-file is set",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
 print(str(key_path))
 print(actual_key_sha)
 print(actual_sha)
 print(not_before)
 print(not_after)
+print(cert_sha_resolved)
 PY
     )
-    if [[ "${#lane_state_ed25519_keyring_resolved[@]}" -ne 5 ]]; then
+    if [[ "${#lane_state_ed25519_keyring_resolved[@]}" -ne 6 ]]; then
       echo "internal error: failed to resolve lane state Ed25519 keyring" >&2
       exit 1
     fi
@@ -789,12 +904,23 @@ PY
     LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED="${lane_state_ed25519_keyring_resolved[2]}"
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE="${lane_state_ed25519_keyring_resolved[3]}"
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER="${lane_state_ed25519_keyring_resolved[4]}"
+    LANE_STATE_MANIFEST_ED25519_CERT_SHA256="${lane_state_ed25519_keyring_resolved[5]}"
+    if [[ -n "$LANE_STATE_MANIFEST_ED25519_CA_FILE" ]]; then
+      LANE_STATE_MANIFEST_ED25519_CA_SHA256="$(
+        sha256sum "$LANE_STATE_MANIFEST_ED25519_CA_FILE" | awk '{print $1}'
+      )"
+    fi
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="keyring"
   else
     LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE"
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256="$(
       sha256sum "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE" | awk '{print $1}'
     )"
+    LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED=""
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE=""
+    LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER=""
+    LANE_STATE_MANIFEST_ED25519_CERT_SHA256=""
+    LANE_STATE_MANIFEST_ED25519_CA_SHA256=""
     LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="file"
   fi
   LANE_STATE_MANIFEST_SIGN_MODE="ed25519"
@@ -1111,6 +1237,8 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_key_id=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEY_ID"
     printf "lane_state_ed25519_public_key_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256"
     printf "lane_state_ed25519_keyring_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256_RESOLVED"
+    printf "lane_state_ed25519_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SHA256"
+    printf "lane_state_ed25519_ca_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CA_SHA256"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -1228,6 +1356,7 @@ lane_state_emit_manifest() {
   LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
   LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" \
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+  LANE_STATE_MANIFEST_ED25519_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_CERT_SHA256" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   python3 - <<'PY'
@@ -1292,6 +1421,9 @@ elif sign_mode == "ed25519":
   key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
   if key_id:
     payload["ed25519_key_id"] = key_id
+  cert_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SHA256", "").strip()
+  if cert_sha:
+    payload["ed25519_cert_sha256"] = cert_sha
   ed_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
   ed_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
   ed_window_start = parse_window_date(ed_key_not_before, "not_before", "Ed25519")
@@ -1377,6 +1509,7 @@ lane_state_verify_manifest() {
   LANE_STATE_MANIFEST_SIGN_MODE="$LANE_STATE_MANIFEST_SIGN_MODE" \
   LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_EFFECTIVE_PUBLIC_KEY_FILE" \
   LANE_STATE_MANIFEST_ED25519_KEY_ID="$LANE_STATE_MANIFEST_ED25519_KEY_ID" \
+  LANE_STATE_MANIFEST_ED25519_CERT_SHA256="$LANE_STATE_MANIFEST_ED25519_CERT_SHA256" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_BEFORE" \
   LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER="$LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_NOT_AFTER" \
   SOURCE_LABEL="$source_label" \
@@ -1401,6 +1534,7 @@ key_not_before = os.environ.get("LANE_STATE_HMAC_KEY_NOT_BEFORE", "").strip()
 key_not_after = os.environ.get("LANE_STATE_HMAC_KEY_NOT_AFTER", "").strip()
 expected_sign_mode = os.environ["LANE_STATE_MANIFEST_SIGN_MODE"]
 expected_ed25519_key_id = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_ID", "").strip()
+expected_ed25519_cert_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SHA256", "").strip()
 ed25519_key_not_before = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_BEFORE", "").strip()
 ed25519_key_not_after = os.environ.get("LANE_STATE_MANIFEST_ED25519_KEY_NOT_AFTER", "").strip()
 
@@ -1517,6 +1651,19 @@ elif expected_sign_mode == "ed25519":
   if expected_ed25519_key_id and manifest_key_id != expected_ed25519_key_id:
     print(
         f"invalid lane-state manifest for {source}: ed25519_key_id mismatch (expected '{expected_ed25519_key_id}', found '{manifest_key_id}')",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  manifest_cert_sha = payload.get("ed25519_cert_sha256", "")
+  if manifest_cert_sha and (not isinstance(manifest_cert_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_cert_sha)):
+    print(
+        f"invalid lane-state manifest for {source}: ed25519_cert_sha256 must be 64 hex chars",
+        file=os.sys.stderr,
+    )
+    raise SystemExit(1)
+  if expected_ed25519_cert_sha and manifest_cert_sha != expected_ed25519_cert_sha:
+    print(
+        f"invalid lane-state manifest for {source}: ed25519_cert_sha256 mismatch (expected {expected_ed25519_cert_sha}, found {manifest_cert_sha})",
         file=os.sys.stderr,
     )
     raise SystemExit(1)

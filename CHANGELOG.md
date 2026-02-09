@@ -32988,6 +32988,63 @@ CIRCT/slang correctly enforces LRM restrictions.
   external trust-anchor integration).
 - Resume granularity remains lane-level (no per-test replay).
 
+## Iteration 685 - February 9, 2026
+
+### Lane-State Ed25519 Certificate/CA Trust-Anchor Support
+
+- Extended Ed25519 keyring mode in `utils/run_formal_all.sh` with certificate
+  and CA validation:
+  - new flag: `--lane-state-manifest-ed25519-ca-file <file>`
+  - keyring row schema now supports optional:
+    - `cert_file_path`
+    - `cert_sha256`
+- Added keyring resolver checks for selected Ed25519 key-id:
+  - cert file existence and optional cert SHA256 match
+  - cert public key must match configured public key file
+  - optional `openssl verify -CAfile` chain check when CA file is configured
+- Added deterministic dependency validation and diagnostics:
+  - CA file requires Ed25519 keyring mode
+  - CA mode rejects keyring entries without certificate path
+- Manifest and replay hardening:
+  - Ed25519 keyring manifests now include `ed25519_cert_sha256` when available
+  - resume/merge verification enforces expected `ed25519_cert_sha256`
+- Lane-state config hash now includes:
+  - `lane_state_ed25519_cert_sha256`
+  - `lane_state_ed25519_ca_sha256`
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - positive Ed25519 keyring+certificate seed/resume
+    - positive Ed25519 keyring+CA seed/resume
+    - negative CA-without-keyring flag check
+    - negative keyring-without-cert under CA mode
+    - negative wrong-CA verification failure
+  - `docs/FormalRegression.md`
+    - documented Ed25519 keyring certificate columns and CA flag
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep with Ed25519 keyring+CA lane-state mode:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-ed25519-ca-sweep-<ts>/out-seed --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --lane-state-tsv /tmp/formal-all-ed25519-ca-sweep-<ts>/lane-state.tsv --reset-lane-state --lane-state-manifest-ed25519-private-key-file /tmp/formal-all-ed25519-ca-sweep-<ts>/ed25519-private.pem --lane-state-manifest-ed25519-keyring-tsv /tmp/formal-all-ed25519-ca-sweep-<ts>/ed25519-keyring.tsv --lane-state-manifest-ed25519-keyring-sha256 <computed> --lane-state-manifest-ed25519-ca-file /tmp/formal-all-ed25519-ca-sweep-<ts>/ed25519-cert.pem --lane-state-manifest-ed25519-key-id ci-ed25519-a`:
+    - PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`,
+      `opentitan`, `avip/*` filtered)
+  - Resume replay (same command + `--resume-from-lane-state`):
+    - PASS (all lanes resumed)
+
+### Remaining Limitations
+
+- CA-based checks currently rely on local `openssl verify` without CRL/OCSP
+  revocation integration.
+- Resume granularity remains lane-level (no per-test replay).
+
 ## Iteration 682 - February 9, 2026
 
 ### Lane-State Key-Window Enforcement (Keyring Mode)
