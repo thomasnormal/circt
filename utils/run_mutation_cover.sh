@@ -56,6 +56,26 @@ Optional:
   --formal-global-propagate-accept-xprop-only
                              Pass --accept-xprop-only to circt-lec global
                              propagation filter
+  --formal-global-propagate-circt-bmc PATH
+                             Use circt-bmc as built-in differential global
+                             filter (orig vs mutant; mutually exclusive with
+                             other global filter modes)
+  --formal-global-propagate-circt-bmc-args ARGS
+                             Extra args passed to circt-bmc global filter
+  --formal-global-propagate-bmc-bound N
+                             circt-bmc bound for global filter (default: 20)
+  --formal-global-propagate-bmc-module NAME
+                             circt-bmc --module name (default: top)
+  --formal-global-propagate-bmc-run-smtlib
+                             Pass --run-smtlib to circt-bmc global filter
+  --formal-global-propagate-bmc-z3 PATH
+                             Optional z3 path passed to circt-bmc --z3-path
+  --formal-global-propagate-bmc-assume-known-inputs
+                             Pass --assume-known-inputs to circt-bmc global
+                             filter
+  --formal-global-propagate-bmc-ignore-asserts-until N
+                             Pass --ignore-asserts-until to circt-bmc global
+                             filter (default: 0)
   --mutation-limit N         Process first N mutations (default: all)
   --mutations-top NAME       Top module name when auto-generating mutations
   --mutations-modes CSV      Comma-separated mutate modes for auto-generation
@@ -78,6 +98,10 @@ Formal command conventions:
     - NOT_PROPAGATED in output => not propagated
     - PROPAGATED in output     => propagated
     - else fallback: exit 0 => not propagated, exit 1 => propagated, other => error
+  Built-in global filters:
+    - circt-lec: LEC_RESULT=EQ => not_propagated, LEC_RESULT=NEQ => propagated
+    - circt-bmc (differential orig vs mutant):
+        same BMC_RESULT => not_propagated, different => propagated
 
 Test command conventions:
   Each test command runs in a per-(test,mutant) directory and must write result_file.
@@ -116,6 +140,16 @@ FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=0
 FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=0
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED=""
 FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS=""
+FORMAL_GLOBAL_PROPAGATE_BMC_BOUND=20
+FORMAL_GLOBAL_PROPAGATE_BMC_MODULE="top"
+FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=0
+FORMAL_GLOBAL_PROPAGATE_BMC_Z3=""
+FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=0
+FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL=0
+FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED=""
+FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED=""
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -159,6 +193,14 @@ while [[ $# -gt 0 ]]; do
     --formal-global-propagate-z3) FORMAL_GLOBAL_PROPAGATE_Z3="$2"; shift 2 ;;
     --formal-global-propagate-assume-known-inputs) FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS=1; shift ;;
     --formal-global-propagate-accept-xprop-only) FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY=1; shift ;;
+    --formal-global-propagate-circt-bmc) FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"; shift 2 ;;
+    --formal-global-propagate-circt-bmc-args) FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS="$2"; shift 2 ;;
+    --formal-global-propagate-bmc-bound) FORMAL_GLOBAL_PROPAGATE_BMC_BOUND="$2"; shift 2 ;;
+    --formal-global-propagate-bmc-module) FORMAL_GLOBAL_PROPAGATE_BMC_MODULE="$2"; shift 2 ;;
+    --formal-global-propagate-bmc-run-smtlib) FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=1; shift ;;
+    --formal-global-propagate-bmc-z3) FORMAL_GLOBAL_PROPAGATE_BMC_Z3="$2"; shift 2 ;;
+    --formal-global-propagate-bmc-assume-known-inputs) FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
+    --formal-global-propagate-bmc-ignore-asserts-until) FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL="$2"; shift 2 ;;
     --mutation-limit) MUTATION_LIMIT="$2"; shift 2 ;;
     --generate-mutations) GENERATE_MUTATIONS="$2"; shift 2 ;;
     --mutations-top) MUTATIONS_TOP="$2"; shift 2 ;;
@@ -248,8 +290,21 @@ if [[ -z "$MUTATIONS_FILE" && "$GENERATE_MUTATIONS" -eq 0 ]]; then
   echo "Provide one mutation source: --mutations-file or --generate-mutations." >&2
   exit 1
 fi
-if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" && -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
-  echo "Use either --formal-global-propagate-cmd or --formal-global-propagate-circt-lec, not both." >&2
+if [[ ! "$FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --formal-global-propagate-bmc-bound value: $FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" >&2
+  exit 1
+fi
+if [[ ! "$FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --formal-global-propagate-bmc-ignore-asserts-until value: $FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" >&2
+  exit 1
+fi
+
+global_filter_mode_count=0
+[[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]] && global_filter_mode_count=$((global_filter_mode_count + 1))
+[[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]] && global_filter_mode_count=$((global_filter_mode_count + 1))
+[[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]] && global_filter_mode_count=$((global_filter_mode_count + 1))
+if [[ "$global_filter_mode_count" -gt 1 ]]; then
+  echo "Use only one global filter mode: --formal-global-propagate-cmd, --formal-global-propagate-circt-lec, or --formal-global-propagate-circt-bmc." >&2
   exit 1
 fi
 
@@ -280,6 +335,18 @@ fi
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3" ]]; then
   if ! FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_Z3")"; then
     echo "Unable to resolve --formal-global-propagate-z3 executable: $FORMAL_GLOBAL_PROPAGATE_Z3" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]]; then
+  if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC")"; then
+    echo "Unable to resolve --formal-global-propagate-circt-bmc executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3" ]]; then
+  if ! FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3")"; then
+    echo "Unable to resolve --formal-global-propagate-bmc-z3 executable: $FORMAL_GLOBAL_PROPAGATE_BMC_Z3" >&2
     exit 1
   fi
 fi
@@ -341,6 +408,9 @@ FORMAL_GLOBAL_PROPAGATE_CMD_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH=""
 FORMAL_GLOBAL_PROPAGATE_Z3_HASH=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_HASH=""
+FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS_HASH=""
+FORMAL_GLOBAL_PROPAGATE_BMC_Z3_HASH=""
 REUSE_COMPAT_SCHEMA_VERSION=1
 REUSE_CACHE_ENTRY_DIR=""
 REUSE_PAIR_SOURCE="none"
@@ -526,6 +596,9 @@ build_reuse_compat_hash() {
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED")"
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS")"
   FORMAL_GLOBAL_PROPAGATE_Z3_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED")"
+  FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED")"
+  FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS")"
+  FORMAL_GLOBAL_PROPAGATE_BMC_Z3_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED")"
 
   MUTATIONS_SET_HASH="$(
     for i in "${!MUTATION_IDS[@]}"; do
@@ -551,6 +624,14 @@ formal_global_propagate_c1=${FORMAL_GLOBAL_PROPAGATE_C1}
 formal_global_propagate_c2=${FORMAL_GLOBAL_PROPAGATE_C2}
 formal_global_propagate_assume_known_inputs=${FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS}
 formal_global_propagate_accept_xprop_only=${FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY}
+formal_global_propagate_circt_bmc_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_HASH}
+formal_global_propagate_circt_bmc_args_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS_HASH}
+formal_global_propagate_bmc_bound=${FORMAL_GLOBAL_PROPAGATE_BMC_BOUND}
+formal_global_propagate_bmc_module=${FORMAL_GLOBAL_PROPAGATE_BMC_MODULE}
+formal_global_propagate_bmc_run_smtlib=${FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB}
+formal_global_propagate_bmc_z3_hash=${FORMAL_GLOBAL_PROPAGATE_BMC_Z3_HASH}
+formal_global_propagate_bmc_assume_known_inputs=${FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS}
+formal_global_propagate_bmc_ignore_asserts_until=${FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL}
 EOF
   )"
   REUSE_COMPAT_HASH="$(hash_string "$compat_payload")"
@@ -637,7 +718,15 @@ write_reuse_manifest() {
   "formal_global_propagate_c1": "$(json_escape "$FORMAL_GLOBAL_PROPAGATE_C1")",
   "formal_global_propagate_c2": "$(json_escape "$FORMAL_GLOBAL_PROPAGATE_C2")",
   "formal_global_propagate_assume_known_inputs": ${FORMAL_GLOBAL_PROPAGATE_ASSUME_KNOWN_INPUTS},
-  "formal_global_propagate_accept_xprop_only": ${FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY}
+  "formal_global_propagate_accept_xprop_only": ${FORMAL_GLOBAL_PROPAGATE_ACCEPT_XPROP_ONLY},
+  "formal_global_propagate_circt_bmc_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_HASH}",
+  "formal_global_propagate_circt_bmc_args_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS_HASH}",
+  "formal_global_propagate_bmc_bound": ${FORMAL_GLOBAL_PROPAGATE_BMC_BOUND},
+  "formal_global_propagate_bmc_module": "$(json_escape "$FORMAL_GLOBAL_PROPAGATE_BMC_MODULE")",
+  "formal_global_propagate_bmc_run_smtlib": ${FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB},
+  "formal_global_propagate_bmc_z3_sha256": "${FORMAL_GLOBAL_PROPAGATE_BMC_Z3_HASH}",
+  "formal_global_propagate_bmc_assume_known_inputs": ${FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS},
+  "formal_global_propagate_bmc_ignore_asserts_until": ${FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL}
 }
 EOF
 }
@@ -836,6 +925,93 @@ classify_global_propagate_circt_lec() {
   printf "error\t%s\n" "$rc"
 }
 
+extract_bmc_result_token() {
+  local log_file="$1"
+  local token=""
+  token="$(grep -Eo 'BMC_RESULT=(SAT|UNSAT)' "$log_file" | tail -n1 || true)"
+  case "$token" in
+    BMC_RESULT=SAT) printf "sat\n" ;;
+    BMC_RESULT=UNSAT) printf "unsat\n" ;;
+    *) printf "\n" ;;
+  esac
+}
+
+classify_global_propagate_circt_bmc() {
+  local run_dir="$1"
+  local log_file="$2"
+  local rc=0
+  local orig_rc=0
+  local mutant_rc=0
+  local orig_result=""
+  local mutant_result=""
+  local orig_log="${log_file}.orig"
+  local mutant_log="${log_file}.mutant"
+  local -a bmc_common_cmd
+  local -a extra_args
+
+  if [[ -z "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
+    printf "propagated\t-1\n"
+    return
+  fi
+
+  bmc_common_cmd=(
+    "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED"
+    -b "$FORMAL_GLOBAL_PROPAGATE_BMC_BOUND"
+    "--module=$FORMAL_GLOBAL_PROPAGATE_BMC_MODULE"
+    "--ignore-asserts-until=$FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL"
+  )
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB" -eq 1 ]]; then
+    bmc_common_cmd+=("--run-smtlib")
+  fi
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED" ]]; then
+    bmc_common_cmd+=("--z3-path=$FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED")
+  fi
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS" -eq 1 ]]; then
+    bmc_common_cmd+=("--assume-known-inputs")
+  fi
+  if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS" ]]; then
+    read -r -a extra_args <<< "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS"
+    bmc_common_cmd+=("${extra_args[@]}")
+  fi
+
+  orig_rc=0
+  if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+    orig_rc=$?
+  fi
+  mutant_rc=0
+  if ! run_command_argv "$run_dir" "$mutant_log" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
+    mutant_rc=$?
+  fi
+
+  orig_result="$(extract_bmc_result_token "$orig_log")"
+  mutant_result="$(extract_bmc_result_token "$mutant_log")"
+  {
+    printf "# bmc_orig_exit=%s bmc_orig_result=%s\n" "$orig_rc" "${orig_result:-none}"
+    cat "$orig_log"
+    printf "\n# bmc_mutant_exit=%s bmc_mutant_result=%s\n" "$mutant_rc" "${mutant_result:-none}"
+    cat "$mutant_log"
+  } > "$log_file"
+
+  if [[ -z "$orig_result" || -z "$mutant_result" ]]; then
+    rc="$orig_rc"
+    if [[ "$rc" -eq 0 ]]; then
+      rc="$mutant_rc"
+    fi
+    printf "error\t%s\n" "$rc"
+    return
+  fi
+
+  rc="$orig_rc"
+  if [[ "$rc" -eq 0 ]]; then
+    rc="$mutant_rc"
+  fi
+  if [[ "$orig_result" == "$mutant_result" ]]; then
+    printf "not_propagated\t%s\n" "$rc"
+  else
+    printf "propagated\t%s\n" "$rc"
+  fi
+}
+
 run_test_and_classify() {
   local run_dir="$1"
   local test_id="$2"
@@ -945,6 +1121,8 @@ process_mutation() {
 
   if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED" ]]; then
     read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_lec "$mutation_dir" "$mutation_dir/global_propagate.log")
+  elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
+    read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_bmc "$mutation_dir" "$mutation_dir/global_propagate.log")
   elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
     read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
   fi

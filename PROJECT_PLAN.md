@@ -86,6 +86,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Formal activation/propagation pruning | **DONE** | 0 | Per test-mutant pair pre-qualification |
 | - Global formal propagation filter | **DONE** | 0 | Added per-mutant `--formal-global-propagate-cmd` relevance pruning before pair runs |
 | - LEC-native global relevance helper | **DONE** | 0 | Added built-in `--formal-global-propagate-circt-lec` mode with `LEC_RESULT=EQ/NEQ` classification |
+| - BMC-native differential global relevance helper | **DONE** | 0 | Added built-in `--formal-global-propagate-circt-bmc` mode comparing orig vs mutant `BMC_RESULT` |
 | - Improvement + metric report modes | **DONE** | 0 | `improvement.tsv` + `metrics.tsv` outputs |
 | - Single-host parallel scheduler/resume | **DONE** | 0 | Added `--jobs` + `--resume` with deterministic report rebuild |
 | - Qualification cache reuse across iterations | **DONE** | 0 | Added `--reuse-pair-file` + `reused_pairs` metrics/JSON tracking |
@@ -95,7 +96,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Multi-mode mutation mix generation | **DONE** | 0 | Added `--mutations-modes` / `--modes` to combine arithmetic/control mutation modes deterministically |
 | - Native mutation operator expansion (arithmetic/control-depth) | MISSING | — | Current focus is boolean/control baseline |
-| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode-mix controls, default/lane global formal propagation filters, and default/lane circt-lec global filter paths; full external-suite wiring still pending |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode-mix controls, default/lane global formal propagation filters, default/lane circt-lec global filter paths, and default/lane circt-bmc global filter controls; full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |

@@ -1,5 +1,94 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 740 - February 9, 2026
+
+### BMC-Native Differential Global Mutant Filtering
+
+- Extended `utils/run_mutation_cover.sh` with built-in differential
+  circt-bmc global filtering:
+  - `--formal-global-propagate-circt-bmc <path>`
+  - `--formal-global-propagate-circt-bmc-args "<args>"`
+  - `--formal-global-propagate-bmc-bound <n>`
+  - `--formal-global-propagate-bmc-module <name>`
+  - `--formal-global-propagate-bmc-run-smtlib`
+  - `--formal-global-propagate-bmc-z3 <path>`
+  - `--formal-global-propagate-bmc-assume-known-inputs`
+  - `--formal-global-propagate-bmc-ignore-asserts-until <n>`
+- New classification behavior (orig vs mutant):
+  - same `BMC_RESULT` => `not_propagated`
+  - different `BMC_RESULT` => `propagated`
+- Strengthened mode safety:
+  - global filter modes are now mutually exclusive:
+    - `--formal-global-propagate-cmd`
+    - `--formal-global-propagate-circt-lec`
+    - `--formal-global-propagate-circt-bmc`
+- Reuse compatibility manifests/hashes now include BMC global-filter
+  configuration fields.
+
+### Matrix Integration
+
+- Extended `utils/run_mutation_matrix.sh` with default/lane circt-bmc global
+  filter controls:
+  - `--default-formal-global-propagate-circt-bmc <path>`
+  - `--default-formal-global-propagate-circt-bmc-args "<args>"`
+  - `--default-formal-global-propagate-bmc-bound <n>`
+  - `--default-formal-global-propagate-bmc-module <name>`
+  - `--default-formal-global-propagate-bmc-run-smtlib`
+  - `--default-formal-global-propagate-bmc-z3 <path>`
+  - `--default-formal-global-propagate-bmc-assume-known-inputs`
+- Added lane TSV optional columns for per-lane overrides:
+  - `global_propagate_circt_bmc`
+  - `global_propagate_bmc_args`
+  - `global_propagate_bmc_bound`
+  - `global_propagate_bmc_module`
+  - `global_propagate_bmc_run_smtlib`
+  - `global_propagate_bmc_z3`
+  - `global_propagate_bmc_assume_known_inputs`
+
+### Tests and Docs Updates
+
+- Added lit regressions:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-filter.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--formal-global-propagate-circt-bmc`
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-formal-global-propagate-circt-bmc`
+  - `test/Tools/run-mutation-cover-global-filter-conflict.test`
+    - checks new 3-mode mutual-exclusion guard message
+  - `docs/FormalRegression.md`
+    - documented BMC-native filter options and matrix lane/default wiring
+  - `PROJECT_PLAN.md`
+    - marked BMC-native differential helper as done.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- Manual command-level validation:
+  - cover BMC-native differential filter
+    (`--formal-global-propagate-circt-bmc`): PASS
+  - matrix default BMC-native filter pass-through
+    (`--default-formal-global-propagate-circt-bmc`): PASS
+  - matrix lane-specific BMC global filter columns
+    (`global_propagate_circt_bmc` + bmc option columns): PASS
+  - conflict guard (`--formal-global-propagate-cmd` +
+    `--formal-global-propagate-circt-bmc`): PASS (expected fail-fast)
+  - regression sanity:
+    - LEC-native global filter path: PASS
+    - command-mode global filter path: PASS
+    - multi-mode generation (`--mutations-modes arith,control`): PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-global-circt-bmc --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 739 - February 9, 2026
 
 ### LEC-Native Global Mutant Relevance Filtering

@@ -19,3 +19,4 @@
 // CHECK: --mutations-yosys
 // CHECK: --formal-global-propagate-cmd
 // CHECK: --formal-global-propagate-circt-lec
+// CHECK: --formal-global-propagate-circt-bmc
