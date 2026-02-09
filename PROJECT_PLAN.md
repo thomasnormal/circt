@@ -96,7 +96,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Multi-mode mutation mix generation | **DONE** | 0 | Added `--mutations-modes` / `--modes` to combine arithmetic/control mutation modes deterministically |
 | - Native mutation operator expansion (arithmetic/control-depth) | IN_PROGRESS | — | Added mutate profile presets (`--mutations-profiles`), weighted mode allocations (`--mutations-mode-counts`), deterministic mode-family expansion (`arith/control/balanced/all` -> `inv/const0/const1/cnot0/cnot1`), plus `-cfg`/select controls (`--mutations-cfg`, `--mutations-select`) across generator/cover/matrix; deeper operator families still pending |
-| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode/profile/mode-count/cfg/select controls, default/lane global formal propagation filters, full default/lane circt-lec global filter controls (`args`, `c1/c2`, `z3`, `assume-known-inputs`, `accept-xprop-only`), and default/lane circt-bmc global filter controls (including `ignore_asserts_until`); full external-suite wiring still pending |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode/profile/mode-count/cfg/select controls, default/lane global formal propagation filters, full default/lane circt-lec global filter controls (`args`, `c1/c2`, `z3`, `assume-known-inputs`, `accept-xprop-only`), and default/lane circt-bmc global filter controls (including `ignore_asserts_until`); built-in global filters now conservatively treat formal `UNKNOWN` as propagated (not pruned); full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |
@@ -173,14 +173,18 @@ See CHANGELOG.md on recent progress.
 3. All command-level validation and run evidence remain in `CHANGELOG.md`.
 4. `VERILOG i2c` and `VERILOG spi_device` singleton-array parse failures are
    closed (LLHD singleton index normalization in MooreToCore).
+5. `VERILOG usbdev` parse closure landed (`prim_sec_anchor_*` dependencies).
+6. `VERILOG dma` and `VERILOG keymgr_dpe` target support is now implemented in
+   `run_opentitan_circt_verilog.sh`.
+7. OpenTitan LEC no longer depends on `LEC_ACCEPT_XPROP_ONLY=1` for
+   `aes_sbox_canright` in default OpenTitan flow (`LEC_X_OPTIMISTIC` default
+   enabled in OpenTitan LEC harness).
 
 #### Current Open Non-Smoke Gaps (from latest E2E run)
 1. `SIM i2c`: wall-clock timeout (non-convergent end-to-end run).
-2. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram` index handling.
-3. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` module resolution.
-4. `VERILOG dma` and `VERILOG keymgr_dpe`: target-matrix mismatch (`Unknown
-   target`) between parity plan and parse runner support.
-5. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
+2. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
+   `aes_sbox_canright` still reports `XPROP_ONLY`; default OpenTitan LEC path
+   now uses x-optimistic equivalence.
 
 #### Closure Workflow
 1. Keep one issue per failing lane target with owner, reproducer, and expected

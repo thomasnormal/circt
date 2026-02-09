@@ -133,7 +133,7 @@ Execution controls:
   - `--formal-global-propagate-accept-xprop-only`
   This mode classifies by `circt-lec` output tokens:
   - `LEC_RESULT=EQ` => `not_propagated`
-  - `LEC_RESULT=NEQ` => `propagated`
+  - `LEC_RESULT=NEQ|UNKNOWN` => `propagated` (conservative fallback)
 - Built-in differential circt-bmc global filter (mutually exclusive with other
   global filter modes):
   - `--formal-global-propagate-circt-bmc <path>`
@@ -146,7 +146,7 @@ Execution controls:
   - `--formal-global-propagate-bmc-ignore-asserts-until <n>`
   This mode compares BMC outcomes between original and mutant:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
-  - different `BMC_RESULT` => `propagated`
+  - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
 
 `tests.tsv` format (tab-separated):
 

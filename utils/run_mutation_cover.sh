@@ -108,9 +108,12 @@ Formal command conventions:
     - PROPAGATED in output     => propagated
     - else fallback: exit 0 => not propagated, exit 1 => propagated, other => error
   Built-in global filters:
-    - circt-lec: LEC_RESULT=EQ => not_propagated, LEC_RESULT=NEQ => propagated
+    - circt-lec:
+        LEC_RESULT=EQ => not_propagated
+        LEC_RESULT=NEQ|UNKNOWN => propagated
     - circt-bmc (differential orig vs mutant):
-        same BMC_RESULT => not_propagated, different => propagated
+        same BMC_RESULT (SAT/UNSAT) => not_propagated
+        different BMC_RESULT or UNKNOWN => propagated
 
 Test command conventions:
   Each test command runs in a per-(test,mutant) directory and must write result_file.
@@ -951,16 +954,21 @@ classify_global_propagate_circt_lec() {
     printf "propagated\t%s\n" "$rc"
     return
   fi
+  if grep -Eq 'LEC_RESULT=UNKNOWN' "$log_file"; then
+    printf "propagated\t%s\n" "$rc"
+    return
+  fi
   printf "error\t%s\n" "$rc"
 }
 
 extract_bmc_result_token() {
   local log_file="$1"
   local token=""
-  token="$(grep -Eo 'BMC_RESULT=(SAT|UNSAT)' "$log_file" | tail -n1 || true)"
+  token="$(grep -Eo 'BMC_RESULT=(SAT|UNSAT|UNKNOWN)' "$log_file" | tail -n1 || true)"
   case "$token" in
     BMC_RESULT=SAT) printf "sat\n" ;;
     BMC_RESULT=UNSAT) printf "unsat\n" ;;
+    BMC_RESULT=UNKNOWN) printf "unknown\n" ;;
     *) printf "\n" ;;
   esac
 }
@@ -1033,6 +1041,10 @@ classify_global_propagate_circt_bmc() {
   rc="$orig_rc"
   if [[ "$rc" -eq 0 ]]; then
     rc="$mutant_rc"
+  fi
+  if [[ "$orig_result" == "unknown" || "$mutant_result" == "unknown" ]]; then
+    printf "propagated\t%s\n" "$rc"
+    return
   fi
   if [[ "$orig_result" == "$mutant_result" ]]; then
     printf "not_propagated\t%s\n" "$rc"
