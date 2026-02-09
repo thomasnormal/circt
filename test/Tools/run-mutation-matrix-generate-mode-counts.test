@@ -1,0 +1,22 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \"\([^\"]*\)\".*/\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \([^ ]*\).*/\1/p" "$script" | tail -n1)\ncount=$(sed -n "s/.*mutate -list \([0-9][0-9]*\).*/\1/p" "$script" | tail -n1)\nif [[ "$mode" == "arith" ]]; then\n  [[ "$count" == "3" ]] || exit 4\n  echo "10 M_ARITH_1" > "$out"\n  echo "11 M_ARITH_2" >> "$out"\n  echo "12 M_ARITH_3" >> "$out"\nelif [[ "$mode" == "control" ]]; then\n  [[ "$count" == "1" ]] || exit 5\n  echo "20 M_CTRL_1" > "$out"\nelse\n  exit 3\nfi\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${BASELINE:-0}\" == \"1\" ]]; then\n  echo SURVIVED > result.txt\nelse\n  echo DETECTED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane1\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t90\t4\t-\t-\t%t/fake-yosys.sh\t-\t-\tarith,control\n' > %t/lanes.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh --default-mutations-mode-counts arith=3,control=1 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: FileCheck %s --check-prefix=GEN < %t/out/lane1/generated_mutations.txt
+
+// LOG: Mutation matrix summary: pass=1 fail=0
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code
+// RESULTS-NEXT: lane1{{.*}}PASS{{.*}}0
+// GEN: 1 M_ARITH_1
+// GEN: 2 M_ARITH_2
+// GEN: 3 M_ARITH_3
+// GEN: 4 M_CTRL_1

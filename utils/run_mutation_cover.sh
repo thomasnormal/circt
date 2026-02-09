@@ -79,6 +79,9 @@ Optional:
   --mutation-limit N         Process first N mutations (default: all)
   --mutations-top NAME       Top module name when auto-generating mutations
   --mutations-modes CSV      Comma-separated mutate modes for auto-generation
+  --mutations-mode-counts CSV
+                             Comma-separated mode=count allocation for
+                             auto-generation (sum must match --generate-mutations)
   --mutations-profiles CSV   Comma-separated named mutate profiles for
                              auto-generation
   --mutations-cfg CSV        Comma-separated KEY=VALUE mutate cfg entries
@@ -158,6 +161,7 @@ MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
 MUTATIONS_MODES=""
+MUTATIONS_MODE_COUNTS=""
 MUTATIONS_PROFILES=""
 MUTATIONS_CFG=""
 MUTATIONS_SELECT=""
@@ -212,6 +216,7 @@ while [[ $# -gt 0 ]]; do
     --generate-mutations) GENERATE_MUTATIONS="$2"; shift 2 ;;
     --mutations-top) MUTATIONS_TOP="$2"; shift 2 ;;
     --mutations-modes) MUTATIONS_MODES="$2"; shift 2 ;;
+    --mutations-mode-counts) MUTATIONS_MODE_COUNTS="$2"; shift 2 ;;
     --mutations-profiles) MUTATIONS_PROFILES="$2"; shift 2 ;;
     --mutations-cfg) MUTATIONS_CFG="$2"; shift 2 ;;
     --mutations-select) MUTATIONS_SELECT="$2"; shift 2 ;;
@@ -388,6 +393,9 @@ if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
   fi
   if [[ -n "$MUTATIONS_MODES" ]]; then
     gen_cmd+=(--modes "$MUTATIONS_MODES")
+  fi
+  if [[ -n "$MUTATIONS_MODE_COUNTS" ]]; then
+    gen_cmd+=(--mode-counts "$MUTATIONS_MODE_COUNTS")
   fi
   if [[ -n "$MUTATIONS_PROFILES" ]]; then
     gen_cmd+=(--profiles "$MUTATIONS_PROFILES")

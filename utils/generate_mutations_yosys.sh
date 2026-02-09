@@ -17,6 +17,8 @@ Optional:
   --yosys PATH              Yosys executable (default: yosys)
   --mode NAME               Mutate mode (repeatable)
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
+  --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)
+  --mode-counts CSV         Comma-separated NAME=COUNT mode allocations
   --profile NAME            Named mutation profile (repeatable)
   --profiles CSV            Comma-separated named mutation profiles
   --cfg KEY=VALUE           Mutate config entry (repeatable, becomes -cfg KEY VALUE)
@@ -37,10 +39,12 @@ COUNT=1000
 SEED=1
 YOSYS_BIN="yosys"
 MODES_CSV=""
+MODE_COUNTS_CSV=""
 PROFILES_CSV=""
 CFGS_CSV=""
 SELECTS_CSV=""
 declare -a MODE_LIST=()
+declare -a MODE_COUNT_LIST=()
 declare -a PROFILE_LIST=()
 declare -a CFG_LIST=()
 declare -a SELECT_LIST=()
@@ -55,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     --yosys) YOSYS_BIN="$2"; shift 2 ;;
     --mode) MODE_LIST+=("$2"); shift 2 ;;
     --modes) MODES_CSV="$2"; shift 2 ;;
+    --mode-count) MODE_COUNT_LIST+=("$2"); shift 2 ;;
+    --mode-counts) MODE_COUNTS_CSV="$2"; shift 2 ;;
     --profile) PROFILE_LIST+=("$2"); shift 2 ;;
     --profiles) PROFILES_CSV="$2"; shift 2 ;;
     --cfg) CFG_LIST+=("$2"); shift 2 ;;
@@ -94,6 +100,15 @@ if [[ -n "$MODES_CSV" ]]; then
     mode="${mode%"${mode##*[![:space:]]}"}"
     [[ -z "$mode" ]] && continue
     MODE_LIST+=("$mode")
+  done
+fi
+if [[ -n "$MODE_COUNTS_CSV" ]]; then
+  IFS=',' read -r -a mode_counts_from_csv <<< "$MODE_COUNTS_CSV"
+  for mode_count in "${mode_counts_from_csv[@]}"; do
+    mode_count="${mode_count#"${mode_count%%[![:space:]]*}"}"
+    mode_count="${mode_count%"${mode_count##*[![:space:]]}"}"
+    [[ -z "$mode_count" ]] && continue
+    MODE_COUNT_LIST+=("$mode_count")
   done
 fi
 if [[ -n "$PROFILES_CSV" ]]; then
@@ -182,6 +197,43 @@ declare -a COMBINED_MODE_LIST=()
 declare -A MODE_SEEN=()
 declare -a FINAL_MODE_LIST=()
 COMBINED_MODE_LIST=("${PROFILE_MODE_LIST[@]}" "${MODE_LIST[@]}")
+declare -a MODE_COUNT_KEYS=()
+declare -A MODE_COUNT_BY_MODE=()
+mode_counts_enabled=0
+mode_counts_total=0
+for mode_count in "${MODE_COUNT_LIST[@]}"; do
+  mode_name="${mode_count%%=*}"
+  mode_value="${mode_count#*=}"
+  if [[ -z "$mode_name" || "$mode_value" == "$mode_count" ]]; then
+    echo "Invalid --mode-count entry: $mode_count (expected NAME=COUNT)." >&2
+    exit 1
+  fi
+  mode_name="${mode_name#"${mode_name%%[![:space:]]*}"}"
+  mode_name="${mode_name%"${mode_name##*[![:space:]]}"}"
+  mode_value="${mode_value#"${mode_value%%[![:space:]]*}"}"
+  mode_value="${mode_value%"${mode_value##*[![:space:]]}"}"
+  if [[ -z "$mode_name" ]]; then
+    echo "Invalid --mode-count entry: $mode_count (empty mode name)." >&2
+    exit 1
+  fi
+  if [[ ! "$mode_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid --mode-count count for $mode_name: $mode_value (expected positive integer)." >&2
+    exit 1
+  fi
+  if [[ -z "${MODE_COUNT_BY_MODE[$mode_name]+x}" ]]; then
+    MODE_COUNT_KEYS+=("$mode_name")
+  fi
+  MODE_COUNT_BY_MODE["$mode_name"]="$mode_value"
+  mode_counts_total=$((mode_counts_total + mode_value))
+  mode_counts_enabled=1
+done
+if [[ "$mode_counts_enabled" -eq 1 && "$mode_counts_total" -ne "$COUNT" ]]; then
+  echo "Mode-count total ($mode_counts_total) must match --count ($COUNT)." >&2
+  exit 1
+fi
+if [[ "$mode_counts_enabled" -eq 1 ]]; then
+  COMBINED_MODE_LIST+=("${MODE_COUNT_KEYS[@]}")
+fi
 for mode in "${COMBINED_MODE_LIST[@]}"; do
   mode="${mode#"${mode%%[![:space:]]*}"}"
   mode="${mode%"${mode##*[![:space:]]}"}"
@@ -263,16 +315,27 @@ if [[ -n "$TOP" ]]; then
 fi
 
 mode_count="${#MODE_LIST[@]}"
-base_count=$((COUNT / mode_count))
-extra_count=$((COUNT % mode_count))
+base_count=0
+extra_count=0
+if [[ "$mode_counts_enabled" -eq 0 ]]; then
+  base_count=$((COUNT / mode_count))
+  extra_count=$((COUNT % mode_count))
+fi
 
 declare -a MODE_OUT_FILES
 
 for idx in "${!MODE_LIST[@]}"; do
   mode="${MODE_LIST[$idx]}"
-  list_count="$base_count"
-  if [[ "$idx" -lt "$extra_count" ]]; then
-    list_count=$((list_count + 1))
+  list_count=0
+  if [[ "$mode_counts_enabled" -eq 1 ]]; then
+    if [[ -n "${MODE_COUNT_BY_MODE[$mode]+x}" ]]; then
+      list_count="${MODE_COUNT_BY_MODE[$mode]}"
+    fi
+  else
+    list_count="$base_count"
+    if [[ "$idx" -lt "$extra_count" ]]; then
+      list_count=$((list_count + 1))
+    fi
   fi
   [[ "$list_count" -le 0 ]] && continue
 

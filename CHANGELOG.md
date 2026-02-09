@@ -1,5 +1,66 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 745 - February 9, 2026
+
+### Weighted Mutation Mode Allocation
+
+- Extended `utils/generate_mutations_yosys.sh` with explicit mode allocation:
+  - `--mode-count <mode>=<count>` (repeatable)
+  - `--mode-counts <csv>`
+- Allocation semantics:
+  - when mode counts are specified, their sum must equal `--count`.
+  - mode-count keys are folded into the effective mode set.
+  - preserves deterministic output order and per-mode generation.
+
+### Cover/Matrix Integration
+
+- Extended `utils/run_mutation_cover.sh` generation controls with:
+  - `--mutations-mode-counts <csv>`
+- Extended `utils/run_mutation_matrix.sh` generated-lane controls with:
+  - `--default-mutations-mode-counts <csv>`
+  - lane TSV optional column:
+    - `mutations_mode_counts`
+  - backward compatibility:
+    - new lane column appended at end of schema.
+
+### Tests and Docs Updates
+
+- Added tests:
+  - `test/Tools/run-mutation-generate-mode-counts.test`
+  - `test/Tools/run-mutation-cover-generate-mode-counts.test`
+  - `test/Tools/run-mutation-matrix-generate-mode-counts.test`
+- Updated tests:
+  - `test/Tools/run-mutation-generate-help.test`
+    - checks `--mode-count` / `--mode-counts`.
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--mutations-mode-counts`.
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-mutations-mode-counts`.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+    - documented mode-count controls in cover + matrix lane/default wiring.
+  - `PROJECT_PLAN.md`
+    - tracks weighted mode allocations in operator-expansion + matrix lanes.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - generator weighted mode-count scenario: PASS
+  - cover generated-mutation weighted mode-count pass-through scenario: PASS
+  - matrix generated-lane default weighted mode-count pass-through scenario: PASS
+  - matrix old-schema BMC lane compatibility (no new mode-count column): PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-mode-counts --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 744 - February 9, 2026
 
 ### Mutation Generation Profile Presets
