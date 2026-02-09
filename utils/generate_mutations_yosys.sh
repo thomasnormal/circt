@@ -17,6 +17,8 @@ Optional:
   --yosys PATH              Yosys executable (default: yosys)
   --mode NAME               Mutate mode (repeatable)
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
+  --profile NAME            Named mutation profile (repeatable)
+  --profiles CSV            Comma-separated named mutation profiles
   --cfg KEY=VALUE           Mutate config entry (repeatable, becomes -cfg KEY VALUE)
   --cfgs CSV                Comma-separated KEY=VALUE mutate config entries
   --select EXPR             Additional mutate select expression (repeatable)
@@ -35,9 +37,11 @@ COUNT=1000
 SEED=1
 YOSYS_BIN="yosys"
 MODES_CSV=""
+PROFILES_CSV=""
 CFGS_CSV=""
 SELECTS_CSV=""
 declare -a MODE_LIST=()
+declare -a PROFILE_LIST=()
 declare -a CFG_LIST=()
 declare -a SELECT_LIST=()
 
@@ -51,6 +55,8 @@ while [[ $# -gt 0 ]]; do
     --yosys) YOSYS_BIN="$2"; shift 2 ;;
     --mode) MODE_LIST+=("$2"); shift 2 ;;
     --modes) MODES_CSV="$2"; shift 2 ;;
+    --profile) PROFILE_LIST+=("$2"); shift 2 ;;
+    --profiles) PROFILES_CSV="$2"; shift 2 ;;
     --cfg) CFG_LIST+=("$2"); shift 2 ;;
     --cfgs) CFGS_CSV="$2"; shift 2 ;;
     --select) SELECT_LIST+=("$2"); shift 2 ;;
@@ -90,6 +96,15 @@ if [[ -n "$MODES_CSV" ]]; then
     MODE_LIST+=("$mode")
   done
 fi
+if [[ -n "$PROFILES_CSV" ]]; then
+  IFS=',' read -r -a profiles_from_csv <<< "$PROFILES_CSV"
+  for profile in "${profiles_from_csv[@]}"; do
+    profile="${profile#"${profile%%[![:space:]]*}"}"
+    profile="${profile%"${profile##*[![:space:]]}"}"
+    [[ -z "$profile" ]] && continue
+    PROFILE_LIST+=("$profile")
+  done
+fi
 if [[ -n "$CFGS_CSV" ]]; then
   IFS=',' read -r -a cfgs_from_csv <<< "$CFGS_CSV"
   for cfg in "${cfgs_from_csv[@]}"; do
@@ -108,11 +123,85 @@ if [[ -n "$SELECTS_CSV" ]]; then
     SELECT_LIST+=("$sel")
   done
 fi
-if [[ "${#MODE_LIST[@]}" -eq 0 ]]; then
-  MODE_LIST+=("")
-fi
+declare -a PROFILE_MODE_LIST=()
+declare -a PROFILE_CFG_LIST=()
+declare -a PROFILE_SELECT_LIST=()
 
-for cfg in "${CFG_LIST[@]}"; do
+append_profile() {
+  local profile_name="$1"
+  case "$profile_name" in
+    arith-depth)
+      PROFILE_MODE_LIST+=("arith")
+      PROFILE_CFG_LIST+=(
+        "weight_pq_w=5"
+        "weight_pq_mw=5"
+        "weight_pq_b=3"
+        "weight_pq_mb=3"
+      )
+      ;;
+    control-depth)
+      PROFILE_MODE_LIST+=("control")
+      PROFILE_CFG_LIST+=(
+        "weight_pq_c=5"
+        "weight_pq_mc=5"
+        "weight_pq_s=3"
+        "weight_pq_ms=3"
+      )
+      ;;
+    balanced-depth)
+      PROFILE_MODE_LIST+=("arith" "control")
+      PROFILE_CFG_LIST+=(
+        "weight_pq_w=4"
+        "weight_pq_mw=4"
+        "weight_pq_c=4"
+        "weight_pq_mc=4"
+        "weight_pq_s=2"
+        "weight_pq_ms=2"
+      )
+      ;;
+    cover)
+      PROFILE_CFG_LIST+=(
+        "weight_cover=5"
+        "pick_cover_prcnt=80"
+      )
+      ;;
+    none)
+      ;;
+    *)
+      echo "Unknown --profile value: $profile_name (expected arith-depth|control-depth|balanced-depth|cover|none)." >&2
+      exit 1
+      ;;
+  esac
+}
+
+for profile in "${PROFILE_LIST[@]}"; do
+  append_profile "$profile"
+done
+
+declare -a COMBINED_MODE_LIST=()
+declare -A MODE_SEEN=()
+declare -a FINAL_MODE_LIST=()
+COMBINED_MODE_LIST=("${PROFILE_MODE_LIST[@]}" "${MODE_LIST[@]}")
+for mode in "${COMBINED_MODE_LIST[@]}"; do
+  mode="${mode#"${mode%%[![:space:]]*}"}"
+  mode="${mode%"${mode##*[![:space:]]}"}"
+  [[ -z "$mode" ]] && continue
+  if [[ -n "${MODE_SEEN[$mode]+x}" ]]; then
+    continue
+  fi
+  MODE_SEEN["$mode"]=1
+  FINAL_MODE_LIST+=("$mode")
+done
+if [[ "${#FINAL_MODE_LIST[@]}" -eq 0 ]]; then
+  FINAL_MODE_LIST+=("")
+fi
+MODE_LIST=("${FINAL_MODE_LIST[@]}")
+
+declare -a COMBINED_CFG_LIST=()
+declare -A CFG_BY_KEY=()
+declare -a CFG_KEY_ORDER=()
+COMBINED_CFG_LIST=("${PROFILE_CFG_LIST[@]}" "${CFG_LIST[@]}")
+for cfg in "${COMBINED_CFG_LIST[@]}"; do
   key="${cfg%%=*}"
   value="${cfg#*=}"
   if [[ -z "$key" || "$value" == "$cfg" ]]; then
@@ -127,7 +216,32 @@ for cfg in "${CFG_LIST[@]}"; do
     echo "Invalid --cfg value for $key: $value (expected integer)." >&2
     exit 1
   fi
+  if [[ -z "${CFG_BY_KEY[$key]+x}" ]]; then
+    CFG_KEY_ORDER+=("$key")
+  fi
+  CFG_BY_KEY["$key"]="$value"
 done
+CFG_LIST=()
+for key in "${CFG_KEY_ORDER[@]}"; do
+  CFG_LIST+=("${key}=${CFG_BY_KEY[$key]}")
+done
+
+declare -a COMBINED_SELECT_LIST=()
+declare -A SELECT_SEEN=()
+declare -a FINAL_SELECT_LIST=()
+COMBINED_SELECT_LIST=("${PROFILE_SELECT_LIST[@]}" "${SELECT_LIST[@]}")
+for sel in "${COMBINED_SELECT_LIST[@]}"; do
+  sel="${sel#"${sel%%[![:space:]]*}"}"
+  sel="${sel%"${sel##*[![:space:]]}"}"
+  [[ -z "$sel" ]] && continue
+  if [[ -n "${SELECT_SEEN[$sel]+x}" ]]; then
+    continue
+  fi
+  SELECT_SEEN["$sel"]=1
+  FINAL_SELECT_LIST+=("$sel")
+done
+SELECT_LIST=("${FINAL_SELECT_LIST[@]}")
+
 
 mkdir -p "$(dirname "$OUT_FILE")"
 WORK_DIR="$(mktemp -d)"

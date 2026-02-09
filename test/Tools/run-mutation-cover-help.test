@@ -16,6 +16,7 @@
 // CHECK: --resume
 // CHECK: --generate-mutations
 // CHECK: --mutations-modes
+// CHECK: --mutations-profiles
 // CHECK: --mutations-cfg
 // CHECK: --mutations-select
 // CHECK: --mutations-yosys

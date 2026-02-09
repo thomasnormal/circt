@@ -1,5 +1,73 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 744 - February 9, 2026
+
+### Mutation Generation Profile Presets
+
+- Extended `utils/generate_mutations_yosys.sh` with named profile controls:
+  - `--profile <name>` (repeatable)
+  - `--profiles <csv>`
+- Added built-in profile presets:
+  - `arith-depth`
+  - `control-depth`
+  - `balanced-depth`
+  - `cover`
+  - `none`
+- Profile semantics:
+  - inject mode and mutate `-cfg` presets for arithmetic/control-depth-focused
+    campaigns.
+  - explicit `--mode/--modes` and `--cfg/--cfgs` still work and are merged;
+    cfg keys are deduplicated with last-value-wins semantics.
+
+### Cover/Matrix Integration
+
+- Extended `utils/run_mutation_cover.sh` auto-generation controls with:
+  - `--mutations-profiles <csv>`
+- Extended `utils/run_mutation_matrix.sh` generated-lane controls with:
+  - `--default-mutations-profiles <csv>`
+  - lane TSV optional column:
+    - `mutations_profiles`
+  - backward compatibility:
+    - new lane column appended at end of schema.
+
+### Tests and Docs Updates
+
+- Added tests:
+  - `test/Tools/run-mutation-generate-profiles.test`
+  - `test/Tools/run-mutation-cover-generate-profiles.test`
+  - `test/Tools/run-mutation-matrix-generate-profiles.test`
+- Updated tests:
+  - `test/Tools/run-mutation-generate-help.test`
+    - checks `--profile` / `--profiles`.
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--mutations-profiles`.
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--default-mutations-profiles`.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+    - documented profile controls in cover + matrix lane/default wiring.
+  - `PROJECT_PLAN.md`
+    - tracks profile controls in mutation operator-expansion and matrix lanes.
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - generator profile scenario (`arith-depth,control-depth`): PASS
+  - cover generated-mutation profile pass-through scenario: PASS
+  - matrix generated-lane default profile pass-through scenario: PASS
+  - matrix old-schema BMC lane compatibility (no new profile column): PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-profiles --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 743 - February 9, 2026
 
 ### Mutation Generation Config/Selector Controls
