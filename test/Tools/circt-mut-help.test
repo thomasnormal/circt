@@ -1,0 +1,9 @@
+// RUN: circt-mut --help | FileCheck %s
+
+// CHECK: circt-mut - CIRCT mutation workflow frontend
+// CHECK: Usage:
+// CHECK: circt-mut <subcommand> [args...]
+// CHECK: Subcommands:
+// CHECK: cover
+// CHECK: matrix
+// CHECK: generate

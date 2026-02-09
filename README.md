@@ -192,13 +192,16 @@ using formal pre-qualification (BMC/LEC) and dynamic tests.
 Build the tools:
 
 ```sh
-ninja -C build circt-bmc circt-lec circt-verilog
+ninja -C build circt-mut circt-bmc circt-lec circt-verilog
 ```
 
-Run a single mutation campaign with `utils/run_mutation_cover.sh`:
+Preferred frontend: `circt-mut` (subcommands: `cover`, `matrix`, `generate`).
+Legacy script entrypoints under `utils/` remain supported for compatibility.
+
+Run a single mutation campaign:
 
 ```sh
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
@@ -215,7 +218,7 @@ global filters:
 Use auto-generated mutations instead of a prebuilt list:
 
 ```sh
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --tests-manifest /path/to/tests.tsv \
   --generate-mutations 1000 \
@@ -224,15 +227,15 @@ utils/run_mutation_cover.sh \
   --mutations-seed 1
 ```
 
-Run multiple lanes with `utils/run_mutation_matrix.sh`:
+Run multiple lanes with `circt-mut matrix`:
 
 ```sh
-utils/run_mutation_matrix.sh \
+circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --create-mutated-script ~/mcy/scripts/create_mutated.sh \
-  --default-formal-global-propagate-circt-lec "$PWD/build/bin/circt-lec" \
-  --default-formal-global-propagate-circt-bmc "$PWD/build/bin/circt-bmc" \
+  --default-formal-global-propagate-circt-lec \
+  --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
   --include-lane-regex '^sv-tests|^verilator' \
   --exclude-lane-regex 'slow'
@@ -242,10 +245,10 @@ Command mapping by workflow:
 
 1. Single mutation campaign
 
-`run_mutation_cover.sh`:
+`circt-mut cover`:
 
 ```sh
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
@@ -273,10 +276,10 @@ certitude_run \
 
 2. Increase generated mutation count
 
-`run_mutation_cover.sh`:
+`circt-mut cover`:
 
 ```sh
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --tests-manifest /path/to/tests.tsv \
   --generate-mutations 1000 \
@@ -306,10 +309,10 @@ certitude_run \
 
 3. Multi-lane/CI orchestration
 
-`run_mutation_matrix.sh`:
+`circt-mut matrix`:
 
 ```sh
-utils/run_mutation_matrix.sh \
+circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --create-mutated-script ~/mcy/scripts/create_mutated.sh \

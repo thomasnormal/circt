@@ -65,10 +65,13 @@ utils/run_formal_all.sh --strict-gate --baseline-window 7 --baseline-window-days
 Use the mutation harness to classify injected faults into:
 `not_activated`, `not_propagated`, `propagated_not_detected`, and `detected`.
 
+Preferred frontend: `circt-mut` (`cover`, `matrix`, `generate`).
+Legacy `utils/run_mutation_*.sh` entrypoints remain supported.
+
 Basic usage:
 
 ```bash
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
@@ -80,7 +83,7 @@ utils/run_mutation_cover.sh \
 Auto-generate mutations (instead of `--mutations-file`):
 
 ```bash
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --tests-manifest /path/to/tests.tsv \
   --generate-mutations 1000 \
@@ -96,10 +99,10 @@ Certitude-style commercial flow.
 
 1. Single campaign
 
-`run_mutation_cover.sh`:
+`circt-mut cover`:
 
 ```bash
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
@@ -127,10 +130,10 @@ certitude_run \
 
 2. Increase mutation volume / refresh generated set
 
-`run_mutation_cover.sh`:
+`circt-mut cover`:
 
 ```bash
-utils/run_mutation_cover.sh \
+circt-mut cover \
   --design /path/to/design.il \
   --tests-manifest /path/to/tests.tsv \
   --generate-mutations 1000 \
@@ -160,10 +163,10 @@ certitude_run \
 
 3. Matrix/lane orchestration
 
-`run_mutation_matrix.sh`:
+`circt-mut matrix`:
 
 ```bash
-utils/run_mutation_matrix.sh \
+circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --default-formal-global-propagate-circt-lec \
@@ -1240,17 +1243,21 @@ Expected-failure cases file:
 - `--expected-failure-cases-file` expects TSV with required columns:
   - `suite	mode	id`
 - Optional columns:
-  - `id_kind` (`base`, `path`, `aggregate`, `base_regex`, or `path_regex`,
+  - `id_kind` (`base`, `base_diag`, `path`, `aggregate`, `base_regex`, or
+    `path_regex`,
     default: `base`)
   - `status` (`ANY`, `FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`; default: `ANY`)
   - `expires_on` (`YYYY-MM-DD`)
   - `reason`
 - `id_kind=aggregate` matches the synthetic aggregate failing case for
   suite/mode lanes that do not emit per-test result rows (`id=__aggregate__`).
+- `id_kind=base_diag` matches `<base>#<DIAG>` where `<DIAG>` is parsed from a
+  trailing diagnostic suffix in observed artifact paths (for example
+  `aes_sbox_canright#XPROP_ONLY`).
 - `id_kind=base_regex` / `path_regex` treat `id` as a Python regular
   expression matched against observed `base` / `path`, respectively.
-  Use `path_regex` for strict OpenTitan LEC diagnostics (e.g. matching
-  `#XPROP_ONLY$`) when run directories are non-deterministic.
+  Use `path_regex` for full-path matching; prefer `base_diag` for strict
+  OpenTitan diagnostic class matching.
 - `--fail-on-unexpected-failure-cases` fails if observed fail-like test cases are
   not matched by the expected-cases file.
 - `--fail-on-expired-expected-failure-cases` fails if any expected case is past

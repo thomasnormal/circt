@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 768 - February 9, 2026
+
+### `circt-mut` Binary Frontend (Initial Migration Step)
+
+- Added a new tool: `tools/circt-mut` with subcommands:
+  - `circt-mut cover`
+  - `circt-mut matrix`
+  - `circt-mut generate`
+- Current behavior dispatches to existing mutation scripts:
+  - `utils/run_mutation_cover.sh`
+  - `utils/run_mutation_matrix.sh`
+  - `utils/generate_mutations_yosys.sh`
+- Script resolution supports:
+  - `CIRCT_MUT_SCRIPTS_DIR` override
+  - build-tree lookup (`<repo>/build/bin` -> `<repo>/utils`)
+  - install-tree lookup (`<prefix>/share/circt/utils`)
+  - repository-root fallback (`./utils`)
+- This establishes a stable binary CLI while preserving the existing script
+  backend during incremental C++ migration.
+
+### Tooling and Docs
+
+- Added build/lit integration:
+  - `tools/circt-mut/CMakeLists.txt`
+  - `tools/CMakeLists.txt` (`add_subdirectory(circt-mut)`)
+  - `test/lit.cfg.py` tool substitution includes `circt-mut`
+- Added lit tests:
+  - `test/Tools/circt-mut-help.test`
+  - `test/Tools/circt-mut-forward-cover.test`
+  - `test/Tools/circt-mut-forward-matrix.test`
+  - `test/Tools/circt-mut-invalid-subcommand.test`
+- Updated user docs to make `circt-mut` the preferred entrypoint while keeping
+  script entrypoints documented as compatible:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-help.test test/Tools/circt-mut-forward-cover.test test/Tools/circt-mut-forward-matrix.test test/Tools/circt-mut-invalid-subcommand.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (48/48)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-circt-mut --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 767 - February 9, 2026
 
 ### Mutation Tool Auto-Discovery for circt-lec/circt-bmc

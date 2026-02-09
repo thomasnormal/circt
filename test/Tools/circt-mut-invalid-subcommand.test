@@ -1,0 +1,4 @@
+// RUN: not circt-mut bogus 2>&1 | FileCheck %s
+
+// CHECK: circt-mut: unknown subcommand: bogus
+// CHECK: circt-mut - CIRCT mutation workflow frontend
