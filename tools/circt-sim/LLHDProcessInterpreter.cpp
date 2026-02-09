@@ -19537,6 +19537,93 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_stream_unpack_bits ----
+    // Signature: (queue: ptr, sourceBits: i64, elementBitWidth: i32,
+    //             isRightToLeft: i1) -> void
+    if (calleeName == "__moore_stream_unpack_bits") {
+      if (callOp.getNumOperands() >= 4) {
+        uint64_t queueAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t sourceBits = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int32_t elemBitWidth = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        bool isRightToLeft =
+            getValue(procId, callOp.getOperand(3)).getUInt64() != 0;
+
+        if (queueAddr != 0 && elemBitWidth > 0) {
+          // Check if queue is in native memory
+          if (queueAddr >= 0x10000000000ULL) {
+            __moore_stream_unpack_bits(
+                reinterpret_cast<MooreQueue *>(queueAddr), sourceBits,
+                elemBitWidth, isRightToLeft);
+          } else {
+            // Queue is in interpreter memory - do the unpack manually
+            uint64_t queueOffset = 0;
+            auto *qBlock =
+                findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+            if (qBlock && qBlock->initialized &&
+                queueOffset + 16 <= qBlock->data.size()) {
+              int64_t numElements = 64 / elemBitWidth;
+              if (numElements <= 0)
+                numElements = 1;
+              int32_t bytesPerElem = (elemBitWidth + 7) / 8;
+              int64_t newSize = numElements * bytesPerElem;
+
+              // Allocate new data block in interpreter memory
+              uint64_t newDataAddr = globalNextAddress;
+              globalNextAddress += newSize;
+
+              MemoryBlock newBlock(newSize, 64);
+              newBlock.initialized = true;
+              memset(newBlock.data.data(), 0, newSize);
+
+              int64_t elementMask = (elemBitWidth < 64)
+                                        ? ((1LL << elemBitWidth) - 1)
+                                        : static_cast<int64_t>(-1);
+
+              if (isRightToLeft) {
+                int bitPos = 0;
+                for (int64_t i = numElements - 1; i >= 0 && bitPos < 64;
+                     --i) {
+                  int64_t elemVal = (sourceBits >> bitPos) & elementMask;
+                  for (int32_t b = 0; b < bytesPerElem && b < 8; ++b)
+                    newBlock.data[i * bytesPerElem + b] =
+                        static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
+                  bitPos += elemBitWidth;
+                }
+              } else {
+                int bitPos = 0;
+                for (int64_t i = 0; i < numElements && bitPos < 64; ++i) {
+                  int64_t elemVal = (sourceBits >> bitPos) & elementMask;
+                  for (int32_t b = 0; b < bytesPerElem && b < 8; ++b)
+                    newBlock.data[i * bytesPerElem + b] =
+                        static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
+                  bitPos += elemBitWidth;
+                }
+              }
+
+              mallocBlocks[newDataAddr] = std::move(newBlock);
+              addrRangeIndexDirty = true;
+
+              // Update queue struct: data ptr and len
+              for (int i = 0; i < 8; ++i)
+                qBlock->data[queueOffset + i] =
+                    static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+              for (int i = 0; i < 8; ++i)
+                qBlock->data[queueOffset + 8 + i] =
+                    static_cast<uint8_t>((numElements >> (i * 8)) & 0xFF);
+            }
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_stream_unpack_bits(bw="
+                   << elemBitWidth << ", src=" << sourceBits << ")\n");
+      }
+      return success();
+    }
+
     // ---- __moore_cross_create ----
     // Signature: (cg: ptr, name: ptr, cp_indices: ptr, num: i32) -> i32
     if (calleeName == "__moore_cross_create") {
