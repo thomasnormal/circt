@@ -238,6 +238,10 @@ Lane-level formal tool fields in `--lanes-tsv` now also get native preflight
 validation (`global_propagate_circt_lec`, `global_propagate_circt_bmc`,
 `global_propagate_z3`, `global_propagate_bmc_z3`) with effective default
 fallback semantics.
+Lane timeout/cache/gate override fields now also get native validation
+(`global_propagate_*_timeout_seconds`, `global_propagate_bmc_bound`,
+`global_propagate_bmc_ignore_asserts_until`, BMC orig-cache limits/policy, and
+`skip_baseline`/`fail_on_undetected`/`fail_on_errors`).
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
