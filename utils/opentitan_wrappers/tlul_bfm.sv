@@ -50,6 +50,7 @@ package tlul_bfm_pkg;
       tl_i.a_valid = 1'b0;
       $display("TLUL BFM read timeout waiting for a_ready (addr=0x%08x, a_valid=%b, a_ready=%b, d_valid=%b)",
                addr, tl_i.a_valid, tl_o.a_ready, tl_o.d_valid);
+      return;
     end
     if (got_a_ready) begin
       @(negedge clk_i);
@@ -122,6 +123,7 @@ package tlul_bfm_pkg;
       err = 1'b1;
       $display("TLUL BFM write timeout waiting for a_ready (addr=0x%08x, a_valid=%b, a_ready=%b, d_valid=%b)",
                addr, tl_i.a_valid, tl_o.a_ready, tl_o.d_valid);
+      return;
     end
     if (got_a_ready) begin
       @(negedge clk_i);
