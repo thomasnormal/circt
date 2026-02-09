@@ -36548,3 +36548,71 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Metadata trust policy still validates sidecar evidence only; it does not yet
   perform live TLS transport-chain capture/verification during refresh.
 - OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
+
+## Iteration 727 - February 9, 2026
+
+### Lane-State Refresh Metadata Artifact Binding
+
+- Extended lane-state refresh metadata schema validation in
+  `utils/run_formal_all.sh`:
+  - added optional metadata field `artifact_sha256`
+  - validator now checks:
+    - if `artifact_sha256` is present, it must be 64 lowercase hex chars
+    - if present, it must match the actual refreshed artifact digest
+- Extended built-in URI refresh metadata emission:
+  - `lane_state_ed25519_fetch_refresh_uri_artifact` now writes
+    `artifact_sha256` for successful `file/http/https` fetches.
+- Added strict metadata policy switches:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-artifact-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-artifact-sha256`
+  - both require corresponding `...-refresh-metadata-file`.
+- Added profile schema support (shared and per-artifact `crl`/`ocsp`) for:
+  - `refresh_metadata_require_artifact_sha256` (boolean)
+- Added precedence wiring for profile-driven artifact-binding defaults:
+  - explicit per-artifact CLI flag
+  - per-artifact profile value
+  - shared profile value
+  - built-in default
+- Added config-hash coverage for both artifact-binding policy toggles.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - dependency-failure checks:
+      - CRL/OCSP `...require-artifact-sha256` without metadata file
+    - parser negative:
+      - profile `refresh_metadata_require_artifact_sha256` non-boolean rejected
+    - runtime negative:
+      - OCSP command-mode metadata with wrong `artifact_sha256` rejected
+      - profile-enforced artifact-binding fails when metadata omits
+        `artifact_sha256`
+    - runtime positive:
+      - OCSP URI refresh with
+        `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-artifact-sha256`
+        passes using built-in metadata that includes `artifact_sha256`
+  - `docs/FormalRegression.md`
+    - documented new profile key and precedence behavior.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-all-profile-artifact-binding-smoke-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - sv-tests BMC/LEC PASS (filtered)
+    - verilator-verification BMC/LEC PASS (filtered)
+    - yosys/tests/sva BMC/LEC PASS (filtered)
+    - OpenTitan LEC PASS (filtered)
+    - AVIP compile PASS (9/9 suites)
+
+### Remaining Limitations
+
+- Metadata trust policy still relies on sidecar-reported transport evidence
+  (`transport`, TLS peer/chain fields); full live transport-chain verification
+  in refresh path is not implemented yet.
+- OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.

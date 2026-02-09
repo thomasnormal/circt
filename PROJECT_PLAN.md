@@ -18055,6 +18055,21 @@ ninja -C build circt-verilog
     rollouts of refresh resilience policy.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 727
+- Added refresh metadata artifact-binding policy:
+  - metadata schema now supports `artifact_sha256`.
+  - built-in URI refresh writes `artifact_sha256` for fetched artifacts.
+  - optional policy flags can require metadata `artifact_sha256` to match the
+    refreshed artifact digest.
+- Added shared/per-artifact profile defaults for
+  `refresh_metadata_require_artifact_sha256`.
+- Planner impact:
+  - Reduces sidecar drift by cryptographically binding metadata to the exact
+    refreshed CRL/OCSP artifact.
+  - Keeps explicit CLI overrides while enabling central profile rollout of
+    stronger metadata integrity policy.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:

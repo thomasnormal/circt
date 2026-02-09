@@ -226,6 +226,9 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 HEX
                          Require CRL refresh metadata `cert_chain_sha256` to
                          contain HEX digest
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-artifact-sha256
+                         Require CRL refresh metadata `artifact_sha256` to
+                         match the refreshed CRL artifact digest
   --lane-state-manifest-ed25519-crl-refresh-metadata-require-ca-cert-in-cert-chain
                          Require CRL refresh metadata `cert_chain_sha256` to
                          contain configured CA cert digest
@@ -287,6 +290,9 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 HEX
                          Require OCSP refresh metadata `cert_chain_sha256` to
                          contain HEX digest
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-artifact-sha256
+                         Require OCSP refresh metadata `artifact_sha256` to
+                         match the refreshed OCSP artifact digest
   --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-ca-cert-in-cert-chain
                          Require OCSP refresh metadata `cert_chain_sha256` to
                          contain configured CA cert digest
@@ -503,6 +509,7 @@ unknown_profile_keys = sorted(
       "refresh_metadata_require_uri_regex",
       "refresh_metadata_require_tls_peer_sha256",
       "refresh_metadata_require_cert_chain_sha256",
+      "refresh_metadata_require_artifact_sha256",
       "refresh_metadata_require_cert_chain_length_min",
       "refresh_metadata_require_ca_cert_in_cert_chain",
       "refresh_metadata_require_tls_peer_in_cert_chain",
@@ -575,6 +582,12 @@ emit_if_string(
     "refresh_metadata_require_cert_chain_sha256",
     "shared_refresh_metadata_require_cert_chain_sha256",
 )
+emit_if_bool(
+    profile,
+    f"profiles.{profile_name}",
+    "refresh_metadata_require_artifact_sha256",
+    "shared_refresh_metadata_require_artifact_sha256",
+)
 emit_if_nonneg_int(
     profile,
     f"profiles.{profile_name}",
@@ -630,6 +643,7 @@ for artifact in ("crl", "ocsp"):
           "refresh_metadata_require_uri_regex",
           "refresh_metadata_require_tls_peer_sha256",
           "refresh_metadata_require_cert_chain_sha256",
+          "refresh_metadata_require_artifact_sha256",
           "refresh_metadata_require_cert_chain_length_min",
           "refresh_metadata_require_ca_cert_in_cert_chain",
           "refresh_metadata_require_tls_peer_in_cert_chain",
@@ -698,6 +712,12 @@ for artifact in ("crl", "ocsp"):
       f"profiles.{profile_name}.{artifact}",
       "refresh_metadata_require_cert_chain_sha256",
       f"{artifact}_refresh_metadata_require_cert_chain_sha256",
+  )
+  emit_if_bool(
+      section,
+      f"profiles.{profile_name}.{artifact}",
+      "refresh_metadata_require_artifact_sha256",
+      f"{artifact}_refresh_metadata_require_artifact_sha256",
   )
   emit_if_nonneg_int(
       section,
@@ -1663,6 +1683,7 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN=""
@@ -1686,6 +1707,7 @@ LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN=0
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN=""
@@ -1951,6 +1973,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-artifact-sha256)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=1; shift ;;
     --lane-state-manifest-ed25519-crl-refresh-metadata-require-ca-cert-in-cert-chain)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=1; shift ;;
     --lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-in-cert-chain)
@@ -1993,6 +2017,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-artifact-sha256)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=1; shift ;;
     --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-ca-cert-in-cert-chain)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=1; shift ;;
     --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-in-cert-chain)
@@ -2422,6 +2448,8 @@ PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=0
+PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN=""
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN_SET=0
 PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
@@ -2454,6 +2482,8 @@ PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=0
+PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN=""
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN_SET=0
 PROFILE_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
@@ -2486,6 +2516,8 @@ PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256=0
+PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN=""
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN_SET=0
 PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN=0
@@ -2549,6 +2581,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         shared_refresh_metadata_require_cert_chain_sha256)
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$profile_value"
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=1
+          ;;
+        shared_refresh_metadata_require_artifact_sha256)
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$profile_value"
+          PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=1
           ;;
         shared_refresh_metadata_require_cert_chain_length_min)
           PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN="$profile_value"
@@ -2614,6 +2650,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$profile_value"
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=1
           ;;
+        crl_refresh_metadata_require_artifact_sha256)
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$profile_value"
+          PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=1
+          ;;
         crl_refresh_metadata_require_cert_chain_length_min)
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN="$profile_value"
           PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN_SET=1
@@ -2677,6 +2717,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_JSON" ]]; then
         ocsp_refresh_metadata_require_cert_chain_sha256)
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$profile_value"
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256_SET=1
+          ;;
+        ocsp_refresh_metadata_require_artifact_sha256)
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$profile_value"
+          PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET=1
           ;;
         ocsp_refresh_metadata_require_cert_chain_length_min)
           PROFILE_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN="$profile_value"
@@ -2893,6 +2937,20 @@ if [[ -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_
     LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
   fi
 fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256" != "1" ]]; then
+  if [[ "$PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$PROFILE_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
+  fi
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256" != "1" ]]; then
+  if [[ "$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$PROFILE_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
+  elif [[ "$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256_SET" == "1" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256="$PROFILE_SHARED_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
+  fi
+fi
 if [[ -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN" ]]; then
   if [[ "$PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN_SET" == "1" ]]; then
     LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN="$PROFILE_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN"
@@ -3103,6 +3161,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_S
   echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
   exit 1
 fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-artifact-sha256 requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-ca-cert-in-cert-chain requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
   exit 1
@@ -3273,6 +3335,10 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SH
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-artifact-sha256 requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
   exit 1
 fi
 if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
@@ -3646,7 +3712,9 @@ lane_state_ed25519_read_refresh_source_metadata_json() {
   local require_cert_chain_length_min="$9"
   local max_age_secs="${10}"
   local max_future_skew_secs="${11}"
-  python3 - "$metadata_file" "$require_transport" "$require_status" "$require_uri_regex" "$require_tls_peer_sha256" "$require_cert_chain_sha256" "$require_ca_cert_sha256" "$require_tls_peer_in_cert_chain" "$require_cert_chain_length_min" "$max_age_secs" "$max_future_skew_secs" <<'PY'
+  local require_artifact_sha256="${12}"
+  local actual_artifact_sha256="${13}"
+  python3 - "$metadata_file" "$require_transport" "$require_status" "$require_uri_regex" "$require_tls_peer_sha256" "$require_cert_chain_sha256" "$require_ca_cert_sha256" "$require_tls_peer_in_cert_chain" "$require_cert_chain_length_min" "$max_age_secs" "$max_future_skew_secs" "$require_artifact_sha256" "$actual_artifact_sha256" <<'PY'
 import json
 import re
 import sys
@@ -3664,6 +3732,8 @@ require_tls_peer_in_cert_chain = sys.argv[8].strip() == "1"
 require_cert_chain_length_min_text = sys.argv[9].strip()
 max_age_secs_text = sys.argv[10].strip()
 max_future_skew_secs_text = sys.argv[11].strip()
+require_artifact_sha256 = sys.argv[12].strip() == "1"
+actual_artifact_sha256 = sys.argv[13].strip()
 require_cert_chain_length_min = (
     int(require_cert_chain_length_min_text)
     if require_cert_chain_length_min_text
@@ -3698,6 +3768,7 @@ unknown_keys = sorted(
         "http_status",
         "tls_peer_sha256",
         "cert_chain_sha256",
+        "artifact_sha256",
         "error",
     }
 )
@@ -3822,6 +3893,29 @@ if transport == "https":
   if cert_chain_sha256 is None or len(cert_chain_sha256) == 0:
     print(
         f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': https transport requires non-empty cert_chain_sha256",
+      file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+artifact_sha256 = parsed.get("artifact_sha256")
+if artifact_sha256 is not None:
+  if not isinstance(artifact_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': artifact_sha256 must be 64 lowercase hex chars",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if actual_artifact_sha256 and artifact_sha256 != actual_artifact_sha256:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': artifact_sha256 mismatch (expected '{actual_artifact_sha256}', got '{artifact_sha256}')",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if require_artifact_sha256:
+  if artifact_sha256 is None:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': artifact_sha256 required by policy",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -4047,6 +4141,7 @@ try:
     if not str(local_path):
       raise ValueError("file URI must include path")
     payload = local_path.read_bytes()
+    metadata["artifact_sha256"] = hashlib.sha256(payload).hexdigest()
     write_artifact(payload)
     metadata["status"] = "ok"
   else:
@@ -4084,6 +4179,7 @@ try:
         if cert_chain_sha256:
           metadata["tls_peer_sha256"] = cert_chain_sha256[0]
           metadata["cert_chain_sha256"] = cert_chain_sha256
+      metadata["artifact_sha256"] = hashlib.sha256(payload).hexdigest()
       write_artifact(payload)
       metadata["status"] = "ok" if 200 <= status < 400 else "error"
 except urllib.error.HTTPError as ex:
@@ -4309,6 +4405,7 @@ run_lane_state_ed25519_refresh_hook() {
   local metadata_require_cert_chain_length_min="${19}"
   local metadata_max_age_secs="${20}"
   local metadata_max_future_skew_secs="${21}"
+  local metadata_require_artifact_sha256="${22}"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -4435,7 +4532,9 @@ PY
               "$metadata_require_tls_peer_in_cert_chain" \
               "$metadata_require_cert_chain_length_min" \
               "$metadata_max_age_secs" \
-              "$metadata_max_future_skew_secs"
+              "$metadata_max_future_skew_secs" \
+              "$metadata_require_artifact_sha256" \
+              "$artifact_sha256"
           )"
           final_source_metadata_sha256="$source_metadata_sha256"
           final_source_metadata_json="$source_metadata_json"
@@ -4542,7 +4641,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" \
-      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
     run_lane_state_ed25519_refresh_hook \
       "ocsp" \
       "OCSP response" \
@@ -4564,7 +4664,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" \
-      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -5512,6 +5613,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX"
     printf "lane_state_ed25519_crl_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
     printf "lane_state_ed25519_crl_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_artifact_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
     printf "lane_state_ed25519_crl_refresh_metadata_require_ca_cert_in_cert_chain=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
     printf "lane_state_ed25519_crl_refresh_metadata_require_tls_peer_in_cert_chain=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
     printf "lane_state_ed25519_crl_refresh_metadata_require_cert_chain_length_min=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN"
@@ -5533,6 +5635,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_artifact_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_ARTIFACT_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_ca_cert_in_cert_chain=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CA_CERT_IN_CERT_CHAIN"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_tls_peer_in_cert_chain=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_IN_CERT_CHAIN"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_cert_chain_length_min=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_LENGTH_MIN"
