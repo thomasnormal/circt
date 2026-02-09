@@ -333,7 +333,7 @@ def main() -> int:
                                 flush=True,
                             )
                             case_rows.append(
-                                ("XFAIL", impl, str(impl_dir), "opentitan", lec_mode_label)
+                                ("XFAIL", impl, f"{impl_dir}#XPROP_ONLY", "opentitan", lec_mode_label)
                             )
                             continue
                         raise subprocess.CalledProcessError(
@@ -344,6 +344,7 @@ def main() -> int:
             except subprocess.CalledProcessError:
                 failures += 1
                 extra = ""
+                diag = None
                 try:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
                     lec_out_text = (impl_dir / "circt-lec.out").read_text()
@@ -353,7 +354,10 @@ def main() -> int:
                 except Exception:
                     pass
                 print(f"{impl:24} FAIL{extra} (logs in {impl_dir})", flush=True)
-                case_rows.append(("FAIL", impl, str(impl_dir), "opentitan", lec_mode_label))
+                detail = str(impl_dir)
+                if diag:
+                    detail = f"{detail}#{diag}"
+                case_rows.append(("FAIL", impl, detail, "opentitan", lec_mode_label))
 
     finally:
         if not keep_workdir:

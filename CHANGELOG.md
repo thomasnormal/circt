@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 756 - February 9, 2026
+
+### OpenTitan LEC Diagnostic Tagging for Case-Level Tracking
+
+- Improved `utils/run_opentitan_circt_lec.py` per-implementation case rows:
+  - accepted `XPROP_ONLY` rows now write artifact paths with a diagnostic tag
+    suffix (`#XPROP_ONLY`).
+  - failed rows now append `#<LEC_DIAG>` when diagnostics are available
+    (for example `#XPROP_ONLY`), preserving mismatch class in machine-readable
+    outputs.
+- This keeps strict OpenTitan LEC gaps observable at expected-failure-case
+  granularity without weakening strict pass/fail behavior.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-xprop-fail-detail.test`
+    - verifies non-accepted `XPROP_ONLY` produces FAIL row with
+      `#XPROP_ONLY` diagnostic tag.
+- Updated:
+  - `test/Tools/run-opentitan-lec-diagnose-xprop.test`
+    - now checks accepted `XPROP_ONLY` rows retain `#XPROP_ONLY` tag.
+
+### Validation
+
+- Script sanity:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-no-assume-known.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-xprop-fail-detail.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-e2e.test`:
+    - 9/9 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+- OpenTitan strict-lane artifact check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-audit-diagtag --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `opentitan LEC_STRICT FAIL total=1 pass=0 fail=1`
+    - case row includes `#XPROP_ONLY` tag in artifact path.
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state LEC for
+  `aes_sbox_canright` still reports `XPROP_ONLY`; tracked via
+  `opentitan/LEC_STRICT` with diagnostic-tagged case rows.
+
 ## Iteration 755 - February 9, 2026
 
 ### MutationCover Global Filter Reuse
