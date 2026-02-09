@@ -44,7 +44,7 @@ Optional:
                              (default: lru)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
-                             (default: ~/mcy/scripts/create_mutated.sh)
+                             (default: utils/create_mutated_yosys.sh)
   --mutant-format EXT        Mutant file extension: il|v|sv (default: il)
   --formal-activate-cmd CMD  Optional per-(test,mutant) activation classification cmd
   --formal-propagate-cmd CMD Optional per-(test,mutant) propagation classification cmd
@@ -171,7 +171,7 @@ REUSE_COMPAT_MODE="warn"
 REUSE_MANIFEST_FILE=""
 REUSE_CACHE_DIR=""
 REUSE_CACHE_MODE="read-write"
-CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
+CREATE_MUTATED_SCRIPT="${SCRIPT_DIR}/create_mutated_yosys.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""

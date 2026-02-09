@@ -213,6 +213,10 @@ Tool discovery for built-in global filters:
   `<circt-root>/build/bin`.
 - Explicit paths still take precedence.
 
+Mutant materialization defaults to the in-repo
+`utils/create_mutated_yosys.sh` helper. Use `--create-mutated-script` only
+when overriding this behavior (for example to force an MCY-site wrapper).
+
 Equivalent MCY flow (one MCY project per lane):
 
 ```bash
