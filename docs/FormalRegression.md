@@ -151,6 +151,8 @@ Lane-state semantics:
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256`
+    - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs`
+    - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs`
 - CRL mode enforces freshness from CRL `nextUpdate`; stale CRLs are rejected
   before certificate verification.
 - `--lane-state-manifest-ed25519-ocsp-response-file` enables OCSP revocation
@@ -174,6 +176,8 @@ Lane-state semantics:
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs`
 - Refresh hooks receive
   `LANE_STATE_MANIFEST_ED25519_REFRESH_METADATA_FILE=<configured-sidecar-path>`
   so wrappers can write metadata deterministically before returning.

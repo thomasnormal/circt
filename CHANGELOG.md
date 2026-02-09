@@ -32754,6 +32754,74 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 705 - February 9, 2026
+
+### Lane-State Refresh Metadata Freshness Policies
+
+- Added freshness policy controls for CRL refresh metadata sidecars in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs`
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs`
+- Added matching freshness controls for OCSP refresh metadata sidecars:
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs`
+- Freshness semantics:
+  - `max-age-secs`: rejects metadata where `fetched_at_utc` is older than the
+    configured age budget.
+  - `max-future-skew-secs`: rejects metadata where `fetched_at_utc` is too far
+    in the future.
+- Policy integration:
+  - freshness options require corresponding metadata sidecar options.
+  - freshness settings are included in lane-state config hash material to
+    preserve strict resume/merge compatibility checks.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - dependency checks for freshness options without metadata sidecar
+    - negative stale CRL metadata case (`max-age-secs`)
+    - negative future-skew OCSP metadata case (`max-future-skew-secs`)
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP freshness policy flags.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Freshness checks are now enforced, but metadata evidence is still
+  producer-supplied (no built-in network attestation).
+- Native AIA/CDP fetch implementation and chain-attested transport metadata are
+  still pending.
+
 ## Iteration 704 - February 9, 2026
 
 ### Lane-State Refresh Metadata Trust-Policy Gates

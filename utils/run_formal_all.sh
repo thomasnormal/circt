@@ -146,6 +146,12 @@ Options:
   --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 HEX
                          Require CRL refresh metadata `cert_chain_sha256` to
                          contain HEX digest
+  --lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs N
+                         Require CRL refresh metadata `fetched_at_utc` age
+                         not older than N seconds
+  --lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs N
+                         Require CRL refresh metadata `fetched_at_utc` not
+                         more than N seconds in the future
   --lane-state-manifest-ed25519-ocsp-response-file FILE
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
@@ -178,6 +184,12 @@ Options:
   --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 HEX
                          Require OCSP refresh metadata `cert_chain_sha256` to
                          contain HEX digest
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs N
+                         Require OCSP refresh metadata `fetched_at_utc` age
+                         not older than N seconds
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs N
+                         Require OCSP refresh metadata `fetched_at_utc` not
+                         more than N seconds in the future
   --lane-state-manifest-ed25519-ocsp-response-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-ocsp-response-file
@@ -310,6 +322,8 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
@@ -322,6 +336,8 @@ LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_FILE=""
@@ -515,6 +531,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-cmd)
@@ -539,6 +559,10 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-responder-cert-file)
@@ -756,6 +780,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_S
   echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-retries: expected non-negative integer" >&2
   exit 1
@@ -796,6 +828,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256: expected 64 lowercase hex chars" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
@@ -850,6 +890,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_
   echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-retries: expected non-negative integer" >&2
   exit 1
@@ -890,6 +938,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SH
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256: expected 64 lowercase hex chars" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs: expected non-negative integer" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -1184,11 +1240,13 @@ lane_state_ed25519_read_refresh_source_metadata_json() {
   local require_uri_regex="$4"
   local require_tls_peer_sha256="$5"
   local require_cert_chain_sha256="$6"
-  python3 - "$metadata_file" "$require_transport" "$require_status" "$require_uri_regex" "$require_tls_peer_sha256" "$require_cert_chain_sha256" <<'PY'
+  local max_age_secs="$7"
+  local max_future_skew_secs="$8"
+  python3 - "$metadata_file" "$require_transport" "$require_status" "$require_uri_regex" "$require_tls_peer_sha256" "$require_cert_chain_sha256" "$max_age_secs" "$max_future_skew_secs" <<'PY'
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
@@ -1197,6 +1255,10 @@ require_status = sys.argv[3].strip()
 require_uri_regex = sys.argv[4]
 require_tls_peer_sha256 = sys.argv[5].strip()
 require_cert_chain_sha256 = sys.argv[6].strip()
+max_age_secs_text = sys.argv[7].strip()
+max_future_skew_secs_text = sys.argv[8].strip()
+max_age_secs = int(max_age_secs_text) if max_age_secs_text else None
+max_future_skew_secs = int(max_future_skew_secs_text) if max_future_skew_secs_text else None
 try:
   parsed = json.loads(metadata_path.read_text(encoding="utf-8"))
 except Exception as ex:
@@ -1277,7 +1339,7 @@ if (
   )
   raise SystemExit(1)
 try:
-  datetime.strptime(fetched_at_utc, "%Y-%m-%dT%H:%M:%SZ")
+  fetched_at_dt = datetime.strptime(fetched_at_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 except ValueError:
   print(
       f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': fetched_at_utc must be valid UTC RFC3339 timestamp",
@@ -1382,6 +1444,26 @@ if require_cert_chain_sha256:
     )
     raise SystemExit(1)
 
+if max_age_secs is not None:
+  max_age_delta = timedelta(seconds=max_age_secs)
+  age_delta = datetime.now(timezone.utc) - fetched_at_dt
+  if age_delta > max_age_delta:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': fetched_at_utc age policy mismatch (age={int(age_delta.total_seconds())}s exceeds max_age={max_age_secs}s)",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if max_future_skew_secs is not None:
+  max_future_delta = timedelta(seconds=max_future_skew_secs)
+  future_delta = fetched_at_dt - datetime.now(timezone.utc)
+  if future_delta > max_future_delta:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': fetched_at_utc future-skew policy mismatch (future_skew={int(future_delta.total_seconds())}s exceeds max_future_skew={max_future_skew_secs}s)",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 print(json.dumps(parsed, sort_keys=True, separators=(",", ":")))
 PY
 }
@@ -1402,6 +1484,8 @@ run_lane_state_ed25519_refresh_hook() {
   local metadata_require_uri_regex="${13}"
   local metadata_require_tls_peer_sha256="${14}"
   local metadata_require_cert_chain_sha256="${15}"
+  local metadata_max_age_secs="${16}"
+  local metadata_max_future_skew_secs="${17}"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -1513,7 +1597,9 @@ PY
               "$metadata_require_status" \
               "$metadata_require_uri_regex" \
               "$metadata_require_tls_peer_sha256" \
-              "$metadata_require_cert_chain_sha256"
+              "$metadata_require_cert_chain_sha256" \
+              "$metadata_max_age_secs" \
+              "$metadata_max_future_skew_secs"
           )"
           final_source_metadata_sha256="$source_metadata_sha256"
           final_source_metadata_json="$source_metadata_json"
@@ -1578,7 +1664,9 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" \
-      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
     run_lane_state_ed25519_refresh_hook \
       "ocsp" \
       "OCSP response" \
@@ -1594,7 +1682,9 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" \
-      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -2510,6 +2600,8 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX"
     printf "lane_state_ed25519_crl_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
     printf "lane_state_ed25519_crl_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+    printf "lane_state_ed25519_crl_refresh_metadata_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_AGE_SECS"
+    printf "lane_state_ed25519_crl_refresh_metadata_max_future_skew_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
@@ -2522,6 +2614,8 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_AGE_SECS"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_max_future_skew_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_MAX_FUTURE_SKEW_SECS"
     printf "lane_state_ed25519_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_issuer_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"
