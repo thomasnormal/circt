@@ -1,5 +1,117 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 753 - February 9, 2026
+
+### OpenTitan Strict LEC Audit Lane in `run_formal_all.sh`
+
+- Added explicit strict OpenTitan LEC lane support to `utils/run_formal_all.sh`:
+  - new flag: `--with-opentitan-lec-strict`
+  - new lane-id: `opentitan/LEC_STRICT`
+- Strict-lane semantics:
+  - runs `utils/run_opentitan_circt_lec.py` with `LEC_X_OPTIMISTIC=0`
+  - writes case rows to `opentitan-lec-strict-results.txt`
+  - reports summary row as `suite=opentitan, mode=LEC_STRICT`
+- Added OpenTitan LEC implementation selection controls:
+  - `--opentitan-lec-impl-filter REGEX`
+  - `--opentitan-lec-include-masked`
+
+### OpenTitan LEC Row Mode Labeling
+
+- Extended `utils/run_opentitan_circt_lec.py` with `LEC_MODE_LABEL` env support
+  (default `LEC`) so strict-lane runs emit mode-tagged case rows without
+  post-hoc rewriting.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-lec-mode-label.test`
+    - verifies `LEC_MODE_LABEL=LEC_STRICT` writes strict-mode case rows.
+  - `test/Tools/run-formal-all-opentitan-lec-strict.test`
+    - verifies `run_formal_all.sh` strict lane wiring (`LEC_X_OPTIMISTIC=0`,
+      `LEC_MODE_LABEL=LEC_STRICT`) and summary/case outputs.
+- Updated:
+  - `test/Tools/run-formal-all-help.test` (new strict-lane CLI option).
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-default-x-optimistic.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-e2e.test`:
+    - 5/5 PASS
+- OpenTitan lane checks:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-audit --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - `opentitan LEC_STRICT FAIL total=1 pass=0 fail=1` (expected current gap)
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-default-and-e2e-after-strict-lane --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|E2E)$'`:
+    - `opentitan LEC PASS total=1 pass=1 fail=0`
+    - `opentitan E2E PASS total=12 pass=12 fail=0`
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state LEC for
+  `aes_sbox_canright` still reports `XPROP_ONLY`; now tracked as
+  `opentitan/LEC_STRICT` in `run_formal_all.sh`.
+
+## Iteration 752 - February 9, 2026
+
+### Global Filter Reuse (Performance)
+
+- Extended `utils/run_mutation_cover.sh` reuse behavior to cache/reuse
+  per-mutant global filter outcomes from prior `pair_qualification.tsv`
+  synthetic rows (`test_id=-`), under existing compatibility checks.
+- Reused global states now skip redundant formal global filter invocations for:
+  - `--formal-global-propagate-cmd`
+  - `--formal-global-propagate-circt-lec`
+  - `--formal-global-propagate-circt-bmc`
+  - `--formal-global-propagate-circt-chain`
+- Global filter pair rows now include propagated outcomes as reusable artifacts:
+  - `global_filter_propagated`
+  - `global_filter_cached_propagated`
+  - existing `global_filter_not_propagated`/cached variants retained.
+
+### Metrics and Telemetry
+
+- Added `reused_global_filters` aggregate metric to:
+  - `metrics.tsv`
+  - `summary.json`
+  - CLI summary line
+- Chain telemetry flags are embedded in global filter notes and restored on
+  reuse so chain-mode metrics remain stable when cached.
+
+### Tests and Documentation
+
+- Added regression test:
+  - `test/Tools/run-mutation-cover-global-filter-reuse.test`
+  validating that second-run reuse skips global filter execution and reports
+  `reused_global_filters`.
+- Updated docs/planning:
+  - `docs/FormalRegression.md` documents global-filter reuse rows/metric.
+  - `PROJECT_PLAN.md` tracks global-filter reuse under CI lane integration.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-filter-reuse.test test/Tools/run-mutation-cover-global-circt-lec-filter.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (28/28)
+- External formal smoke cadence (fallback lanes due local `run_formal_all.sh`
+  syntax breakage in current worktree):
+  - `sv-tests` BMC/LEC: PASS (0 selected, 1028 skipped under filter)
+  - `verilator-verification` BMC/LEC: PASS (1/1 each)
+  - `yosys/tests/sva` BMC/LEC: PASS (1/1 each)
+  - `opentitan` LEC: PASS (1/1)
+  - AVIP compile lanes: PASS (9/9)
+
 ## Iteration 751 - February 9, 2026
 
 ### OpenTitan E2E Closure: `SIM i2c` Timeout

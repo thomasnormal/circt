@@ -96,7 +96,7 @@ Coverage collection now works for parametric covergroups (requires AVIP recompil
 | - Yosys-backed mutation list generation | **DONE** | 0 | Added `generate_mutations_yosys.sh` + `--generate-mutations` flow |
 | - Multi-mode mutation mix generation | **DONE** | 0 | Added `--mutations-modes` / `--modes` to combine arithmetic/control mutation modes deterministically |
 | - Native mutation operator expansion (arithmetic/control-depth) | IN_PROGRESS | — | Added mutate profile presets (`--mutations-profiles`), weighted mode allocations (`--mutations-mode-counts`), deterministic mode-family expansion (`arith/control/balanced/all` -> `inv/const0/const1/cnot0/cnot1`), plus `-cfg`/select controls (`--mutations-cfg`, `--mutations-select`) across generator/cover/matrix; deeper operator families still pending |
-| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode/profile/mode-count/cfg/select controls, default/lane global formal propagation filters, full default/lane circt-lec global filter controls (`args`, `c1/c2`, `z3`, `assume-known-inputs`, `accept-xprop-only`), default/lane circt-bmc global filter controls (including `ignore_asserts_until`), and default/lane chained LEC/BMC global filtering (`--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec`) with symmetric chain telemetry metrics (`chain_lec_unknown_fallbacks`, `chain_bmc_resolved_not_propagated_mutants`, `chain_bmc_unknown_fallbacks`, `chain_lec_resolved_not_propagated_mutants`); built-in global filters now conservatively treat formal `UNKNOWN` as propagated (not pruned); full external-suite wiring still pending |
+| - CI lane integration across AVIP/sv-tests/verilator/yosys/opentitan | IN_PROGRESS | — | Added `run_mutation_matrix.sh` with generated lanes, parallel lane-jobs, reuse-pair/summary pass-through, reuse cache pass-through, reuse-compat policy pass-through, generated-lane mode/profile/mode-count/cfg/select controls, default/lane global formal propagation filters, full default/lane circt-lec global filter controls (`args`, `c1/c2`, `z3`, `assume-known-inputs`, `accept-xprop-only`), default/lane circt-bmc global filter controls (including `ignore_asserts_until`), and default/lane chained LEC/BMC global filtering (`--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec`) with symmetric chain telemetry metrics (`chain_lec_unknown_fallbacks`, `chain_bmc_resolved_not_propagated_mutants`, `chain_bmc_unknown_fallbacks`, `chain_lec_resolved_not_propagated_mutants`); added compatibility-guarded global filter reuse from prior `pair_qualification.tsv` (`test_id=-`) with `reused_global_filters` metric; built-in global filters now conservatively treat formal `UNKNOWN` as propagated (not pruned); full external-suite wiring still pending |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
 | - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
 | - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |
@@ -182,8 +182,11 @@ See CHANGELOG.md on recent progress.
 8. `SIM i2c` timeout is closed in non-smoke E2E by short-circuiting TL-UL BFM
    response wait when `a_ready` never handshakes.
 9. OpenTitan non-smoke E2E gate is currently clean (`pass=12 fail=0`).
+10. `run_formal_all.sh` now supports an explicit strict OpenTitan LEC audit
+    lane (`opentitan/LEC_STRICT`, `--with-opentitan-lec-strict`) to track the
+    remaining strict X-prop parity gap independently from default parity lanes.
 
-#### Current Open Non-Smoke Gaps (from latest E2E run)
+#### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
    `aes_sbox_canright` still reports `XPROP_ONLY`; default OpenTitan LEC path
    now uses x-optimistic equivalence.
