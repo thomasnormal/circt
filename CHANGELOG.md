@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 718 - February 9, 2026
+
+### Refresh-Policy Manifest Signer OCSP Responder Identity/Pinning Parity
+
+- Extended refresh-policy profile-manifest signer keyring OCSP policy in
+  `utils/run_formal_all.sh` with responder identity controls:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex`
+- New signer OCSP verification behavior in profile-manifest signer keyring mode:
+  - optional responder cert CA verification + SHA pin validation
+  - optional responder EKU enforcement (`OCSP Signing`)
+  - optional responder AKI-to-CA-SKI linkage enforcement
+  - optional responder-id regex match against OCSP `Responder Id`
+  - optional explicit issuer-cert override for OCSP `-issuer` selection.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material with profile-manifest signer OCSP
+  responder identity policy inputs and resolved hashes:
+  - responder cert file path + expected/resolved SHA256
+  - issuer cert file path + resolved SHA256
+  - responder EKU/AKI policy toggles
+  - responder-id regex policy.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for all new manifest keyring OCSP responder
+      options
+    - positive profile-manifest signer keyring flow with responder cert pin,
+      issuer cert override, EKU/AKI policy, and responder-id regex
+    - negative responder-id mismatch for profile-manifest signer OCSP checks
+  - `docs/FormalRegression.md`
+    - documented manifest signer keyring OCSP responder identity options and
+      constraints.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-manifest-keyring-ocsp-responder-sweep-20260209-065900 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - summary:
+      - sv-tests BMC/LEC: 1/1 PASS each
+      - verilator-verification BMC/LEC: 1/1 PASS each
+      - yosys/tests/sva BMC/LEC: 1/1 PASS each
+      - OpenTitan LEC: 1/1 PASS
+      - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 717 - February 9, 2026
 
 ### Refresh-Policy Manifest Signer Revocation/Freshness Controls

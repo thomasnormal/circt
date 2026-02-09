@@ -206,6 +206,22 @@ Lane-state semantics:
     rejects OCSP responses whose `thisUpdate` age exceeds N seconds.
   - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update`
     enforces presence of OCSP `nextUpdate`.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file`
+    optionally pins signer OCSP responder identity with explicit responder cert:
+    - requires signer keyring OCSP mode
+    - responder cert is CA-verified
+    - when configured, OCSP verification uses `-verify_other` + responder cert.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file`
+    optionally sets explicit issuer cert for signer OCSP `-issuer` selection
+    (defaults to manifest keyring CA cert).
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256`
+    optionally pins responder cert content hash.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing`
+    requires responder cert EKU to include `OCSP Signing`.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski`
+    requires responder cert AKI keyid to match manifest keyring CA cert SKI.
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex`
+    optionally constrains OCSP `Responder Id` with a regex.
   - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
     optionally pins the expected manifest signer `key_id`.
   - `--lane-state-manifest-ed25519-refresh-auto-uri-policy` sets a shared

@@ -18342,14 +18342,26 @@ ninja -C build circt-verilog
   - Keeps strict determinism: profile-derived controls remain part of lane-state
     config-hash compatibility checks.
 
-### Lane-State Hardening Snapshot (Iterations 713-717)
+### Iteration 718
+- Closed responder identity/pinning parity for refresh-policy profile-manifest
+  signer OCSP checks in signer keyring mode:
+  - responder cert pinning + SHA policy
+  - responder EKU (`OCSP Signing`) and AKI/SKI linkage checks
+  - responder-id regex policy
+  - optional explicit OCSP issuer-cert selection
+- Planning impact:
+  - Profile-manifest signer OCSP trust now matches lane-state signer OCSP
+    identity controls, reducing trust-policy drift between the two paths.
+
+### Lane-State Hardening Snapshot (Iterations 713-718)
 - Delivered chain of trust for refresh-policy profile registries and their
   signer material:
   - profile-registry SHA pinning
   - signed profile-registry manifest verification
   - signer keyring mode for profile-manifest signers
   - signer certificate anchoring + CA verification
-  - signer CRL/OCSP revocation and freshness policy controls.
+  - signer CRL/OCSP revocation and freshness policy controls
+  - signer OCSP responder identity/pinning controls.
 - Planning impact:
   - Refresh-policy profile trust now supports rotation-friendly signer identity
     and cert-based revocation controls while remaining deterministic under
@@ -18358,7 +18370,7 @@ ninja -C build circt-verilog
   iteration is tracked in `CHANGELOG.md`.
 
 ### Recent Lane-State Hardening (See CHANGELOG)
-- Iterations 698-717 completed the CRL/OCSP refresh control plane:
+- Iterations 698-718 completed the CRL/OCSP refresh control plane:
   - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
     timeout, and jitter controls.
   - signed refresh provenance + strict schema-versioned metadata contracts and
@@ -18379,9 +18391,6 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add responder-identity/pinning policy controls for profile-manifest signer
-    OCSP checks (responder cert pin/EKU/AKI parity with lane-state signer
-    policy).
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active

@@ -180,6 +180,23 @@ Options:
   --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update
                          Require Next Update field in signer-certificate OCSP
                          response for manifest signer keyring mode
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file FILE
+                         Optional responder certificate PEM used to pin signer
+                         OCSP responder identity in manifest signer keyring mode
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file FILE
+                         Optional issuer certificate PEM used for signer OCSP
+                         --issuer selection (defaults to manifest keyring CA)
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256 HEX
+                         Optional SHA256 pin for signer OCSP responder cert
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing
+                         Require signer OCSP responder cert EKU to include OCSP
+                         Signing
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski
+                         Require signer OCSP responder cert AKI keyid to match
+                         manifest keyring CA cert SKI
+  --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex REGEX
+                         Optional regex constraint applied to signer OCSP
+                         Responder Id in manifest signer keyring mode
   --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id ID
                          Optional expected key_id for profile manifest signer
   --lane-state-manifest-ed25519-crl-refresh-retries N
@@ -631,7 +648,13 @@ resolve_refresh_policy_profiles_manifest_public_key_from_keyring() {
   local expected_ocsp_response_sha="$8"
   local ocsp_max_age_secs="$9"
   local ocsp_require_next_update="${10}"
-  python3 - "$manifest_json" "$keyring_tsv" "$expected_keyring_sha" "$expected_key_id" "$ca_file" "$crl_file" "$ocsp_response_file" "$expected_ocsp_response_sha" "$ocsp_max_age_secs" "$ocsp_require_next_update" <<'PY'
+  local ocsp_responder_cert_file="${11}"
+  local ocsp_issuer_cert_file="${12}"
+  local ocsp_responder_cert_expected_sha="${13}"
+  local ocsp_require_responder_ocsp_signing="${14}"
+  local ocsp_require_responder_aki_match_ca_ski="${15}"
+  local ocsp_responder_id_regex="${16}"
+  python3 - "$manifest_json" "$keyring_tsv" "$expected_keyring_sha" "$expected_key_id" "$ca_file" "$crl_file" "$ocsp_response_file" "$expected_ocsp_response_sha" "$ocsp_max_age_secs" "$ocsp_require_next_update" "$ocsp_responder_cert_file" "$ocsp_issuer_cert_file" "$ocsp_responder_cert_expected_sha" "$ocsp_require_responder_ocsp_signing" "$ocsp_require_responder_aki_match_ca_ski" "$ocsp_responder_id_regex" <<'PY'
 import hashlib
 import json
 import re
@@ -651,6 +674,12 @@ ocsp_response_file = Path(sys.argv[7]) if sys.argv[7].strip() else None
 expected_ocsp_response_sha = sys.argv[8].strip()
 ocsp_max_age_secs = sys.argv[9].strip()
 ocsp_require_next_update = sys.argv[10].strip() == "1"
+ocsp_responder_cert_file = Path(sys.argv[11]) if sys.argv[11].strip() else None
+ocsp_issuer_cert_file = Path(sys.argv[12]) if sys.argv[12].strip() else None
+ocsp_responder_cert_expected_sha = sys.argv[13].strip()
+ocsp_require_responder_ocsp_signing = sys.argv[14].strip() == "1"
+ocsp_require_responder_aki_match_ca_ski = sys.argv[15].strip() == "1"
+ocsp_responder_id_regex = sys.argv[16]
 
 if ca_file is not None and not ca_file.is_file():
   print(
@@ -670,6 +699,18 @@ if ocsp_response_file is not None and not ocsp_response_file.is_file():
       file=sys.stderr,
   )
   raise SystemExit(1)
+if ocsp_responder_cert_file is not None and not ocsp_responder_cert_file.is_file():
+  print(
+      f"refresh policy profiles manifest signer OCSP responder cert file not readable: {ocsp_responder_cert_file}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_issuer_cert_file is not None and not ocsp_issuer_cert_file.is_file():
+  print(
+      f"refresh policy profiles manifest signer OCSP issuer cert file not readable: {ocsp_issuer_cert_file}",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
 if ocsp_max_age_secs and not re.fullmatch(r"\d+", ocsp_max_age_secs):
   print(
       "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-max-age-secs: expected non-negative integer",
@@ -682,6 +723,12 @@ if expected_ocsp_response_sha and not re.fullmatch(r"[0-9a-f]{64}", expected_ocs
       file=sys.stderr,
   )
   raise SystemExit(1)
+if ocsp_responder_cert_expected_sha and not re.fullmatch(r"[0-9a-f]{64}", ocsp_responder_cert_expected_sha):
+  print(
+      "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256: expected 64 hex chars",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
 if crl_file is not None and ca_file is None:
   print(
       "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-crl-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file",
@@ -691,6 +738,42 @@ if crl_file is not None and ca_file is None:
 if ocsp_response_file is not None and ca_file is None:
   print(
       "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_responder_cert_file is not None and ocsp_response_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_issuer_cert_file is not None and ocsp_response_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_responder_cert_expected_sha and ocsp_responder_cert_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256 requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_require_responder_ocsp_signing and ocsp_responder_cert_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_require_responder_aki_match_ca_ski and ocsp_responder_cert_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if ocsp_responder_id_regex and ocsp_response_file is None:
+  print(
+      "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file",
       file=sys.stderr,
   )
   raise SystemExit(1)
@@ -926,6 +1009,8 @@ cert_sha_resolved = ""
 ca_sha_resolved = ""
 crl_sha_resolved = ""
 ocsp_sha_resolved = ""
+ocsp_responder_cert_sha_resolved = ""
+ocsp_issuer_cert_sha_resolved = ""
 cert_path = None
 if cert_file_path:
   cert_path = Path(cert_file_path)
@@ -1016,6 +1101,8 @@ if ca_file:
       f"refresh policy profiles manifest signer certificate verification failed for key_id '{manifest_key_id}'",
   )
   if ocsp_response_file is not None:
+    ocsp_issuer_cert_file_effective = ocsp_issuer_cert_file if ocsp_issuer_cert_file is not None else ca_file
+    ocsp_issuer_cert_sha_resolved = hashlib.sha256(ocsp_issuer_cert_file_effective.read_bytes()).hexdigest()
     ocsp_sha_resolved = hashlib.sha256(ocsp_response_file.read_bytes()).hexdigest()
     if expected_ocsp_response_sha and ocsp_sha_resolved != expected_ocsp_response_sha:
       print(
@@ -1023,20 +1110,78 @@ if ca_file:
           file=sys.stderr,
       )
       raise SystemExit(1)
+    ocsp_verify_args = ["-VAfile", str(ca_file)]
+    if ocsp_responder_cert_file is not None:
+      ocsp_responder_cert_sha_resolved = hashlib.sha256(ocsp_responder_cert_file.read_bytes()).hexdigest()
+      if ocsp_responder_cert_expected_sha and ocsp_responder_cert_sha_resolved != ocsp_responder_cert_expected_sha:
+        print(
+            f"refresh policy profiles manifest signer OCSP responder cert SHA256 mismatch for key_id '{manifest_key_id}': expected {ocsp_responder_cert_expected_sha}, found {ocsp_responder_cert_sha_resolved}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      run_openssl(
+          ["openssl", "verify", "-CAfile", str(ca_file), str(ocsp_responder_cert_file)],
+          f"refresh policy profiles manifest signer OCSP responder cert verify failed for key_id '{manifest_key_id}'",
+      )
+      responder_cert_text = ""
+      if ocsp_require_responder_ocsp_signing or ocsp_require_responder_aki_match_ca_ski:
+        responder_cert_text = run_openssl(
+            ["openssl", "x509", "-in", str(ocsp_responder_cert_file), "-noout", "-text"],
+            f"refresh policy profiles manifest signer OCSP responder cert metadata extraction failed for key_id '{manifest_key_id}'",
+        ).stdout.decode("utf-8", errors="replace")
+      if ocsp_require_responder_ocsp_signing:
+        eku_match = re.search(r"X509v3 Extended Key Usage:\s*\n((?:\s+.+\n)+)", responder_cert_text)
+        eku_block = eku_match.group(1) if eku_match is not None else ""
+        if "OCSP Signing" not in eku_block:
+          print(
+              f"refresh policy profiles manifest signer OCSP responder cert EKU missing OCSP Signing for key_id '{manifest_key_id}'",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+      if ocsp_require_responder_aki_match_ca_ski:
+        ca_cert_text = run_openssl(
+            ["openssl", "x509", "-in", str(ca_file), "-noout", "-text"],
+            f"refresh policy profiles manifest signer CA cert SKI extraction failed for key_id '{manifest_key_id}'",
+        ).stdout.decode("utf-8", errors="replace")
+        responder_aki_match = re.search(
+            r"X509v3 Authority Key Identifier:\s*\n\s*(?:keyid:)?\s*([0-9A-Fa-f:]+)",
+            responder_cert_text,
+        )
+        if responder_aki_match is None:
+          print(
+              f"refresh policy profiles manifest signer OCSP responder cert AKI keyid missing for key_id '{manifest_key_id}'",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+        ca_ski_match = re.search(r"X509v3 Subject Key Identifier:\s*\n\s*([0-9A-Fa-f:]+)", ca_cert_text)
+        if ca_ski_match is None:
+          print(
+              f"refresh policy profiles manifest signer CA cert SKI missing for key_id '{manifest_key_id}'",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+        responder_aki = re.sub(r"[^0-9A-Fa-f]", "", responder_aki_match.group(1)).lower()
+        ca_ski = re.sub(r"[^0-9A-Fa-f]", "", ca_ski_match.group(1)).lower()
+        if responder_aki != ca_ski:
+          print(
+              f"refresh policy profiles manifest signer OCSP responder cert AKI/SKI mismatch for key_id '{manifest_key_id}': responder AKI {responder_aki} != CA SKI {ca_ski}",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+      ocsp_verify_args = ["-verify_other", str(ocsp_responder_cert_file), "-VAfile", str(ocsp_responder_cert_file)]
     ocsp_status_raw = run_openssl(
         [
             "openssl",
             "ocsp",
             "-issuer",
-            str(ca_file),
+            str(ocsp_issuer_cert_file_effective),
             "-cert",
             str(cert_path),
             "-respin",
             str(ocsp_response_file),
             "-CAfile",
             str(ca_file),
-            "-VAfile",
-            str(ca_file),
+            *ocsp_verify_args,
             "-no_nonce",
         ],
         f"refresh policy profiles manifest signer OCSP verification failed for key_id '{manifest_key_id}'",
@@ -1094,6 +1239,47 @@ if ca_file:
             file=sys.stderr,
         )
         raise SystemExit(1)
+    if ocsp_responder_id_regex:
+      ocsp_text = run_openssl(
+          [
+              "openssl",
+              "ocsp",
+              "-issuer",
+              str(ocsp_issuer_cert_file_effective),
+              "-cert",
+              str(cert_path),
+              "-respin",
+              str(ocsp_response_file),
+              "-CAfile",
+              str(ca_file),
+              *ocsp_verify_args,
+              "-no_nonce",
+              "-resp_text",
+          ],
+          f"refresh policy profiles manifest signer OCSP responder-id extraction failed for key_id '{manifest_key_id}'",
+      ).stdout.decode("utf-8", errors="replace")
+      responder_match = re.search(r"Responder Id:\s*(.+)", ocsp_text)
+      if responder_match is None:
+        print(
+            f"refresh policy profiles manifest signer OCSP responder-id parse failed for key_id '{manifest_key_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      responder_id = responder_match.group(1).strip()
+      try:
+        responder_id_ok = re.search(ocsp_responder_id_regex, responder_id) is not None
+      except re.error as ex:
+        print(
+            f"invalid --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex: {ex}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      if not responder_id_ok:
+        print(
+            f"refresh policy profiles manifest signer OCSP responder-id mismatch for key_id '{manifest_key_id}': regex '{ocsp_responder_id_regex}' did not match '{responder_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 elif crl_file is not None or ocsp_response_file is not None:
   print(
       "refresh policy profiles manifest signer CRL/OCSP checks require --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file",
@@ -1111,6 +1297,8 @@ print(cert_sha_resolved)
 print(ca_sha_resolved)
 print(crl_sha_resolved)
 print(ocsp_sha_resolved)
+print(ocsp_responder_cert_sha_resolved)
+print(ocsp_issuer_cert_sha_resolved)
 PY
 }
 
@@ -1209,6 +1397,12 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPON
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_NEXT_UPDATE=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI=0
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_ID_REGEX=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
@@ -1269,6 +1463,8 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_SHA256_RESO
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CA_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CRL_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_BEFORE=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_AFTER=""
@@ -1466,6 +1662,18 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update)
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_NEXT_UPDATE=1; shift ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING=1; shift ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI=1; shift ;;
+    --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex)
+      LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_ID_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id)
       LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEY_ID="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-retries)
@@ -1748,6 +1956,34 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCS
   echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-next-update requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-issuer-cert-file requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256 requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED" && ! "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-sha256: expected 64 hex chars" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-ocsp-signing requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file" >&2
+  exit 1
+fi
+if [[ "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI" == "1" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-require-responder-aki-match-ca-ski requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-cert-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_ID_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-responder-id-regex requires --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ocsp-response-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE" && -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_TSV" ]]; then
   echo "--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file and --lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-tsv are mutually exclusive" >&2
   exit 1
@@ -1799,6 +2035,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_
   echo "refresh policy profiles manifest signer keyring OCSP response file not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_FILE" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" ]]; then
+  echo "refresh policy profiles manifest signer OCSP responder cert file not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE" ]]; then
+  echo "refresh policy profiles manifest signer OCSP issuer cert file not readable: $LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE" >&2
+  exit 1
+fi
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_SHA256_RESOLVED=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_MODE="none"
@@ -1806,6 +2050,8 @@ LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_SHA256_RESO
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CA_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CRL_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256=""
+LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_CERT_SHA256=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_BEFORE=""
 LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_AFTER=""
@@ -1827,9 +2073,15 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]
         "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_FILE" \
         "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONSE_SHA256" \
         "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_MAX_AGE_SECS" \
-        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_NEXT_UPDATE"
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_NEXT_UPDATE" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI" \
+        "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_ID_REGEX"
     ) || exit 1
-    if [[ "${#refresh_profiles_manifest_keyring_resolved[@]}" -ne 10 ]]; then
+    if [[ "${#refresh_profiles_manifest_keyring_resolved[@]}" -ne 12 ]]; then
       echo "internal error: failed to resolve refresh policy profiles manifest signer keyring" >&2
       exit 1
     fi
@@ -1843,6 +2095,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CA_SHA256="${refresh_profiles_manifest_keyring_resolved[7]}"
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CRL_SHA256="${refresh_profiles_manifest_keyring_resolved[8]}"
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_SHA256="${refresh_profiles_manifest_keyring_resolved[9]}"
+    LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256="${refresh_profiles_manifest_keyring_resolved[10]}"
+    LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_SHA256="${refresh_profiles_manifest_keyring_resolved[11]}"
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_MODE="keyring"
   else
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_EFFECTIVE_PUBLIC_KEY_FILE="$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_FILE"
@@ -1853,6 +2107,8 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_JSON" ]]
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CA_SHA256=""
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_CRL_SHA256=""
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_SHA256=""
+    LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256=""
+    LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_SHA256=""
     LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_MODE="file"
   fi
   profile_manifest_rows="$(
@@ -4371,6 +4627,14 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_response_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_SHA256"
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_MAX_AGE_SECS"
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_require_next_update=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_NEXT_UPDATE"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_responder_cert_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_FILE"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_issuer_cert_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_FILE"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_responder_cert_sha256_expected=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256_EXPECTED"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_CERT_SHA256"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_issuer_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_ISSUER_CERT_SHA256"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_require_responder_aki_match_ca_ski=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_REQUIRE_RESPONDER_AKI_MATCH_CA_SKI"
+    printf "lane_state_ed25519_refresh_policy_profiles_manifest_keyring_ocsp_responder_id_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_KEYRING_OCSP_RESPONDER_ID_REGEX"
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_public_key_not_before=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_BEFORE"
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_public_key_not_after=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_PUBLIC_KEY_NOT_AFTER"
     printf "lane_state_ed25519_refresh_policy_profiles_manifest_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_REFRESH_POLICY_PROFILES_MANIFEST_CERT_SHA256"
