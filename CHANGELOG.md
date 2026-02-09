@@ -16,12 +16,17 @@
   - `bmc_orig_cache_hit_mutants`
   - `bmc_orig_cache_miss_mutants`
   emitted in `metrics.tsv`, `summary.json`, and CLI summary.
+- Added cross-run cache hydration/publication through `--reuse-cache-dir`:
+  - load from `<reuse-cache-dir>/global_bmc_orig_cache`
+  - publish new entries to the same directory in `read-write` mode
+  - report publication state via `bmc_orig_cache_write_status`.
 
 ### Tests and Documentation
 
 - Added regression tests:
   - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test`
   - `test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test`
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-persist.test`
 - Updated docs/planning:
   - `docs/FormalRegression.md`
   - `PROJECT_PLAN.md`
@@ -32,7 +37,7 @@
   - `bash -n utils/run_mutation_cover.sh`: PASS
   - `bash -n utils/run_mutation_matrix.sh`: PASS
 - Lit:
-  - `build/bin/llvm-lit -sv test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test`: PASS (12/12)
+  - `build/bin/llvm-lit -sv test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-persist.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test`: PASS (13/13)
 - External cadence:
   - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
   - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
@@ -43,6 +48,10 @@
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+  - Combined smoke (`utils/run_formal_all.sh`) was re-run with this slice and
+    reported PASS for completed suites, but final artifact writes hit
+    `ENOSPC` (`No space left on device`) on `/tmp`; follow-up run pending after
+    freeing disk space.
 
 ## Iteration 758 - February 9, 2026
 
