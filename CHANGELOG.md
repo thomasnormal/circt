@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 772 - February 9, 2026
+
+### Generated-Mutation Cache Locking for Parallel Matrix Lanes
+
+- Extended `utils/generate_mutations_yosys.sh` with per-cache-key process
+  locking to avoid duplicate `yosys mutate -list` work when concurrent
+  cover/matrix jobs target the same generated-mutation cache entry.
+- Lock behavior:
+  - lock path: `<cache_key>.mutations.txt.lock`
+  - stale-lock recovery by age (`CACHE_LOCK_STALE_SECONDS`, default 3600s)
+  - lock ownership marker (`pid`) with cleanup on normal exit and traps
+  - double-check cache after lock acquisition to convert waiter to cache-hit
+- This closes a thundering-herd performance gap in high `--lane-jobs` matrix
+  runs that share generation options/design content.
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-matrix-generate-cache-parallel.test`
+    - two generated lanes in parallel (`--lane-jobs 2`) sharing one cache key,
+      asserting exactly one Yosys invocation and one hit/one miss lane outcome.
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate-cache.test test/Tools/run-mutation-matrix-generate-cache-parallel.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (65/65)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-cache-lock-rerun2 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 771 - February 9, 2026
 
 ### Matrix-Level Mutation Generation Cache Telemetry

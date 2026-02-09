@@ -359,6 +359,9 @@ Outputs are written under `--work-dir` / `--out-dir` and include
 When `--reuse-cache-dir` is set, generated mutation lists are now cached by
 design+generator options to avoid repeated Yosys mutation-list synthesis across
 runs/lanes.
+Generation cache writes are now coordinated with per-key locking, so parallel
+matrix lanes with identical generation settings reuse one synthesis result
+instead of duplicating `yosys mutate -list` work.
 `metrics.tsv` now reports generated-list cache usage via:
 - `generated_mutations_cache_status` (`hit|miss|disabled`)
 - `generated_mutations_cache_hit`
