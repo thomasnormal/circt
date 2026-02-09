@@ -4645,18 +4645,21 @@ def CallPostRandomizeOp
     by default. If a class overrides it with a different signature,
     slang will report an error.
 
+    The `success` operand gates the call: post_randomize is only invoked
+    when randomization succeeds (IEEE 1800-2017 Section 18.6.3).
+
     Example:
     ```mlir
-    moore.call_post_randomize %obj : !moore.class<@MyClass>
+    moore.call_post_randomize %obj, %success : !moore.class<@MyClass>
     ```
 
     See IEEE 1800-2017 Section 18.6.1 "Pre and post randomize methods".
   }];
 
-  let arguments = (ins ClassHandleType:$object);
+  let arguments = (ins ClassHandleType:$object, I1:$success);
   let results = (outs);
   let assemblyFormat = [{
-    $object `:` type($object) attr-dict
+    $object `,` $success `:` type($object) attr-dict
   }];
 }
 

@@ -24361,6 +24361,35 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             soft.constraintName);
     }
 
+    // Detect statically infeasible constraints: intersect all hard
+    // constraints per property and check if any has min > max.
+    // IEEE 1800-2017 §18.6.3: randomize() returns 0 when constraints
+    // are infeasible and random variables retain their previous values.
+    {
+      DenseMap<StringRef, std::pair<int64_t, int64_t>> effectiveBounds;
+      for (const auto &hc : hardConstraints) {
+        if (hc.isMultiRange)
+          continue;
+        auto it = effectiveBounds.find(hc.propertyName);
+        if (it == effectiveBounds.end()) {
+          effectiveBounds[hc.propertyName] = {hc.minValue, hc.maxValue};
+        } else {
+          it->second.first = std::max(it->second.first, hc.minValue);
+          it->second.second = std::min(it->second.second, hc.maxValue);
+        }
+      }
+      for (auto &[propName, bounds] : effectiveBounds) {
+        if (bounds.first > bounds.second) {
+          // Infeasible: min > max after intersection.
+          // Don't modify random variables, return 0 (failure).
+          rewriter.replaceOp(op,
+              arith::ConstantOp::create(rewriter, loc, i1Ty,
+                                        rewriter.getBoolAttr(false)));
+          return success();
+        }
+      }
+    }
+
     // If we have any constraints, use constraint-aware randomization
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
         !softRangeConstraints.empty() ||
@@ -25573,40 +25602,38 @@ struct CallPostRandomizeOpConversion
     auto *classDeclSym = mod.lookupSymbol(classSym);
     auto classDecl = dyn_cast_or_null<ClassDeclOp>(classDeclSym);
 
-    bool foundMethod = false;
+    // Find the post_randomize implementation (virtual or conventional)
+    SymbolRefAttr postRandomizeRef;
     if (classDecl) {
-      // First, look for a post_randomize method declaration (for virtual case)
       for (auto methodDecl :
            classDecl.getBody().getOps<ClassMethodDeclOp>()) {
         if (methodDecl.getSymName() == "post_randomize") {
-          // Found a post_randomize method - call it directly if it has an impl
-          if (methodDecl.getImpl().has_value()) {
-            auto implSymRef = methodDecl.getImpl().value();
-
-            // The post_randomize method takes 'this' as argument and returns
-            // void. Call the implementation function directly.
-            Value classPtr = adaptor.getObject();
-            func::CallOp::create(rewriter, loc, implSymRef, TypeRange{},
-                                 ValueRange{classPtr});
-            foundMethod = true;
-          }
+          if (methodDecl.getImpl().has_value())
+            postRandomizeRef = methodDecl.getImpl().value();
           break;
         }
       }
     }
 
-    // If not found via ClassMethodDeclOp, look for a func.func with the
-    // conventional name "ClassName::post_randomize". This handles non-virtual
-    // post_randomize methods which don't get ClassMethodDeclOp entries.
-    if (!foundMethod) {
+    if (!postRandomizeRef) {
       std::string funcName = (className + "::post_randomize").str();
       auto funcOp = mod.lookupSymbol<func::FuncOp>(funcName);
-      if (funcOp) {
-        Value classPtr = adaptor.getObject();
-        func::CallOp::create(rewriter, loc,
-                             SymbolRefAttr::get(rewriter.getContext(), funcName),
-                             TypeRange{}, ValueRange{classPtr});
-      }
+      if (funcOp)
+        postRandomizeRef =
+            SymbolRefAttr::get(rewriter.getContext(), funcName);
+    }
+
+    // Gate the post_randomize call on the success value.
+    // IEEE 1800-2017 §18.6.3: post_randomize is NOT called when
+    // randomization fails (constraints are infeasible).
+    if (postRandomizeRef) {
+      Value successVal = adaptor.getSuccess();
+      auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, successVal,
+                                     /*withElseRegion=*/false);
+      rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+      Value classPtr = adaptor.getObject();
+      func::CallOp::create(rewriter, loc, postRandomizeRef, TypeRange{},
+                           ValueRange{classPtr});
     }
 
     // post_randomize returns void, so just erase the operation

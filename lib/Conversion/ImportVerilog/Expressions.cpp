@@ -5551,11 +5551,12 @@ struct RvalueExprVisitor : public ExprVisitor {
 
       // Call post_randomize() after successful randomization
       // IEEE 1800-2017 Section 18.6.1: post_randomize is called after
-      // randomization succeeds. We unconditionally emit it here; the
-      // lowering pass will gate it on the success result if needed.
+      // randomization succeeds. The success value gates the call so
+      // post_randomize is skipped when constraints are infeasible (§18.6.3).
       // Note: post_randomize is not called for check-only mode
       if (!checkOnly) {
-        moore::CallPostRandomizeOp::create(builder, loc, classObj);
+        moore::CallPostRandomizeOp::create(builder, loc, classObj,
+                                           randomizeOp.getSuccess());
       }
 
       // The result is i1, but the expression type from slang is typically
