@@ -40074,3 +40074,50 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
   `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 773 - February 9, 2026
+
+### BMC Tech Debt Closure: Yosys Case-Level Expected-Failure Support
+
+1. Fixed `utils/run_formal_all.sh` expected-failure case pipelines to ingest
+   detailed `yosys/tests/sva` BMC case rows from `yosys-bmc-results.txt` in both:
+   - expected-case matching (`--expected-failure-cases-file`)
+   - expected-case refresh (`--refresh-expected-failure-cases-file`).
+2. Before this fix, yosys BMC failures were treated as summary-only aggregates
+   during expected-case processing, which prevented stable per-test BMC case
+   expectations (for example `basic02`) and reduced strict-gate fidelity.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test`
+    - verifies case-level matching for `yosys/tests/sva/BMC` using
+      `id_kind=base` (`basic02`)
+    - verifies refresh emits `basic02` (not `__aggregate__`) for yosys BMC.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-expected-failure-cases-base-diag.test test/Tools/run-formal-all-expected-failure-cases-base-diag-regex.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-strict-gate-failure-cases.test`:
+    - 5/5 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan parity lanes:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-yosys-bmc-casefix --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-yosys-bmc-casefix --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - summary: `total=12 pass=12 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.

@@ -227,6 +227,10 @@ See CHANGELOG.md on recent progress.
     diagnostic suffixes (`#XPROP_ONLY`, etc.) for both `opentitan/LEC` and
     `opentitan/LEC_STRICT` case rows when `run_opentitan_circt_lec.py` cannot
     emit case TSV output directly.
+25. `run_formal_all.sh` expected-failure case ingestion/refresh now reads
+    detailed `yosys/tests/sva` BMC case rows (`yosys-bmc-results.txt`) in
+    addition to summary counters, enabling per-case BMC expectations without
+    collapsing to aggregate-only IDs.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
