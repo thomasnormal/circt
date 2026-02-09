@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" "$script" | tail -n1)\nseed=$(sed -n "s/.*-seed \\([0-9][0-9]*\\).*/\\1/p" "$script" | tail -n1)\ncount=$(sed -n "s/.*mutate -list \\([0-9][0-9]*\\).*/\\1/p" "$script" | tail -n1)\n: > "$out"\nif [[ "$seed" == "7" ]]; then\n  for ((i=1; i<=count; ++i)); do\n    echo "$i M_DUP" >> "$out"\n  done\nelse\n  for ((i=1; i<=count; ++i)); do\n    echo "$i M_${mode}_${seed}_$i" >> "$out"\n  done\nfi\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+//
+// RUN: %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 4 --seed 7 --modes arith --yosys %t/fake-yosys.sh
+// RUN: wc -l < %t/mutations.txt | FileCheck %s --check-prefix=LINES
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+//
+// LINES: 4
+// OUT: 1 M_DUP
+// OUT: 2 M_inv_8_1
+// OUT: 3 M_const0_8_1
+// OUT: 4 M_const1_8_1
