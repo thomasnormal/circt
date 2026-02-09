@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 728 - February 9, 2026
+
+### Mutation Matrix Generated-Lane Support
+
+- Extended `utils/run_mutation_matrix.sh` lane schema to support
+  auto-generated mutation lanes:
+  - optional columns:
+    - `generate_count`
+    - `mutations_top`
+    - `mutations_seed`
+    - `mutations_yosys`
+- New behavior:
+  - when `mutations_file` is `-` and `generate_count` is provided,
+    `run_mutation_cover.sh --generate-mutations ...` is used per lane.
+  - generated mutation artifacts are retained under each lane work dir.
+
+### Test and Docs Updates
+
+- Added lit regression:
+  - `test/Tools/run-mutation-matrix-generate.test`
+- Updated:
+  - `docs/FormalRegression.md`
+    - lane TSV schema now documents generated-lane columns
+  - `PROJECT_PLAN.md`
+    - CI lane integration status note updated for generated-lane support.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - generated-lane matrix scenario: PASS (`pass=1 fail=0`, expected generated
+    mutation file present).
+
 ## Iteration 727 - February 9, 2026
 
 ### Mutation Generation Pipeline Upgrade
