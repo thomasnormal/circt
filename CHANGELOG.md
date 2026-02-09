@@ -36987,3 +36987,64 @@ CIRCT/slang correctly enforces LRM restrictions.
 - The compatibility profile mechanism validates schema version membership but
   does not yet provide auto-migration tooling between schema versions.
 - OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
+
+## Iteration 733 - February 9, 2026
+
+### OpenTitan Non-Smoke End-to-End Formal Gate
+
+- Added new end-to-end OpenTitan formal runner:
+  - `utils/run_opentitan_formal_e2e.sh`
+- The new runner executes non-smoke OpenTitan checks across:
+  - full-IP sim targets (`run_opentitan_circt_sim.sh`)
+  - full parse targets (`run_opentitan_circt_verilog.sh --ir-hw`)
+  - AES S-Box LEC (`run_opentitan_circt_lec.py` with `LEC_SMOKE_ONLY=0`)
+- Added machine-readable parity tracking output:
+  - `results.tsv` with `kind`, `target`, `status`, `detail`, `artifact`.
+
+### Timeout Correctness Hardening
+
+- Updated `utils/run_opentitan_circt_sim.sh`:
+  - wall-clock timeout markers now fail the run (non-zero exit).
+  - `TEST TIMEOUT` markers now fail the run (non-zero exit).
+  - missing `TEST PASSED` marker now fails the run.
+- This prevents false PASS outcomes when circt-sim exits `0` after timeout.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-sim-timeout-detect.test`
+    - verifies timeout markers in sim output are treated as failure.
+  - `test/Tools/run-opentitan-formal-e2e.test`
+    - verifies non-smoke LEC enforcement (`LEC_SMOKE_ONLY=0`) in E2E runner.
+    - verifies parity behavior for `XFAIL` LEC rows with and without
+      `--allow-xprop-only`.
+
+### Validation
+
+- Syntax:
+  - `bash -n utils/run_opentitan_circt_sim.sh`: PASS
+  - `bash -n utils/run_opentitan_formal_e2e.sh`: PASS
+- New lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-sim-timeout-detect.test test/Tools/run-opentitan-formal-e2e.test`:
+    - 2/2 PASS
+- Existing OpenTitan LEC lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-diagnose-xprop.test test/Tools/run-opentitan-lec-x-optimistic.test test/Tools/run-opentitan-lec-no-assume-known.test`:
+    - 3/3 PASS
+- Non-smoke OpenTitan E2E run:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_opentitan_formal_e2e.sh --opentitan-root /home/thomas-ahle/opentitan --out-dir /home/thomas-ahle/circt/opentitan-formal-e2e --sim-targets gpio,uart,usbdev --verilog-targets gpio,uart,spi_device,usbdev`:
+    - summary: `pass=4 fail=4`
+    - PASS:
+      - `SIM`: `gpio`, `uart`
+      - `VERILOG`: `gpio`, `uart`
+    - FAIL:
+      - `SIM`: `usbdev` (MLIR verify failure in `tlul_adapter_sram`)
+      - `VERILOG`: `spi_device` (`moore.builtin.readmemh` region-isolation verifier failure)
+      - `VERILOG`: `usbdev` (unknown `prim_sec_anchor_buf/flop`)
+      - `LEC`: `aes_sbox_canright` (`XPROP_ONLY`, rejected in strict parity mode)
+
+### Remaining Limitations
+
+- OpenTitan parity still has real non-smoke failures in sim/parse/LEC paths;
+  current status is not commercial parity.
+- `aes_sbox_canright` still requires `LEC_ACCEPT_XPROP_ONLY=1` for acceptance
+  in relaxed mode.

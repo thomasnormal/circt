@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/ot %t/bin
+// RUN: printf '#!/bin/sh\necho "fake sim $1"\nexit 0\n' > %t/bin/fake-sim.sh
+// RUN: chmod +x %t/bin/fake-sim.sh
+// RUN: printf '#!/bin/sh\necho "fake verilog $1"\nexit 0\n' > %t/bin/fake-verilog.sh
+// RUN: chmod +x %t/bin/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nif os.environ.get(\"LEC_SMOKE_ONLY\") != \"0\":\n  print(\"bad LEC_SMOKE_ONLY\", file=sys.stderr)\n  sys.exit(5)\nout = \"\"\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == \"--results-file\" and i + 1 < len(args):\n    out = args[i + 1]\nif not out:\n  print(\"missing --results-file\", file=sys.stderr)\n  sys.exit(6)\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n  f.write(\"PASS\\timpl_ok\\t/work/ok\\topentitan\\tLEC\\n\")\n  f.write(\"XFAIL\\timpl_xprop\\t/work/xprop\\topentitan\\tLEC\\n\")\nprint(\"fake lec done\")\n' > %t/bin/fake-lec.py
+// RUN: chmod +x %t/bin/fake-lec.py
+// RUN: not %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out-fail --skip-sim --skip-verilog --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh --lec-script %t/bin/fake-lec.py 2>&1 | FileCheck %s --check-prefix=FAILSUM
+// RUN: %S/../../utils/run_opentitan_formal_e2e.sh --opentitan-root %t/ot --out-dir %t/out-pass --skip-sim --skip-verilog --allow-xprop-only --sim-script %t/bin/fake-sim.sh --verilog-script %t/bin/fake-verilog.sh --lec-script %t/bin/fake-lec.py
+// RUN: FileCheck %s --check-prefix=PASSRESULTS < %t/out-pass/results.tsv
+
+// FAILSUM: OpenTitan E2E summary: pass=1 fail=1
+// PASSRESULTS: kind{{[[:space:]]}}target{{[[:space:]]}}status
+// PASSRESULTS: LEC{{[[:space:]]}}impl_ok{{[[:space:]]}}PASS{{[[:space:]]}}equivalent
+// PASSRESULTS: LEC{{[[:space:]]}}impl_xprop{{[[:space:]]}}PASS{{[[:space:]]}}xprop_only_accepted

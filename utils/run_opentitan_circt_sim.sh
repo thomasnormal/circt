@@ -6790,6 +6790,20 @@ fi
 echo "Simulating $TARGET..."
 SIM_LOG="$OUT_DIR/opentitan-${TARGET}_sim_output.log"
 if "${SIM_CMD[@]}" 2>&1 | tee "$SIM_LOG"; then
+  # circt-sim may exit 0 on wall-clock timeout; treat timeout markers as hard
+  # failure so OpenTitan E2E runs remain trustworthy for parity tracking.
+  if grep -q "Wall-clock timeout reached" "$SIM_LOG" || grep -q "TEST TIMEOUT" "$SIM_LOG"; then
+    echo ""
+    echo "Simulation failed: timeout detected"
+    echo "Log: $SIM_LOG"
+    exit 2
+  fi
+  if ! grep -q "TEST PASSED" "$SIM_LOG"; then
+    echo ""
+    echo "Simulation failed: missing TEST PASSED marker"
+    echo "Log: $SIM_LOG"
+    exit 3
+  fi
   echo ""
   echo "Simulation completed"
   echo "Log: $SIM_LOG"
