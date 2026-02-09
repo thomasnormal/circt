@@ -51,6 +51,11 @@ Optional:
   --formal-global-propagate-cmd CMD
                              Optional per-mutant propagation filter cmd run once
                              before per-test qualification/detection
+  --formal-global-propagate-timeout-seconds N
+                             Optional wall timeout for per-mutant global
+                             formal filtering commands (0 disables, default: 0).
+                             Timeout outcomes are handled conservatively as
+                             propagated (no pruning).
   --formal-global-propagate-circt-lec [PATH]
                              Use circt-lec as built-in per-mutant global
                              propagation filter (mutually exclusive with
@@ -152,6 +157,9 @@ Formal command conventions:
         consensus-safe semantics (not_propagated only on both not_propagated).
         auto may short-circuit and cancel the peer engine when one side
         already proves propagated.
+    - global timeout:
+        timeout or kill due to --formal-global-propagate-timeout-seconds =>
+        propagated (conservative, no pruning)
 
 Test command conventions:
   Each test command runs in a per-(test,mutant) directory and must write result_file.
@@ -181,6 +189,7 @@ MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
 FORMAL_GLOBAL_PROPAGATE_CMD=""
+FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS=0
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS=""
 FORMAL_GLOBAL_PROPAGATE_C1="top"
@@ -263,6 +272,7 @@ while [[ $# -gt 0 ]]; do
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --formal-global-propagate-cmd) FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
+    --formal-global-propagate-timeout-seconds) FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --formal-global-propagate-circt-lec)
       if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
         FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"
@@ -410,6 +420,14 @@ if [[ ! "$FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" =~ ^[0-9]+$ ]]; then
   echo "Invalid --formal-global-propagate-bmc-ignore-asserts-until value: $FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL" >&2
+  exit 1
+fi
+if [[ ! "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --formal-global-propagate-timeout-seconds value: $FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -gt 0 ]] && ! command -v timeout >/dev/null 2>&1; then
+  echo "--formal-global-propagate-timeout-seconds requires 'timeout' in PATH." >&2
   exit 1
 fi
 
@@ -631,6 +649,9 @@ declare -A REUSE_GLOBAL_CHAIN_AUTO_PARALLEL
 declare -A REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT
 declare -A REUSE_GLOBAL_FILTER_LEC_UNKNOWN
 declare -A REUSE_GLOBAL_FILTER_BMC_UNKNOWN
+declare -A REUSE_GLOBAL_FILTER_TIMEOUT
+declare -A REUSE_GLOBAL_FILTER_LEC_TIMEOUT
+declare -A REUSE_GLOBAL_FILTER_BMC_TIMEOUT
 declare -A FILE_HASH_CACHE
 
 REUSE_COMPAT_HASH=""
@@ -641,6 +662,7 @@ CREATE_MUTATED_SCRIPT_HASH=""
 FORMAL_ACTIVATE_CMD_HASH=""
 FORMAL_PROPAGATE_CMD_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CMD_HASH=""
+FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH=""
 FORMAL_GLOBAL_PROPAGATE_Z3_HASH=""
@@ -763,6 +785,9 @@ load_reuse_pairs() {
       REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT["$mutation_id"]="$([[ "$note" == *"chain_auto_short_circuit=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_FILTER_LEC_UNKNOWN["$mutation_id"]="$([[ "$note" == *"global_filter_lec_unknown=1"* ]] && printf "1" || printf "0")"
       REUSE_GLOBAL_FILTER_BMC_UNKNOWN["$mutation_id"]="$([[ "$note" == *"global_filter_bmc_unknown=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_FILTER_TIMEOUT["$mutation_id"]="$([[ "$note" == *"global_filter_timeout=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_FILTER_LEC_TIMEOUT["$mutation_id"]="$([[ "$note" == *"global_filter_lec_timeout=1"* ]] && printf "1" || printf "0")"
+      REUSE_GLOBAL_FILTER_BMC_TIMEOUT["$mutation_id"]="$([[ "$note" == *"global_filter_bmc_timeout=1"* ]] && printf "1" || printf "0")"
       continue
     fi
     if [[ "$activation" != "activated" && "$activation" != "not_activated" ]]; then
@@ -872,6 +897,7 @@ build_reuse_compat_hash() {
   FORMAL_ACTIVATE_CMD_HASH="$(hash_string "$FORMAL_ACTIVATE_CMD")"
   FORMAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_PROPAGATE_CMD")"
   FORMAL_GLOBAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CMD")"
+  FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS")"
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED")"
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS")"
   FORMAL_GLOBAL_PROPAGATE_Z3_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED")"
@@ -897,6 +923,7 @@ create_mutated_script_hash=${CREATE_MUTATED_SCRIPT_HASH}
 formal_activate_cmd_hash=${FORMAL_ACTIVATE_CMD_HASH}
 formal_propagate_cmd_hash=${FORMAL_PROPAGATE_CMD_HASH}
 formal_global_propagate_cmd_hash=${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}
+formal_global_propagate_timeout_seconds_hash=${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH}
 formal_global_propagate_circt_lec_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}
 formal_global_propagate_circt_lec_args_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}
 formal_global_propagate_z3_hash=${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}
@@ -993,6 +1020,8 @@ write_reuse_manifest() {
   "formal_activate_cmd_sha256": "${FORMAL_ACTIVATE_CMD_HASH}",
   "formal_propagate_cmd_sha256": "${FORMAL_PROPAGATE_CMD_HASH}",
   "formal_global_propagate_cmd_sha256": "${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}",
+  "formal_global_propagate_timeout_seconds": ${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS},
+  "formal_global_propagate_timeout_seconds_sha256": "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH}",
   "formal_global_propagate_circt_lec_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}",
   "formal_global_propagate_circt_lec_args_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}",
   "formal_global_propagate_z3_sha256": "${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}",
@@ -1412,6 +1441,80 @@ run_command_argv() {
   return "$exit_code"
 }
 
+is_timeout_exit_code() {
+  local rc="$1"
+  [[ "$rc" -eq 124 || "$rc" -eq 137 || "$rc" -eq 143 ]]
+}
+
+mark_global_filter_timeout_if_needed() {
+  local log_file="$1"
+  local tool_label="$2"
+  local rc="$3"
+  if is_timeout_exit_code "$rc"; then
+    printf "\nGLOBAL_FILTER_TIMEOUT=1 tool=%s timeout_seconds=%s exit_code=%s\n" \
+      "$tool_label" "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" "$rc" >> "$log_file"
+  fi
+}
+
+log_has_global_filter_timeout() {
+  local log_file="$1"
+  local tool_label="${2:-}"
+  if [[ ! -f "$log_file" ]]; then
+    return 1
+  fi
+  if [[ -n "$tool_label" ]]; then
+    grep -Eq "GLOBAL_FILTER_TIMEOUT=1 tool=${tool_label}( |$)" "$log_file"
+    return $?
+  fi
+  grep -Eq 'GLOBAL_FILTER_TIMEOUT=1' "$log_file"
+}
+
+run_command_global_filter() {
+  local run_dir="$1"
+  local cmd="$2"
+  local log_file="$3"
+  local tool_label="$4"
+  local exit_code=0
+
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -le 0 ]]; then
+    run_command "$run_dir" "$cmd" "$log_file"
+    return $?
+  fi
+
+  set +e
+  (
+    cd "$run_dir"
+    timeout --signal=TERM --kill-after=5 "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS}" bash -lc "$cmd"
+  ) >"$log_file" 2>&1
+  exit_code=$?
+  set -e
+  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$exit_code"
+  return "$exit_code"
+}
+
+run_command_argv_global_filter() {
+  local run_dir="$1"
+  local log_file="$2"
+  local tool_label="$3"
+  shift 3
+  local exit_code=0
+
+  if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -le 0 ]]; then
+    run_command_argv "$run_dir" "$log_file" "$@"
+    return $?
+  fi
+
+  set +e
+  (
+    cd "$run_dir"
+    timeout --signal=TERM --kill-after=5 "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS}" "$@"
+  ) >"$log_file" 2>&1
+  exit_code=$?
+  set -e
+  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$exit_code"
+  return "$exit_code"
+}
+
 classify_activate() {
   local run_dir="$1"
   local log_file="$2"
@@ -1445,6 +1548,8 @@ classify_propagate_cmd() {
   local run_dir="$1"
   local log_file="$2"
   local propagate_cmd="$3"
+  local timeout_seconds="${4:-0}"
+  local tool_label="${5:-propagate-cmd}"
   local rc=0
 
   if [[ -z "$propagate_cmd" ]]; then
@@ -1453,7 +1558,11 @@ classify_propagate_cmd() {
   fi
 
   rc=0
-  if ! run_command "$run_dir" "$propagate_cmd" "$log_file"; then
+  if [[ "$timeout_seconds" -gt 0 ]]; then
+    if ! run_command_global_filter "$run_dir" "$propagate_cmd" "$log_file" "$tool_label"; then
+      rc=$?
+    fi
+  elif ! run_command "$run_dir" "$propagate_cmd" "$log_file"; then
     rc=$?
   fi
   if grep -Eiq '(^|[^[:alnum:]_])NOT_PROPAGATED([^[:alnum:]_]|$)' "$log_file"; then
@@ -1461,6 +1570,10 @@ classify_propagate_cmd() {
     return
   fi
   if grep -Eiq '(^|[^[:alnum:]_])PROPAGATED([^[:alnum:]_]|$)' "$log_file"; then
+    printf "propagated\t%s\n" "$rc"
+    return
+  fi
+  if [[ "$timeout_seconds" -gt 0 ]] && is_timeout_exit_code "$rc"; then
     printf "propagated\t%s\n" "$rc"
     return
   fi
@@ -1472,7 +1585,7 @@ classify_propagate_cmd() {
 }
 
 classify_propagate() {
-  classify_propagate_cmd "$1" "$2" "$FORMAL_PROPAGATE_CMD"
+  classify_propagate_cmd "$1" "$2" "$FORMAL_PROPAGATE_CMD" 0 "propagate-cmd"
 }
 
 classify_global_propagate_circt_lec_raw() {
@@ -1504,7 +1617,7 @@ classify_global_propagate_circt_lec_raw() {
   lec_cmd+=("-c1=$FORMAL_GLOBAL_PROPAGATE_C1" "-c2=$FORMAL_GLOBAL_PROPAGATE_C2" "$ORIG_DESIGN" "$MUTANT_DESIGN")
 
   rc=0
-  if ! run_command_argv "$run_dir" "$log_file" "${lec_cmd[@]}"; then
+  if ! run_command_argv_global_filter "$run_dir" "$log_file" "circt-lec" "${lec_cmd[@]}"; then
     rc=$?
   fi
 
@@ -1520,6 +1633,10 @@ classify_global_propagate_circt_lec_raw() {
     printf "unknown\t%s\n" "$rc"
     return
   fi
+  if is_timeout_exit_code "$rc" || grep -Eq 'GLOBAL_FILTER_TIMEOUT=1' "$log_file"; then
+    printf "timeout\t%s\n" "$rc"
+    return
+  fi
   printf "error\t%s\n" "$rc"
 }
 
@@ -1531,7 +1648,7 @@ classify_global_propagate_circt_lec() {
   read -r raw_state raw_rc < <(classify_global_propagate_circt_lec_raw "$run_dir" "$log_file")
   case "$raw_state" in
     eq) printf "not_propagated\t%s\n" "$raw_rc" ;;
-    neq|unknown) printf "propagated\t%s\n" "$raw_rc" ;;
+    neq|unknown|timeout) printf "propagated\t%s\n" "$raw_rc" ;;
     *) printf "error\t%s\n" "$raw_rc" ;;
   esac
 }
@@ -1640,7 +1757,7 @@ classify_global_propagate_circt_bmc_raw() {
         if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
           orig_rc=0
           orig_start_ns="$(current_epoch_ns)"
-          if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+          if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
             orig_rc=$?
           fi
           orig_end_ns="$(current_epoch_ns)"
@@ -1649,6 +1766,9 @@ classify_global_propagate_circt_bmc_raw() {
             orig_runtime_ns=$((orig_end_ns - orig_start_ns))
           fi
           orig_result="$(extract_bmc_result_token "$orig_log")"
+          if [[ -z "$orig_result" ]] && (is_timeout_exit_code "$orig_rc" || log_has_global_filter_timeout "$orig_log" "circt-bmc"); then
+            orig_result="timeout"
+          fi
           bmc_orig_cache_tmp_log="${bmc_orig_cache_log}.tmp.$$"
           bmc_orig_cache_tmp_meta="${bmc_orig_cache_meta}.tmp.$$"
           cp "$orig_log" "$bmc_orig_cache_tmp_log" 2>/dev/null || true
@@ -1676,7 +1796,7 @@ classify_global_propagate_circt_bmc_raw() {
       if [[ "$bmc_orig_cache_wait_loops" -ge "$bmc_orig_cache_wait_max" ]]; then
         orig_rc=0
         orig_start_ns="$(current_epoch_ns)"
-        if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+        if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
           orig_rc=$?
         fi
         orig_end_ns="$(current_epoch_ns)"
@@ -1685,6 +1805,9 @@ classify_global_propagate_circt_bmc_raw() {
           orig_runtime_ns=$((orig_end_ns - orig_start_ns))
         fi
         orig_result="$(extract_bmc_result_token "$orig_log")"
+        if [[ -z "$orig_result" ]] && (is_timeout_exit_code "$orig_rc" || log_has_global_filter_timeout "$orig_log" "circt-bmc"); then
+          orig_result="timeout"
+        fi
         bmc_orig_cache_mode="timeout_fallback"
         break
       fi
@@ -1697,11 +1820,17 @@ classify_global_propagate_circt_bmc_raw() {
   fi
 
   mutant_rc=0
-  if ! run_command_argv "$run_dir" "$mutant_log" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
+  if ! run_command_argv_global_filter "$run_dir" "$mutant_log" "circt-bmc" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
     mutant_rc=$?
   fi
 
   mutant_result="$(extract_bmc_result_token "$mutant_log")"
+  if [[ -z "$orig_result" ]] && (is_timeout_exit_code "$orig_rc" || log_has_global_filter_timeout "$orig_log" "circt-bmc"); then
+    orig_result="timeout"
+  fi
+  if [[ -z "$mutant_result" ]] && (is_timeout_exit_code "$mutant_rc" || log_has_global_filter_timeout "$mutant_log" "circt-bmc"); then
+    mutant_result="timeout"
+  fi
   {
     printf "# bmc_orig_cache=%s cache_key=%s orig_design_sha256=%s\n" \
       "$bmc_orig_cache_mode" "$bmc_orig_cache_key" "$bmc_orig_design_hash"
@@ -1728,6 +1857,10 @@ classify_global_propagate_circt_bmc_raw() {
     printf "unknown\t%s\n" "$rc"
     return
   fi
+  if [[ "$orig_result" == "timeout" || "$mutant_result" == "timeout" ]]; then
+    printf "timeout\t%s\n" "$rc"
+    return
+  fi
   if [[ "$orig_result" == "$mutant_result" ]]; then
     printf "equal\t%s\n" "$rc"
   else
@@ -1743,7 +1876,7 @@ classify_global_propagate_circt_bmc() {
   read -r raw_state raw_rc < <(classify_global_propagate_circt_bmc_raw "$run_dir" "$log_file")
   case "$raw_state" in
     equal) printf "not_propagated\t%s\n" "$raw_rc" ;;
-    different|unknown) printf "propagated\t%s\n" "$raw_rc" ;;
+    different|unknown|timeout) printf "propagated\t%s\n" "$raw_rc" ;;
     *) printf "error\t%s\n" "$raw_rc" ;;
   esac
 }
@@ -1808,7 +1941,7 @@ classify_global_propagate_circt_chain() {
       printf "not_propagated\t%s\n" "$final_rc"
       return
     fi
-    if [[ "$lec_state" == "neq" || "$lec_state" == "unknown" || "$bmc_state" == "different" || "$bmc_state" == "unknown" ]]; then
+    if [[ "$lec_state" == "neq" || "$lec_state" == "unknown" || "$lec_state" == "timeout" || "$bmc_state" == "different" || "$bmc_state" == "unknown" || "$bmc_state" == "timeout" ]]; then
       printf "propagated\t%s\n" "$final_rc"
       return
     fi
@@ -1944,7 +2077,7 @@ classify_global_propagate_circt_chain() {
       printf "not_propagated\t%s\n" "$final_rc"
       return
     fi
-    if [[ "$lec_state" == "neq" || "$lec_state" == "unknown" || "$bmc_state" == "different" || "$bmc_state" == "unknown" ]]; then
+    if [[ "$lec_state" == "neq" || "$lec_state" == "unknown" || "$lec_state" == "timeout" || "$bmc_state" == "different" || "$bmc_state" == "unknown" || "$bmc_state" == "timeout" ]]; then
       printf "propagated\t%s\n" "$final_rc"
       return
     fi
@@ -2040,26 +2173,26 @@ classify_global_propagate_circt_chain() {
   if [[ "$fallback_tool" == "bmc" ]]; then
     if [[ "$primary_state" == "error" ]]; then
       case "$fallback_state" in
-        equal|different|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+        equal|different|unknown|timeout) printf "propagated\t%s\n" "$final_rc" ;;
         *) printf "error\t%s\n" "$final_rc" ;;
       esac
     else
       case "$fallback_state" in
         equal) printf "not_propagated\t%s\n" "$final_rc" ;;
-        different|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+        different|unknown|timeout) printf "propagated\t%s\n" "$final_rc" ;;
         *) printf "error\t%s\n" "$final_rc" ;;
       esac
     fi
   else
     if [[ "$primary_state" == "error" ]]; then
       case "$fallback_state" in
-        eq|neq|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+        eq|neq|unknown|timeout) printf "propagated\t%s\n" "$final_rc" ;;
         *) printf "error\t%s\n" "$final_rc" ;;
       esac
     else
       case "$fallback_state" in
         eq) printf "not_propagated\t%s\n" "$final_rc" ;;
-        neq|unknown) printf "propagated\t%s\n" "$final_rc" ;;
+        neq|unknown|timeout) printf "propagated\t%s\n" "$final_rc" ;;
         *) printf "error\t%s\n" "$final_rc" ;;
       esac
     fi
@@ -2162,6 +2295,9 @@ process_mutation() {
   local bmc_orig_cache_miss_runtime_ns=0
   local global_filter_lec_unknown=0
   local global_filter_bmc_unknown=0
+  local global_filter_timeout=0
+  local global_filter_lec_timeout=0
+  local global_filter_bmc_timeout=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -2204,6 +2340,9 @@ process_mutation() {
       printf "bmc_orig_cache_miss_runtime_ns\t0\n"
       printf "global_filter_lec_unknown\t0\n"
       printf "global_filter_bmc_unknown\t0\n"
+      printf "global_filter_timeout\t0\n"
+      printf "global_filter_lec_timeout\t0\n"
+      printf "global_filter_bmc_timeout\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -2235,6 +2374,9 @@ process_mutation() {
       chain_auto_short_circuit="${REUSE_GLOBAL_CHAIN_AUTO_SHORT_CIRCUIT[$mutation_id]:-0}"
       global_filter_lec_unknown="${REUSE_GLOBAL_FILTER_LEC_UNKNOWN[$mutation_id]:-0}"
       global_filter_bmc_unknown="${REUSE_GLOBAL_FILTER_BMC_UNKNOWN[$mutation_id]:-0}"
+      global_filter_timeout="${REUSE_GLOBAL_FILTER_TIMEOUT[$mutation_id]:-0}"
+      global_filter_lec_timeout="${REUSE_GLOBAL_FILTER_LEC_TIMEOUT[$mutation_id]:-0}"
+      global_filter_bmc_timeout="${REUSE_GLOBAL_FILTER_BMC_TIMEOUT[$mutation_id]:-0}"
       {
         printf "# reused_global_filter=1 source=%s state=%s rc=%s\n" "$REUSE_PAIR_SOURCE" "$global_filter_state" "$global_filter_rc"
       } > "$mutation_dir/global_propagate.log"
@@ -2245,7 +2387,7 @@ process_mutation() {
     elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
       read -r global_filter_state global_filter_rc < <(classify_global_propagate_circt_bmc "$mutation_dir" "$mutation_dir/global_propagate.log")
     elif [[ -n "$FORMAL_GLOBAL_PROPAGATE_CMD" ]]; then
-      read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD")
+      read -r global_filter_state global_filter_rc < <(classify_propagate_cmd "$mutation_dir" "$mutation_dir/global_propagate.log" "$FORMAL_GLOBAL_PROPAGATE_CMD" "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" "global-cmd")
     fi
   fi
   if [[ "$reused_global_filter" -eq 0 && -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
@@ -2256,7 +2398,7 @@ process_mutation() {
       if grep -Eq '^# chain_fallback=bmc fallback_state=equal ' "$mutation_dir/global_propagate.log"; then
         chain_bmc_resolved_not_propagated=1
       fi
-      if grep -Eq '^# chain_fallback=bmc fallback_state=(different|unknown) ' "$mutation_dir/global_propagate.log"; then
+      if grep -Eq '^# chain_fallback=bmc fallback_state=(different|unknown|timeout) ' "$mutation_dir/global_propagate.log"; then
         chain_bmc_resolved_propagated=1
       fi
     elif [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "bmc-then-lec" ]]; then
@@ -2266,7 +2408,7 @@ process_mutation() {
       if grep -Eq '^# chain_fallback=lec fallback_state=eq ' "$mutation_dir/global_propagate.log"; then
         chain_lec_resolved_not_propagated=1
       fi
-      if grep -Eq '^# chain_fallback=lec fallback_state=(neq|unknown) ' "$mutation_dir/global_propagate.log"; then
+      if grep -Eq '^# chain_fallback=lec fallback_state=(neq|unknown|timeout) ' "$mutation_dir/global_propagate.log"; then
         chain_lec_resolved_propagated=1
       fi
     elif [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "consensus" ]]; then
@@ -2305,6 +2447,12 @@ process_mutation() {
          grep -Eq '^# chain_mode=consensus lec_state=unknown ' "$mutation_dir/global_propagate.log"; then
         global_filter_lec_unknown=1
       fi
+      if grep -Eq 'GLOBAL_FILTER_TIMEOUT=1 tool=circt-lec( |$)' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_mode=lec-then-bmc primary=lec primary_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_fallback=lec fallback_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_mode=consensus lec_state=timeout ' "$mutation_dir/global_propagate.log"; then
+        global_filter_lec_timeout=1
+      fi
     fi
     if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" || -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED" ]]; then
       if grep -Eq 'BMC_RESULT=UNKNOWN' "$mutation_dir/global_propagate.log" || \
@@ -2315,6 +2463,17 @@ process_mutation() {
          grep -Eq '^# chain_consensus_bmc_state=unknown ' "$mutation_dir/global_propagate.log"; then
         global_filter_bmc_unknown=1
       fi
+      if grep -Eq 'GLOBAL_FILTER_TIMEOUT=1 tool=circt-bmc( |$)' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# bmc_orig_exit=.* bmc_orig_result=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# bmc_mutant_exit=.* bmc_mutant_result=timeout' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_mode=bmc-then-lec primary=bmc primary_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_fallback=bmc fallback_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_consensus_bmc_state=timeout ' "$mutation_dir/global_propagate.log"; then
+        global_filter_bmc_timeout=1
+      fi
+    fi
+    if grep -Eq 'GLOBAL_FILTER_TIMEOUT=1' "$mutation_dir/global_propagate.log"; then
+      global_filter_timeout=1
     fi
     if grep -Eq '^# bmc_orig_cache=hit ' "$mutation_dir/global_propagate.log"; then
       bmc_orig_cache_hit=1
@@ -2379,6 +2538,15 @@ process_mutation() {
     fi
     if [[ "$global_filter_bmc_unknown" -eq 1 ]]; then
       global_filter_note="${global_filter_note};global_filter_bmc_unknown=1"
+    fi
+    if [[ "$global_filter_timeout" -eq 1 ]]; then
+      global_filter_note="${global_filter_note};global_filter_timeout=1"
+    fi
+    if [[ "$global_filter_lec_timeout" -eq 1 ]]; then
+      global_filter_note="${global_filter_note};global_filter_lec_timeout=1"
+    fi
+    if [[ "$global_filter_bmc_timeout" -eq 1 ]]; then
+      global_filter_note="${global_filter_note};global_filter_bmc_timeout=1"
     fi
     if [[ "$global_filter_state" == "not_propagated" || "$global_filter_state" == "propagated" ]]; then
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -2530,6 +2698,9 @@ process_mutation() {
     printf "bmc_orig_cache_miss_runtime_ns\t%s\n" "$bmc_orig_cache_miss_runtime_ns"
     printf "global_filter_lec_unknown\t%s\n" "$global_filter_lec_unknown"
     printf "global_filter_bmc_unknown\t%s\n" "$global_filter_bmc_unknown"
+    printf "global_filter_timeout\t%s\n" "$global_filter_timeout"
+    printf "global_filter_lec_timeout\t%s\n" "$global_filter_lec_timeout"
+    printf "global_filter_bmc_timeout\t%s\n" "$global_filter_bmc_timeout"
   } > "$meta_local"
 }
 
@@ -2664,6 +2835,9 @@ count_bmc_orig_cache_saved_runtime_ns=0
 count_bmc_orig_cache_miss_runtime_ns=0
 count_global_filter_lec_unknown=0
 count_global_filter_bmc_unknown=0
+count_global_filter_timeout=0
+count_global_filter_lec_timeout=0
+count_global_filter_bmc_timeout=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -2919,6 +3093,33 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_global_filter_bmc_unknown" =~ ^[0-9]+$ ]]; then
     count_global_filter_bmc_unknown=$((count_global_filter_bmc_unknown + local_global_filter_bmc_unknown))
   fi
+
+  local_global_filter_timeout=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_timeout="$(awk -F$'\t' '$1=="global_filter_timeout"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_timeout="${local_global_filter_timeout:-0}"
+  fi
+  if [[ "$local_global_filter_timeout" =~ ^[0-9]+$ ]]; then
+    count_global_filter_timeout=$((count_global_filter_timeout + local_global_filter_timeout))
+  fi
+
+  local_global_filter_lec_timeout=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_lec_timeout="$(awk -F$'\t' '$1=="global_filter_lec_timeout"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_lec_timeout="${local_global_filter_lec_timeout:-0}"
+  fi
+  if [[ "$local_global_filter_lec_timeout" =~ ^[0-9]+$ ]]; then
+    count_global_filter_lec_timeout=$((count_global_filter_lec_timeout + local_global_filter_lec_timeout))
+  fi
+
+  local_global_filter_bmc_timeout=0
+  if [[ -f "$meta_local" ]]; then
+    local_global_filter_bmc_timeout="$(awk -F$'\t' '$1=="global_filter_bmc_timeout"{print $2}' "$meta_local" | head -n1)"
+    local_global_filter_bmc_timeout="${local_global_filter_bmc_timeout:-0}"
+  fi
+  if [[ "$local_global_filter_bmc_timeout" =~ ^[0-9]+$ ]]; then
+    count_global_filter_bmc_timeout=$((count_global_filter_bmc_timeout + local_global_filter_bmc_timeout))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -3059,6 +3260,9 @@ fi
   printf "bmc_orig_cache_miss_runtime_ns\t%s\n" "$count_bmc_orig_cache_miss_runtime_ns"
   printf "global_filter_lec_unknown_mutants\t%s\n" "$count_global_filter_lec_unknown"
   printf "global_filter_bmc_unknown_mutants\t%s\n" "$count_global_filter_bmc_unknown"
+  printf "global_filter_timeout_mutants\t%s\n" "$count_global_filter_timeout"
+  printf "global_filter_lec_timeout_mutants\t%s\n" "$count_global_filter_lec_timeout"
+  printf "global_filter_bmc_timeout_mutants\t%s\n" "$count_global_filter_bmc_timeout"
   printf "generated_mutations_enabled\t%s\n" "$GENERATED_MUTATIONS_ENABLED"
   printf "generated_mutations_cache_hit\t%s\n" "$GENERATED_MUTATIONS_CACHE_HIT"
   printf "generated_mutations_cache_miss\t%s\n" "$GENERATED_MUTATIONS_CACHE_MISS"
@@ -3124,6 +3328,9 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "bmc_orig_cache_miss_runtime_ns": $count_bmc_orig_cache_miss_runtime_ns,
   "global_filter_lec_unknown_mutants": $count_global_filter_lec_unknown,
   "global_filter_bmc_unknown_mutants": $count_global_filter_bmc_unknown,
+  "global_filter_timeout_mutants": $count_global_filter_timeout,
+  "global_filter_lec_timeout_mutants": $count_global_filter_lec_timeout,
+  "global_filter_bmc_timeout_mutants": $count_global_filter_bmc_timeout,
   "generated_mutations_enabled": $GENERATED_MUTATIONS_ENABLED,
   "generated_mutations_cache_hit": $GENERATED_MUTATIONS_CACHE_HIT,
   "generated_mutations_cache_miss": $GENERATED_MUTATIONS_CACHE_MISS,
@@ -3164,7 +3371,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_resolved_propagated=${count_chain_bmc_resolved_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_resolved_propagated=${count_chain_lec_resolved_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} chain_auto_short_circuit=${count_chain_auto_short_circuit} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_resolved_propagated=${count_chain_bmc_resolved_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_lec_resolved_propagated=${count_chain_lec_resolved_propagated} chain_lec_error_fallbacks=${count_chain_lec_error_fallbacks} chain_bmc_error_fallbacks=${count_chain_bmc_error_fallbacks} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} chain_auto_short_circuit=${count_chain_auto_short_circuit} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} global_filter_timeout=${count_global_filter_timeout} global_filter_lec_timeout=${count_global_filter_lec_timeout} global_filter_bmc_timeout=${count_global_filter_bmc_timeout} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} generated_mutations_runtime_ns=${GENERATED_MUTATIONS_RUNTIME_NS} generated_mutations_cache_saved_runtime_ns=${GENERATED_MUTATIONS_CACHE_SAVED_RUNTIME_NS} generated_mutations_cache_lock_wait_ns=${GENERATED_MUTATIONS_CACHE_LOCK_WAIT_NS} generated_mutations_cache_lock_contended=${GENERATED_MUTATIONS_CACHE_LOCK_CONTENDED} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

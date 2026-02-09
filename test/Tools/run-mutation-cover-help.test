@@ -26,6 +26,7 @@
 // CHECK-DAG: --mutations-yosys
 // CHECK-DAG: --fail-on-undetected
 // CHECK-DAG: --formal-global-propagate-cmd
+// CHECK-DAG: --formal-global-propagate-timeout-seconds
 // CHECK-DAG: --formal-global-propagate-circt-lec
 // CHECK-DAG: --formal-global-propagate-circt-lec-args
 // CHECK-DAG: --formal-global-propagate-circt-chain

@@ -304,6 +304,9 @@ Execution controls:
 - `--formal-global-propagate-cmd <cmd>`: per-mutant formal propagation filter
   run once before per-test qualification/detection. Mutants proven
   `NOT_PROPAGATED` are classified as `not_propagated` without running tests.
+- `--formal-global-propagate-timeout-seconds <n>`: wall-time cap (seconds) for
+  per-mutant global formal filters (`0` disables). Timeout outcomes are
+  classified conservatively as `propagated` (no pruning).
 - Built-in circt-lec global filter (mutually exclusive with command mode):
   - `--formal-global-propagate-circt-lec [path]`
   - `--formal-global-propagate-circt-lec-args "<args>"`
@@ -385,6 +388,12 @@ Generated artifacts (default under `./mutation-cover-results`):
     global filtering observed LEC `UNKNOWN`.
   - `global_filter_bmc_unknown_mutants`: count of mutants where built-in
     global filtering observed BMC `UNKNOWN`.
+  - `global_filter_timeout_mutants`: count of mutants where any built-in or
+    command global filter timed out.
+  - `global_filter_lec_timeout_mutants`: count of mutants where LEC global
+    filtering timed out.
+  - `global_filter_bmc_timeout_mutants`: count of mutants where differential
+    BMC global filtering timed out.
   - `generated_mutations_enabled`: whether this run used built-in mutation-list
     generation (`1`/`0`).
   - `generated_mutations_cache_hit`: whether generated-mutation cache lookup
@@ -524,6 +533,9 @@ Execution controls:
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.
+- `--default-formal-global-propagate-timeout-seconds <n>`: default
+  `run_mutation_cover.sh --formal-global-propagate-timeout-seconds` for lanes
+  without a lane-specific global filter timeout.
 - `--default-formal-global-propagate-circt-lec [path]`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-lec` for lanes
   without a lane-specific circt-lec global filter path.
@@ -586,7 +598,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]    [global_propagate_timeout_seconds]
 ```
 
 Notes:
@@ -611,6 +623,8 @@ Notes:
   `--default-mutations-mode-counts` for a generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides
   `--default-formal-global-propagate-cmd` for a specific lane.
+- `global_propagate_timeout_seconds` (optional) overrides
+  `--default-formal-global-propagate-timeout-seconds` for a specific lane.
 - `global_propagate_circt_lec` (optional) overrides
   `--default-formal-global-propagate-circt-lec` for a specific lane.
 - `global_propagate_circt_lec_args` (optional) overrides
