@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 759 - February 9, 2026
+
+### Differential BMC Original-Design Cache (MutationCover)
+
+- Optimized built-in differential circt-bmc global filtering in
+  `utils/run_mutation_cover.sh` by caching original-design BMC outcomes in:
+  - `<work_dir>/.global_bmc_orig_cache`
+- Cache key includes the fully resolved BMC invocation + original design path,
+  so cache entries are command/config-specific and safe across differing bounds
+  or args.
+- Added per-mutant telemetry in global filter notes:
+  - `bmc_orig_cache=hit|miss`
+- Added aggregate metrics:
+  - `bmc_orig_cache_hit_mutants`
+  - `bmc_orig_cache_miss_mutants`
+  emitted in `metrics.tsv`, `summary.json`, and CLI summary.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test`
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test`
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-filter.test test/Tools/run-mutation-matrix-global-circt-bmc-filter.test test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-bmc-then-lec-filter.test test/Tools/run-mutation-matrix-global-circt-chain-consensus-filter.test test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test`: PASS (12/12)
+- External cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+
 ## Iteration 758 - February 9, 2026
 
 ### MutationCover Auto Chain Mode (Parallel LEC+BMC)

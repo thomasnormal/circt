@@ -153,6 +153,10 @@ Execution controls:
   This mode compares BMC outcomes between original and mutant:
   - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
   - different `BMC_RESULT` or any `UNKNOWN` => `propagated`
+  - per-run optimization: original-design BMC outcomes are cached in
+    `<work_dir>/.global_bmc_orig_cache` keyed by resolved BMC command +
+    arguments, reducing repeated original-design solver invocations across
+    mutants.
 - Built-in chained circt-lec/circt-bmc global filter:
   - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
   - requires both `--formal-global-propagate-circt-lec` and
@@ -210,6 +214,10 @@ Generated artifacts (default under `./mutation-cover-results`):
     resolved to `error`.
   - `chain_auto_parallel_mutants`: count of mutants classified using
     auto-mode parallel LEC/BMC execution.
+  - `bmc_orig_cache_hit_mutants`: count of mutants using cached original-design
+    BMC results in built-in differential BMC mode.
+  - `bmc_orig_cache_miss_mutants`: count of mutants that required a fresh
+    original-design BMC run in built-in differential BMC mode.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`

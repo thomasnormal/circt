@@ -181,6 +181,7 @@ FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=0
 FORMAL_GLOBAL_PROPAGATE_BMC_IGNORE_ASSERTS_UNTIL=0
 FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_RESOLVED=""
 FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED=""
+BMC_ORIG_CACHE_DIR=""
 MUTATION_LIMIT=0
 GENERATE_MUTATIONS=0
 MUTATIONS_TOP=""
@@ -407,6 +408,8 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3" ]]; then
 fi
 
 mkdir -p "$WORK_DIR/mutations"
+BMC_ORIG_CACHE_DIR="${WORK_DIR}/.global_bmc_orig_cache"
+mkdir -p "$BMC_ORIG_CACHE_DIR"
 SUMMARY_FILE="${SUMMARY_FILE:-${WORK_DIR}/summary.tsv}"
 PAIR_FILE="${PAIR_FILE:-${WORK_DIR}/pair_qualification.tsv}"
 RESULTS_FILE="${RESULTS_FILE:-${WORK_DIR}/results.tsv}"
@@ -1066,6 +1069,17 @@ classify_global_propagate_circt_bmc_raw() {
   local mutant_result=""
   local orig_log="${log_file}.orig"
   local mutant_log="${log_file}.mutant"
+  local bmc_orig_cache_mode="disabled"
+  local bmc_orig_cache_key=""
+  local bmc_orig_cache_base=""
+  local bmc_orig_cache_log=""
+  local bmc_orig_cache_meta=""
+  local bmc_orig_cache_lock=""
+  local bmc_orig_cache_wait_loops=0
+  local bmc_orig_cache_wait_max=400
+  local bmc_orig_cache_payload=""
+  local bmc_orig_cache_tmp_log=""
+  local bmc_orig_cache_tmp_meta=""
   local -a bmc_common_cmd
   local -a extra_args
 
@@ -1094,18 +1108,81 @@ classify_global_propagate_circt_bmc_raw() {
     bmc_common_cmd+=("${extra_args[@]}")
   fi
 
-  orig_rc=0
-  if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
-    orig_rc=$?
+  bmc_orig_cache_payload="$(printf "%q " "${bmc_common_cmd[@]}" "$ORIG_DESIGN")"
+  bmc_orig_cache_key="$(hash_string "$bmc_orig_cache_payload")"
+  bmc_orig_cache_base="${BMC_ORIG_CACHE_DIR}/${bmc_orig_cache_key}"
+  bmc_orig_cache_log="${bmc_orig_cache_base}.orig.log"
+  bmc_orig_cache_meta="${bmc_orig_cache_base}.orig.meta"
+  bmc_orig_cache_lock="${bmc_orig_cache_base}.lock"
+
+  if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
+    if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
+      read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+      bmc_orig_cache_mode="hit"
+    fi
   fi
+
+  if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
+    while true; do
+      if mkdir "$bmc_orig_cache_lock" 2>/dev/null; then
+        if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
+          if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
+            read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+            bmc_orig_cache_mode="hit"
+          fi
+        fi
+        if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
+          orig_rc=0
+          if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+            orig_rc=$?
+          fi
+          orig_result="$(extract_bmc_result_token "$orig_log")"
+          bmc_orig_cache_tmp_log="${bmc_orig_cache_log}.tmp.$$"
+          bmc_orig_cache_tmp_meta="${bmc_orig_cache_meta}.tmp.$$"
+          cp "$orig_log" "$bmc_orig_cache_tmp_log" 2>/dev/null || true
+          printf "%s\t%s\n" "$orig_rc" "$orig_result" > "$bmc_orig_cache_tmp_meta"
+          mv "$bmc_orig_cache_tmp_log" "$bmc_orig_cache_log" 2>/dev/null || true
+          mv "$bmc_orig_cache_tmp_meta" "$bmc_orig_cache_meta" 2>/dev/null || true
+          bmc_orig_cache_mode="miss"
+        fi
+        rmdir "$bmc_orig_cache_lock" 2>/dev/null || true
+        break
+      fi
+
+      if [[ -f "$bmc_orig_cache_meta" && -f "$bmc_orig_cache_log" ]]; then
+        if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
+          read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
+          bmc_orig_cache_mode="hit"
+          break
+        fi
+      fi
+
+      bmc_orig_cache_wait_loops=$((bmc_orig_cache_wait_loops + 1))
+      if [[ "$bmc_orig_cache_wait_loops" -ge "$bmc_orig_cache_wait_max" ]]; then
+        orig_rc=0
+        if ! run_command_argv "$run_dir" "$orig_log" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+          orig_rc=$?
+        fi
+        orig_result="$(extract_bmc_result_token "$orig_log")"
+        bmc_orig_cache_mode="timeout_fallback"
+        break
+      fi
+      sleep 0.05
+    done
+  fi
+
+  if [[ -z "$orig_result" ]]; then
+    orig_result="$(extract_bmc_result_token "$orig_log")"
+  fi
+
   mutant_rc=0
   if ! run_command_argv "$run_dir" "$mutant_log" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
     mutant_rc=$?
   fi
 
-  orig_result="$(extract_bmc_result_token "$orig_log")"
   mutant_result="$(extract_bmc_result_token "$mutant_log")"
   {
+    printf "# bmc_orig_cache=%s cache_key=%s\n" "$bmc_orig_cache_mode" "$bmc_orig_cache_key"
     printf "# bmc_orig_exit=%s bmc_orig_result=%s\n" "$orig_rc" "${orig_result:-none}"
     cat "$orig_log"
     printf "\n# bmc_mutant_exit=%s bmc_mutant_result=%s\n" "$mutant_rc" "${mutant_result:-none}"
@@ -1393,6 +1470,8 @@ process_mutation() {
   local chain_consensus_disagreement=0
   local chain_consensus_error=0
   local chain_auto_parallel=0
+  local bmc_orig_cache_hit=0
+  local bmc_orig_cache_miss=0
   local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
@@ -1424,6 +1503,8 @@ process_mutation() {
       printf "chain_consensus_disagreement\t0\n"
       printf "chain_consensus_error\t0\n"
       printf "chain_auto_parallel\t0\n"
+      printf "bmc_orig_cache_hit\t0\n"
+      printf "bmc_orig_cache_miss\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -1491,6 +1572,14 @@ process_mutation() {
       chain_auto_parallel=1
     fi
   fi
+  if [[ "$reused_global_filter" -eq 0 ]]; then
+    if grep -Eq '^# bmc_orig_cache=hit ' "$mutation_dir/global_propagate.log"; then
+      bmc_orig_cache_hit=1
+    fi
+    if grep -Eq '^# bmc_orig_cache=(miss|timeout_fallback) ' "$mutation_dir/global_propagate.log"; then
+      bmc_orig_cache_miss=1
+    fi
+  fi
   if [[ -n "$global_filter_state" ]]; then
     if [[ "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" == "auto" ]]; then
       chain_auto_parallel=1
@@ -1524,6 +1613,11 @@ process_mutation() {
     esac
     if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_CHAIN" ]]; then
       global_filter_note="${global_filter_note};chain_lec_unknown_fallback=${chain_lec_unknown_fallback};chain_bmc_resolved_not_propagated=${chain_bmc_resolved_not_propagated};chain_bmc_unknown_fallback=${chain_bmc_unknown_fallback};chain_lec_resolved_not_propagated=${chain_lec_resolved_not_propagated};chain_consensus_not_propagated=${chain_consensus_not_propagated};chain_consensus_disagreement=${chain_consensus_disagreement};chain_consensus_error=${chain_consensus_error};chain_auto_parallel=${chain_auto_parallel}"
+    fi
+    if [[ "$bmc_orig_cache_hit" -eq 1 ]]; then
+      global_filter_note="${global_filter_note};bmc_orig_cache=hit"
+    elif [[ "$bmc_orig_cache_miss" -eq 1 ]]; then
+      global_filter_note="${global_filter_note};bmc_orig_cache=miss"
     fi
     if [[ "$global_filter_state" == "not_propagated" || "$global_filter_state" == "propagated" ]]; then
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -1664,6 +1758,8 @@ process_mutation() {
     printf "chain_consensus_disagreement\t%s\n" "$chain_consensus_disagreement"
     printf "chain_consensus_error\t%s\n" "$chain_consensus_error"
     printf "chain_auto_parallel\t%s\n" "$chain_auto_parallel"
+    printf "bmc_orig_cache_hit\t%s\n" "$bmc_orig_cache_hit"
+    printf "bmc_orig_cache_miss\t%s\n" "$bmc_orig_cache_miss"
   } > "$meta_local"
 }
 
@@ -1777,6 +1873,8 @@ count_chain_consensus_not_propagated=0
 count_chain_consensus_disagreement=0
 count_chain_consensus_error=0
 count_chain_auto_parallel=0
+count_bmc_orig_cache_hit=0
+count_bmc_orig_cache_miss=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -1933,6 +2031,24 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_chain_auto_parallel" =~ ^[0-9]+$ ]]; then
     count_chain_auto_parallel=$((count_chain_auto_parallel + local_chain_auto_parallel))
   fi
+
+  local_bmc_orig_cache_hit=0
+  if [[ -f "$meta_local" ]]; then
+    local_bmc_orig_cache_hit="$(awk -F$'\t' '$1=="bmc_orig_cache_hit"{print $2}' "$meta_local" | head -n1)"
+    local_bmc_orig_cache_hit="${local_bmc_orig_cache_hit:-0}"
+  fi
+  if [[ "$local_bmc_orig_cache_hit" =~ ^[0-9]+$ ]]; then
+    count_bmc_orig_cache_hit=$((count_bmc_orig_cache_hit + local_bmc_orig_cache_hit))
+  fi
+
+  local_bmc_orig_cache_miss=0
+  if [[ -f "$meta_local" ]]; then
+    local_bmc_orig_cache_miss="$(awk -F$'\t' '$1=="bmc_orig_cache_miss"{print $2}' "$meta_local" | head -n1)"
+    local_bmc_orig_cache_miss="${local_bmc_orig_cache_miss:-0}"
+  fi
+  if [[ "$local_bmc_orig_cache_miss" =~ ^[0-9]+$ ]]; then
+    count_bmc_orig_cache_miss=$((count_bmc_orig_cache_miss + local_bmc_orig_cache_miss))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -2021,6 +2137,8 @@ fi
   printf "chain_consensus_disagreement_mutants\t%s\n" "$count_chain_consensus_disagreement"
   printf "chain_consensus_error_mutants\t%s\n" "$count_chain_consensus_error"
   printf "chain_auto_parallel_mutants\t%s\n" "$count_chain_auto_parallel"
+  printf "bmc_orig_cache_hit_mutants\t%s\n" "$count_bmc_orig_cache_hit"
+  printf "bmc_orig_cache_miss_mutants\t%s\n" "$count_bmc_orig_cache_miss"
   printf "reuse_pair_source\t%s\n" "$REUSE_PAIR_SOURCE"
   printf "reuse_summary_source\t%s\n" "$REUSE_SUMMARY_SOURCE"
   printf "reuse_cache_mode\t%s\n" "$REUSE_CACHE_MODE"
@@ -2050,6 +2168,8 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "chain_consensus_disagreement_mutants": $count_chain_consensus_disagreement,
   "chain_consensus_error_mutants": $count_chain_consensus_error,
   "chain_auto_parallel_mutants": $count_chain_auto_parallel,
+  "bmc_orig_cache_hit_mutants": $count_bmc_orig_cache_hit,
+  "bmc_orig_cache_miss_mutants": $count_bmc_orig_cache_miss,
   "reuse_pair_source": "$(json_escape "$REUSE_PAIR_SOURCE")",
   "reuse_summary_source": "$(json_escape "$REUSE_SUMMARY_SOURCE")",
   "reuse_cache_mode": "$(json_escape "$REUSE_CACHE_MODE")",
@@ -2065,7 +2185,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"
