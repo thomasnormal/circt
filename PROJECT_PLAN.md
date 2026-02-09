@@ -18338,6 +18338,9 @@ ninja -C build circt-verilog
   before manifest emission.
 - Iteration 704 adds explicit metadata trust-policy gates (transport/status/URI
   regex/TLS peer SHA/cert-chain digest) for CRL/OCSP refresh sidecars.
+- Iteration 705 adds metadata freshness policy gates (`max-age` and
+  `max-future-skew`) for CRL/OCSP refresh sidecars to prevent stale/future-skew
+  provenance acceptance.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18353,8 +18356,9 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Move metadata trust from static policy matching to active transport-chain
-    capture/verification in refresh tooling (issuer/path validation evidence).
+  - Move metadata trust from schema + static policy matching to active
+    transport-chain capture/verification in refresh tooling (issuer/path
+    validation evidence).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
