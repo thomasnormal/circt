@@ -6718,8 +6718,10 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     :
   else
     opentitan_case_results="$OUT_DIR/opentitan-lec-results.txt"
+    opentitan_xprop_summary="$OUT_DIR/opentitan-lec-xprop-summary.tsv"
     opentitan_lec_workdir="$OUT_DIR/opentitan-lec-work"
     : > "$opentitan_case_results"
+    : > "$opentitan_xprop_summary"
     rm -rf "$opentitan_lec_workdir"
     opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
     if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
@@ -6730,6 +6732,7 @@ if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
     fi
     opentitan_env=(LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS"
       OUT="$opentitan_case_results"
+      OUT_XPROP_SUMMARY="$opentitan_xprop_summary"
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
     if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
       opentitan_env+=(CIRCT_LEC_ARGS="--accept-xprop-only ${CIRCT_LEC_ARGS:-}")
@@ -6795,8 +6798,10 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
     :
   else
     opentitan_strict_case_results="$OUT_DIR/opentitan-lec-strict-results.txt"
+    opentitan_strict_xprop_summary="$OUT_DIR/opentitan-lec-strict-xprop-summary.tsv"
     opentitan_strict_workdir="$OUT_DIR/opentitan-lec-strict-work"
     : > "$opentitan_strict_case_results"
+    : > "$opentitan_strict_xprop_summary"
     rm -rf "$opentitan_strict_workdir"
     opentitan_strict_args=(--opentitan-root "$OPENTITAN_DIR")
     if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
@@ -6809,6 +6814,7 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRI
       LEC_X_OPTIMISTIC=0
       LEC_MODE_LABEL=LEC_STRICT
       OUT="$opentitan_strict_case_results"
+      OUT_XPROP_SUMMARY="$opentitan_strict_xprop_summary"
       CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
     if [[ "$OPENTITAN_LEC_STRICT_DUMP_UNKNOWN_SOURCES" == "1" ]]; then
       opentitan_strict_env+=(LEC_DUMP_UNKNOWN_SOURCES=1)

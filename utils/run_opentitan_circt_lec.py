@@ -55,6 +55,24 @@ def parse_lec_diag(text: str) -> str | None:
     return match.group(1)
 
 
+def parse_xprop_summary_counts(text: str) -> dict[str, int]:
+    # circt-lec prints a single diagnostics line in this form:
+    #   summary: key1=V1 key2=V2 ...
+    matches = re.findall(r"(?m)^.*summary:\s*(.*)$", text)
+    if not matches:
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in re.findall(r"\b([a-z0-9][a-z0-9_-]*)=([0-9]+)\b", matches[-1]):
+        counts[key] = int(value)
+    return counts
+
+
+def encode_summary_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return ""
+    return ",".join(f"{key}={counts[key]}" for key in sorted(counts))
+
+
 def run_and_log(
     cmd: list[str], log_path: Path, out_path: Path | None = None
 ) -> str:
@@ -107,6 +125,14 @@ def main() -> int:
         "--results-file",
         default=os.environ.get("OUT", ""),
         help="Optional TSV output path for per-implementation case rows.",
+    )
+    parser.add_argument(
+        "--xprop-summary-file",
+        default=os.environ.get("OUT_XPROP_SUMMARY", ""),
+        help=(
+            "Optional TSV output path for XPROP diagnostic rows "
+            "(implementation, mode, diag, result, counters, log_dir)."
+        ),
     )
     args = parser.parse_args()
 
@@ -235,6 +261,7 @@ def main() -> int:
 
     failures = 0
     case_rows: list[tuple[str, str, str, str, str]] = []
+    xprop_rows: list[tuple[str, str, str, str, str, str, str]] = []
     try:
         print(
             f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
@@ -323,6 +350,9 @@ def main() -> int:
                     lec_cmd.append(f"--z3-path={z3_bin}")
             lec_cmd += circt_lec_args
 
+            result: str | None = None
+            diag: str | None = None
+            summary_counts: dict[str, int] = {}
             try:
                 run_and_log(verilog_cmd, impl_dir / "circt-verilog.log")
                 run_and_log(opt_cmd, impl_dir / "circt-opt.log")
@@ -336,6 +366,8 @@ def main() -> int:
                     combined = lec_log_text + "\n" + lec_stdout
                     result = parse_lec_result(combined)
                     diag = parse_lec_diag(combined)
+                    if diag == "XPROP_ONLY":
+                        summary_counts = parse_xprop_summary_counts(combined)
                     if result in ("NEQ", "UNKNOWN"):
                         if diag == "XPROP_ONLY" and lec_accept_xprop_only:
                             print(
@@ -344,6 +376,17 @@ def main() -> int:
                             )
                             case_rows.append(
                                 ("XFAIL", impl, f"{impl_dir}#XPROP_ONLY", "opentitan", lec_mode_label)
+                            )
+                            xprop_rows.append(
+                                (
+                                    "XFAIL",
+                                    impl,
+                                    lec_mode_label,
+                                    "XPROP_ONLY",
+                                    result or "",
+                                    encode_summary_counts(summary_counts),
+                                    str(impl_dir),
+                                )
                             )
                             continue
                         raise subprocess.CalledProcessError(
@@ -354,11 +397,16 @@ def main() -> int:
             except subprocess.CalledProcessError:
                 failures += 1
                 extra = ""
-                diag = None
                 try:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
                     lec_out_text = (impl_dir / "circt-lec.out").read_text()
-                    diag = parse_lec_diag(lec_log_text + "\n" + lec_out_text)
+                    combined = lec_log_text + "\n" + lec_out_text
+                    if result is None:
+                        result = parse_lec_result(combined)
+                    if diag is None:
+                        diag = parse_lec_diag(combined)
+                    if diag == "XPROP_ONLY":
+                        summary_counts = parse_xprop_summary_counts(combined)
                     if diag:
                         extra = f" ({diag})"
                 except Exception:
@@ -368,6 +416,18 @@ def main() -> int:
                 if diag:
                     detail = f"{detail}#{diag}"
                 case_rows.append(("FAIL", impl, detail, "opentitan", lec_mode_label))
+                if diag == "XPROP_ONLY":
+                    xprop_rows.append(
+                        (
+                            "FAIL",
+                            impl,
+                            lec_mode_label,
+                            "XPROP_ONLY",
+                            result or "",
+                            encode_summary_counts(summary_counts),
+                            str(impl_dir),
+                        )
+                    )
 
     finally:
         if not keep_workdir:
@@ -378,6 +438,12 @@ def main() -> int:
         results_path.parent.mkdir(parents=True, exist_ok=True)
         with results_path.open("w") as handle:
             for row in sorted(case_rows, key=lambda item: (item[1], item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
+    if args.xprop_summary_file:
+        xprop_summary_path = Path(args.xprop_summary_file)
+        xprop_summary_path.parent.mkdir(parents=True, exist_ok=True)
+        with xprop_summary_path.open("w") as handle:
+            for row in sorted(xprop_rows, key=lambda item: (item[1], item[2], item[0], item[6])):
                 handle.write("\t".join(row) + "\n")
 
     if failures:
