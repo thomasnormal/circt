@@ -23862,6 +23862,18 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                    enabledVal.getResult(), zero);
     };
 
+    // Collect variable_list names if present (IEEE 18.11).
+    // When variable_list is set, only those variables are randomized; all others
+    // (even declared rand) are treated as state variables and preserved.
+    llvm::DenseSet<StringRef> varListNames;
+    bool hasVarList = false;
+    if (auto varListAttr = op.getVariableList()) {
+      hasVarList = true;
+      for (auto attr : *varListAttr)
+        if (auto symRef = dyn_cast<FlatSymbolRefAttr>(attr))
+          varListNames.insert(symRef.getValue());
+    }
+
     if (classDecl) {
       for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
         auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
@@ -23880,7 +23892,15 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                             classPtr, gepIndices);
         auto fieldVal =
             LLVM::LoadOp::create(rewriter, loc, fieldTy, fieldPtr);
-        if (propDecl.isRandomizable()) {
+
+        // Determine if this property should be randomized.
+        // With variable_list: only listed properties are randomized.
+        // Without: only rand-declared properties are randomized.
+        bool isRandomTarget =
+            hasVarList ? varListNames.contains(propDecl.getSymName())
+                       : propDecl.isRandomizable();
+
+        if (isRandomTarget) {
           Value enabled = createRandEnabledCheck(propDecl.getSymName());
           auto zero = arith::ConstantOp::create(
               rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
@@ -23940,6 +23960,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
       for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
         if (propDecl.getRandMode() != RandMode::RandC)
+          continue;
+        // With variable_list, skip randc properties not in the list.
+        if (hasVarList && !varListNames.contains(propDecl.getSymName()))
           continue;
         OpBuilder::InsertionGuard guard(rewriter);
         Value randEnabled = createRandEnabledCheck(propDecl.getSymName());
@@ -25827,7 +25850,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       auto checkClassProps2 = [&](ClassDeclOp decl) {
         for (auto propDecl :
              decl.getBody().getOps<ClassPropertyDeclOp>()) {
-          if (propDecl.isRandomizable()) {
+          bool isTarget =
+              hasVarList ? varListNames.contains(propDecl.getSymName())
+                         : propDecl.isRandomizable();
+          if (isTarget) {
             Value enabled = createRandEnabledCheck(propDecl.getSymName());
             anyRandEnabled =
                 arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);

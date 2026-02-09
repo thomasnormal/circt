@@ -42,8 +42,8 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.9--controlling-constraints-with-constraint_mode_0	pass	constraint_mode toggle
 18.11.1--in-line-constraint-checker_0	pass	Inline constraint checker
 18.11.1--in-line-constraint-checker_1	pass	Inline randc constraint checker
-18.11--in-line-random-variable-control_0	xfail	Inline variable control
-18.11--in-line-random-variable-control_1	xfail	Inline randc variable control
+18.11--in-line-random-variable-control_0	pass	Inline variable control
+18.11--in-line-random-variable-control_1	pass	Inline randc variable control
 18.13.3--srandom_0	pass	srandom seed reproducible
 18.13.4--get_randstate_0	pass	get_randstate returns state
 18.13.5--set_randstate_0	pass	set_randstate restore working
