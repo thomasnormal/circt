@@ -3602,6 +3602,54 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (subroutine->name == "sample") {
         // sample() triggers sampling of the covergroup
         SmallVector<Value> sampleArgs;
+        SmallVector<Value> iffArgs;
+        // Helper lambda to collect iff conditions from a covergroup body.
+        // Only populates iffArgs if at least one coverpoint has an iff
+        // expression. For coverpoints without iff in a mixed group, uses
+        // constant true. Returns false on conversion failure.
+        auto collectIffConditions =
+            [&](const slang::ast::CovergroupBodySymbol &cgBody) -> bool {
+              // First pass: check if any coverpoint has an iff expression.
+              bool hasAnyIff = false;
+              for (const auto &member : cgBody.members()) {
+                if (auto *cp =
+                        member.as_if<slang::ast::CoverpointSymbol>()) {
+                  if (cp->getIffExpr()) {
+                    hasAnyIff = true;
+                    break;
+                  }
+                }
+              }
+              if (!hasAnyIff)
+                return true; // success, but no iff conditions needed
+
+              // Second pass: evaluate iff conditions for all coverpoints.
+              for (const auto &member : cgBody.members()) {
+                if (auto *cp =
+                        member.as_if<slang::ast::CoverpointSymbol>()) {
+                  if (const auto *iffExpr = cp->getIffExpr()) {
+                    Value iffVal =
+                        context.convertRvalueExpression(*iffExpr);
+                    if (!iffVal)
+                      return false;
+                    iffVal = context.convertToBool(iffVal,
+                        moore::Domain::TwoValued);
+                    if (!iffVal)
+                      return false;
+                    iffArgs.push_back(iffVal);
+                  } else {
+                    // No iff on this coverpoint but others have iff -
+                    // use constant true (always sample).
+                    auto i1Ty =
+                        moore::IntType::getInt(context.getContext(), 1);
+                    iffArgs.push_back(
+                        moore::ConstantOp::create(builder, loc, i1Ty, 1));
+                  }
+                }
+              }
+              return true;
+            };
+
         if (expr.arguments().empty()) {
           // Implicit sampling: evaluate each coverpoint's expression at the
           // call site. IEEE 1800-2017 Section 19.8.1 - when sample() is
@@ -3619,6 +3667,9 @@ struct RvalueExprVisitor : public ExprVisitor {
               sampleArgs.push_back(val);
             }
           }
+          // Collect iff conditions (only if any coverpoint has iff).
+          if (!collectIffConditions(cgBody))
+            return {};
         } else {
           // Explicit sample arguments (parametric covergroup with
           // `with function sample(...)`). IEEE 1800-2017 §19.8.1.
@@ -3700,6 +3751,9 @@ struct RvalueExprVisitor : public ExprVisitor {
                 sampleArgs.push_back(val);
               }
             }
+            // Collect iff conditions (only if any coverpoint has iff).
+            if (!collectIffConditions(cgBody))
+              return {};
           } else {
             // Fallback: no sample method found, pass raw args.
             for (const auto *arg : expr.arguments()) {
@@ -3711,7 +3765,7 @@ struct RvalueExprVisitor : public ExprVisitor {
           }
         }
         moore::CovergroupSampleOp::create(builder, loc, covergroupInstance,
-                                          sampleArgs);
+                                          sampleArgs, iffArgs);
         // sample() returns void, but we need to return something for
         // expression context. Return a constant 0.
         auto intTy = moore::IntType::getInt(context.getContext(), 32);
@@ -4374,6 +4428,110 @@ struct RvalueExprVisitor : public ExprVisitor {
             context, "__moore_class_srandom", funcTy);
         mlir::LLVM::CallOp::create(builder, loc, func,
                                    ValueRange{objPtr, seedVal});
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, moore::VoidType::get(context.getContext()),
+                   ValueRange{})
+            .getResult(0);
+      }
+    }
+
+    // Handle class-level get_randstate() calls.
+    // IEEE 1800-2017 §18.13: Returns a string representation of the
+    // per-object RNG state that can later be restored with set_randstate().
+    // Emit __moore_class_get_randstate(objPtr) -> !llvm.struct<(ptr, i64)>
+    if (subroutine->name == "get_randstate" &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name != "process") {
+        Value classInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          classInstance = context.convertRvalueExpression(*recvExpr);
+        }
+        if (!classInstance)
+          classInstance = context.getImplicitThisRef();
+
+        if (!classInstance) {
+          mlir::emitError(loc)
+              << "class get_randstate() requires a class object receiver";
+          return {};
+        }
+
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+        auto i64Ty = builder.getIntegerType(64);
+        auto stringStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+            context.getContext(), {ptrTy, i64Ty});
+
+        Value objPtr = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, ptrTy, classInstance)
+                           .getResult(0);
+
+        auto funcTy =
+            mlir::LLVM::LLVMFunctionType::get(stringStructTy, {ptrTy});
+        auto func = getOrCreateRuntimeFunc(
+            context, "__moore_class_get_randstate", funcTy);
+        auto callOp = mlir::LLVM::CallOp::create(builder, loc, func,
+                                                  ValueRange{objPtr});
+
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, resultType, callOp.getResult())
+            .getResult(0);
+      }
+    }
+
+    // Handle class-level set_randstate(state) calls.
+    // IEEE 1800-2017 §18.13: Restores per-object RNG state from a string
+    // previously obtained via get_randstate().
+    // Emit __moore_class_set_randstate(objPtr, stateStruct) -> void
+    if (subroutine->name == "set_randstate" &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name != "process") {
+        Value classInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          classInstance = context.convertRvalueExpression(*recvExpr);
+        }
+        if (!classInstance)
+          classInstance = context.getImplicitThisRef();
+
+        if (!classInstance) {
+          mlir::emitError(loc)
+              << "class set_randstate() requires a class object receiver";
+          return {};
+        }
+
+        if (expr.arguments().size() < 1) {
+          mlir::emitError(loc)
+              << "class set_randstate() requires a string argument";
+          return {};
+        }
+        Value stateArg =
+            context.convertRvalueExpression(*expr.arguments()[0]);
+        if (!stateArg)
+          return {};
+
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+        auto i64Ty = builder.getIntegerType(64);
+        auto stringStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+            context.getContext(), {ptrTy, i64Ty});
+
+        Value objPtr = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, ptrTy, classInstance)
+                           .getResult(0);
+        Value stateStruct =
+            mlir::UnrealizedConversionCastOp::create(
+                builder, loc, stringStructTy, stateArg)
+                .getResult(0);
+
+        auto funcTy = mlir::LLVM::LLVMFunctionType::get(
+            mlir::LLVM::LLVMVoidType::get(context.getContext()),
+            {ptrTy, stringStructTy});
+        auto func = getOrCreateRuntimeFunc(
+            context, "__moore_class_set_randstate", funcTy);
+        mlir::LLVM::CallOp::create(builder, loc, func,
+                                   ValueRange{objPtr, stateStruct});
         return mlir::UnrealizedConversionCastOp::create(
                    builder, loc, moore::VoidType::get(context.getContext()),
                    ValueRange{})

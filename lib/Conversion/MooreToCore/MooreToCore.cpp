@@ -26069,10 +26069,6 @@ void MooreToCorePass::runOnOperation() {
                                                 Operation *randomizeOp) {
       if (inlineRegion.empty())
         return;
-      llvm::errs() << "[PREPASS] Found inline region with "
-                    << std::distance(inlineRegion.front().begin(),
-                                    inlineRegion.front().end())
-                    << " ops\n";
 
       // Helper to get property name through zext/sext/trunc + read + propref
       auto getPropertyName = [](Value v) -> StringRef {

@@ -17439,63 +17439,89 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     // ---- __moore_urandom ----
+    // IEEE 1800-2017 §18.13.1: $urandom uses the calling process's RNG state.
+    // This enables random stability: saving/restoring process RNG state via
+    // process::get_randstate()/set_randstate() produces reproducible sequences.
     if (calleeName == "__moore_urandom") {
-      uint32_t result = __moore_urandom();
+      auto &state = processStates[procId];
+      uint32_t result = state.randomGenerator();
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_urandom() = " << result
-                               << "\n");
+                               << " [per-process RNG, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_urandom_range ----
+    // IEEE 1800-2017 §18.13.2: $urandom_range uses the calling process's RNG.
     if (calleeName == "__moore_urandom_range") {
       uint32_t maxVal = static_cast<uint32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
       uint32_t minVal = static_cast<uint32_t>(
           getValue(procId, callOp.getOperand(1)).getUInt64());
-      uint32_t result = __moore_urandom_range(maxVal, minVal);
+      // IEEE 1800-2017: If min > max, swap them.
+      if (minVal > maxVal)
+        std::swap(minVal, maxVal);
+      uint32_t result;
+      if (minVal == maxVal) {
+        result = minVal;
+      } else {
+        auto &state = processStates[procId];
+        std::uniform_int_distribution<uint32_t> dist(minVal, maxVal);
+        result = dist(state.randomGenerator);
+      }
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_urandom_range(" << maxVal << ", "
-                 << minVal << ") = " << result << "\n");
+                 << minVal << ") = " << result
+                 << " [per-process RNG, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_random ----
+    // IEEE 1800-2017 §18.13: $random uses the calling process's RNG state.
     if (calleeName == "__moore_random") {
-      int32_t result = __moore_random();
+      auto &state = processStates[procId];
+      int32_t result = static_cast<int32_t>(state.randomGenerator());
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_random() = " << result
-                               << "\n");
+                               << " [per-process RNG, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_urandom_seeded ----
+    // Seeds the calling process's RNG and returns a value from it.
     if (calleeName == "__moore_urandom_seeded") {
       int32_t seed = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
-      uint32_t result = __moore_urandom_seeded(seed);
+      auto &state = processStates[procId];
+      state.randomGenerator.seed(static_cast<uint32_t>(seed));
+      uint32_t result = state.randomGenerator();
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_urandom_seeded(" << seed
-                 << ") = " << result << "\n");
+                 << ") = " << result
+                 << " [per-process RNG, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_random_seeded ----
+    // Seeds the calling process's RNG and returns a value from it.
     if (calleeName == "__moore_random_seeded") {
       int32_t seed = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
-      int32_t result = __moore_random_seeded(seed);
+      auto &state = processStates[procId];
+      state.randomGenerator.seed(static_cast<uint32_t>(seed));
+      int32_t result = static_cast<int32_t>(state.randomGenerator());
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_random_seeded(" << seed
-                 << ") = " << result << "\n");
+                 << ") = " << result
+                 << " [per-process RNG, pid=" << procId << "]\n");
       return success();
     }
 
@@ -19677,7 +19703,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *nativeQueue =
                 reinterpret_cast<MooreQueue *>(queueAddr);
             if (nativeQueue && nativeQueue->data && nativeQueue->len > 1) {
-              __moore_queue_shuffle(nativeQueue, 8);
+              // Fisher-Yates shuffle using per-process RNG for random
+              // stability instead of __moore_queue_shuffle (std::rand).
+              auto *data = static_cast<char *>(nativeQueue->data);
+              int64_t len = nativeQueue->len;
+              int64_t elemSize = 8;
+              auto &rng = processStates[procId].randomGenerator;
+              std::vector<char> temp(elemSize);
+              for (int64_t i = len - 1; i > 0; --i) {
+                std::uniform_int_distribution<int64_t> dist(0, i);
+                int64_t j = dist(rng);
+                if (i != j) {
+                  std::memcpy(temp.data(), data + i * elemSize, elemSize);
+                  std::memcpy(data + i * elemSize, data + j * elemSize,
+                              elemSize);
+                  std::memcpy(data + j * elemSize, temp.data(), elemSize);
+                }
+              }
             }
             LLVM_DEBUG(llvm::dbgs()
                        << "  llvm.call: __moore_queue_shuffle(native 0x"
@@ -19711,10 +19753,26 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                     if (nativeElemSize <= 0)
                       nativeElemSize = 8;
                   }
-                  MooreQueue tmpQ;
-                  tmpQ.data = reinterpret_cast<void *>(dataPtr);
-                  tmpQ.len = queueLen;
-                  __moore_queue_shuffle(&tmpQ, nativeElemSize);
+                  // Fisher-Yates shuffle using per-process RNG for
+                  // random stability instead of __moore_queue_shuffle
+                  // which uses std::rand().
+                  {
+                    auto *data = reinterpret_cast<char *>(dataPtr);
+                    auto &rng = processStates[procId].randomGenerator;
+                    std::vector<char> temp(nativeElemSize);
+                    for (int64_t i = queueLen - 1; i > 0; --i) {
+                      std::uniform_int_distribution<int64_t> dist(0, i);
+                      int64_t j = dist(rng);
+                      if (i != j) {
+                        std::memcpy(temp.data(), data + i * nativeElemSize,
+                                    nativeElemSize);
+                        std::memcpy(data + i * nativeElemSize,
+                                    data + j * nativeElemSize, nativeElemSize);
+                        std::memcpy(data + j * nativeElemSize, temp.data(),
+                                    nativeElemSize);
+                      }
+                    }
+                  }
                 } else {
                   uint64_t dataOffset = 0;
                   auto *dataBlock =
@@ -19726,10 +19784,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                     int64_t elemSize = availableSize / queueLen;
                     if (elemSize > 0) {
                       uint8_t *base = dataBlock->data.data() + dataOffset;
-                      // Fisher-Yates shuffle in-place
+                      // Fisher-Yates shuffle using per-process RNG for
+                      // random stability (IEEE 1800-2017 §18.14).
+                      auto &rng = processStates[procId].randomGenerator;
                       std::vector<uint8_t> temp(elemSize);
                       for (int64_t i = queueLen - 1; i > 0; --i) {
-                        int64_t j = std::rand() % (i + 1);
+                        std::uniform_int_distribution<int64_t> dist(0, i);
+                        int64_t j = dist(rng);
                         if (i != j) {
                           std::memcpy(temp.data(), base + i * elemSize,
                                       elemSize);
