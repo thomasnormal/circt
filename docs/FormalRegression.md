@@ -298,6 +298,8 @@ Execution controls:
     `--default-formal-global-propagate-circt-chain`) before script dispatch.
   - default generated-mutation Yosys option is now pre-resolved natively:
     `--default-mutations-yosys`.
+  - generated lanes in `--lanes-tsv` now get native preflight validation for
+    lane `mutations_yosys` executables (with default/`yosys` fallback).
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.

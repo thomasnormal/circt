@@ -1,11 +1,12 @@
 // RUN: rm -rf %t && mkdir -p %t/scripts
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "SCRIPT:$(basename "$0")"\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/scripts/run_mutation_matrix.sh
 // RUN: chmod +x %t/scripts/run_mutation_matrix.sh
-// RUN: CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv lanes.tsv --out-dir out > %t/out.txt
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\t-\t-\t-\n' > %t/lanes.tsv
+// RUN: CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv %t/lanes.tsv --out-dir out > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 
 // CHECK: SCRIPT:run_mutation_matrix.sh
 // CHECK: ARG:--lanes-tsv
-// CHECK: ARG:lanes.tsv
+// CHECK: ARG:[[LANES:.*lanes.tsv]]
 // CHECK: ARG:--out-dir
 // CHECK: ARG:out
