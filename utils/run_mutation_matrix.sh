@@ -13,6 +13,7 @@ Required:
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
   --results-file FILE       Lane summary TSV (default: <out-dir>/results.tsv)
+  --gate-summary-file FILE  Gate-status count TSV (default: <out-dir>/gate_summary.tsv)
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
@@ -142,6 +143,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LANES_TSV=""
 OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
+GATE_SUMMARY_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
 SKIP_BASELINE=0
@@ -188,6 +190,7 @@ while [[ $# -gt 0 ]]; do
     --lanes-tsv) LANES_TSV="$2"; shift 2 ;;
     --out-dir) OUT_DIR="$2"; shift 2 ;;
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
+    --gate-summary-file) GATE_SUMMARY_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
     --skip-baseline) SKIP_BASELINE=1; shift ;;
@@ -340,6 +343,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
+GATE_SUMMARY_FILE="${GATE_SUMMARY_FILE:-${OUT_DIR}/gate_summary.tsv}"
 
 declare -a LANE_ID
 declare -a DESIGN
@@ -1027,6 +1031,8 @@ run_lane() {
   if [[ -f "$lane_metrics" ]]; then
     cov_v="$(awk -F$'\t' '$1=="mutation_coverage_percent"{print $2}' "$lane_metrics" | head -n1)"
     [[ -n "$cov_v" ]] && coverage="$cov_v"
+    gate_v="$(awk -F$'\t' '$1=="gate_status"{print $2}' "$lane_metrics" | head -n1)"
+    [[ -n "$gate_v" ]] && gate="$gate_v"
     lane_generated_mutations_cache_status="$(awk -F$'\t' '$1=="generated_mutations_cache_status"{print $2}' "$lane_metrics" | head -n1)"
     lane_generated_mutations_cache_status="${lane_generated_mutations_cache_status:-disabled}"
     lane_generated_mutations_cache_hit="$(awk -F$'\t' '$1=="generated_mutations_cache_hit"{print $2}' "$lane_metrics" | head -n1)"
@@ -1103,6 +1109,10 @@ generated_cache_miss_lanes=0
 generated_cache_saved_runtime_ns=0
 generated_cache_lock_wait_ns=0
 generated_cache_lock_contended_lanes=0
+declare -A GATE_COUNTS=()
+if [[ "$parse_failures" -gt 0 ]]; then
+  GATE_COUNTS["PARSE_ERROR"]="$parse_failures"
+fi
 
 for i in "${EXECUTED_INDICES[@]}"; do
   lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
@@ -1111,10 +1121,14 @@ for i in "${EXECUTED_INDICES[@]}"; do
     printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
+    GATE_COUNTS["MISSING_STATUS"]=$(( ${GATE_COUNTS["MISSING_STATUS"]:-0} + 1 ))
     continue
   fi
   cat "$lane_status_file" >> "$RESULTS_FILE"
   lane_status="$(awk -F$'\t' 'NR==1{print $2}' "$lane_status_file")"
+  lane_gate="$(awk -F$'\t' 'NR==1{print $5}' "$lane_status_file")"
+  lane_gate="${lane_gate:-UNKNOWN}"
+  GATE_COUNTS["$lane_gate"]=$(( ${GATE_COUNTS["$lane_gate"]:-0} + 1 ))
   if [[ "$lane_status" == "PASS" ]]; then
     passes=$((passes + 1))
   else
@@ -1147,7 +1161,17 @@ for i in "${EXECUTED_INDICES[@]}"; do
   fi
 done
 
+{
+  printf "gate_status\tcount\n"
+  if [[ "${#GATE_COUNTS[@]}" -gt 0 ]]; then
+    for gate_name in $(printf "%s\n" "${!GATE_COUNTS[@]}" | sort); do
+      printf "%s\t%s\n" "$gate_name" "${GATE_COUNTS[$gate_name]}"
+    done
+  fi
+} > "$GATE_SUMMARY_FILE"
+
 echo "Mutation matrix summary: pass=${passes} fail=${failures}"
+echo "Gate summary: $GATE_SUMMARY_FILE"
 echo "Mutation matrix generated-mutation cache: hit_lanes=${generated_cache_hit_lanes} miss_lanes=${generated_cache_miss_lanes} saved_runtime_ns=${generated_cache_saved_runtime_ns} lock_wait_ns=${generated_cache_lock_wait_ns} lock_contended_lanes=${generated_cache_lock_contended_lanes}"
 echo "Results: $RESULTS_FILE"
 if [[ "$failures" -ne 0 ]]; then

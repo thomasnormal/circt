@@ -364,7 +364,8 @@ Core input formats:
 
 Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and
-`summary.json`.
+`summary.json`. Matrix runs also emit gate-status aggregation in
+`gate_summary.tsv`.
 
 When `--reuse-cache-dir` is set, generated mutation lists are now cached by
 design+generator options to avoid repeated Yosys mutation-list synthesis across
