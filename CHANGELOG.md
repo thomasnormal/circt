@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 776 - February 9, 2026
+
+### FormalAll: Dedicated OpenTitan `E2E_STRICT` Lane
+
+1. Extended `utils/run_formal_all.sh` with a separate strict OpenTitan E2E
+   lane:
+   - new flag: `--with-opentitan-e2e-strict`
+   - new lane-id: `opentitan/E2E_STRICT`
+   - new case export: `opentitan-e2e-strict-results.txt`
+   - new TSV export: `opentitan-e2e-strict-results.tsv`
+2. Refactored OpenTitan E2E invocation into a shared helper
+   (`run_opentitan_e2e_lane`) to reduce duplicate lane logic and keep default
+   and strict paths behaviorally aligned.
+3. Strict E2E lane is always executed with strict X semantics
+   (`--lec-strict-x`) and isolated artifacts
+   (`opentitan-formal-e2e-strict/`) so it can run alongside default
+   `opentitan/E2E` without output collisions.
+4. Expected-failure and strict-gate case pipelines now ingest strict E2E case
+   rows by adding `opentitan-e2e-strict-results.txt` to all
+   result-source collectors in `run_formal_all.sh`.
+5. Lane-state determinism hardening:
+   - OpenTitan binary validation now triggers when any OpenTitan lane is active
+     (`LEC`, `LEC_STRICT`, `E2E`, `E2E_STRICT`).
+   - lane-state config hash now includes:
+     - `with_opentitan_lec_strict`
+     - `with_opentitan_e2e_strict`
+     - `opentitan_e2e_lec_x_mode`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-e2e-strict-lane.test`
+    - verifies `opentitan/E2E_STRICT` execution
+    - verifies strict-x forwarding (no `--lec-x-optimistic`)
+    - verifies strict-lane case export and expected-failure matching.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-strict-x.test test/Tools/run-formal-all-opentitan-e2e-strict-lane.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-strict-gate-failure-cases.test test/Tools/run-formal-all-baselines.test`:
+    - 7/7 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan dual-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-dual-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-e2e-sim-targets usbdev --opentitan-e2e-verilog-targets usbdev --opentitan-e2e-impl-filter canright --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'`:
+    - `opentitan/E2E`: `total=3 pass=3 fail=0`
+    - `opentitan/E2E_STRICT`: `total=3 pass=2 fail=1`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
 ## Iteration 774 - February 9, 2026
 
 ### Associative Array Deep Copy (UVM Phase Livelock Fix)

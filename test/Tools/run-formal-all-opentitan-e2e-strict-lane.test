@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN_E2E_STRICT=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\nout_dir=\"\"\nresults_file=\"\"\nstrict_x=0\nxopt=0\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --out-dir) out_dir=\"$2\"; shift 2 ;;\n    --results-file) results_file=\"$2\"; shift 2 ;;\n    --lec-strict-x) strict_x=1; shift ;;\n    --lec-x-optimistic) xopt=1; shift ;;\n    *) shift ;;\n  esac\ndone\nif [[ \"$strict_x\" != \"1\" ]]; then\n  echo \"missing_lec_strict_x\"\n  exit 8\nfi\nif [[ \"$xopt\" != \"0\" ]]; then\n  echo \"unexpected_lec_x_optimistic\"\n  exit 7\nfi\nif [[ -z \"$results_file\" ]]; then\n  echo \"missing_results_file\"\n  exit 6\nfi\nif [[ \"$out_dir\" != \"%t/out/opentitan-formal-e2e-strict\" ]]; then\n  echo \"bad_out_dir=${out_dir}\"\n  exit 5\nfi\nmkdir -p \"$(dirname \"$results_file\")\"\nprintf \"kind\\ttarget\\tstatus\\tdetail\\tartifact\\n\" > \"$results_file\"\nprintf \"SIM\\tusbdev\\tPASS\\tstrict_lane\\t%t/log-usbdev.log\\n\" >> \"$results_file\"\nprintf \"LEC\\taes_sbox_canright\\tFAIL\\tstrict_lane\\t%t/log-canright.log\\n\" >> \"$results_file\"\necho \"OpenTitan E2E summary: pass=1 fail=1\"\necho \"STRICT_E2E_LANE_OK\"\n' > %t/utils/run_opentitan_formal_e2e.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_formal_e2e.sh %t/fake-circt-verilog %t/fake-circt-verilog-opentitan
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tE2E_STRICT\tLEC:aes_sbox_canright\tbase\tFAIL\t2099-01-01\tknown_ot_e2e_strict_fail\n' > %t/expected-failure-cases-opentitan-e2e-strict.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog %t/fake-circt-verilog --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/E2E_STRICT$' --expected-failure-cases-file %t/expected-failure-cases-opentitan-e2e-strict.tsv --fail-on-unexpected-failure-cases
+// RUN: FileCheck %s --check-prefix=SUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=LOG < %t/out/opentitan-e2e-strict.log
+// RUN: FileCheck %s --check-prefix=DETAIL < %t/out/opentitan-e2e-strict-results.txt
+// RUN: FileCheck %s --check-prefix=CASE < %t/out/expected-failure-cases-summary.tsv
+
+// SUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// SUM: opentitan{{[[:space:]]+}}E2E_STRICT{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1
+// LOG: STRICT_E2E_LANE_OK
+// DETAIL: FAIL{{[[:space:]]+}}LEC:aes_sbox_canright{{[[:space:]]+}}{{.*}}log-canright.log{{[[:space:]]+}}opentitan{{[[:space:]]+}}E2E_STRICT
+// CASE: opentitan{{[[:space:]]+}}E2E_STRICT{{[[:space:]]+}}base{{[[:space:]]+}}LEC:aes_sbox_canright{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_ot_e2e_strict_fail
