@@ -48,10 +48,6 @@
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
   - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
-  - Combined smoke (`utils/run_formal_all.sh`) was re-run with this slice and
-    reported PASS for completed suites, but final artifact writes hit
-    `ENOSPC` (`No space left on device`) on `/tmp`; follow-up run pending after
-    freeing disk space.
 
 ## Iteration 758 - February 9, 2026
 
