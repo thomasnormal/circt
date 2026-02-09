@@ -120,6 +120,12 @@ Run multiple mutation lanes from a single TSV:
 utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutation-matrix
 ```
 
+Execution controls:
+- `--lane-jobs <N>`: run up to `N` lanes concurrently.
+- `--jobs-per-lane <N>`: per-lane mutant worker count passed through to
+  `run_mutation_cover.sh`.
+- `--stop-on-fail` is supported with `--lane-jobs=1` (deterministic fail-fast).
+
 Lane TSV schema (tab-separated):
 
 ```text

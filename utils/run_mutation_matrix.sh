@@ -16,7 +16,8 @@ Optional:
   --create-mutated-script FILE
                             Passed through to run_mutation_cover.sh
   --jobs-per-lane N         Passed through to run_mutation_cover.sh --jobs (default: 1)
-  --stop-on-fail            Stop at first failed lane
+  --lane-jobs N             Number of concurrent lanes (default: 1)
+  --stop-on-fail            Stop at first failed lane (requires --lane-jobs=1)
   -h, --help                Show help
 
 Notes:
@@ -32,6 +33,7 @@ OUT_DIR="${PWD}/mutation-matrix-results"
 RESULTS_FILE=""
 CREATE_MUTATED_SCRIPT=""
 JOBS_PER_LANE=1
+LANE_JOBS=1
 STOP_ON_FAIL=0
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --results-file) RESULTS_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --jobs-per-lane) JOBS_PER_LANE="$2"; shift 2 ;;
+    --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
     --stop-on-fail) STOP_ON_FAIL=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -64,14 +67,32 @@ if [[ ! "$JOBS_PER_LANE" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --jobs-per-lane value: $JOBS_PER_LANE" >&2
   exit 1
 fi
+if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --lane-jobs value: $LANE_JOBS" >&2
+  exit 1
+fi
+if [[ "$STOP_ON_FAIL" -eq 1 && "$LANE_JOBS" -gt 1 ]]; then
+  echo "--stop-on-fail requires --lane-jobs=1 for deterministic stop semantics." >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 RESULTS_FILE="${RESULTS_FILE:-${OUT_DIR}/results.tsv}"
-printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\n" > "$RESULTS_FILE"
 
-failures=0
-passes=0
+declare -a LANE_ID
+declare -a DESIGN
+declare -a MUTATIONS_FILE
+declare -a TESTS_MANIFEST
+declare -a ACTIVATE_CMD
+declare -a PROPAGATE_CMD
+declare -a THRESHOLD
+declare -a GENERATE_COUNT
+declare -a MUTATIONS_TOP
+declare -a MUTATIONS_SEED
+declare -a MUTATIONS_YOSYS
+declare -a EXECUTED_INDICES
 
+parse_failures=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   line="${line%$'\r'}"
   [[ -z "$line" ]] && continue
@@ -80,63 +101,87 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
-    failures=$((failures + 1))
+    parse_failures=$((parse_failures + 1))
     continue
   fi
 
-  lane_dir="${OUT_DIR}/${lane_id}"
+  LANE_ID+=("$lane_id")
+  DESIGN+=("$design")
+  MUTATIONS_FILE+=("$mutations_file")
+  TESTS_MANIFEST+=("$tests_manifest")
+  ACTIVATE_CMD+=("${activate_cmd:-}")
+  PROPAGATE_CMD+=("${propagate_cmd:-}")
+  THRESHOLD+=("${threshold:-}")
+  GENERATE_COUNT+=("${generate_count:--}")
+  MUTATIONS_TOP+=("${mutations_top:--}")
+  MUTATIONS_SEED+=("${mutations_seed:--}")
+  MUTATIONS_YOSYS+=("${mutations_yosys:--}")
+done < "$LANES_TSV"
+
+if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
+  echo "No valid lanes loaded from: $LANES_TSV" >&2
+  exit 1
+fi
+
+run_lane() {
+  local i="$1"
+  local lane_id="${LANE_ID[$i]}"
+  local lane_dir="${OUT_DIR}/${lane_id}"
+  local lane_log="${lane_dir}/lane.log"
+  local lane_metrics="${lane_dir}/metrics.tsv"
+  local lane_json="${lane_dir}/summary.json"
+  local lane_status_file="${lane_dir}/lane_status.tsv"
+  local coverage="0.00"
+  local gate="UNKNOWN"
+  local lane_status="FAIL"
+  local rc=1
+
   mkdir -p "$lane_dir"
-  lane_log="${lane_dir}/lane.log"
-  lane_metrics="${lane_dir}/metrics.tsv"
-  lane_json="${lane_dir}/summary.json"
 
   cmd=(
     "${SCRIPT_DIR}/run_mutation_cover.sh"
-    --design "$design"
-    --tests-manifest "$tests_manifest"
+    --design "${DESIGN[$i]}"
+    --tests-manifest "${TESTS_MANIFEST[$i]}"
     --work-dir "$lane_dir"
     --metrics-file "$lane_metrics"
     --summary-json-file "$lane_json"
     --jobs "$JOBS_PER_LANE"
   )
-  gen_count="${generate_count:--}"
-  if [[ "$mutations_file" != "-" ]]; then
-    cmd+=(--mutations-file "$mutations_file")
-  elif [[ "$gen_count" != "-" && -n "$gen_count" ]]; then
-    cmd+=(--generate-mutations "$gen_count")
+
+  if [[ "${MUTATIONS_FILE[$i]}" != "-" ]]; then
+    cmd+=(--mutations-file "${MUTATIONS_FILE[$i]}")
+  elif [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
+    cmd+=(--generate-mutations "${GENERATE_COUNT[$i]}")
   else
-    echo "Lane '${lane_id}' missing mutation source (mutations_file or generate_count)." >&2
-    failures=$((failures + 1))
-    if [[ "$STOP_ON_FAIL" -eq 1 ]]; then
-      echo "Mutation matrix summary: pass=${passes} fail=${failures}"
-      echo "Results: $RESULTS_FILE"
-      exit 1
-    fi
-    continue
+    gate="CONFIG_ERROR"
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+      "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+    return 0
   fi
-  if [[ "$gen_count" != "-" && -n "$gen_count" ]]; then
-    if [[ "${mutations_top:--}" != "-" && -n "${mutations_top:-}" ]]; then
-      cmd+=(--mutations-top "$mutations_top")
+
+  if [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
+    if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
+      cmd+=(--mutations-top "${MUTATIONS_TOP[$i]}")
     fi
-    if [[ "${mutations_seed:--}" != "-" && -n "${mutations_seed:-}" ]]; then
-      cmd+=(--mutations-seed "$mutations_seed")
+    if [[ "${MUTATIONS_SEED[$i]}" != "-" && -n "${MUTATIONS_SEED[$i]}" ]]; then
+      cmd+=(--mutations-seed "${MUTATIONS_SEED[$i]}")
     fi
-    if [[ "${mutations_yosys:--}" != "-" && -n "${mutations_yosys:-}" ]]; then
-      cmd+=(--mutations-yosys "$mutations_yosys")
+    if [[ "${MUTATIONS_YOSYS[$i]}" != "-" && -n "${MUTATIONS_YOSYS[$i]}" ]]; then
+      cmd+=(--mutations-yosys "${MUTATIONS_YOSYS[$i]}")
     fi
   fi
+
   if [[ -n "$CREATE_MUTATED_SCRIPT" ]]; then
     cmd+=(--create-mutated-script "$CREATE_MUTATED_SCRIPT")
   fi
-
-  if [[ -n "${activate_cmd:-}" && "$activate_cmd" != "-" ]]; then
-    cmd+=(--formal-activate-cmd "$activate_cmd")
+  if [[ -n "${ACTIVATE_CMD[$i]}" && "${ACTIVATE_CMD[$i]}" != "-" ]]; then
+    cmd+=(--formal-activate-cmd "${ACTIVATE_CMD[$i]}")
   fi
-  if [[ -n "${propagate_cmd:-}" && "$propagate_cmd" != "-" ]]; then
-    cmd+=(--formal-propagate-cmd "$propagate_cmd")
+  if [[ -n "${PROPAGATE_CMD[$i]}" && "${PROPAGATE_CMD[$i]}" != "-" ]]; then
+    cmd+=(--formal-propagate-cmd "${PROPAGATE_CMD[$i]}")
   fi
-  if [[ -n "${threshold:-}" && "$threshold" != "-" ]]; then
-    cmd+=(--coverage-threshold "$threshold")
+  if [[ -n "${THRESHOLD[$i]}" && "${THRESHOLD[$i]}" != "-" ]]; then
+    cmd+=(--coverage-threshold "${THRESHOLD[$i]}")
   fi
 
   rc=0
@@ -145,8 +190,6 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   rc=$?
   set -e
 
-  coverage="0.00"
-  gate="UNKNOWN"
   if [[ -f "$lane_metrics" ]]; then
     cov_v="$(awk -F$'\t' '$1=="mutation_coverage_percent"{print $2}' "$lane_metrics" | head -n1)"
     [[ -n "$cov_v" ]] && coverage="$cov_v"
@@ -155,24 +198,64 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     gate_v="$(awk -F': ' '/^Gate status:/{print $2}' "$lane_log" | tail -n1)"
     [[ -n "$gate_v" ]] && gate="$gate_v"
   fi
-
-  lane_status="PASS"
-  if [[ "$rc" -ne 0 ]]; then
-    lane_status="FAIL"
-    failures=$((failures + 1))
-  else
-    passes=$((passes + 1))
+  if [[ "$rc" -eq 0 ]]; then
+    lane_status="PASS"
   fi
 
   printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" >> "$RESULTS_FILE"
+    "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+}
 
-  if [[ "$lane_status" == "FAIL" && "$STOP_ON_FAIL" -eq 1 ]]; then
-    echo "Mutation matrix summary: pass=${passes} fail=${failures}"
-    echo "Results: $RESULTS_FILE"
-    exit 1
+if [[ "$LANE_JOBS" -le 1 ]]; then
+  for i in "${!LANE_ID[@]}"; do
+    run_lane "$i"
+    EXECUTED_INDICES+=("$i")
+    if [[ "$STOP_ON_FAIL" -eq 1 ]]; then
+      lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
+      lane_status="$(awk -F$'\t' 'NR==1{print $2}' "$lane_status_file")"
+      if [[ "$lane_status" != "PASS" ]]; then
+        break
+      fi
+    fi
+  done
+else
+  active_jobs=0
+  for i in "${!LANE_ID[@]}"; do
+    run_lane "$i" &
+    EXECUTED_INDICES+=("$i")
+    active_jobs=$((active_jobs + 1))
+    if [[ "$active_jobs" -ge "$LANE_JOBS" ]]; then
+      wait -n
+      active_jobs=$((active_jobs - 1))
+    fi
+  done
+  while [[ "$active_jobs" -gt 0 ]]; do
+    wait -n
+    active_jobs=$((active_jobs - 1))
+  done
+fi
+
+printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\n" > "$RESULTS_FILE"
+failures="$parse_failures"
+passes=0
+
+for i in "${EXECUTED_INDICES[@]}"; do
+  lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
+  if [[ ! -f "$lane_status_file" ]]; then
+    failures=$((failures + 1))
+    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\n" \
+      "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
+      "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
+    continue
   fi
-done < "$LANES_TSV"
+  cat "$lane_status_file" >> "$RESULTS_FILE"
+  lane_status="$(awk -F$'\t' 'NR==1{print $2}' "$lane_status_file")"
+  if [[ "$lane_status" == "PASS" ]]; then
+    passes=$((passes + 1))
+  else
+    failures=$((failures + 1))
+  fi
+done
 
 echo "Mutation matrix summary: pass=${passes} fail=${failures}"
 echo "Results: $RESULTS_FILE"
