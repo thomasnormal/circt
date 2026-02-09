@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 749 - February 9, 2026
+
+### Chain Telemetry Metrics for Global Formal Filtering
+
+- Extended `utils/run_mutation_cover.sh` metrics for chained
+  `--formal-global-propagate-circt-chain lec-then-bmc` flows:
+  - `chain_lec_unknown_fallbacks`: mutants where chain mode fell back from
+    `LEC_RESULT=UNKNOWN` to BMC.
+  - `chain_bmc_resolved_not_propagated_mutants`: mutants classified
+    `not_propagated` by BMC fallback (`BMC_RESULT` equal on original/mutant).
+- Added these counters to:
+  - per-mutant `local_metrics.tsv`
+  - aggregate `metrics.tsv`
+  - `summary.json`
+  - final CLI summary line
+
+### Tests and Documentation
+
+- Updated tests:
+  - `test/Tools/run-mutation-cover-global-circt-chain-filter.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-filter.test`
+  to assert the new chain telemetry metrics.
+- Updated docs/planning:
+  - `docs/FormalRegression.md` documents chain telemetry metrics.
+  - `PROJECT_PLAN.md` tracks chain telemetry as part of lane integration.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-chain-filter.test test/Tools/run-mutation-matrix-global-circt-chain-filter.test test/Tools/run-mutation-cover-global-circt-lec-unknown.test test/Tools/run-mutation-cover-global-circt-bmc-unknown.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (24/24)
+
 ## Iteration 748 - February 9, 2026
 
 ### Chained Global Formal Propagation Filter (LEC -> BMC)
