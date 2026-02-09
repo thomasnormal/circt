@@ -18388,6 +18388,24 @@ ninja -C build circt-verilog
   - Brings profile-manifest trust to parity with existing keyring-based formal
     trust contracts used elsewhere in lane-state flows.
 
+### Iteration 716
+- Added signer-certificate-aware refresh-policy profile-manifest signer keyring
+  hardening:
+  - optional keyring row columns:
+    - `cert_file_path`
+    - `cert_sha256`
+  - optional CA anchoring:
+    - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-keyring-ca-file`
+- Added signer identity and trust checks in keyring mode:
+  - cert SHA pin validation when provided
+  - cert public key must match signer keyring public key
+  - CA-chain verification via configured CA anchor
+  - strict failure when CA anchoring is requested but signer row has no cert.
+- Planning impact:
+  - Closes the signer-cert anchoring gap for profile-manifest signer rotation.
+  - Tightens cross-worker resume safety by binding signer cert/CA trust material
+    into compatibility hashing.
+
 ### Recent Lane-State Hardening (See CHANGELOG)
 - Iterations 698-715 completed the CRL/OCSP refresh control plane:
   - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
@@ -18410,9 +18428,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add signer-certificate-aware profile-manifest keyring rows (optional cert
-    path + cert SHA + issuer anchoring) to align signer identity policy with
-    lane-state manifest keyring rigor.
+  - Add explicit signer-cert revocation/freshness policy controls for profile
+    manifests (CRL/OCSP parity with lane-state manifest signer policy).
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active
