@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 771 - February 9, 2026
+
+### Matrix-Level Mutation Generation Cache Telemetry
+
+- Extended `utils/generate_mutations_yosys.sh` cache reporting with runtime
+  metadata:
+  - `Mutation generation runtime_ns: <n>`
+  - `Mutation cache saved_runtime_ns: <n>`
+- Cache metadata now persists estimated generation runtime in a sidecar:
+  - `<cache_key>.mutations.txt.meta` (`generation_runtime_ns`)
+- Extended `utils/run_mutation_cover.sh` to export generation-runtime metrics:
+  - `generated_mutations_runtime_ns`
+  - `generated_mutations_cache_saved_runtime_ns`
+- Extended `utils/run_mutation_matrix.sh` lane status/results output so
+  `results.tsv` now includes generated-mutation cache telemetry columns:
+  - `generated_mutations_cache_status`
+  - `generated_mutations_cache_hit`
+  - `generated_mutations_cache_miss`
+  - `generated_mutations_cache_saved_runtime_ns`
+- Matrix summary logging now prints aggregate generated-cache lane stats:
+  - `hit_lanes`, `miss_lanes`, `saved_runtime_ns`
+
+### Tests and Documentation
+
+- Updated tests:
+  - `test/Tools/run-mutation-generate-cache.test`
+  - `test/Tools/run-mutation-cover-generate-cache.test`
+  - `test/Tools/run-mutation-matrix-generate-cache.test`
+- Updated docs:
+  - `README.md` (generation-cache runtime metrics)
+  - `docs/FormalRegression.md` (cover metrics + matrix `results.tsv` schema)
+  - `PROJECT_PLAN.md` (matrix-level generated-cache telemetry status)
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-cache.test test/Tools/run-mutation-cover-generate-cache.test test/Tools/run-mutation-matrix-generate-cache.test test/Tools/run-mutation-matrix.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test`: PASS (38/38)
+
 ## Iteration 770 - February 9, 2026
 
 ### Mutation Generation Cache Telemetry (Cover/Matrix)
@@ -39968,6 +40011,56 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OpenTitan LEC E2E lane:
   - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-verilog --out-dir /tmp/opentitan-e2e-lec-default-20260209`:
     - summary: `pass=1 fail=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
+## Iteration 772 - February 9, 2026
+
+### OpenTitan LEC Fallback Diagnostic Retention (FormalAll)
+
+1. Hardened OpenTitan LEC fallback parsing in `utils/run_formal_all.sh` (used
+   when `run_opentitan_circt_lec.py` does not emit case TSV rows):
+   - preserve fail diagnostics in case detail as `#<DIAG>` when log lines carry
+     `FAIL (<DIAG>)`.
+   - for `XPROP_ONLY (accepted)` fallback rows, emit case IDs as
+     `<impl>#XPROP_ONLY` (instead of plain `<impl>`).
+2. Applied to both lanes:
+   - `opentitan/LEC`
+   - `opentitan/LEC_STRICT`
+3. This keeps case-level strict-gate/expected-failure tracking stable even
+   under partial-run fallback conditions.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`
+    - verifies fallback `opentitan/LEC` emits
+      `XFAIL aes_sbox_canright ... aes_sbox_canright#XPROP_ONLY`
+    - verifies fallback `opentitan/LEC_STRICT` emits
+      `FAIL ... opentitan-lec-strict-work/aes_sbox_canright#XPROP_ONLY`.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-opentitan-lec.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-strict-gate-failure-cases.test test/Tools/run-formal-all-expected-failure-cases-base-diag.test`:
+    - 5/5 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan strict-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-lec-strict-fallback-followup --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`:
+    - summary: `total=1 pass=0 fail=1`
 
 ### Remaining Limitations
 

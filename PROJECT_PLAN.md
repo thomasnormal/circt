@@ -223,6 +223,10 @@ See CHANGELOG.md on recent progress.
 22. `run_formal_all.sh` strict-gate now tracks fail-like case IDs via baseline
     `failure_cases` telemetry and flags diagnostic drift even when aggregate
     fail counts stay flat.
+24. OpenTitan LEC fallback parsing in `run_formal_all.sh` now preserves
+    diagnostic suffixes (`#XPROP_ONLY`, etc.) for both `opentitan/LEC` and
+    `opentitan/LEC_STRICT` case rows when `run_opentitan_circt_lec.py` cannot
+    emit case TSV output directly.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
@@ -236,6 +240,11 @@ See CHANGELOG.md on recent progress.
     (`generated_mutations_cache_status`, `generated_mutations_cache_hit`,
     `generated_mutations_cache_miss`) to make cache effectiveness directly
     visible in CI trend data.
+23. Mutation generation now tracks runtime telemetry in cover/matrix artifacts
+    (`generated_mutations_runtime_ns`,
+    `generated_mutations_cache_saved_runtime_ns`), and matrix `results.tsv`
+    now surfaces generated-cache status/hit/miss/saved-runtime columns for
+    lane-level CI triage without opening per-lane metrics files.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
