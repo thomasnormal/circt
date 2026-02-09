@@ -34424,6 +34424,54 @@ CIRCT/slang correctly enforces LRM restrictions.
   - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --resume-from-lane-state`:
     - PASS
   - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-responder-sweep-20260209-020439/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-responder-sweep-20260209-020439/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode remains pinned-response-file based (no live responder URL mode).
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
+## Iteration 693 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Responder Identity Policy
+
+- Added `--lane-state-manifest-ed25519-ocsp-responder-id-regex` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - extracts OCSP `Responder Id` (`openssl ocsp -resp_text`)
+  - enforces configured regex match with field-qualified diagnostics.
+- Lane-state trust-contract updates:
+  - responder-id regex policy now contributes to lane-state config hash
+    material (`lane_state_ed25519_ocsp_responder_id_regex`), so resume/merge
+    detects policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency check for responder-id regex without OCSP response
+    - positive responder-id regex match case
+    - negative responder-id mismatch case
+  - `docs/FormalRegression.md`
+    - documented responder-id regex policy option.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, strict OCSP policy + responder-id
+  regex enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519' --resume-from-lane-state`:
+    - PASS
+  - run outputs:
     - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-seed`
     - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-resume`
 

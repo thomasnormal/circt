@@ -18272,6 +18272,16 @@ ninja -C build circt-verilog
   - Prevents accidental/malicious OCSP response file substitution.
   - Complements config-hash binding with explicit first-use integrity pinning.
 
+### Iteration 693
+- Added OCSP responder identity policy controls for Ed25519 lane-state keyring
+  mode:
+  - `--lane-state-manifest-ed25519-ocsp-responder-id-regex`
+  - validates OCSP `Responder Id` against configured regex in strict mode.
+- Planning impact:
+  - Tightens OCSP trust posture by binding accepted responder identities.
+  - Reduces risk of accepting responses from unexpected but chain-valid
+    responders in multi-issuer environments.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18282,8 +18292,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add OCSP responder-identity policy controls (currently response-file based
-    only).
+  - Add stronger OCSP responder certificate/signer pinning for multi-issuer
+    deployments (beyond responder-id string policy).
   - Add OCSP/certificate signer linkage policy hardening for multi-issuer
     deployments.
   - Add CRL/OCSP distribution-point fetch and refresh automation.

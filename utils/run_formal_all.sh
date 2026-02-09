@@ -130,6 +130,8 @@ Options:
                          thisUpdate (default when OCSP is enabled: 604800)
   --lane-state-manifest-ed25519-ocsp-require-next-update
                          Require OCSP responses to include Next Update
+  --lane-state-manifest-ed25519-ocsp-responder-id-regex REGEX
+                         Optional regex constraint applied to OCSP Responder Id
   --lane-state-manifest-ed25519-cert-subject-regex REGEX
                          Optional regex constraint applied to selected Ed25519
                          certificate subject (keyring mode)
@@ -232,6 +234,7 @@ LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=0
+LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX=""
 LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
@@ -397,6 +400,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-require-next-update)
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=1; shift ;;
+    --lane-state-manifest-ed25519-ocsp-responder-id-regex)
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-cert-subject-regex)
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
@@ -576,6 +581,10 @@ if [[ "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" == "1" && -z "$LAN
   echo "--lane-state-manifest-ed25519-ocsp-require-next-update requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-responder-id-regex requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-max-age-secs: expected non-negative integer" >&2
   exit 1
@@ -752,6 +761,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" \
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX" \
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
@@ -772,6 +782,7 @@ ocsp_response_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_F
 ocsp_response_expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256", "").strip()
 ocsp_max_age_secs = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS", "").strip()
 ocsp_require_next_update = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE", "").strip() == "1"
+ocsp_responder_id_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX", "").strip()
 cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
@@ -1125,6 +1136,48 @@ if cert_file_path:
         if next_update_dt < now_utc:
           print(
               f"lane state Ed25519 OCSP nextUpdate is stale for key_id '{target_key_id}': {next_update_dt.strftime('%Y-%m-%d %H:%M:%SZ')}",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+      if ocsp_responder_id_regex:
+        ocsp_text = run_openssl(
+            [
+                "openssl",
+                "ocsp",
+                "-issuer",
+                ca_file,
+                "-cert",
+                str(cert_path),
+                "-respin",
+                ocsp_response_file,
+                "-CAfile",
+                ca_file,
+                "-VAfile",
+                ca_file,
+                "-no_nonce",
+                "-resp_text",
+            ],
+            f"lane state Ed25519 OCSP responder-id extraction failed for key_id '{target_key_id}'",
+        ).stdout.decode("utf-8", errors="replace")
+        responder_match = re.search(r"Responder Id:\s*(.+)", ocsp_text)
+        if responder_match is None:
+          print(
+              f"lane state Ed25519 OCSP responder-id parse failed for key_id '{target_key_id}'",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+        responder_id = responder_match.group(1).strip()
+        try:
+          responder_id_ok = re.search(ocsp_responder_id_regex, responder_id) is not None
+        except re.error as ex:
+          print(
+              f"invalid --lane-state-manifest-ed25519-ocsp-responder-id-regex: {ex}",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+        if not responder_id_ok:
+          print(
+              f"lane state Ed25519 OCSP responder-id mismatch for key_id '{target_key_id}': regex '{ocsp_responder_id_regex}' did not match '{responder_id}'",
               file=sys.stderr,
           )
           raise SystemExit(1)
@@ -1510,6 +1563,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE"
     printf "lane_state_ed25519_ocsp_require_next_update=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE"
+    printf "lane_state_ed25519_ocsp_responder_id_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX"
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
