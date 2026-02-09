@@ -32754,6 +32754,59 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 698 - February 9, 2026
+
+### Lane-State CRL/OCSP Refresh Hooks
+
+- Added pre-verification refresh hooks in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-cmd <cmd>`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-cmd <cmd>`
+- Hook semantics:
+  - commands run immediately before Ed25519 keyring certificate/OCSP checks
+  - hooks export lane-state Ed25519 env context for refresh scripts
+  - refresh must leave the configured artifact file readable, else fail fast
+- Validation hardening:
+  - CRL refresh hook requires `--lane-state-manifest-ed25519-crl-file`
+  - OCSP refresh hook requires
+    `--lane-state-manifest-ed25519-ocsp-response-file`
+- Resume safety:
+  - refresh-command strings now contribute to lane-state config hash material,
+    so resume/merge rejects incompatible hook-policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for CRL/OCSP refresh hook options without
+      corresponding artifact file options
+    - positive OCSP stale-then-refresh flow using
+      `--lane-state-manifest-ed25519-ocsp-refresh-cmd` and strict max-age
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP refresh hook options and usage examples
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep with refresh hooks enabled:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 utils/run_formal_all.sh ... --with-opentitan ... --with-avip ... --lane-state-manifest-ed25519-crl-file ... --lane-state-manifest-ed25519-crl-refresh-cmd ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-refresh-cmd ... --reset-lane-state`:
+    - PASS
+  - same command with `--resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-refresh-sweep2-20260209-025731/out-seed`
+    - `/tmp/formal-all-ed25519-refresh-sweep2-20260209-025731/out-resume`
+
+### Remaining Limitations
+
+- Refresh hooks are command-string based; no native AIA/CDP fetcher with
+  structured policy controls yet.
+- Hook execution is pre-verify only and does not include retry/backoff policy.
+
 ## Iteration 680 - February 9, 2026
 
 ### Lane-State Signed Provenance (HMAC Manifest)
