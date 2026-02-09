@@ -18,4 +18,4 @@
 // RUN:   --formal-global-propagate-circt-lec %t/fake-circt-lec.sh \
 // RUN:   2>&1 | FileCheck %s
 
-// CHECK: Use either --formal-global-propagate-cmd or --formal-global-propagate-circt-lec, not both.
+// CHECK: Use only one global filter mode: --formal-global-propagate-cmd, --formal-global-propagate-circt-lec, or --formal-global-propagate-circt-bmc.

@@ -119,6 +119,19 @@ Execution controls:
   This mode classifies by `circt-lec` output tokens:
   - `LEC_RESULT=EQ` => `not_propagated`
   - `LEC_RESULT=NEQ` => `propagated`
+- Built-in differential circt-bmc global filter (mutually exclusive with other
+  global filter modes):
+  - `--formal-global-propagate-circt-bmc <path>`
+  - `--formal-global-propagate-circt-bmc-args "<args>"`
+  - `--formal-global-propagate-bmc-bound <n>`
+  - `--formal-global-propagate-bmc-module <name>`
+  - `--formal-global-propagate-bmc-run-smtlib`
+  - `--formal-global-propagate-bmc-z3 <path>`
+  - `--formal-global-propagate-bmc-assume-known-inputs`
+  - `--formal-global-propagate-bmc-ignore-asserts-until <n>`
+  This mode compares BMC outcomes between original and mutant:
+  - same `BMC_RESULT` (`SAT`/`UNSAT`) => `not_propagated`
+  - different `BMC_RESULT` => `propagated`
 
 `tests.tsv` format (tab-separated):
 
@@ -182,6 +195,22 @@ Execution controls:
 - `--default-formal-global-propagate-circt-lec <path>`: default
   `run_mutation_cover.sh --formal-global-propagate-circt-lec` for lanes
   without a lane-specific circt-lec global filter path.
+- `--default-formal-global-propagate-circt-bmc <path>`: default
+  `run_mutation_cover.sh --formal-global-propagate-circt-bmc` for lanes
+  without a lane-specific circt-bmc global filter path.
+- `--default-formal-global-propagate-circt-bmc-args <args>`: default
+  `run_mutation_cover.sh --formal-global-propagate-circt-bmc-args` for lanes
+  without lane-specific bmc args.
+- `--default-formal-global-propagate-bmc-bound <n>`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-bound`.
+- `--default-formal-global-propagate-bmc-module <name>`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-module`.
+- `--default-formal-global-propagate-bmc-run-smtlib`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-run-smtlib`.
+- `--default-formal-global-propagate-bmc-z3 <path>`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-z3`.
+- `--default-formal-global-propagate-bmc-assume-known-inputs`: default
+  `run_mutation_cover.sh --formal-global-propagate-bmc-assume-known-inputs`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -191,7 +220,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]
 ```
 
 Notes:
@@ -209,8 +238,23 @@ Notes:
   `--default-formal-global-propagate-cmd` for a specific lane.
 - `global_propagate_circt_lec` (optional) overrides
   `--default-formal-global-propagate-circt-lec` for a specific lane.
-- `global_propagate_cmd` and `global_propagate_circt_lec` are mutually
-  exclusive within a lane.
+- `global_propagate_circt_bmc` (optional) overrides
+  `--default-formal-global-propagate-circt-bmc` for a specific lane.
+- `global_propagate_bmc_args` (optional) overrides
+  `--default-formal-global-propagate-circt-bmc-args` for a specific lane.
+- `global_propagate_bmc_bound` (optional) overrides
+  `--default-formal-global-propagate-bmc-bound` for a specific lane.
+- `global_propagate_bmc_module` (optional) overrides
+  `--default-formal-global-propagate-bmc-module` for a specific lane.
+- `global_propagate_bmc_run_smtlib` (optional truthy flag:
+  `1|true|yes`) enables `--formal-global-propagate-bmc-run-smtlib`.
+- `global_propagate_bmc_z3` (optional) overrides
+  `--default-formal-global-propagate-bmc-z3` for a specific lane.
+- `global_propagate_bmc_assume_known_inputs` (optional truthy flag:
+  `1|true|yes`) enables
+  `--formal-global-propagate-bmc-assume-known-inputs`.
+- `global_propagate_cmd`, `global_propagate_circt_lec`, and
+  `global_propagate_circt_bmc` are mutually exclusive within a lane.
 
 Shard/route a run to selected lane IDs:
 

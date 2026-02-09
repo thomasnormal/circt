@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -28,6 +28,28 @@ Optional:
   --default-formal-global-propagate-circt-lec PATH
                             Default --formal-global-propagate-circt-lec for
                             lanes without lane-specific global_propagate_circt_lec
+  --default-formal-global-propagate-circt-bmc PATH
+                            Default --formal-global-propagate-circt-bmc for
+                            lanes without lane-specific global_propagate_circt_bmc
+  --default-formal-global-propagate-circt-bmc-args ARGS
+                            Default --formal-global-propagate-circt-bmc-args
+                            for lanes without lane-specific global_propagate_bmc_args
+  --default-formal-global-propagate-bmc-bound N
+                            Default --formal-global-propagate-bmc-bound for
+                            lanes without lane-specific global_propagate_bmc_bound
+  --default-formal-global-propagate-bmc-module NAME
+                            Default --formal-global-propagate-bmc-module for
+                            lanes without lane-specific global_propagate_bmc_module
+  --default-formal-global-propagate-bmc-run-smtlib
+                            Enable default --formal-global-propagate-bmc-run-smtlib
+                            for lanes using circt-bmc global filtering
+  --default-formal-global-propagate-bmc-z3 PATH
+                            Default --formal-global-propagate-bmc-z3 for
+                            lanes without lane-specific global_propagate_bmc_z3
+  --default-formal-global-propagate-bmc-assume-known-inputs
+                            Enable default
+                            --formal-global-propagate-bmc-assume-known-inputs
+                            for lanes using circt-bmc global filtering
   --reuse-cache-dir DIR     Passed through to run_mutation_cover.sh --reuse-cache-dir
   --reuse-compat-mode MODE  Passed through to run_mutation_cover.sh reuse compatibility policy
                             (off|warn|strict, default: warn)
@@ -53,6 +75,13 @@ DEFAULT_REUSE_SUMMARY_FILE=""
 DEFAULT_MUTATIONS_MODES=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_MODULE=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=0
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_Z3=""
+DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=0
 REUSE_CACHE_DIR=""
 REUSE_COMPAT_MODE="warn"
 LANE_JOBS=1
@@ -70,6 +99,13 @@ while [[ $# -gt 0 ]]; do
     --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --default-formal-global-propagate-circt-lec) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"; shift 2 ;;
+    --default-formal-global-propagate-circt-bmc) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC="$2"; shift 2 ;;
+    --default-formal-global-propagate-circt-bmc-args) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS="$2"; shift 2 ;;
+    --default-formal-global-propagate-bmc-bound) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND="$2"; shift 2 ;;
+    --default-formal-global-propagate-bmc-module) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_MODULE="$2"; shift 2 ;;
+    --default-formal-global-propagate-bmc-run-smtlib) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB=1; shift ;;
+    --default-formal-global-propagate-bmc-z3) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_Z3="$2"; shift 2 ;;
+    --default-formal-global-propagate-bmc-assume-known-inputs) DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
     --reuse-cache-dir) REUSE_CACHE_DIR="$2"; shift 2 ;;
     --reuse-compat-mode) REUSE_COMPAT_MODE="$2"; shift 2 ;;
     --lane-jobs) LANE_JOBS="$2"; shift 2 ;;
@@ -98,6 +134,10 @@ if [[ ! "$JOBS_PER_LANE" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --lane-jobs value: $LANE_JOBS" >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid --default-formal-global-propagate-bmc-bound value: $DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_REUSE_PAIR_FILE" && ! -f "$DEFAULT_REUSE_PAIR_FILE" ]]; then
@@ -136,6 +176,13 @@ declare -a REUSE_SUMMARY_FILE
 declare -a MUTATIONS_MODES
 declare -a GLOBAL_PROPAGATE_CMD
 declare -a GLOBAL_PROPAGATE_CIRCT_LEC
+declare -a GLOBAL_PROPAGATE_CIRCT_BMC
+declare -a GLOBAL_PROPAGATE_BMC_ARGS
+declare -a GLOBAL_PROPAGATE_BMC_BOUND
+declare -a GLOBAL_PROPAGATE_BMC_MODULE
+declare -a GLOBAL_PROPAGATE_BMC_RUN_SMTLIB
+declare -a GLOBAL_PROPAGATE_BMC_Z3
+declare -a GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS
 declare -a EXECUTED_INDICES
 
 parse_failures=0
@@ -144,7 +191,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -167,6 +214,13 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   MUTATIONS_MODES+=("${mutations_modes:--}")
   GLOBAL_PROPAGATE_CMD+=("${global_propagate_cmd:--}")
   GLOBAL_PROPAGATE_CIRCT_LEC+=("${global_propagate_circt_lec:--}")
+  GLOBAL_PROPAGATE_CIRCT_BMC+=("${global_propagate_circt_bmc:--}")
+  GLOBAL_PROPAGATE_BMC_ARGS+=("${global_propagate_bmc_args:--}")
+  GLOBAL_PROPAGATE_BMC_BOUND+=("${global_propagate_bmc_bound:--}")
+  GLOBAL_PROPAGATE_BMC_MODULE+=("${global_propagate_bmc_module:--}")
+  GLOBAL_PROPAGATE_BMC_RUN_SMTLIB+=("${global_propagate_bmc_run_smtlib:--}")
+  GLOBAL_PROPAGATE_BMC_Z3+=("${global_propagate_bmc_z3:--}")
+  GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS+=("${global_propagate_bmc_assume_known_inputs:--}")
 done < "$LANES_TSV"
 
 if [[ "${#LANE_ID[@]}" -eq 0 ]]; then
@@ -191,6 +245,13 @@ run_lane() {
   local lane_mutations_modes=""
   local lane_global_propagate_cmd=""
   local lane_global_propagate_circt_lec=""
+  local lane_global_propagate_circt_bmc=""
+  local lane_global_propagate_bmc_args=""
+  local lane_global_propagate_bmc_bound=""
+  local lane_global_propagate_bmc_module=""
+  local lane_global_propagate_bmc_run_smtlib=""
+  local lane_global_propagate_bmc_z3=""
+  local lane_global_propagate_bmc_assume_known_inputs=""
 
   mkdir -p "$lane_dir"
 
@@ -289,6 +350,69 @@ run_lane() {
   if [[ -n "$lane_global_propagate_circt_lec" ]]; then
     cmd+=(--formal-global-propagate-circt-lec "$lane_global_propagate_circt_lec")
   fi
+
+  lane_global_propagate_circt_bmc="${GLOBAL_PROPAGATE_CIRCT_BMC[$i]}"
+  if [[ "$lane_global_propagate_circt_bmc" == "-" || -z "$lane_global_propagate_circt_bmc" ]]; then
+    lane_global_propagate_circt_bmc="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC"
+  fi
+  if [[ -n "$lane_global_propagate_circt_bmc" ]]; then
+    cmd+=(--formal-global-propagate-circt-bmc "$lane_global_propagate_circt_bmc")
+  fi
+
+  lane_global_propagate_bmc_args="${GLOBAL_PROPAGATE_BMC_ARGS[$i]}"
+  if [[ "$lane_global_propagate_bmc_args" == "-" || -z "$lane_global_propagate_bmc_args" ]]; then
+    lane_global_propagate_bmc_args="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC_ARGS"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_args" ]]; then
+    cmd+=(--formal-global-propagate-circt-bmc-args "$lane_global_propagate_bmc_args")
+  fi
+
+  lane_global_propagate_bmc_bound="${GLOBAL_PROPAGATE_BMC_BOUND[$i]}"
+  if [[ "$lane_global_propagate_bmc_bound" == "-" || -z "$lane_global_propagate_bmc_bound" ]]; then
+    lane_global_propagate_bmc_bound="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_bound" ]]; then
+    if ! [[ "$lane_global_propagate_bmc_bound" =~ ^[1-9][0-9]*$ ]]; then
+      gate="CONFIG_ERROR"
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" > "$lane_status_file"
+      return 0
+    fi
+    cmd+=(--formal-global-propagate-bmc-bound "$lane_global_propagate_bmc_bound")
+  fi
+
+  lane_global_propagate_bmc_module="${GLOBAL_PROPAGATE_BMC_MODULE[$i]}"
+  if [[ "$lane_global_propagate_bmc_module" == "-" || -z "$lane_global_propagate_bmc_module" ]]; then
+    lane_global_propagate_bmc_module="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_MODULE"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_module" ]]; then
+    cmd+=(--formal-global-propagate-bmc-module "$lane_global_propagate_bmc_module")
+  fi
+
+  lane_global_propagate_bmc_run_smtlib="${GLOBAL_PROPAGATE_BMC_RUN_SMTLIB[$i]}"
+  if [[ "$lane_global_propagate_bmc_run_smtlib" == "-" || -z "$lane_global_propagate_bmc_run_smtlib" ]]; then
+    lane_global_propagate_bmc_run_smtlib="$([[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_RUN_SMTLIB" -eq 1 ]] && printf "1" || printf "")"
+  fi
+  if [[ "$lane_global_propagate_bmc_run_smtlib" == "1" || "$lane_global_propagate_bmc_run_smtlib" == "true" || "$lane_global_propagate_bmc_run_smtlib" == "yes" ]]; then
+    cmd+=(--formal-global-propagate-bmc-run-smtlib)
+  fi
+
+  lane_global_propagate_bmc_z3="${GLOBAL_PROPAGATE_BMC_Z3[$i]}"
+  if [[ "$lane_global_propagate_bmc_z3" == "-" || -z "$lane_global_propagate_bmc_z3" ]]; then
+    lane_global_propagate_bmc_z3="$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_Z3"
+  fi
+  if [[ -n "$lane_global_propagate_bmc_z3" ]]; then
+    cmd+=(--formal-global-propagate-bmc-z3 "$lane_global_propagate_bmc_z3")
+  fi
+
+  lane_global_propagate_bmc_assume_known_inputs="${GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS[$i]}"
+  if [[ "$lane_global_propagate_bmc_assume_known_inputs" == "-" || -z "$lane_global_propagate_bmc_assume_known_inputs" ]]; then
+    lane_global_propagate_bmc_assume_known_inputs="$([[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_ASSUME_KNOWN_INPUTS" -eq 1 ]] && printf "1" || printf "")"
+  fi
+  if [[ "$lane_global_propagate_bmc_assume_known_inputs" == "1" || "$lane_global_propagate_bmc_assume_known_inputs" == "true" || "$lane_global_propagate_bmc_assume_known_inputs" == "yes" ]]; then
+    cmd+=(--formal-global-propagate-bmc-assume-known-inputs)
+  fi
+
   if [[ -n "${THRESHOLD[$i]}" && "${THRESHOLD[$i]}" != "-" ]]; then
     cmd+=(--coverage-threshold "${THRESHOLD[$i]}")
   fi
