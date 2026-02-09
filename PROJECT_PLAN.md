@@ -18025,6 +18025,22 @@ ninja -C build circt-verilog
     tightening across continuous 24/7 closure runs.
 - Implementation details and validation evidence are tracked in `CHANGELOG.md`.
 
+### Iteration 725
+- Extended refresh policy profiles to carry metadata match-policy defaults:
+  - shared and per-artifact profile keys now support:
+    - `refresh_metadata_require_transport`
+    - `refresh_metadata_require_status`
+    - `refresh_metadata_require_uri_regex`
+    - `refresh_metadata_require_tls_peer_sha256`
+    - `refresh_metadata_require_cert_chain_sha256`
+    - `refresh_metadata_require_cert_chain_length_min`
+- Planner impact:
+  - Moves refresh metadata policy rollout toward centralized profiles with
+    deterministic precedence, reducing lane-local option drift.
+  - Keeps per-run explicit overrides intact while enabling stronger default
+    policy convergence across 24/7 closure lanes.
+- Implementation details and validation evidence are tracked in `CHANGELOG.md`.
+
 ### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
 - Completed the Ed25519 revocation-control chain for lane-state and signer
   keyring modes:
