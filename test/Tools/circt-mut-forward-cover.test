@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "SCRIPT:$(basename "$0")"\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --alpha beta --gamma=1 > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK: SCRIPT:run_mutation_cover.sh
+// CHECK: ARG:--alpha
+// CHECK: ARG:beta
+// CHECK: ARG:--gamma=1
