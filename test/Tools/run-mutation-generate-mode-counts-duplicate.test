@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nout=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" "$script" | tail -n1)\nmode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" "$script" | tail -n1)\ncount=$(sed -n "s/.*mutate -list \\([0-9][0-9]*\\).*/\\1/p" "$script" | tail -n1)\n[[ "$mode" == "inv" ]] || exit 3\n: > "$out"\nfor ((i=1; i<=count; ++i)); do\n  echo "$i M_${mode}_$i" >> "$out"\ndone\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+//
+// RUN: %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 4 --seed 7 --mode-counts inv=1,inv=3 --yosys %t/fake-yosys.sh
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+// RUN: wc -l < %t/mutations.txt | FileCheck %s --check-prefix=LINES
+//
+// LINES: 4
+// OUT: 1 M_inv_1
+// OUT: 2 M_inv_2
+// OUT: 3 M_inv_3
+// OUT: 4 M_inv_4

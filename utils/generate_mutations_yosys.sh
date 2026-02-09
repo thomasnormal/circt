@@ -396,8 +396,10 @@ for mode_count in "${MODE_COUNT_LIST[@]}"; do
   fi
   if [[ -z "${MODE_COUNT_BY_MODE[$mode_name]+x}" ]]; then
     MODE_COUNT_KEYS+=("$mode_name")
+    MODE_COUNT_BY_MODE["$mode_name"]="$mode_value"
+  else
+    MODE_COUNT_BY_MODE["$mode_name"]="$((MODE_COUNT_BY_MODE[$mode_name] + mode_value))"
   fi
-  MODE_COUNT_BY_MODE["$mode_name"]="$mode_value"
   mode_counts_total=$((mode_counts_total + mode_value))
   mode_counts_enabled=1
 done
