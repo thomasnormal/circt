@@ -245,6 +245,9 @@ circt-mut matrix \
   --exclude-lane-regex 'slow'
 ```
 
+Lane TSVs can now override strict matrix gates per lane via tail columns:
+`skip_baseline`, `fail_on_undetected`, `fail_on_errors`.
+
 Mutation materialization is built in by default via
 `utils/create_mutated_yosys.sh`. Override with `--create-mutated-script` only
 if you need MCY/external compatibility behavior.
