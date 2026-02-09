@@ -274,8 +274,9 @@ Execution controls:
 - `circt-mut generate` migration note:
   - core mutation generation now runs natively in `circt-mut` for standard
     generation options (mode/profile/mode-count/cfg/select/top-up).
-  - `--cache-dir` currently routes through compatibility script backend
-    (`generate_mutations_yosys.sh`) until native cache parity is completed.
+  - generated-mutation caching (`--cache-dir`) is now supported in the native
+    generate path with compatibility telemetry (`Mutation cache status`,
+    `saved_runtime_ns`, lock wait/contended counters).
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache

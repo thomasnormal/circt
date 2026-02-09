@@ -15,6 +15,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
@@ -22,13 +23,16 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -72,7 +76,7 @@ static void printGenerateHelp(raw_ostream &os) {
   os << "  --cfgs CSV                Comma-separated KEY=VALUE config entries\n";
   os << "  --select EXPR             Additional mutate select expression (repeatable)\n";
   os << "  --selects CSV             Comma-separated mutate select expressions\n";
-  os << "  --cache-dir DIR           Use script backend (native cache migration pending)\n";
+  os << "  --cache-dir DIR           Optional cache directory for generated mutation lists\n";
   os << "  -h, --help                Show help\n\n";
   os << "Output format:\n";
   os << "  Each line in --out is \"<id> <mutation-spec>\" (MCY-compatible).\n";
@@ -191,6 +195,7 @@ static std::string quoteForYosys(StringRef value) {
 struct GenerateOptions {
   std::string design;
   std::string outFile;
+  std::string cacheDir;
   std::string top;
   uint64_t count = 1000;
   uint64_t seed = 1;
@@ -357,17 +362,15 @@ static GenerateParseResult parseGenerateArgs(ArrayRef<StringRef> args) {
       continue;
     }
 
-    // Keep full compatibility by deferring unsupported/unknown options to the
-    // script backend while native migration is in progress.
     if (arg == "--cache-dir") {
       auto v = requireValue(arg);
       if (!v)
         return result;
-      (void)v;
-      result.fallbackToScript = true;
-      result.ok = true;
-      return result;
+      result.opts.cacheDir = v->str();
+      continue;
     }
+    // Keep full compatibility by deferring unsupported/unknown options to the
+    // script backend while native migration is in progress.
     if (arg.starts_with("-")) {
       result.fallbackToScript = true;
       result.ok = true;
@@ -468,7 +471,105 @@ private:
   std::string path;
 };
 
+class ScopedCacheLock {
+public:
+  ~ScopedCacheLock() { release(); }
+
+  void setLockDir(StringRef dir) { lockDir = dir.str(); }
+  StringRef getLockDir() const { return lockDir; }
+  void setHeld(bool value) { held = value; }
+  bool isHeld() const { return held; }
+
+  void release() {
+    if (!held || lockDir.empty())
+      return;
+    std::error_code ec;
+    SmallString<256> pidFile(lockDir);
+    sys::path::append(pidFile, "pid");
+    (void)sys::fs::remove(pidFile);
+    (void)sys::fs::remove(lockDir);
+    held = false;
+    lockDir.clear();
+  }
+
+private:
+  std::string lockDir;
+  bool held = false;
+};
+
+static std::string hashSHA256(StringRef input) {
+  SHA256 sha;
+  sha.update(input);
+  auto digest = sha.final();
+  return toHex(ArrayRef<uint8_t>(digest), /*LowerCase=*/true);
+}
+
+static std::optional<std::string> hashFileSHA256(StringRef path) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr)
+    return std::nullopt;
+  return hashSHA256(bufferOrErr.get()->getBuffer());
+}
+
+static std::string joinWithTrailingNewline(ArrayRef<std::string> items) {
+  std::string out;
+  if (items.empty()) {
+    out.push_back('\n');
+    return out;
+  }
+  for (const std::string &item : items) {
+    out += item;
+    out.push_back('\n');
+  }
+  return out;
+}
+
+static uint64_t parseGenerationRuntimeFromMeta(StringRef path) {
+  constexpr StringRef key = "generation_runtime_ns\t";
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr)
+    return 0;
+  SmallVector<StringRef, 16> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  for (StringRef line : lines) {
+    if (!line.starts_with(key))
+      continue;
+    uint64_t value = 0;
+    if (!line.substr(key.size()).getAsInteger(10, value))
+      return value;
+  }
+  return 0;
+}
+
+static std::error_code copyFileReplace(StringRef from, StringRef to) {
+  (void)sys::fs::remove(to);
+  return sys::fs::copy_file(from, to);
+}
+
+static uint64_t countNonEmptyLines(StringRef path) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr)
+    return 0;
+  uint64_t count = 0;
+  SmallVector<StringRef, 64> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  for (StringRef line : lines) {
+    if (!line.trim().empty())
+      ++count;
+  }
+  return count;
+}
+
 static int runNativeGenerate(const GenerateOptions &opts) {
+  auto start = std::chrono::steady_clock::now();
+  auto elapsedNs = [&]() -> uint64_t {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(now - start)
+        .count();
+  };
+
   if (!sys::fs::exists(opts.design)) {
     errs() << "circt-mut generate: design file not found: " << opts.design << "\n";
     return 1;
@@ -619,7 +720,132 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     return 1;
   }
 
-  auto start = std::chrono::steady_clock::now();
+  bool cacheEnabled = !opts.cacheDir.empty();
+  std::string cacheFile;
+  std::string cacheMetaFile;
+  uint64_t cacheSavedRuntimeNs = 0;
+  uint64_t cacheLockWaitNs = 0;
+  int cacheLockContended = 0;
+  ScopedCacheLock cacheLock;
+
+  if (cacheEnabled) {
+    std::error_code ec = sys::fs::create_directories(opts.cacheDir);
+    if (ec) {
+      errs() << "circt-mut generate: failed to create cache directory: "
+             << opts.cacheDir << ": " << ec.message() << "\n";
+      return 1;
+    }
+
+    auto designHash = hashFileSHA256(opts.design);
+    if (!designHash) {
+      errs() << "circt-mut generate: failed to hash design file: " << opts.design
+             << "\n";
+      return 1;
+    }
+
+    std::string yosysResolved = opts.yosys;
+    if (ErrorOr<std::string> foundYosys = sys::findProgramByName(opts.yosys))
+      yosysResolved = *foundYosys;
+
+    SmallVector<std::string, 16> cfgEntries;
+    for (const auto &cfg : finalCfgList)
+      cfgEntries.push_back((Twine(cfg.first) + "=" + cfg.second).str());
+
+    std::string modePayload = joinWithTrailingNewline(finalModes);
+    std::string modeCountPayload = joinWithTrailingNewline(opts.modeCountList);
+    std::string profilePayload = joinWithTrailingNewline(opts.profileList);
+    std::string cfgPayload = joinWithTrailingNewline(cfgEntries);
+    std::string selectPayload = joinWithTrailingNewline(finalSelects);
+
+    std::string cachePayload;
+    raw_string_ostream cachePayloadOS(cachePayload);
+    cachePayloadOS << "v1\n";
+    cachePayloadOS << "design_hash=" << *designHash << "\n";
+    cachePayloadOS << "top=" << opts.top << "\n";
+    cachePayloadOS << "count=" << opts.count << "\n";
+    cachePayloadOS << "seed=" << opts.seed << "\n";
+    cachePayloadOS << "yosys_bin=" << yosysResolved << "\n";
+    cachePayloadOS << "modes=" << modePayload;
+    cachePayloadOS << "mode_counts=" << modeCountPayload;
+    cachePayloadOS << "profiles=" << profilePayload;
+    cachePayloadOS << "cfg=" << cfgPayload;
+    cachePayloadOS << "select=" << selectPayload;
+    cachePayloadOS.flush();
+
+    std::string cacheKey = hashSHA256(cachePayload);
+    cacheFile = (Twine(opts.cacheDir) + "/" + cacheKey + ".mutations.txt").str();
+    cacheMetaFile = cacheFile + ".meta";
+
+    auto tryCacheHit = [&](bool afterLock) -> std::optional<int> {
+      uint64_t cacheSize = 0;
+      if (sys::fs::file_size(cacheFile, cacheSize) || cacheSize == 0)
+        return std::nullopt;
+      std::error_code copyEc = copyFileReplace(cacheFile, opts.outFile);
+      if (copyEc) {
+        errs() << "circt-mut generate: failed to copy cache file: " << cacheFile
+               << " -> " << opts.outFile << ": " << copyEc.message() << "\n";
+        return 1;
+      }
+      cacheSavedRuntimeNs = parseGenerationRuntimeFromMeta(cacheMetaFile);
+      uint64_t generated = countNonEmptyLines(opts.outFile);
+      outs() << "Generated mutations: " << generated << " (cache hit)\n";
+      outs() << "Mutation file: " << opts.outFile << "\n";
+      outs() << "Mutation generation runtime_ns: " << elapsedNs() << "\n";
+      outs() << "Mutation cache saved_runtime_ns: " << cacheSavedRuntimeNs
+             << "\n";
+      outs() << "Mutation cache lock_wait_ns: " << cacheLockWaitNs << "\n";
+      outs() << "Mutation cache lock_contended: " << cacheLockContended << "\n";
+      outs() << "Mutation cache status: hit\n";
+      outs() << "Mutation cache file: " << cacheFile << "\n";
+      if (afterLock)
+        cacheLock.release();
+      return 0;
+    };
+
+    if (auto rc = tryCacheHit(/*afterLock=*/false))
+      return *rc;
+
+    cacheLock.setLockDir(cacheFile + ".lock");
+    auto lockStart = std::chrono::steady_clock::now();
+    while (true) {
+      std::error_code lockEc = sys::fs::create_directory(cacheLock.getLockDir());
+      if (!lockEc) {
+        cacheLock.setHeld(true);
+        auto lockEnd = std::chrono::steady_clock::now();
+        cacheLockWaitNs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(lockEnd -
+                                                                  lockStart)
+                .count();
+        break;
+      }
+      if (lockEc != std::errc::file_exists) {
+        errs() << "circt-mut generate: failed to acquire cache lock: "
+               << cacheLock.getLockDir() << ": " << lockEc.message() << "\n";
+        return 1;
+      }
+      cacheLockContended = 1;
+
+      sys::fs::file_status lockStatus;
+      std::error_code statusEc = sys::fs::status(cacheLock.getLockDir(), lockStatus);
+      if (!statusEc) {
+        auto now = std::chrono::system_clock::now();
+        auto ageSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+                              now - lockStatus.getLastModificationTime())
+                              .count();
+        if (ageSeconds >= 3600) {
+          SmallString<256> pidFile(cacheLock.getLockDir());
+          sys::path::append(pidFile, "pid");
+          (void)sys::fs::remove(pidFile);
+          (void)sys::fs::remove(cacheLock.getLockDir());
+          continue;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (auto rc = tryCacheHit(/*afterLock=*/true))
+      return *rc;
+  }
 
   SmallString<256> outParent(opts.outFile);
   sys::path::remove_filename(outParent);
@@ -830,18 +1056,57 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     return 1;
   }
 
-  auto end = std::chrono::steady_clock::now();
-  uint64_t runtimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           end - start)
-                           .count();
+  uint64_t generated = nextID - 1;
 
-  outs() << "Generated mutations: " << (nextID - 1) << "\n";
+  if (cacheEnabled) {
+    std::string cacheTmp = cacheFile + ".tmp." + std::to_string(sys::Process::getProcessId());
+    std::string cacheMetaTmp = cacheMetaFile + ".tmp." + std::to_string(sys::Process::getProcessId());
+
+    std::error_code copyEc = copyFileReplace(opts.outFile, cacheTmp);
+    if (copyEc) {
+      errs() << "circt-mut generate: failed to write cache file: " << cacheTmp
+             << ": " << copyEc.message() << "\n";
+      return 1;
+    }
+
+    std::error_code metaEc;
+    raw_fd_ostream metaOut(cacheMetaTmp, metaEc, sys::fs::OF_Text);
+    if (metaEc) {
+      errs() << "circt-mut generate: failed to write cache metadata: "
+             << cacheMetaTmp << ": " << metaEc.message() << "\n";
+      return 1;
+    }
+    metaOut << "generation_runtime_ns\t" << elapsedNs() << "\n";
+    metaOut.close();
+
+    std::error_code renameEc = sys::fs::rename(cacheTmp, cacheFile);
+    if (renameEc) {
+      errs() << "circt-mut generate: failed to publish cache file: " << cacheTmp
+             << " -> " << cacheFile << ": " << renameEc.message() << "\n";
+      return 1;
+    }
+    renameEc = sys::fs::rename(cacheMetaTmp, cacheMetaFile);
+    if (renameEc) {
+      errs() << "circt-mut generate: failed to publish cache metadata: "
+             << cacheMetaTmp << " -> " << cacheMetaFile << ": "
+             << renameEc.message() << "\n";
+      return 1;
+    }
+    cacheLock.release();
+  }
+
+  outs() << "Generated mutations: " << generated << "\n";
   outs() << "Mutation file: " << opts.outFile << "\n";
-  outs() << "Mutation generation runtime_ns: " << runtimeNs << "\n";
+  outs() << "Mutation generation runtime_ns: " << elapsedNs() << "\n";
   outs() << "Mutation cache saved_runtime_ns: 0\n";
-  outs() << "Mutation cache lock_wait_ns: 0\n";
-  outs() << "Mutation cache lock_contended: 0\n";
-  outs() << "Mutation cache status: disabled\n";
+  outs() << "Mutation cache lock_wait_ns: " << cacheLockWaitNs << "\n";
+  outs() << "Mutation cache lock_contended: " << cacheLockContended << "\n";
+  if (cacheEnabled) {
+    outs() << "Mutation cache status: miss\n";
+    outs() << "Mutation cache file: " << cacheFile << "\n";
+  } else {
+    outs() << "Mutation cache status: disabled\n";
+  }
 
   return 0;
 }
