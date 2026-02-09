@@ -36434,3 +36434,62 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Metadata trust policy still validates sidecar evidence only; it does not yet
   perform live TLS transport-chain capture/verification during refresh.
 - OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
+
+## Iteration 725 - February 9, 2026
+
+### Lane-State Refresh Profile Defaults for Metadata Match Policies
+
+- Extended `--lane-state-manifest-ed25519-refresh-policy-profiles-json` profile
+  schema in `utils/run_formal_all.sh`:
+  - shared profile keys now support:
+    - `refresh_metadata_require_transport`
+    - `refresh_metadata_require_status`
+    - `refresh_metadata_require_uri_regex`
+    - `refresh_metadata_require_tls_peer_sha256`
+    - `refresh_metadata_require_cert_chain_sha256`
+    - `refresh_metadata_require_cert_chain_length_min`
+  - per-artifact profile sections (`crl`, `ocsp`) now support the same keys.
+- Added strict parser validation for new profile fields:
+  - `refresh_metadata_require_*` string keys must be non-empty strings
+  - `refresh_metadata_require_cert_chain_length_min` must be non-negative integer
+  - field-qualified diagnostics report invalid profile path.
+- Extended profile row export/import plumbing for the new keys and propagated
+  values into effective CRL/OCSP metadata policy selection.
+- Effective precedence for profile-driven metadata match requirements:
+  - explicit per-artifact CLI flag
+  - per-artifact profile value
+  - shared profile value
+  - built-in default
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative parser case for non-string profile metadata match field
+    - negative OCSP runtime case where profile-driven `require_transport` conflicts
+      with metadata transport
+    - retained existing profile-driven chain-membership/freshness checks
+  - `docs/FormalRegression.md`
+    - documented new shared/per-artifact profile fields and precedence.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered sweep:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-all-profile-match-smoke-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - sv-tests BMC/LEC PASS (filtered)
+    - verilator-verification BMC/LEC PASS (filtered)
+    - yosys/tests/sva BMC/LEC PASS (filtered)
+    - OpenTitan LEC PASS (filtered)
+    - AVIP compile PASS (9/9 suites)
+
+### Remaining Limitations
+
+- Metadata trust policy still validates sidecar evidence only; it does not yet
+  perform live TLS transport-chain capture/verification during refresh.
+- OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
