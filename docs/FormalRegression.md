@@ -312,6 +312,12 @@ Execution controls:
     `bmc_orig_cache_max_entries`, `bmc_orig_cache_max_bytes`,
     `bmc_orig_cache_max_age_seconds`, `bmc_orig_cache_eviction_policy`,
     `skip_baseline`, `fail_on_undetected`, `fail_on_errors`.
+  - lane boolean formal fields now get native validation with
+    `1|0|true|false|yes|no|-` forms:
+    `global_propagate_assume_known_inputs`,
+    `global_propagate_accept_xprop_only`,
+    `global_propagate_bmc_run_smtlib`,
+    `global_propagate_bmc_assume_known_inputs`.
   - matrix default numeric/cache controls are also validated natively:
     `--default-formal-global-propagate-timeout-seconds`,
     `--default-formal-global-propagate-lec-timeout-seconds`,
