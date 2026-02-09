@@ -122,6 +122,9 @@ Options:
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
                          keyring cert verification
+  --lane-state-manifest-ed25519-ocsp-response-sha256 HEX
+                         Optional SHA256 pin for
+                         --lane-state-manifest-ed25519-ocsp-response-file
   --lane-state-manifest-ed25519-ocsp-max-age-secs N
                          Max allowed OCSP response age in seconds from
                          thisUpdate (default when OCSP is enabled: 604800)
@@ -225,6 +228,7 @@ LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CA_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
+LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE=0
@@ -387,6 +391,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-response-sha256)
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-max-age-secs)
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-require-next-update)
@@ -552,6 +558,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MA
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_CA_FILE" ]]; then
   echo "--lane-state-manifest-ed25519-ocsp-response-file requires --lane-state-manifest-ed25519-ca-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-response-sha256 requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-response-sha256: expected 64 hex chars" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -735,6 +749,7 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" \
       LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE="$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE" \
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
@@ -754,6 +769,7 @@ target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
 ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
 crl_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_FILE", "").strip()
 ocsp_response_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE", "").strip()
+ocsp_response_expected_sha = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256", "").strip()
 ocsp_max_age_secs = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS", "").strip()
 ocsp_require_next_update = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_NEXT_UPDATE", "").strip() == "1"
 cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
@@ -1034,6 +1050,13 @@ if cert_file_path:
         f"lane state Ed25519 certificate verify failed for key_id '{target_key_id}'",
     )
     if ocsp_response_file:
+      ocsp_sha = hashlib.sha256(Path(ocsp_response_file).read_bytes()).hexdigest()
+      if ocsp_response_expected_sha and ocsp_sha != ocsp_response_expected_sha:
+        print(
+            f"lane state Ed25519 OCSP response SHA256 mismatch for key_id '{target_key_id}': expected {ocsp_response_expected_sha}, found {ocsp_sha}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
       ocsp_status_raw = run_openssl(
           [
               "openssl",

@@ -34389,6 +34389,49 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OCSP mode remains pinned-response-file based (no live responder URL mode).
 - No CRL/OCSP distribution-point fetch/refresh automation yet.
 
+## Iteration 692 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Response SHA Pinning
+
+- Added `--lane-state-manifest-ed25519-ocsp-response-sha256` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - validates configured SHA256 against the OCSP DER response before status
+    verification
+  - fails fast on mismatch with key-id-qualified diagnostics.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency check for OCSP SHA pin without response file
+    - negative OCSP response SHA mismatch case
+  - `docs/FormalRegression.md`
+    - documented OCSP response SHA pin option and usage example.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, OCSP strict + SHA pin policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-sha-sweep-20260209-015841/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode remains pinned-response-file based (no live responder URL mode).
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
 ## Iteration 679 - February 8, 2026
 
 ### Lane-State Compatibility Policy Versioning

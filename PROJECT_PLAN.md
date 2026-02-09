@@ -18264,6 +18264,14 @@ ninja -C build circt-verilog
     acceptance under strict policy.
   - Moves OCSP handling toward production PKI policy controls.
 
+### Iteration 692
+- Added OCSP response SHA pinning for Ed25519 lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-response-sha256`
+  - validates configured SHA256 against OCSP DER response before verification.
+- Planning impact:
+  - Prevents accidental/malicious OCSP response file substitution.
+  - Complements config-hash binding with explicit first-use integrity pinning.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18276,6 +18284,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add OCSP responder-identity policy controls (currently response-file based
     only).
+  - Add OCSP/certificate signer linkage policy hardening for multi-issuer
+    deployments.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
