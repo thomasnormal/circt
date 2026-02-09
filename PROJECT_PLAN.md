@@ -18001,173 +18001,27 @@ ninja -C build circt-verilog
     resume/reset paths.
   - Hardens 24/7 distributed checkpoint trust against stale or compromised certs.
 
-### Iteration 688
-- Added CRL freshness enforcement for Ed25519 lane-state keyring mode:
-  - CRL `nextUpdate` is parsed and required to be >= current UTC time.
-  - Stale CRLs fail fast before certificate verification.
+### Recent Lane-State Hardening Summary (See CHANGELOG for Details)
+- Completed the Ed25519 revocation-control chain for lane-state and signer
+  keyring modes:
+  - CRL freshness gating
+  - OCSP status + freshness + next-update gating
+  - OCSP response SHA pinning
+  - responder identity/certificate pinning + EKU + AKI/SKI linkage
+  - explicit OCSP issuer certificate selection.
+- Completed refresh metadata trust-policy tightening:
+  - minimum certificate-chain depth policies
+  - TLS peer-in-chain linkage policies
+  - CA cert-in-chain membership policies for CRL/OCSP refresh metadata.
+- Completed refresh-policy profile rollout and signer-trust hardening:
+  - shared/per-artifact profile defaults
+  - signed profile-registry support
+  - deterministic precedence and config-hash compatibility behavior.
 - Planning impact:
-  - Prevents acceptance of revoked-status data from expired CRLs.
-  - Tightens revocation policy from "CRL present" to "CRL present and fresh".
-
-### Iteration 689
-- Added Ed25519 OCSP revocation checks for lane-state keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-response-file`
-  - requires `--lane-state-manifest-ed25519-ca-file`
-  - OCSP response hash now binds into lane-state config/manifest contracts.
-- Planning impact:
-  - Closes online-status parity gap by supporting revocation proofs beyond CRL.
-  - Strengthens signer revocation policy for distributed 24/7 checkpoint trust.
-
-### Iteration 690
-- Added OCSP freshness-age policy for Ed25519 lane-state keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-max-age-secs`
-  - default when OCSP mode is enabled: 604800 seconds
-  - enforces freshness from OCSP `This Update` and blocks stale responses.
-- Planning impact:
-  - Prevents replay of old but syntactically valid OCSP responses.
-  - Tightens revocation policy from status-only to status + freshness.
-
-### Iteration 691
-- Added OCSP `nextUpdate` policy control for Ed25519 lane-state keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-require-next-update`
-  - enforces presence of `Next Update` in OCSP responses when policy is enabled.
-- Planning impact:
-  - Tightens revocation response quality by preventing indefinite-lifetime OCSP
-    acceptance under strict policy.
-  - Moves OCSP handling toward production PKI policy controls.
-
-### Iteration 692
-- Added OCSP response SHA pinning for Ed25519 lane-state keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-response-sha256`
-  - validates configured SHA256 against OCSP DER response before verification.
-- Planning impact:
-  - Prevents accidental/malicious OCSP response file substitution.
-  - Complements config-hash binding with explicit first-use integrity pinning.
-
-### Iteration 693
-- Added OCSP responder identity policy controls for Ed25519 lane-state keyring
-  mode:
-  - `--lane-state-manifest-ed25519-ocsp-responder-id-regex`
-  - validates OCSP `Responder Id` against configured regex in strict mode.
-- Planning impact:
-  - Tightens OCSP trust posture by binding accepted responder identities.
-  - Reduces risk of accepting responses from unexpected but chain-valid
-    responders in multi-issuer environments.
-
-### Iteration 694
-- Added OCSP responder certificate pinning controls for Ed25519 lane-state
-  keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-responder-cert-file`
-  - `--lane-state-manifest-ed25519-ocsp-responder-cert-sha256`
-  - OCSP verification can now be bound to an explicit responder certificate,
-    not only CA-chain acceptance plus responder-id text policy.
-- Planning impact:
-  - Hardens multi-issuer deployments by requiring signer-certificate linkage for
-    OCSP responses.
-  - Improves deterministic trust posture for 24/7 distributed closure and
-    resume safety.
-
-### Iteration 695
-- Added OCSP responder EKU policy control for Ed25519 lane-state keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing`
-  - enforces that pinned responder cert includes EKU `OCSP Signing`.
-- Planning impact:
-  - Prevents acceptance of responder certs that are chain-valid but not scoped
-    for OCSP signing usage.
-  - Tightens OCSP signer policy toward production PKI role separation.
-
-### Iteration 696
-- Added OCSP responder AKI/SKI linkage policy control for Ed25519 lane-state
-  keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski`
-  - enforces responder cert AKI keyid linkage against CA cert SKI.
-- Planning impact:
-  - Tightens responder-to-issuer binding beyond chain validity by requiring
-    explicit key-identifier linkage.
-  - Reduces multi-issuer ambiguity risk in long-running distributed closure.
-
-### Iteration 697
-- Added explicit OCSP issuer certificate selection for Ed25519 lane-state
-  keyring mode:
-  - `--lane-state-manifest-ed25519-ocsp-issuer-cert-file`
-  - defaults to `--lane-state-manifest-ed25519-ca-file` when unset
-  - requires `--lane-state-manifest-ed25519-ocsp-response-file`.
-- Planning impact:
-  - Removes issuer ambiguity when CA bundles contain multiple issuer
-    certificates.
-  - Binds issuer-cert hash into lane-state config/manifest verification
-    contracts for deterministic resume safety.
-
-### Iteration 712
-- Added Ed25519 refresh auto-URI policy profile registry support:
-  - `--lane-state-manifest-ed25519-refresh-policy-profiles-json`
-  - `--lane-state-manifest-ed25519-refresh-policy-profile`
-- Profiles now provide shared and per-artifact defaults for:
-  - `auto_uri_policy`
-  - `auto_uri_allowed_schemes`
-- Effective precedence is now explicit and stable:
-  - per-artifact CLI > shared CLI > per-artifact profile > shared profile >
-    built-in defaults.
-- Planning impact:
-  - Enables fleet-wide baseline policy rollout for 24/7 farms without requiring
-    per-job flag duplication.
-  - Keeps strict determinism: profile-derived controls remain part of lane-state
-    config-hash compatibility checks.
-
-### Iteration 718
-- Closed responder identity/pinning parity for refresh-policy profile-manifest
-  signer OCSP checks in signer keyring mode:
-  - responder cert pinning + SHA policy
-  - responder EKU (`OCSP Signing`) and AKI/SKI linkage checks
-  - responder-id regex policy
-  - optional explicit OCSP issuer-cert selection
-- Planning impact:
-  - Profile-manifest signer OCSP trust now matches lane-state signer OCSP
-    identity controls, reducing trust-policy drift between the two paths.
-
-### Iteration 719
-- Added lane-state refresh metadata chain-length policy controls for Ed25519
-  CRL/OCSP refresh validation:
-  - `...crl-refresh-metadata-require-cert-chain-length-min`
-  - `...ocsp-refresh-metadata-require-cert-chain-length-min`
-- Hardened built-in HTTPS refresh metadata evidence capture to populate
-  leaf-plus-chain SHA observations where available.
-- Planning impact:
-  - moves refresh-side trust checks beyond single-cert pins toward explicit
-    minimum evidence depth policies.
-  - improves long-term closure readiness for stricter transport provenance
-    contracts.
-
-### Iteration 721
-- Added opt-in TLS peer-to-chain linkage policy controls for Ed25519 CRL/OCSP
-  refresh metadata:
-  - `...crl-refresh-metadata-require-tls-peer-in-cert-chain`
-  - `...ocsp-refresh-metadata-require-tls-peer-in-cert-chain`
-- Added strict linkage semantics under policy:
-  - require `https` transport
-  - require `tls_peer_sha256` membership in `cert_chain_sha256`
-- Planning impact:
-  - closes a trust-evidence consistency gap between independent TLS peer pin
-    checks and cert-chain observations.
-  - improves readiness for future issuer/path verification enforcement.
-
-### Lane-State Hardening Snapshot (Iterations 713-721)
-- Delivered chain of trust for refresh-policy profile registries and their
-  signer material:
-  - profile-registry SHA pinning
-  - signed profile-registry manifest verification
-  - signer keyring mode for profile-manifest signers
-  - signer certificate anchoring + CA verification
-  - signer CRL/OCSP revocation and freshness policy controls
-  - signer OCSP responder identity/pinning controls
-  - refresh metadata minimum-chain-depth policy gates
-  - refresh metadata TLS peer-chain linkage policy gates.
-- Planning impact:
-  - Refresh-policy profile trust now supports rotation-friendly signer identity
-    and cert-based revocation controls while remaining deterministic under
-    resume/merge config-hash policies.
-- Detailed implementation, diagnostics, and validation evidence for each
-  iteration is tracked in `CHANGELOG.md`.
+  - Lane-state refresh and resume trust is now materially stricter and more
+    deterministic for 24/7 distributed execution.
+  - Remaining execution-level details and validation command logs are tracked in
+    `CHANGELOG.md`.
 
 ### Recent Lane-State Hardening (See CHANGELOG)
 - Iterations 698-718 completed the CRL/OCSP refresh control plane:
