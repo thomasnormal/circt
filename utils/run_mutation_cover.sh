@@ -24,6 +24,7 @@ Optional:
   --summary-json-file FILE   Machine-readable summary JSON (default: <work-dir>/summary.json)
   --improvement-file FILE    Improvement-mode summary TSV (default: <work-dir>/improvement.tsv)
   --reuse-pair-file FILE     Reuse activation/propagation from prior pair_qualification.tsv
+  --reuse-summary-file FILE  Reuse prior summary.tsv detected_by_test as test-order hints
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -70,6 +71,7 @@ METRICS_FILE=""
 SUMMARY_JSON_FILE=""
 IMPROVEMENT_FILE=""
 REUSE_PAIR_FILE=""
+REUSE_SUMMARY_FILE=""
 CREATE_MUTATED_SCRIPT="${HOME}/mcy/scripts/create_mutated.sh"
 MUTANT_FORMAT="il"
 FORMAL_ACTIVATE_CMD=""
@@ -99,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --summary-json-file) SUMMARY_JSON_FILE="$2"; shift 2 ;;
     --improvement-file) IMPROVEMENT_FILE="$2"; shift 2 ;;
     --reuse-pair-file) REUSE_PAIR_FILE="$2"; shift 2 ;;
+    --reuse-summary-file) REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -138,6 +141,10 @@ if [[ ! -f "$TESTS_MANIFEST" ]]; then
 fi
 if [[ -n "$REUSE_PAIR_FILE" && ! -f "$REUSE_PAIR_FILE" ]]; then
   echo "Reuse pair file not found: $REUSE_PAIR_FILE" >&2
+  exit 1
+fi
+if [[ -n "$REUSE_SUMMARY_FILE" && ! -f "$REUSE_SUMMARY_FILE" ]]; then
+  echo "Reuse summary file not found: $REUSE_SUMMARY_FILE" >&2
   exit 1
 fi
 if [[ ! -x "$CREATE_MUTATED_SCRIPT" ]]; then
@@ -214,6 +221,7 @@ declare -A REUSE_ACTIVATION
 declare -A REUSE_PROPAGATION
 declare -A REUSE_ACTIVATE_EXIT
 declare -A REUSE_PROPAGATE_EXIT
+declare -A REUSE_DETECTED_TEST
 
 declare -a MUTATION_IDS
 declare -a MUTATION_SPECS
@@ -315,6 +323,39 @@ load_reuse_pairs() {
     REUSE_ACTIVATE_EXIT["$key"]="${activate_exit:--1}"
     REUSE_PROPAGATE_EXIT["$key"]="${propagate_exit:--1}"
   done < "$REUSE_PAIR_FILE"
+}
+
+load_reuse_summary() {
+  local line=""
+  local mutation_id=""
+  local classification=""
+  local detected_by_test=""
+  local base_class=""
+
+  if [[ -z "$REUSE_SUMMARY_FILE" ]]; then
+    return
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+    IFS=$'\t' read -r mutation_id classification _ detected_by_test _ <<< "$line"
+    if [[ -z "$mutation_id" || -z "$classification" ]]; then
+      continue
+    fi
+    base_class="${classification%%+*}"
+    if [[ "$base_class" != "detected" ]]; then
+      continue
+    fi
+    if [[ -z "$detected_by_test" || "$detected_by_test" == "-" ]]; then
+      continue
+    fi
+    if [[ -z "${TEST_CMD[$detected_by_test]+x}" ]]; then
+      continue
+    fi
+    REUSE_DETECTED_TEST["$mutation_id"]="$detected_by_test"
+  done < "$REUSE_SUMMARY_FILE"
 }
 
 run_command() {
@@ -458,6 +499,10 @@ process_mutation() {
   local reuse_key=""
   local reuse_hit=0
   local run_note="run_detection"
+  local hinted_test=""
+  local hinted_mutant=0
+  local hint_hit=0
+  local -a ORDERED_TESTS=()
 
   printf "1 %s\n" "$mutation_spec" > "$mutation_dir/input.txt"
 
@@ -476,6 +521,8 @@ process_mutation() {
     {
       printf "errors\t%s\n" "$mutation_errors"
       printf "reused_pairs\t0\n"
+      printf "hinted_mutant\t0\n"
+      printf "hint_hit\t0\n"
     } > "$meta_local"
     return 0
   fi
@@ -487,7 +534,19 @@ process_mutation() {
   export MUTATION_SPEC="$mutation_spec"
   export MUTATION_WORKDIR="$mutation_dir"
 
+  hinted_test="${REUSE_DETECTED_TEST[$mutation_id]:-}"
+  if [[ -n "$hinted_test" ]]; then
+    hinted_mutant=1
+    ORDERED_TESTS+=("$hinted_test")
+  fi
   for test_id in "${TEST_ORDER[@]}"; do
+    if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
+      continue
+    fi
+    ORDERED_TESTS+=("$test_id")
+  done
+
+  for test_id in "${ORDERED_TESTS[@]}"; do
     export TEST_ID="$test_id"
     test_dir="${mutation_dir}/${test_id}"
     mkdir -p "$test_dir"
@@ -505,6 +564,13 @@ process_mutation() {
       run_note="cached_run_detection"
     else
       read -r activate_state activate_rc < <(classify_activate "$test_dir" "$test_dir/activate.log")
+    fi
+    if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
+      if [[ "$run_note" == "cached_run_detection" ]]; then
+        run_note="hinted_cached_run_detection"
+      else
+        run_note="hinted_run_detection"
+      fi
     fi
 
     if [[ "$activate_state" == "error" ]]; then
@@ -559,6 +625,9 @@ process_mutation() {
     if [[ "$test_result" == "detected" ]]; then
       mutant_class="detected"
       detected_by_test="$test_id"
+      if [[ -n "$hinted_test" && "$test_id" == "$hinted_test" ]]; then
+        hint_hit=1
+      fi
       break
     fi
   done
@@ -581,11 +650,14 @@ process_mutation() {
   {
     printf "errors\t%s\n" "$mutation_errors"
     printf "reused_pairs\t%s\n" "$reused_pairs"
+    printf "hinted_mutant\t%s\n" "$hinted_mutant"
+    printf "hint_hit\t%s\n" "$hint_hit"
   } > "$meta_local"
 }
 
 load_tests_manifest
 load_reuse_pairs
+load_reuse_summary
 load_mutations
 if [[ "${#MUTATION_IDS[@]}" -eq 0 ]]; then
   echo "No usable mutations loaded from: $MUTATIONS_FILE" >&2
@@ -653,6 +725,8 @@ count_not_propagated=0
 count_detected=0
 count_propagated_not_detected=0
 count_reused_pairs=0
+count_hinted_mutants=0
+count_hint_hits=0
 
 for i in "${!MUTATION_IDS[@]}"; do
   mutation_id="${MUTATION_IDS[$i]}"
@@ -701,6 +775,24 @@ for i in "${!MUTATION_IDS[@]}"; do
   if [[ "$local_reused" =~ ^[0-9]+$ ]]; then
     count_reused_pairs=$((count_reused_pairs + local_reused))
   fi
+
+  local_hinted=0
+  if [[ -f "$meta_local" ]]; then
+    local_hinted="$(awk -F$'\t' '$1=="hinted_mutant"{print $2}' "$meta_local" | head -n1)"
+    local_hinted="${local_hinted:-0}"
+  fi
+  if [[ "$local_hinted" =~ ^[0-9]+$ ]]; then
+    count_hinted_mutants=$((count_hinted_mutants + local_hinted))
+  fi
+
+  local_hint_hit=0
+  if [[ -f "$meta_local" ]]; then
+    local_hint_hit="$(awk -F$'\t' '$1=="hint_hit"{print $2}' "$meta_local" | head -n1)"
+    local_hint_hit="${local_hint_hit:-0}"
+  fi
+  if [[ "$local_hint_hit" =~ ^[0-9]+$ ]]; then
+    count_hint_hits=$((count_hint_hits + local_hint_hit))
+  fi
 done
 
 count_relevant=$((count_detected + count_propagated_not_detected))
@@ -718,6 +810,8 @@ fi
   printf "not_propagated_mutants\t%s\n" "$count_not_propagated"
   printf "not_activated_mutants\t%s\n" "$count_not_activated"
   printf "reused_pairs\t%s\n" "$count_reused_pairs"
+  printf "hinted_mutants\t%s\n" "$count_hinted_mutants"
+  printf "hint_hits\t%s\n" "$count_hint_hits"
   printf "errors\t%s\n" "$errors"
   printf "mutation_coverage_percent\t%s\n" "$coverage_pct"
 } > "$METRICS_FILE"
@@ -762,6 +856,8 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "not_propagated_mutants": $count_not_propagated,
   "not_activated_mutants": $count_not_activated,
   "reused_pairs": $count_reused_pairs,
+  "hinted_mutants": $count_hinted_mutants,
+  "hint_hits": $count_hint_hits,
   "errors": $errors,
   "mutation_coverage_percent": $coverage_pct,
   "coverage_threshold_percent": $threshold_json,
@@ -771,7 +867,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

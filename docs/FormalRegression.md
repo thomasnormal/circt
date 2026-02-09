@@ -89,6 +89,8 @@ Execution controls:
 - `--reuse-pair-file <path>`: reuse prior `pair_qualification.tsv`
   activation/propagation rows so iterative testbench-improvement runs can skip
   repeated formal pre-qualification work.
+- `--reuse-summary-file <path>`: reuse prior `summary.tsv` `detected_by_test`
+  as per-mutant test-order hints to reduce detection reruns.
 
 `tests.tsv` format (tab-separated):
 
@@ -109,6 +111,9 @@ Generated artifacts (default under `./mutation-cover-results`):
 - `metrics.tsv`: gate-oriented aggregate metrics (coverage, bucket counts, errors)
 - `summary.json`: machine-readable gate/coverage summary for CI trend ingestion
 - `improvement.tsv`: actionable bucket-to-remediation mapping
+- hint metrics:
+  - `hinted_mutants`: mutants with a usable prior `detected_by_test` hint
+  - `hint_hits`: hinted mutants detected by the hinted test
 
 Gate behavior:
 - `--coverage-threshold <pct>`: fails with exit code `2` when detected/relevant falls below threshold.
