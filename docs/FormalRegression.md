@@ -344,7 +344,9 @@ Execution controls:
   - `bmc-then-lec`: use differential BMC first and fall back to LEC when BMC
     returns `UNKNOWN` or an error.
   - `consensus`: run both LEC and differential BMC and classify
-    `not_propagated` only when both agree on non-propagation.
+    `not_propagated` only when both agree on non-propagation. If one engine
+    errors while the other reports non-propagation, classify conservatively as
+    `propagated` (do not prune).
   - `auto`: run LEC and differential BMC in parallel with consensus-safe
     classification (same pruning semantics as `consensus` with lower wall-time).
 
@@ -400,10 +402,18 @@ Generated artifacts (default under `./mutation-cover-results`):
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
     `not_propagated` by chained-mode BMC fallback.
+  - `chain_bmc_resolved_propagated_mutants`: count of mutants classified as
+    `propagated` by chained-mode BMC fallback.
   - `chain_bmc_unknown_fallbacks`: count of mutants where chained mode fell
     back from BMC `UNKNOWN` to LEC.
   - `chain_lec_resolved_not_propagated_mutants`: count of mutants classified as
     `not_propagated` by chained-mode LEC fallback.
+  - `chain_lec_resolved_propagated_mutants`: count of mutants classified as
+    `propagated` by chained-mode LEC fallback.
+  - `chain_lec_error_fallbacks`: count of mutants where chained mode observed
+    a LEC error and still produced conservative `propagated` classification.
+  - `chain_bmc_error_fallbacks`: count of mutants where chained mode observed
+    a BMC error and still produced conservative `propagated` classification.
   - `chain_consensus_not_propagated_mutants`: count of mutants classified
     `not_propagated` under consensus mode.
   - `chain_consensus_disagreement_mutants`: count of mutants where LEC/BMC
