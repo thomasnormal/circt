@@ -22003,7 +22003,9 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
                         SymbolRefAttr classSym) {
   SmallVector<RangeConstraintInfo> constraints;
 
-  // Build a map from property names to their indices and types
+  // Build a map from property names to their indices and types.
+  // Walk the full class hierarchy so constraints in derived classes can
+  // reference properties declared in base classes (IEEE 1800-2017 §18.5.14.1).
   DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
   unsigned propIdx = 0;
 
@@ -22019,6 +22021,33 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
     if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
       propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
       propIdx++;
+    }
+  }
+
+  // Also include properties from parent classes so that constraints
+  // referencing inherited properties can be extracted.
+  {
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      unsigned parentIdx = baseClass.getBaseAttr() ? 1 : 1;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+          // Only add if not already present (child can shadow parent)
+          if (!propertyMap.contains(propDecl.getSymName())) {
+            propertyMap[propDecl.getSymName()] = {parentIdx,
+                                                  propDecl.getPropertyType()};
+          }
+          parentIdx++;
+        }
+      }
+      parentDecl = baseClass;
     }
   }
 
@@ -22602,7 +22631,9 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
                        SymbolRefAttr classSym) {
   SmallVector<SoftConstraintInfo> softConstraints;
 
-  // Build a map from property names to their indices and types
+  // Build a map from property names to their indices and types.
+  // Include inherited properties so constraints referencing parent properties
+  // can be extracted (IEEE 1800-2017 §18.5.14.1).
   DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
   unsigned propIdx = 0;
 
@@ -22616,6 +22647,31 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
     if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
       propertyMap[propDecl.getSymName()] = {propIdx, propDecl.getPropertyType()};
       propIdx++;
+    }
+  }
+
+  // Also include properties from parent classes.
+  {
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      unsigned parentIdx = baseClass.getBaseAttr() ? 1 : 1;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op)) {
+          if (!propertyMap.contains(propDecl.getSymName())) {
+            propertyMap[propDecl.getSymName()] = {parentIdx,
+                                                  propDecl.getPropertyType()};
+          }
+          parentIdx++;
+        }
+      }
+      parentDecl = baseClass;
     }
   }
 
@@ -24294,11 +24350,109 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
     }
 
-    // Also collect soft range constraints (from ConstraintExprOp with isSoft)
+    // IEEE 1800-2017 §18.5.14.1: Soft constraint priority rules:
+    // 1. Within the same class, the LAST soft constraint per property wins
+    // 2. Derived class soft constraints override base class soft constraints
+    // 3. Soft equality (SoftConstraintInfo) and soft range (RangeConstraintInfo
+    //    with isSoft) are treated uniformly - a property appears in only one.
+    //
+    // Strategy: Process each class level separately (child first, then each
+    // parent). Within each level, iterate forward so later entries replace
+    // earlier ones (last-wins). Across levels, child's result is locked and
+    // parent entries for the same property are skipped (child-wins).
+
+    // First pass: soft equality constraints (SoftConstraintInfo).
+    SmallVector<SoftConstraintInfo> effectiveSoftConstraints;
+    {
+      llvm::DenseMap<StringRef, size_t> softEqByProp;
+      for (const auto &soft : softConstraints) {
+        if (hardConstrainedProps.contains(soft.propertyName))
+          continue;
+        auto it = softEqByProp.find(soft.propertyName);
+        if (it != softEqByProp.end()) {
+          effectiveSoftConstraints[it->second] = soft;
+        } else {
+          softEqByProp[soft.propertyName] = effectiveSoftConstraints.size();
+          effectiveSoftConstraints.push_back(soft);
+        }
+      }
+    }
+
+    // Track properties already claimed by any soft constraint type.
+    llvm::DenseSet<StringRef> claimedSoftProps;
+    for (const auto &soft : effectiveSoftConstraints)
+      claimedSoftProps.insert(soft.propertyName);
+
+    // Second pass: soft range constraints per class level.
+    // rangeConstraints = [childConstraints...][parent1...][parent2...]
+    // We process per-level segments: within each level, last-wins (replace).
+    // Across levels, first level with a property locks it.
     SmallVector<RangeConstraintInfo> softRangeConstraints;
-    for (const auto &constraint : rangeConstraints) {
-      if (constraint.isSoft && !hardConstrainedProps.contains(constraint.propertyName)) {
-        softRangeConstraints.push_back(constraint);
+    {
+      // Build per-level segments: extract child count, then each parent count.
+      SmallVector<size_t> levelBoundaries;
+      if (classDecl) {
+        // Count child's own soft range constraints
+        size_t childCount = 0;
+        for (const auto &c : rangeConstraints) {
+          (void)c;
+          childCount++;
+        }
+        // The boundary approach: we know the extraction order from lines above.
+        // rangeConstraints starts with extractRangeConstraints(classDecl),
+        // then parent constraints are appended. We can't easily recover
+        // the boundary post-hoc. Instead, re-process using per-class
+        // extraction results.
+      }
+
+      // Simpler: re-extract per class level and process each.
+      // The rangeConstraints array is already built. We need to know which
+      // constraints came from which class. Since extractRangeConstraints
+      // is a pure function, we can call it again per level.
+      struct ClassLevel {
+        SmallVector<RangeConstraintInfo> constraints;
+      };
+      SmallVector<ClassLevel> levels;
+
+      if (classDecl) {
+        ClassLevel childLevel;
+        childLevel.constraints = extractRangeConstraints(classDecl, cache, classSym);
+        levels.push_back(std::move(childLevel));
+
+        ClassDeclOp parentDecl = classDecl;
+        while (auto baseAttr = parentDecl.getBaseAttr()) {
+          ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+          auto *baseSym = mod.lookupSymbol(baseAttr);
+          if (!baseSym) break;
+          auto baseClassDecl = dyn_cast<ClassDeclOp>(baseSym);
+          if (!baseClassDecl) break;
+          ClassLevel parentLevel;
+          parentLevel.constraints =
+              extractRangeConstraints(baseClassDecl, cache, classSym);
+          levels.push_back(std::move(parentLevel));
+          parentDecl = baseClassDecl;
+        }
+      }
+
+      // Process each level: within level, last-wins; across levels, first-wins.
+      llvm::DenseMap<StringRef, size_t> softRangeByProp;
+      for (auto &level : levels) {
+        // Within this level, find the last soft constraint per property.
+        llvm::DenseMap<StringRef, const RangeConstraintInfo*> levelLast;
+        for (const auto &c : level.constraints) {
+          if (c.isSoft && !hardConstrainedProps.contains(c.propertyName) &&
+              !claimedSoftProps.contains(c.propertyName)) {
+            levelLast[c.propertyName] = &c;
+          }
+        }
+        // Add level's winners to the result (if not already claimed).
+        for (auto &[propName, cPtr] : levelLast) {
+          if (!claimedSoftProps.contains(propName)) {
+            softRangeByProp[propName] = softRangeConstraints.size();
+            softRangeConstraints.push_back(*cPtr);
+            claimedSoftProps.insert(propName);
+          }
+        }
       }
     }
 
@@ -24307,13 +24461,6 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       hardConstrainedProps.insert(dist.propertyName);
     }
 
-    // Filter soft constraints to only those without hard constraints
-    SmallVector<SoftConstraintInfo> effectiveSoftConstraints;
-    for (const auto &soft : softConstraints) {
-      if (!hardConstrainedProps.contains(soft.propertyName)) {
-        effectiveSoftConstraints.push_back(soft);
-      }
-    }
 
     // Apply solve-before ordering to constraints if any ordering is specified
     if (!solveBeforeOrdering.empty()) {
