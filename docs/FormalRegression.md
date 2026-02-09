@@ -138,6 +138,9 @@ Lane-state semantics:
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-crl-refresh-jitter-secs` adds randomized
   retry delay (`0..N` seconds) for CRL refresh retries.
+- `--lane-state-manifest-ed25519-crl-refresh-metadata-file` accepts a JSON
+  object sidecar path produced by refresh automation and embeds it in signed
+  CRL refresh provenance.
 - CRL mode enforces freshness from CRL `nextUpdate`; stale CRLs are rejected
   before certificate verification.
 - `--lane-state-manifest-ed25519-ocsp-response-file` enables OCSP revocation
@@ -152,6 +155,9 @@ Lane-state semantics:
   refresh attempt wall-clock time.
 - `--lane-state-manifest-ed25519-ocsp-refresh-jitter-secs` adds randomized
   retry delay (`0..N` seconds) for OCSP refresh retries.
+- `--lane-state-manifest-ed25519-ocsp-refresh-metadata-file` accepts a JSON
+  object sidecar path produced by refresh automation and embeds it in signed
+  OCSP refresh provenance.
 - When Ed25519 manifest signing is enabled, CRL/OCSP refresh hooks now emit
   signed refresh provenance into `<lane-state>.manifest.json` (attempt timeline,
   timeout/failure markers, and observed artifact SHA256 per attempt).
