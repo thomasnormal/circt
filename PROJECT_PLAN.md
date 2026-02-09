@@ -18336,6 +18336,8 @@ ninja -C build circt-verilog
 - Iteration 703 enforces a strict versioned (`schema_version=1`) metadata
   contract for CRL/OCSP source-metadata sidecars and rejects malformed metadata
   before manifest emission.
+- Iteration 704 adds explicit metadata trust-policy gates (transport/status/URI
+  regex/TLS peer SHA/cert-chain digest) for CRL/OCSP refresh sidecars.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18351,8 +18353,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Extend source-metadata trust from schema validation to transport-chain
-    attestation policy (TLS peer/cert-chain pinning and verification outcomes).
+  - Move metadata trust from static policy matching to active transport-chain
+    capture/verification in refresh tooling (issuer/path validation evidence).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.

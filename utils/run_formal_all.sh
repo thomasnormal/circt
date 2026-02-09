@@ -135,6 +135,17 @@ Options:
                          Optional JSON object file emitted/updated by CRL
                          refresh command and embedded in signed refresh
                          provenance
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-transport MODE
+                         Require CRL refresh metadata `transport` value
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-status STATUS
+                         Require CRL refresh metadata `status` value
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex REGEX
+                         Require CRL refresh metadata `uri` to match REGEX
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256 HEX
+                         Require CRL refresh metadata `tls_peer_sha256` value
+  --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 HEX
+                         Require CRL refresh metadata `cert_chain_sha256` to
+                         contain HEX digest
   --lane-state-manifest-ed25519-ocsp-response-file FILE
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
@@ -156,6 +167,17 @@ Options:
                          Optional JSON object file emitted/updated by OCSP
                          refresh command and embedded in signed refresh
                          provenance
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-transport MODE
+                         Require OCSP refresh metadata `transport` value
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-status STATUS
+                         Require OCSP refresh metadata `status` value
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex REGEX
+                         Require OCSP refresh metadata `uri` to match REGEX
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256 HEX
+                         Require OCSP refresh metadata `tls_peer_sha256` value
+  --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 HEX
+                         Require OCSP refresh metadata `cert_chain_sha256` to
+                         contain HEX digest
   --lane-state-manifest-ed25519-ocsp-response-sha256 HEX
                          Optional SHA256 pin for
                          --lane-state-manifest-ed25519-ocsp-response-file
@@ -283,6 +305,11 @@ LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS=""
 LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
+LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES=""
@@ -290,6 +317,11 @@ LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_DELAY_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS=""
 LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256=""
+LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_FILE=""
@@ -473,6 +505,16 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-crl-refresh-metadata-file)
       LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-transport)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-status)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256)
+      LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-cmd)
@@ -487,6 +529,16 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-refresh-metadata-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-transport)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-status)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256)
+      LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-sha256)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-responder-cert-file)
@@ -684,6 +736,26 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" && -z "$LANE_S
   echo "--lane-state-manifest-ed25519-crl-refresh-metadata-file requires --lane-state-manifest-ed25519-crl-refresh-cmd" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-transport requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-status requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256 requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-crl-refresh-metadata-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-retries: expected non-negative integer" >&2
   exit 1
@@ -698,6 +770,32 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" && ! "$LANE_STA
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-crl-refresh-jitter-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" =~ ^(file|http|https|other)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-transport: expected one of file,http,https,other" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS" =~ ^(ok|error|stale|unknown)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-status: expected one of ok,error,stale,unknown" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" 2>/dev/null
+  crl_metadata_uri_regex_ec=$?
+  set -e
+  if [[ "$crl_metadata_uri_regex_ec" == "2" ]]; then
+    echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex: $LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256: expected 64 lowercase hex chars" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256: expected 64 lowercase hex chars" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
@@ -732,6 +830,26 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" && -z "$LANE_
   echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-file requires --lane-state-manifest-ed25519-ocsp-refresh-cmd" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-transport requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-status requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256 requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256 requires --lane-state-manifest-ed25519-ocsp-refresh-metadata-file" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-retries: expected non-negative integer" >&2
   exit 1
@@ -746,6 +864,32 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" && ! "$LANE_ST
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" =~ ^[0-9]+$ ]]; then
   echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-jitter-secs: expected non-negative integer" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT" =~ ^(file|http|https|other)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-transport: expected one of file,http,https,other" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS" =~ ^(ok|error|stale|unknown)$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-status: expected one of ok,error,stale,unknown" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" 2>/dev/null
+  ocsp_metadata_uri_regex_ec=$?
+  set -e
+  if [[ "$ocsp_metadata_uri_regex_ec" == "2" ]]; then
+    echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex: $LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256: expected 64 lowercase hex chars" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256: expected 64 lowercase hex chars" >&2
   exit 1
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_SHA256" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
@@ -1035,7 +1179,12 @@ PY
 
 lane_state_ed25519_read_refresh_source_metadata_json() {
   local metadata_file="$1"
-  python3 - "$metadata_file" <<'PY'
+  local require_transport="$2"
+  local require_status="$3"
+  local require_uri_regex="$4"
+  local require_tls_peer_sha256="$5"
+  local require_cert_chain_sha256="$6"
+  python3 - "$metadata_file" "$require_transport" "$require_status" "$require_uri_regex" "$require_tls_peer_sha256" "$require_cert_chain_sha256" <<'PY'
 import json
 import re
 import sys
@@ -1043,6 +1192,11 @@ from datetime import datetime
 from pathlib import Path
 
 metadata_path = Path(sys.argv[1])
+require_transport = sys.argv[2].strip()
+require_status = sys.argv[3].strip()
+require_uri_regex = sys.argv[4]
+require_tls_peer_sha256 = sys.argv[5].strip()
+require_cert_chain_sha256 = sys.argv[6].strip()
 try:
   parsed = json.loads(metadata_path.read_text(encoding="utf-8"))
 except Exception as ex:
@@ -1181,6 +1335,53 @@ if error_text is not None and not isinstance(error_text, str):
   )
   raise SystemExit(1)
 
+if require_transport and transport != require_transport:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': transport policy mismatch (expected '{require_transport}', got '{transport}')",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+if require_status and status != require_status:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': status policy mismatch (expected '{require_status}', got '{status}')",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+
+if require_uri_regex:
+  try:
+    uri_regex = re.compile(require_uri_regex)
+  except re.error as ex:
+    print(
+        f"invalid lane state Ed25519 refresh metadata policy regex '{require_uri_regex}': {ex}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if not uri_regex.search(uri):
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': uri policy mismatch (regex '{require_uri_regex}', got '{uri}')",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if require_tls_peer_sha256:
+  if tls_peer_sha256 != require_tls_peer_sha256:
+    observed = tls_peer_sha256 if tls_peer_sha256 is not None else "<missing>"
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': tls_peer_sha256 policy mismatch (expected '{require_tls_peer_sha256}', got '{observed}')",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if require_cert_chain_sha256:
+  if cert_chain_sha256 is None or require_cert_chain_sha256 not in cert_chain_sha256:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': cert_chain_sha256 policy mismatch (missing '{require_cert_chain_sha256}')",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 print(json.dumps(parsed, sort_keys=True, separators=(",", ":")))
 PY
 }
@@ -1196,6 +1397,11 @@ run_lane_state_ed25519_refresh_hook() {
   local refresh_jitter_secs="$8"
   local provenance_var_name="$9"
   local refresh_metadata_file="${10}"
+  local metadata_require_transport="${11}"
+  local metadata_require_status="${12}"
+  local metadata_require_uri_regex="${13}"
+  local metadata_require_tls_peer_sha256="${14}"
+  local metadata_require_cert_chain_sha256="${15}"
   local retry_count="${refresh_retries:-0}"
   local delay_secs="${refresh_delay_secs:-0}"
   local timeout_secs="${refresh_timeout_secs:-0}"
@@ -1300,7 +1506,15 @@ PY
             continue
           fi
           source_metadata_sha256="$(sha256sum "$refresh_metadata_file" | awk '{print $1}')"
-          source_metadata_json="$(lane_state_ed25519_read_refresh_source_metadata_json "$refresh_metadata_file")"
+          source_metadata_json="$(
+            lane_state_ed25519_read_refresh_source_metadata_json \
+              "$refresh_metadata_file" \
+              "$metadata_require_transport" \
+              "$metadata_require_status" \
+              "$metadata_require_uri_regex" \
+              "$metadata_require_tls_peer_sha256" \
+              "$metadata_require_cert_chain_sha256"
+          )"
           final_source_metadata_sha256="$source_metadata_sha256"
           final_source_metadata_json="$source_metadata_json"
         fi
@@ -1359,7 +1573,12 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS" \
       "LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_PROVENANCE_JSON" \
-      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE"
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" \
+      "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
     run_lane_state_ed25519_refresh_hook \
       "ocsp" \
       "OCSP response" \
@@ -1370,7 +1589,12 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS" \
       "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS" \
       "LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_PROVENANCE_JSON" \
-      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE"
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256" \
+      "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
     mapfile -t lane_state_ed25519_keyring_resolved < <(
       LANE_STATE_MANIFEST_ED25519_KEYRING_TSV="$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" \
       LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256="$LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256" \
@@ -2281,6 +2505,11 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_crl_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_TIMEOUT_SECS"
     printf "lane_state_ed25519_crl_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_JITTER_SECS"
     printf "lane_state_ed25519_crl_refresh_metadata_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_FILE"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_transport=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TRANSPORT"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_status=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_STATUS"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_URI_REGEX"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
+    printf "lane_state_ed25519_crl_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
     printf "lane_state_ed25519_ocsp_refresh_cmd=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_CMD"
     printf "lane_state_ed25519_ocsp_refresh_retries=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_RETRIES"
@@ -2288,6 +2517,11 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_refresh_timeout_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_TIMEOUT_SECS"
     printf "lane_state_ed25519_ocsp_refresh_jitter_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_JITTER_SECS"
     printf "lane_state_ed25519_ocsp_refresh_metadata_file=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_FILE"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_transport=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TRANSPORT"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_status=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_STATUS"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_uri_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_URI_REGEX"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_tls_peer_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_TLS_PEER_SHA256"
+    printf "lane_state_ed25519_ocsp_refresh_metadata_require_cert_chain_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REFRESH_METADATA_REQUIRE_CERT_CHAIN_SHA256"
     printf "lane_state_ed25519_ocsp_responder_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_issuer_cert_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_ISSUER_CERT_SHA256"
     printf "lane_state_ed25519_ocsp_require_responder_ocsp_signing=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_REQUIRE_RESPONDER_OCSP_SIGNING"

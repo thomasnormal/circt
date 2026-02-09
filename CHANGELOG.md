@@ -32754,6 +32754,80 @@ CIRCT/slang correctly enforces LRM restrictions.
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
 
+## Iteration 704 - February 9, 2026
+
+### Lane-State Refresh Metadata Trust-Policy Gates
+
+- Added optional policy-enforcement flags for CRL metadata sidecars in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-transport`
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-status`
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex`
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256`
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256`
+- Added matching OCSP metadata policy flags:
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-transport`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-status`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256`
+- Policy semantics:
+  - each policy flag requires the corresponding metadata sidecar option
+  - values are validated at CLI parse time (enums/regex/hash shape)
+  - sidecar payload is rejected if policy requirements do not match metadata
+    values.
+- Lane-state compatibility:
+  - metadata trust-policy values are now included in lane-state config hash
+    material for deterministic resume/merge behavior.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - dependency checks for policy flags without metadata sidecar options
+    - positive CRL/OCSP policy-gated refresh flows
+    - negative CRL metadata policy mismatch check
+    - OCSP metadata fixture extended with TLS peer and cert-chain digests
+  - `docs/FormalRegression.md`
+    - documented CRL/OCSP metadata trust-policy options.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- Metadata trust policy is currently static matcher-based and depends on
+  producer-supplied sidecar values.
+- Native AIA/CDP fetch implementation and chain-attested transport metadata are
+  still pending.
+
 ## Iteration 703 - February 9, 2026
 
 ### Lane-State Refresh Metadata Schema Enforcement
