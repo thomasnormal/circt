@@ -1,5 +1,105 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 779 - February 9, 2026
+
+### Mutation Matrix: Cache-Aware Lane Scheduling
+
+1. Extended `utils/run_mutation_matrix.sh` with:
+   - `--lane-schedule-policy fifo|cache-aware` (default: `fifo`)
+2. Added cache-aware scheduling mode that:
+   - computes generated-mutation cache grouping keys from resolved generation
+     parameters
+   - schedules one leader lane per key first, then same-key followers
+   - reduces generated-cache lock contention opportunities under parallel
+     lane execution while keeping deterministic leader/follower order
+3. Added scheduler diagnostics:
+   - policy summary line with selected lane count
+   - `cache-aware` summary includes `unique_keys` and
+     `deferred_followers` counts
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-matrix-schedule-cache-aware.test`
+    - validates cache-aware order (`leader` lanes before same-key followers)
+      and fifo order preservation.
+- Updated:
+  - `test/Tools/run-mutation-matrix-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-matrix-schedule-cache-aware.test test/Tools/run-mutation-matrix-generate-cache-parallel.test test/Tools/run-mutation-matrix-generate-cache.test`: PASS (4/4)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (66/66)
+- External cadence snapshot:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all_snapshot.sh --out-dir /tmp/formal-all-mutation-cache-lock-telemetry-snapshot --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile 8/9 PASS (`uart_avip` coverage enum expression failure)
+
+## Iteration 778 - February 9, 2026
+
+### FormalAll: Structured `E2E_MODE_DIFF` Classification Telemetry
+
+1. Extended OpenTitan E2E mode-diff synthesis in `utils/run_formal_all.sh` to
+   export structured classification metrics:
+   - `<out-dir>/opentitan-e2e-mode-diff-metrics.tsv`
+2. Added class counters for mode-diff categories:
+   - `same_status`
+   - `strict_only_fail`
+   - `strict_only_pass`
+   - `status_diff`
+   - `missing_in_e2e`
+   - `missing_in_e2e_strict`
+3. Embedded these counters directly into the `E2E_MODE_DIFF` summary string in
+   `summary.tsv`, making them first-class for machine parsing in downstream
+   trend jobs.
+4. Refactored summary writing internals by introducing
+   `record_result_with_summary`, preserving existing behavior while enabling
+   lane-specific structured summaries without duplicating lane-state writes.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-opentitan-e2e-mode-diff.test`
+    - verifies `E2E_MODE_DIFF` summary includes class counters
+    - verifies `opentitan-e2e-mode-diff-metrics.tsv` schema and values.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-strict-x.test test/Tools/run-formal-all-opentitan-e2e-strict-lane.test test/Tools/run-formal-all-opentitan-e2e-mode-diff.test test/Tools/run-formal-all-expected-failure-cases-regex.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-strict-gate-failure-cases.test`:
+    - 7/7 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan dual-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-mode-diff-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --opentitan-e2e-sim-targets usbdev --opentitan-e2e-verilog-targets usbdev --opentitan-e2e-impl-filter canright --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'`:
+    - `opentitan/E2E`: `total=3 pass=3 fail=0`
+    - `opentitan/E2E_STRICT`: `total=3 pass=2 fail=1`
+    - `opentitan/E2E_MODE_DIFF`: `total=3 pass=2 fail=1`
+    - metrics include: `strict_only_fail=1`, `same_status=2`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
+
 ## Iteration 777 - February 9, 2026
 
 ### FormalAll: OpenTitan E2E Default-vs-Strict Mode Diff Artifact

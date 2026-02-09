@@ -248,6 +248,10 @@ See CHANGELOG.md on recent progress.
     fail-like case export (`opentitan-e2e-mode-diff-results.txt`,
     `mode=E2E_MODE_DIFF`) so strict-only behavioral drift is directly trackable
     through existing expected-failure and strict-gate flows.
+30. `E2E_MODE_DIFF` now exports classification telemetry as both structured
+    metrics (`opentitan-e2e-mode-diff-metrics.tsv`) and summary counters
+    (`strict_only_fail`, `same_status`, `status_diff`, missing-case classes),
+    enabling trend-friendly CI analytics without parsing ad hoc logs.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
