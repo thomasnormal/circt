@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 802 - February 9, 2026
+
+### BMC Drift Hardening: Timeout/Unknown Telemetry + Strict Gates
+
+1. Extended `utils/run_formal_all.sh` with BMC case-derived summary counters:
+   - `bmc_timeout_cases`
+   - `bmc_unknown_cases`
+   (derived from BMC case rows when available, currently `sv-tests` and
+   `verilator-verification` lanes).
+2. Added strict-gate controls:
+   - `--fail-on-new-bmc-timeout-cases`
+   - `--fail-on-new-bmc-unknown-cases`
+   - both enabled by `--strict-gate`.
+3. Extended fail-like case handling to include additional statuses:
+   - `TIMEOUT`
+   - `UNKNOWN`
+4. Updated BMC runners to emit first-class statuses and summary counters:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - classify `BMC_RESULT=UNKNOWN` as `UNKNOWN`
+   - classify timeout exits (`124`/`137`) as `TIMEOUT`
+   - include `unknown=` / `timeout=` in summary lines.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`
+    - verifies strict-gate failures when baseline-window BMC timeout/unknown
+      counters increase.
+  - `test/Tools/run-sv-tests-circt-bmc-unknown-timeout.test`
+    - verifies `sv-tests` BMC script emits `UNKNOWN` and `TIMEOUT`.
+  - `test/Tools/run-verilator-verification-circt-bmc-unknown-timeout.test`
+    - verifies `verilator-verification` BMC script emits `UNKNOWN` and
+      `TIMEOUT`.
+- Updated:
+  - `test/Tools/run-formal-all-help.test`
+    - covers new BMC strict-gate options.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh`: PASS
+- Lit (focused):
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-sv-tests-circt-bmc-unknown-timeout.test test/Tools/run-verilator-verification-circt-bmc-unknown-timeout.test`:
+    - 6/6 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-fail.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-status-diff.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-strict-only-pass.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e.test test/Tools/run-formal-all-strict-gate-e2e-mode-diff-missing-in-e2e-strict.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`:
+    - 7/7 PASS
+- BMC summary telemetry spot-check:
+  - `TEST_FILTER='16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-bmc-timeout-unknown-counters-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$|^verilator-verification/BMC$'`:
+    - `sv-tests/BMC`: summary includes `bmc_timeout_cases=0 bmc_unknown_cases=0`
+    - `verilator-verification/BMC`: summary includes
+      `bmc_timeout_cases=0 bmc_unknown_cases=0`
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+- OpenTitan targeted E2E spot check:
+  - `utils/run_opentitan_formal_e2e.sh --sim-targets usbdev --verilog-targets usbdev,dma,keymgr_dpe --out-dir /tmp/opentitan-e2e-bmc-timeout-unknown-gates-20260209`:
+    - summary: `pass=5 fail=0`
+
 ## Iteration 801 - February 9, 2026
 
 ### Global Filter Runtime Telemetry (Cover/Matrix)

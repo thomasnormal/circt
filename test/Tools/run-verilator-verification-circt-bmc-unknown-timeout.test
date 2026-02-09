@@ -1,0 +1,14 @@
+// RUN: rm -rf %t/verilator
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/verilator/tests/asserts/unknown_case.sv
+// RUN: printf 'module top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/verilator/tests/asserts/timeout_case.sv
+// RUN: printf '#!/bin/sh\necho \"module @top {\"\necho \"  verif.assert %c0_i1\"\necho \"}\"\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\ncase \"$last\" in\n  *timeout_case*) exit 124 ;;\n  *) echo \"BMC_RESULT=UNKNOWN\"; exit 0 ;;\nesac\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER='unknown_case|timeout_case' OUT=%t/results.tsv %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: verilator-verification summary: total=2 pass=0 fail=0 xfail=0 xpass=0 error=2 skip=0 unknown=1 timeout=1
+// RESULTS: TIMEOUT{{[[:space:]]+}}timeout_case{{[[:space:]]+}}{{.*}}timeout_case.sv
+// RESULTS: UNKNOWN{{[[:space:]]+}}unknown_case{{[[:space:]]+}}{{.*}}unknown_case.sv

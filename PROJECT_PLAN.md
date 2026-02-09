@@ -300,6 +300,14 @@ See CHANGELOG.md on recent progress.
     tracking (for example
     `xprop_impl_aes_sbox_canright_counter_input_unknown_extracts`) so parity
     regressions can be attributed and gated at implementation granularity.
+40. BMC lane summaries in `run_formal_all.sh` now include case-derived drift
+    counters when detailed case files are available:
+    - `bmc_timeout_cases`
+    - `bmc_unknown_cases`
+41. Strict-gate now supports explicit BMC drift gates:
+    - `--fail-on-new-bmc-timeout-cases`
+    - `--fail-on-new-bmc-unknown-cases`
+    and enables both by default under `--strict-gate`.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.
