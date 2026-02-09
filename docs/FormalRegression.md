@@ -113,6 +113,8 @@ Execution controls:
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
   byte footprint (`0` disables limit, default `0`).
+- `--bmc-orig-cache-max-age-seconds <n>`: cap differential-BMC
+  original-design cache entry age (`0` disables limit, default `0`).
 - `--mutations-modes <csv>`: pass-through mode mix for auto-generation
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes. Supports concrete Yosys modes
@@ -165,6 +167,7 @@ Execution controls:
   - cross-run optimization (when `--reuse-cache-dir` is enabled): original
     BMC cache entries are hydrated from and published to
     `<reuse-cache-dir>/global_bmc_orig_cache`.
+  - cache bounds can be applied by entry count, byte footprint, and entry age.
 - Built-in chained circt-lec/circt-bmc global filter:
   - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
   - requires both `--formal-global-propagate-circt-lec` and
@@ -228,17 +231,22 @@ Generated artifacts (default under `./mutation-cover-results`):
     original-design BMC run in built-in differential BMC mode.
   - `bmc_orig_cache_write_status`: write status for cross-run original-BMC
     cache publication (`disabled|read_only|written|write_error`).
-  - `bmc_orig_cache_max_entries` / `bmc_orig_cache_max_bytes`: configured cache
-    limits.
+  - `bmc_orig_cache_max_entries` / `bmc_orig_cache_max_bytes` /
+    `bmc_orig_cache_max_age_seconds`: configured cache limits.
   - `bmc_orig_cache_entries` / `bmc_orig_cache_bytes`: post-run local cache
     footprint.
   - `bmc_orig_cache_pruned_entries` / `bmc_orig_cache_pruned_bytes`: local
     cache entries/bytes evicted to satisfy limits.
+  - `bmc_orig_cache_pruned_age_entries` / `bmc_orig_cache_pruned_age_bytes`:
+    local cache entries/bytes evicted specifically by max-age policy.
   - `bmc_orig_cache_persist_entries` / `bmc_orig_cache_persist_bytes`: post-run
     persisted cache footprint.
   - `bmc_orig_cache_persist_pruned_entries` /
     `bmc_orig_cache_persist_pruned_bytes`: persisted cache evictions under
     limits.
+  - `bmc_orig_cache_persist_pruned_age_entries` /
+    `bmc_orig_cache_persist_pruned_age_bytes`: persisted-cache evictions
+    specifically by max-age policy.
 - reuse compatibility sidecars:
   - `<summary.tsv>.manifest.json`
   - `<pair_qualification.tsv>.manifest.json`
@@ -325,6 +333,8 @@ Execution controls:
   `run_mutation_cover.sh --bmc-orig-cache-max-entries`.
 - `--default-bmc-orig-cache-max-bytes <n>`: default
   `run_mutation_cover.sh --bmc-orig-cache-max-bytes`.
+- `--default-bmc-orig-cache-max-age-seconds <n>`: default
+  `run_mutation_cover.sh --bmc-orig-cache-max-age-seconds`.
 - `--reuse-cache-dir <path>`: pass-through
   `run_mutation_cover.sh --reuse-cache-dir` for matrix lanes.
 - `--reuse-compat-mode off|warn|strict`: pass-through reuse compatibility
@@ -334,7 +344,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]
 ```
 
 Notes:
@@ -399,8 +409,13 @@ Notes:
   `--default-bmc-orig-cache-max-entries` for a specific lane.
 - `bmc_orig_cache_max_bytes` (optional) overrides
   `--default-bmc-orig-cache-max-bytes` for a specific lane.
-- `global_propagate_cmd`, `global_propagate_circt_lec`, and
-  `global_propagate_circt_bmc` are mutually exclusive within a lane.
+- `bmc_orig_cache_max_age_seconds` (optional) overrides
+  `--default-bmc-orig-cache-max-age-seconds` for a specific lane.
+- `global_propagate_cmd` is mutually exclusive with built-in global filter
+  modes.
+- `global_propagate_circt_chain` requires both
+  `global_propagate_circt_lec` and `global_propagate_circt_bmc` (lane value
+  or inherited defaults).
 
 Shard/route a run to selected lane IDs:
 
@@ -1081,12 +1096,17 @@ Expected-failure cases file:
 - `--expected-failure-cases-file` expects TSV with required columns:
   - `suite	mode	id`
 - Optional columns:
-  - `id_kind` (`base`, `path`, or `aggregate`, default: `base`)
+  - `id_kind` (`base`, `path`, `aggregate`, `base_regex`, or `path_regex`,
+    default: `base`)
   - `status` (`ANY`, `FAIL`, `ERROR`, `XFAIL`, `XPASS`, `EFAIL`; default: `ANY`)
   - `expires_on` (`YYYY-MM-DD`)
   - `reason`
 - `id_kind=aggregate` matches the synthetic aggregate failing case for
   suite/mode lanes that do not emit per-test result rows (`id=__aggregate__`).
+- `id_kind=base_regex` / `path_regex` treat `id` as a Python regular
+  expression matched against observed `base` / `path`, respectively.
+  Use `path_regex` for strict OpenTitan LEC diagnostics (e.g. matching
+  `#XPROP_ONLY$`) when run directories are non-deterministic.
 - `--fail-on-unexpected-failure-cases` fails if observed fail-like test cases are
   not matched by the expected-cases file.
 - `--fail-on-expired-expected-failure-cases` fails if any expected case is past

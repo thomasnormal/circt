@@ -24,6 +24,7 @@
 // CHECK: --default-formal-global-propagate-bmc-ignore-asserts-until
 // CHECK: --default-bmc-orig-cache-max-entries
 // CHECK: --default-bmc-orig-cache-max-bytes
+// CHECK: --default-bmc-orig-cache-max-age-seconds
 // CHECK: --reuse-cache-dir
 // CHECK: --reuse-compat-mode
 // CHECK: --lane-jobs

@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 763 - February 9, 2026
+
+### BMC Original-Cache Age/TTL Policy (Cover + Matrix)
+
+- Extended `utils/run_mutation_cover.sh` differential-BMC original-cache policy
+  with age-based pruning:
+  - new option: `--bmc-orig-cache-max-age-seconds`
+  - `0` disables age policy (default).
+  - stale entries older than the configured age are pruned in both local cache
+    (`<work-dir>/.global_bmc_orig_cache`) and persisted cache
+    (`<reuse-cache-dir>/global_bmc_orig_cache`) before count/byte cap pruning.
+- Added age-aware cache telemetry in `metrics.tsv` and `summary.json`:
+  - `bmc_orig_cache_max_age_seconds`
+  - `bmc_orig_cache_pruned_age_entries`,
+    `bmc_orig_cache_pruned_age_bytes`
+  - `bmc_orig_cache_persist_pruned_age_entries`,
+    `bmc_orig_cache_persist_pruned_age_bytes`
+- Extended `utils/run_mutation_matrix.sh` so lanes can apply the same policy:
+  - default option:
+    - `--default-bmc-orig-cache-max-age-seconds`
+  - lane TSV optional column:
+    - `bmc_orig_cache_max_age_seconds`
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-age-prune.test`
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-age-prune.test`
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-matrix-help.test`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-prune.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-design-hash.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-persist.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-age-prune.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-prune.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-age-prune.test`: PASS (10/10)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (40/40)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-bmc-cache-age --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 762 - February 9, 2026
 
 ### Strict LEC Expected-Case Regex Matching

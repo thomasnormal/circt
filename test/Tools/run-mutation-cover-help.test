@@ -13,6 +13,7 @@
 // CHECK-DAG: --reuse-cache-mode
 // CHECK-DAG: --bmc-orig-cache-max-entries
 // CHECK-DAG: --bmc-orig-cache-max-bytes
+// CHECK-DAG: --bmc-orig-cache-max-age-seconds
 // CHECK-DAG: --jobs
 // CHECK-DAG: --resume
 // CHECK-DAG: --generate-mutations
