@@ -9917,16 +9917,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Handle class-level srandom(seed) calls.
-  // MooreToCore emits empty stub functions @srandom_NNNN for class srandom().
-  // We intercept them here to actually seed the global RNG.
+  // Handle class-level srandom(seed) calls (old stub pattern).
+  // Old MooreToCore emitted empty stub functions @srandom_NNNN for class
+  // srandom(). These don't carry the object pointer, so we store a pending
+  // seed that will be applied to the next __moore_randomize_basic call.
+  // New compilations emit __moore_class_srandom(objPtr, seed) which is
+  // handled below in the LLVM call interceptor.
   if ((calleeName == "srandom" || calleeName.starts_with("srandom_")) &&
       callOp.getNumOperands() >= 1 && callOp.getNumResults() == 0) {
-    int32_t seed = static_cast<int32_t>(
+    uint32_t seed = static_cast<uint32_t>(
         getValue(procId, callOp.getOperand(0)).getUInt64());
+    pendingSrandomSeed = seed;
     std::srand(static_cast<unsigned>(seed));
     LLVM_DEBUG(llvm::dbgs() << "  func.call @" << calleeName
-                            << ": seeding RNG with " << seed << "\n");
+                            << ": setting pending seed " << seed
+                            << " (legacy stub, no object ptr)\n");
     return success();
   }
 
@@ -12144,10 +12149,16 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
         isEventType = true;
       }
 
-      // Trace through unrealized_conversion_cast to find llvm.load
+      // Trace through value chain to find the llvm.load that reads from
+      // memory. This handles patterns like:
+      //   %val = llvm.load %ptr             <- target
+      //   %field = llvm.extractvalue %val[0]
+      //   %struct = hw.struct_create(%field, ...)
+      //   %cast = unrealized_conversion_cast %struct
+      //   moore.detect_event posedge %cast
       std::function<Value(Value, int)> traceToMemoryPtr =
           [&](Value value, int depth) -> Value {
-        if (depth > 10)
+        if (depth > 16)
           return nullptr;
 
         if (Operation *defOp = value.getDefiningOp()) {
@@ -12161,6 +12172,34 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
             if (!castOp.getInputs().empty()) {
               return traceToMemoryPtr(castOp.getInputs()[0], depth + 1);
             }
+          }
+
+          // Trace through hw.struct_create - check all operands
+          if (auto structCreate = dyn_cast<hw::StructCreateOp>(defOp)) {
+            for (Value operand : structCreate.getOperands()) {
+              Value result = traceToMemoryPtr(operand, depth + 1);
+              if (result)
+                return result;
+            }
+          }
+
+          // Trace through hw.struct_extract
+          if (auto structExtract = dyn_cast<hw::StructExtractOp>(defOp)) {
+            return traceToMemoryPtr(structExtract.getInput(), depth + 1);
+          }
+
+          // Trace through llvm.extractvalue
+          if (auto extractValue = dyn_cast<LLVM::ExtractValueOp>(defOp)) {
+            return traceToMemoryPtr(extractValue.getContainer(), depth + 1);
+          }
+
+          // Trace through llvm.insertvalue
+          if (auto insertValue = dyn_cast<LLVM::InsertValueOp>(defOp)) {
+            // Try the inserted value first, then the container
+            Value result = traceToMemoryPtr(insertValue.getValue(), depth + 1);
+            if (result)
+              return result;
+            return traceToMemoryPtr(insertValue.getContainer(), depth + 1);
           }
         }
 
@@ -12258,11 +12297,13 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       waiter.address = addr;
       waiter.lastValue = currentValue;
       waiter.valueSize = valueSize;
-      // For event types, use rising edge detection (0→1).
-      // This is critical for UVM wait_for_objection: if no objection has been
-      // raised yet (value=0), we must wait for the NEXT trigger (0→1),
-      // not wake up immediately or on any change.
-      waiter.waitForRisingEdge = isEventType;
+      // Determine edge detection mode:
+      // - For event types (!moore.event), use rising edge (0→1)
+      // - For posedge detect_event, use rising edge
+      // - For negedge, use falling edge (via rising edge on inverted value)
+      // - For any/both edges, use any change
+      waiter.waitForRisingEdge = isEventType ||
+          detectOp.getEdge() == moore::Edge::PosEdge;
       memoryEventWaiters[procId] = waiter;
 
       LLVM_DEBUG(llvm::dbgs() << "    Set up memory event waiter for address 0x"
@@ -14101,6 +14142,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             }
           }
         }
+      }
+      return success();
+    }
+
+    // Handle __moore_class_srandom - seed the per-object RNG.
+    // Implements SystemVerilog obj.srandom(seed) (IEEE 1800-2017 §18.13.3).
+    // Signature: (objPtr: ptr, seed: i32) -> void
+    if (calleeName == "__moore_class_srandom") {
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t objAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint32_t seed = static_cast<uint32_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        // Create or reseed the per-object RNG
+        perObjectRng[objAddr] = std::mt19937(seed);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.call: __moore_class_srandom(0x"
+                   << llvm::format_hex(objAddr, 16)
+                   << ", seed=" << seed << ")\n");
       }
       return success();
     }
@@ -16490,25 +16550,34 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // ---- __moore_randomize_basic ----
     // Signature: (classPtr: ptr, classSize: i64) -> i32
-    // Fills the object's memory with random bytes using std::rand().
+    // Fills the object's memory with random bytes using per-object RNG.
     if (calleeName == "__moore_randomize_basic") {
       if (callOp.getNumOperands() >= 2) {
         uint64_t classAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         int64_t classSize = static_cast<int64_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
+        // Track last randomized object for subsequent range calls
+        lastRandomizeObjAddr = classAddr;
+        // If there's a pending seed from an old-style @srandom() stub,
+        // apply it to this object's RNG now.
+        if (pendingSrandomSeed.has_value()) {
+          perObjectRng[classAddr] = std::mt19937(*pendingSrandomSeed);
+          pendingSrandomSeed.reset();
+        }
 
         if (classAddr != 0 && classSize > 0) {
           uint64_t offset = 0;
           auto *block =
               findMemoryBlockByAddress(classAddr, procId, &offset);
           if (block) {
+            auto &rng = getObjectRng(classAddr);
             size_t avail = block->data.size() - offset;
             size_t fillSize = std::min<size_t>(classSize, avail);
             // Fill in 4-byte chunks for efficiency
             size_t fullWords = fillSize / 4;
             for (size_t i = 0; i < fullWords; ++i) {
-              uint32_t rval = static_cast<uint32_t>(std::rand());
+              uint32_t rval = rng();
               for (int b = 0; b < 4; ++b)
                 block->data[offset + i * 4 + b] =
                     static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
@@ -16516,7 +16585,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // Fill remaining bytes
             size_t remaining = fillSize % 4;
             if (remaining > 0) {
-              uint32_t rval = static_cast<uint32_t>(std::rand());
+              uint32_t rval = rng();
               for (size_t b = 0; b < remaining; ++b)
                 block->data[offset + fullWords * 4 + b] =
                     static_cast<uint8_t>((rval >> (b * 8)) & 0xFF);
@@ -16590,8 +16659,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
 
           if (totalWeight > 0) {
+            auto &rng = getObjectRng(lastRandomizeObjAddr);
             int64_t randomWeight =
-                static_cast<int64_t>(std::rand()) % totalWeight;
+                static_cast<int64_t>(rng()) % totalWeight;
             int64_t cumulative = 0;
             for (int64_t i = 0; i < numRanges; ++i) {
               cumulative += effectiveWeights[i];
@@ -16600,7 +16670,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 int64_t high = ranges[i * 2 + 1];
                 int64_t rangeSize = high - low + 1;
                 result = (rangeSize == 1) ? low
-                                          : low + std::rand() % rangeSize;
+                                          : low + static_cast<int64_t>(rng() % rangeSize);
                 break;
               }
             }
@@ -16620,7 +16690,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
     // ---- __moore_randomize_with_range (singular) ----
     // Signature: (min: i64, max: i64) -> i64
-    // Returns a uniformly random value in [min, max].
+    // Returns a uniformly random value in [min, max] using per-object RNG.
     if (calleeName == "__moore_randomize_with_range") {
       int64_t minVal = 0, maxVal = 0;
       if (callOp.getNumOperands() >= 2) {
@@ -16631,11 +16701,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       }
       int64_t result = minVal;
       if (maxVal > minVal) {
+        auto &rng = getObjectRng(lastRandomizeObjAddr);
         uint64_t range = static_cast<uint64_t>(maxVal - minVal) + 1;
-        uint64_t randomVal = static_cast<uint64_t>(std::rand());
+        uint64_t randomVal = static_cast<uint64_t>(rng());
         if (range > UINT32_MAX)
-          randomVal = (static_cast<uint64_t>(std::rand()) << 32) |
-                      static_cast<uint64_t>(std::rand());
+          randomVal = (static_cast<uint64_t>(rng()) << 32) |
+                      static_cast<uint64_t>(rng());
         result = minVal + static_cast<int64_t>(randomVal % range);
       }
       LLVM_DEBUG(llvm::dbgs()
@@ -16690,10 +16761,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           if (totalSize > 0) {
             // Generate random position in [0, totalSize - 1]
-            uint64_t randomVal = static_cast<uint64_t>(std::rand());
+            auto &rng = getObjectRng(lastRandomizeObjAddr);
+            uint64_t randomVal = static_cast<uint64_t>(rng());
             if (totalSize > UINT32_MAX)
-              randomVal = (static_cast<uint64_t>(std::rand()) << 32) |
-                          static_cast<uint64_t>(std::rand());
+              randomVal = (static_cast<uint64_t>(rng()) << 32) |
+                          static_cast<uint64_t>(rng());
             uint64_t position = randomVal % totalSize;
 
             // Map position to a specific range and value
@@ -17776,7 +17848,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t maxVal = (bitWidth >= 64) ? UINT64_MAX
                                             : ((1ULL << bitWidth) - 1);
-        uint64_t result = static_cast<uint64_t>(std::rand()) & maxVal;
+        auto &rng = getObjectRng(lastRandomizeObjAddr);
+        uint64_t result = static_cast<uint64_t>(rng()) & maxVal;
         setValue(procId, callOp.getResult(),
                  InterpretedValue(result, 64));
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_randc_next(bw="

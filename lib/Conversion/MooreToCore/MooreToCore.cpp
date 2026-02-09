@@ -12250,6 +12250,128 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     }
 
     if (llvmPtrDst) {
+      // For ContinuousAssignOp at the hw.module level (not inside a function
+      // or process), check if the source derives from signal probes. If so,
+      // create an llhd.process that continuously propagates signal changes to
+      // the memory-backed destination. This is critical for interface input
+      // port connections: the top-level clock signal must be continuously
+      // propagated to the interface struct's clock field so that DUT processes
+      // like `always @(posedge vif.clk)` see the clock toggling.
+      if constexpr (std::is_same_v<OpTy, ContinuousAssignOp>) {
+        bool inModule =
+            op->template getParentOfType<hw::HWModuleOp>() != nullptr;
+        bool inProcess =
+            op->template getParentOfType<llhd::ProcessOp>() != nullptr;
+        bool inFunc = op->template getParentOfType<func::FuncOp>() != nullptr;
+        bool inInitial =
+            op->template getParentOfType<seq::InitialOp>() != nullptr;
+
+        if (inModule && !inProcess && !inFunc && !inInitial) {
+          // Walk the source value's def chain to find all llhd.prb ops.
+          // Collect the probed VALUES (not signal refs) for the observe list.
+          SmallVector<llhd::ProbeOp> probeOps;
+          SmallVector<Value> observedValues;
+          SmallVector<Value> worklist;
+          SmallDenseSet<Value> visited;
+          worklist.push_back(adaptor.getSrc());
+          while (!worklist.empty()) {
+            Value v = worklist.pop_back_val();
+            if (!visited.insert(v).second)
+              continue;
+            auto *defOp = v.getDefiningOp();
+            if (!defOp)
+              continue;
+            if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp)) {
+              probeOps.push_back(probeOp);
+              // The probe result (an HW value type) is used as the observe
+              // operand. The interpreter traces back through probe ops to
+              // find the underlying signals for sensitivity.
+              observedValues.push_back(probeOp.getResult());
+            } else {
+              for (Value operand : defOp->getOperands())
+                worklist.push_back(operand);
+            }
+          }
+
+          if (!probeOps.empty()) {
+            // Create an llhd.process that watches the source signals and
+            // continuously updates the interface memory.
+            auto processOp =
+                llhd::ProcessOp::create(rewriter, loc, TypeRange{});
+
+            // Entry block: branch to body
+            Block *entryBlock =
+                rewriter.createBlock(&processOp.getBody());
+            Block *bodyBlock =
+                rewriter.createBlock(&processOp.getBody());
+            Block *waitBlock =
+                rewriter.createBlock(&processOp.getBody());
+
+            rewriter.setInsertionPointToEnd(entryBlock);
+            cf::BranchOp::create(rewriter, loc, bodyBlock);
+
+            // Body block: re-probe signals, rebuild source value, store to
+            // destination, branch to wait block.
+            rewriter.setInsertionPointToEnd(bodyBlock);
+
+            // Create new probes inside the process body so we get the
+            // current signal values each time the process runs.
+            IRMapping mapper;
+            for (auto probeOp : probeOps) {
+              Value newProbe = llhd::ProbeOp::create(rewriter, loc,
+                                                      probeOp.getSignal());
+              mapper.map(probeOp.getResult(), newProbe);
+            }
+
+            // Rebuild the source value computation inside the process body
+            // by cloning the ops that compute the source from the probes.
+            SmallVector<Operation *> opsToClone;
+            SmallVector<Value> cloneWorklist;
+            SmallDenseSet<Operation *> visitedOps;
+            cloneWorklist.push_back(adaptor.getSrc());
+            while (!cloneWorklist.empty()) {
+              Value v = cloneWorklist.pop_back_val();
+              auto *defOp = v.getDefiningOp();
+              if (!defOp)
+                continue;
+              if (isa<llhd::ProbeOp>(defOp))
+                continue; // Already handled via mapper
+              if (defOp->hasTrait<OpTrait::ConstantLike>())
+                continue; // Constants are accessible from any region
+              if (!visitedOps.insert(defOp).second)
+                continue;
+              for (Value operand : defOp->getOperands())
+                cloneWorklist.push_back(operand);
+              opsToClone.push_back(defOp);
+            }
+
+            // Clone ops in topological order (reverse of collection order).
+            std::reverse(opsToClone.begin(), opsToClone.end());
+            for (auto *origOp : opsToClone) {
+              auto *clonedOp = rewriter.clone(*origOp, mapper);
+              for (unsigned i = 0; i < origOp->getNumResults(); ++i)
+                mapper.map(origOp->getResult(i), clonedOp->getResult(i));
+            }
+
+            Value newSrc = mapper.lookupOrDefault(adaptor.getSrc());
+            Value storeVal = convertValueToLLVMType(newSrc, loc, rewriter);
+            LLVM::StoreOp::create(rewriter, loc, storeVal, llvmPtrDst);
+            cf::BranchOp::create(rewriter, loc, waitBlock);
+
+            // Wait block: observe the module-level probe results.
+            // These are defined in the enclosing hw.module body and are
+            // accessible from within this process region. The interpreter
+            // traces back from probe results to find the underlying signals.
+            rewriter.setInsertionPointToEnd(waitBlock);
+            llhd::WaitOp::create(rewriter, loc, ValueRange{}, Value{},
+                                 observedValues, ValueRange{}, bodyBlock);
+
+            rewriter.eraseOp(op);
+            return success();
+          }
+        }
+      }
+
       // Convert source to LLVM-compatible type if needed
       // For 4-state hw.struct<value, unknown>, decompose and rebuild as llvm.struct
       Value storeVal = convertValueToLLVMType(adaptor.getSrc(), op.getLoc(),
@@ -21800,6 +21922,10 @@ struct ConditionalConstraintInfo {
   SmallVector<RangeConstraintInfo> elseConstraints;
 };
 
+/// Forward declaration: trace a value back through ReadOp/ClassPropertyRefOp/
+/// VariableOp to find the property name being constrained.
+static StringRef traceToPropertyName(Value variable);
+
 /// Extract simple range constraints from a class declaration.
 /// Returns a list of range constraints found in ConstraintInsideOp operations.
 /// Only extracts constraints that can be expressed as simple [min, max] ranges.
@@ -21842,32 +21968,10 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Get the variable being constrained
         Value variable = insideOp.getVariable();
 
-        // The variable should be a block argument referencing a property
-        // In the constraint block, arguments correspond to random properties
-        auto blockArg = dyn_cast<BlockArgument>(variable);
-        if (!blockArg)
-          continue;
-
-        // Get the argument index - this corresponds to the order of rand properties
-        unsigned argIdx = blockArg.getArgNumber();
-
-        // Find the corresponding property by counting rand properties
-        unsigned randPropCount = 0;
-        StringRef propName;
-        Type propType;
-        for (auto &innerOp : classDecl.getBody().getOps()) {
-          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
-            if (propDecl.isRandomizable()) {
-              if (randPropCount == argIdx) {
-                propName = propDecl.getSymName();
-                propType = propDecl.getPropertyType();
-                break;
-              }
-              randPropCount++;
-            }
-          }
-        }
-
+        // Trace through ClassPropertyRefOp or VariableOp to get property name.
+        // Non-static: class.property_ref %arg0[@x] -> "x"
+        // Static: variable "x" -> "x"
+        StringRef propName = traceToPropertyName(variable);
         if (propName.empty())
           continue;
 
@@ -21942,10 +22046,16 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         v = sextOp.getInput();
       else if (auto truncOp = v.getDefiningOp<TruncOp>())
         v = truncOp.getInput();
-      if (auto readOp = v.getDefiningOp<ReadOp>())
+      if (auto readOp = v.getDefiningOp<ReadOp>()) {
         if (auto propRef =
                 readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
           return propRef.getProperty();
+        // Static constraint: ReadOp -> VariableOp
+        if (auto varOp = readOp.getInput().getDefiningOp<VariableOp>()) {
+          if (auto nameAttr = varOp.getNameAttr())
+            return nameAttr.getValue();
+        }
+      }
       return {};
     };
 
@@ -22224,9 +22334,15 @@ extractPredicate(Value condition) {
       v = sextOp.getInput();
     else if (auto truncOp = v.getDefiningOp<TruncOp>())
       v = truncOp.getInput();
-    if (auto readOp = v.getDefiningOp<ReadOp>())
+    if (auto readOp = v.getDefiningOp<ReadOp>()) {
       if (auto propRef = readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
         return propRef.getProperty();
+      // Static constraint: ReadOp -> VariableOp
+      if (auto varOp = readOp.getInput().getDefiningOp<VariableOp>()) {
+        if (auto nameAttr = varOp.getNameAttr())
+          return nameAttr.getValue();
+      }
+    }
     return {};
   };
 
@@ -22454,32 +22570,10 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Get the variable being constrained
         Value variable = insideOp.getVariable();
 
-        // The variable should be a block argument referencing a property
-        auto blockArg = dyn_cast<BlockArgument>(variable);
-        if (!blockArg)
-          continue;
-
-        // Get the argument index - this corresponds to the order of rand
-        // properties
-        unsigned argIdx = blockArg.getArgNumber();
-
-        // Find the corresponding property by counting rand properties
-        unsigned randPropCount = 0;
-        StringRef propName;
-        Type propType;
-        for (auto &innerOp : classDecl.getBody().getOps()) {
-          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
-            if (propDecl.isRandomizable()) {
-              if (randPropCount == argIdx) {
-                propName = propDecl.getSymName();
-                propType = propDecl.getPropertyType();
-                break;
-              }
-              randPropCount++;
-            }
-          }
-        }
-
+        // Trace through ClassPropertyRefOp or VariableOp to get property name.
+        // Non-static: class.property_ref %arg0[@x] -> "x"
+        // Static: variable "x" -> "x"
+        StringRef propName = traceToPropertyName(variable);
         if (propName.empty())
           continue;
 
@@ -22562,32 +22656,10 @@ extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Get the variable being constrained
         Value variable = distOp.getVariable();
 
-        // The variable should be a block argument referencing a property
-        auto blockArg = dyn_cast<BlockArgument>(variable);
-        if (!blockArg)
-          continue;
-
-        // Get the argument index - this corresponds to the order of rand
-        // properties
-        unsigned argIdx = blockArg.getArgNumber();
-
-        // Find the corresponding property by counting rand properties
-        unsigned randPropCount = 0;
-        StringRef propName;
-        Type propType;
-        for (auto &innerOp : classDecl.getBody().getOps()) {
-          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(innerOp)) {
-            if (propDecl.isRandomizable()) {
-              if (randPropCount == argIdx) {
-                propName = propDecl.getSymName();
-                propType = propDecl.getPropertyType();
-                break;
-              }
-              randPropCount++;
-            }
-          }
-        }
-
+        // Trace through ClassPropertyRefOp or VariableOp to get property name.
+        // Non-static: class.property_ref %arg0[@x] -> "x"
+        // Static: variable "x" -> "x"
+        StringRef propName = traceToPropertyName(variable);
         if (propName.empty())
           continue;
 
@@ -22792,6 +22864,11 @@ static StringRef traceToPropertyName(Value variable) {
   //   %1 = moore.read %0 : ...
   //   moore.constraint.inside %1, [...] : ...
   // So we need to trace back through the read operation.
+  //
+  // In static constraints (no 'this' arg), the variable is:
+  //   %x = moore.variable : <i32>  (with name = "x")
+  //   moore.constraint.dist %x, [...] : ...
+  // So we also need to check for VariableOp with a matching name.
 
   // If it's directly a ClassPropertyRefOp, get the property name
   if (auto propRef = variable.getDefiningOp<ClassPropertyRefOp>())
@@ -22802,6 +22879,17 @@ static StringRef traceToPropertyName(Value variable) {
     Value input = readOp.getInput();
     if (auto propRef = input.getDefiningOp<ClassPropertyRefOp>())
       return propRef.getProperty();
+    // Static constraint: ReadOp -> VariableOp
+    if (auto varOp = input.getDefiningOp<VariableOp>()) {
+      if (auto nameAttr = varOp.getNameAttr())
+        return nameAttr.getValue();
+    }
+  }
+
+  // Static constraint: VariableOp directly (without ReadOp)
+  if (auto varOp = variable.getDefiningOp<VariableOp>()) {
+    if (auto nameAttr = varOp.getNameAttr())
+      return nameAttr.getValue();
   }
 
   return StringRef();

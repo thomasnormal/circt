@@ -4238,6 +4238,68 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle class-level srandom(seed) calls.
+    // IEEE 1800-2017 §18.13.3: Every class instance has a built-in srandom()
+    // method that seeds the per-object RNG used by randomize().
+    // We intercept this here and emit a __moore_class_srandom(objPtr, seed)
+    // runtime call so the interpreter can maintain per-object RNG state.
+    if (subroutine->name == "srandom" &&
+        parentSym.kind == slang::ast::SymbolKind::ClassType) {
+      const auto *classType = parentSym.as_if<slang::ast::ClassType>();
+      if (classType && classType->name != "process") {
+        // Get the class instance (the 'this' object)
+        Value classInstance;
+        if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+          classInstance = context.convertRvalueExpression(*recvExpr);
+        }
+        if (!classInstance)
+          classInstance = context.getImplicitThisRef();
+
+        if (!classInstance) {
+          mlir::emitError(loc)
+              << "class srandom() requires a class object receiver";
+          return {};
+        }
+
+        // Convert seed argument
+        if (expr.arguments().size() < 1) {
+          mlir::emitError(loc)
+              << "class srandom() requires a seed argument";
+          return {};
+        }
+        Value seedArg =
+            context.convertRvalueExpression(*expr.arguments()[0]);
+        if (!seedArg)
+          return {};
+        auto intTy = moore::IntType::getInt(context.getContext(), 32);
+        seedArg = context.materializeConversion(
+            intTy, seedArg, expr.arguments()[0]->type->isSigned(), loc);
+        if (!seedArg)
+          return {};
+
+        // Emit runtime call: __moore_class_srandom(objPtr, seed)
+        auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+        auto i32Ty = builder.getIntegerType(32);
+        Value objPtr = mlir::UnrealizedConversionCastOp::create(
+                           builder, loc, ptrTy, classInstance)
+                           .getResult(0);
+        Value seedVal = mlir::UnrealizedConversionCastOp::create(
+                            builder, loc, i32Ty, seedArg)
+                            .getResult(0);
+        auto funcTy = mlir::LLVM::LLVMFunctionType::get(
+            mlir::LLVM::LLVMVoidType::get(context.getContext()),
+            {ptrTy, i32Ty});
+        auto func = getOrCreateRuntimeFunc(
+            context, "__moore_class_srandom", funcTy);
+        mlir::LLVM::CallOp::create(builder, loc, func,
+                                   ValueRange{objPtr, seedVal});
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, moore::VoidType::get(context.getContext()),
+                   ValueRange{})
+            .getResult(0);
+      }
+    }
+
     // Check if this is an interface method call (task/function defined inside
     // an interface). Interface methods have an implicit first argument for the
     // interface instance, similar to class methods with 'this'.

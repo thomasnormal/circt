@@ -1203,9 +1203,32 @@ private:
   /// value is mode (1=enabled, 0=disabled). Default is enabled (1).
   std::map<std::string, int32_t> constraintModeState;
 
-  /// Per-object RNG seeds. Key is classPtr address, value is the seed.
+  /// Per-object RNG state. Key is classPtr address, value is the RNG.
   /// Used by obj.srandom(seed) to seed per-object randomization.
-  llvm::DenseMap<uint64_t, uint32_t> perObjectRngSeeds;
+  /// IEEE 1800-2017 §18.13: Each class instance has its own RNG state.
+  std::map<uint64_t, std::mt19937> perObjectRng;
+
+  /// Get or create the per-object RNG for the given object address.
+  /// If no RNG exists yet, creates one seeded with the object address.
+  std::mt19937 &getObjectRng(uint64_t objAddr) {
+    auto it = perObjectRng.find(objAddr);
+    if (it != perObjectRng.end())
+      return it->second;
+    // Default seed: use object address for unique per-object randomization
+    auto [insertIt, _] = perObjectRng.emplace(objAddr, std::mt19937(static_cast<uint32_t>(objAddr)));
+    return insertIt->second;
+  }
+
+  /// The object address of the last __moore_randomize_basic call.
+  /// Used to associate subsequent __moore_randomize_with_range/ranges calls
+  /// with the same per-object RNG, since those calls don't receive the
+  /// object pointer directly.
+  uint64_t lastRandomizeObjAddr = 0;
+
+  /// Pending seed from old-style @srandom() stubs (no object pointer).
+  /// When set, the next __moore_randomize_basic call will use this seed
+  /// instead of the default per-object seed.
+  std::optional<uint32_t> pendingSrandomSeed;
 
   /// Tracks active function call depth for recursion detection.
   /// Maps funcOp operation pointer to current call depth. Used to enable
