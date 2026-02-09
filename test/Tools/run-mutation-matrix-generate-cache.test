@@ -18,11 +18,19 @@
 // RUN: wc -l < %t/hits.txt | FileCheck %s --check-prefix=HITS
 // RUN: FileCheck %s --check-prefix=METRICSA < %t/out-a/lane_gen/metrics.tsv
 // RUN: FileCheck %s --check-prefix=METRICSB < %t/out-b/lane_gen/metrics.tsv
+// RUN: FileCheck %s --check-prefix=RESULTSA < %t/out-a/results.tsv
+// RUN: FileCheck %s --check-prefix=RESULTSB < %t/out-b/results.tsv
 
 // LOGA: Mutation matrix summary: pass=1 fail=0
 // LOGB: Mutation matrix summary: pass=1 fail=0
 // HITS: 1
 // METRICSA: generated_mutations_cache_hit{{.*}}0
 // METRICSA: generated_mutations_cache_status{{.*}}miss
+// METRICSA: generated_mutations_cache_saved_runtime_ns{{.*}}0
 // METRICSB: generated_mutations_cache_hit{{.*}}1
 // METRICSB: generated_mutations_cache_status{{.*}}hit
+// METRICSB: generated_mutations_cache_saved_runtime_ns{{.*}}{{[0-9]+}}
+// RESULTSA: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns
+// RESULTSA: lane_gen{{.*}}miss{{.*}}0{{.*}}1{{.*}}0
+// RESULTSB: lane_id{{.*}}generated_mutations_cache_status{{.*}}generated_mutations_cache_saved_runtime_ns
+// RESULTSB: lane_gen{{.*}}hit{{.*}}1{{.*}}0{{.*}}{{[0-9]+}}

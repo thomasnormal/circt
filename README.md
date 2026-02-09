@@ -363,6 +363,8 @@ runs/lanes.
 - `generated_mutations_cache_status` (`hit|miss|disabled`)
 - `generated_mutations_cache_hit`
 - `generated_mutations_cache_miss`
+- `generated_mutations_runtime_ns`
+- `generated_mutations_cache_saved_runtime_ns`
 
 For full option reference, global-filter modes, cache/reuse controls, and the
 complete lane TSV schema, see `docs/FormalRegression.md`.
