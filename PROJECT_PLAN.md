@@ -18176,6 +18176,17 @@ ninja -C build circt-verilog
     manifest generation or replay.
   - Tightens checkpoint provenance guarantees for long-running 24/7 closure.
 
+### Iteration 683
+- Added Ed25519 lane-state manifest mode in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-private-key-file`
+  - `--lane-state-manifest-ed25519-public-key-file`
+  - `--lane-state-manifest-ed25519-key-id`
+- Planning impact:
+  - Upgrades lane-state provenance from shared-secret-only to asymmetric
+    signer/verifier separation.
+  - Enables safer distributed verification where private signing keys remain
+    isolated from resume/merge workers.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18186,8 +18197,7 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add asymmetric signer support (Ed25519/cert-backed manifests) for lane-state
-    provenance.
+  - Add certificate-chain/trust-store policy on top of Ed25519 signer material.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
