@@ -614,22 +614,29 @@ run_generation_round() {
   local mode=""
   local list_count=0
   local script_file=""
-  local log_file=""
-  local sources_file=""
   local mode_out_file=""
   local mode_arg=""
+  local log_file=""
+  local sources_file=""
   local mutate_cmd=""
   local key=""
   local value=""
+  local any_target=0
 
+  script_file="${WORK_DIR}/mutate.${round_tag}.ys"
+  log_file="${WORK_DIR}/mutate.${round_tag}.log"
   MODE_OUT_FILES=()
+  {
+    echo "$read_cmd"
+    echo "$prep_cmd"
+  } > "$script_file"
+
   for idx in "${!MODE_TARGET_LIST[@]}"; do
     mode="${MODE_TARGET_LIST[$idx]}"
     list_count="${ROUND_COUNTS[$idx]:-0}"
     [[ "$list_count" -le 0 ]] && continue
+    any_target=1
 
-    script_file="${WORK_DIR}/mutate.${round_tag}.${idx}.ys"
-    log_file="${WORK_DIR}/mutate.${round_tag}.${idx}.log"
     sources_file="${WORK_DIR}/sources.${round_tag}.${idx}.txt"
     mode_out_file="${WORK_DIR}/mutations.${round_tag}.${idx}.txt"
     MODE_OUT_FILES+=("$mode_out_file")
@@ -652,16 +659,17 @@ run_generation_round() {
     for sel in "${SELECT_LIST[@]}"; do
       mutate_cmd+=" $sel"
     done
+    echo "$mutate_cmd" >> "$script_file"
+  done
 
-    {
-      echo "$read_cmd"
-      echo "$prep_cmd"
-      echo "$mutate_cmd"
-    } > "$script_file"
+  if [[ "$any_target" -eq 0 ]]; then
+    return
+  fi
 
-    "$YOSYS_BIN" -ql "$log_file" "$script_file"
+  "$YOSYS_BIN" -ql "$log_file" "$script_file"
+  for mode_out_file in "${MODE_OUT_FILES[@]}"; do
     if [[ ! -f "$mode_out_file" ]]; then
-      echo "Mutation generation failed: output file missing for mode '${mode:-default}': $mode_out_file" >&2
+      echo "Mutation generation failed: output file missing: $mode_out_file" >&2
       exit 1
     fi
   done

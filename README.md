@@ -371,6 +371,8 @@ Outputs are written under `--work-dir` / `--out-dir` and include
 When `--reuse-cache-dir` is set, generated mutation lists are now cached by
 design+generator options to avoid repeated Yosys mutation-list synthesis across
 runs/lanes.
+Within each generation round, CIRCT now batches all mode/profile `mutate -list`
+requests into a single Yosys invocation to reduce process startup overhead.
 Generation cache writes are now coordinated with per-key locking, so parallel
 matrix lanes with identical generation settings reuse one synthesis result
 instead of duplicating `yosys mutate -list` work.
