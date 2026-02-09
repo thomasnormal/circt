@@ -238,6 +238,11 @@ See CHANGELOG.md on recent progress.
     `--opentitan-e2e-lec-x-optimistic` or
     `--opentitan-e2e-lec-strict-x` (mutually exclusive), enabling strict
     parity audits through the canonical E2E control plane.
+28. `run_formal_all.sh` now supports a dedicated strict OpenTitan E2E audit
+    lane (`opentitan/E2E_STRICT`, `--with-opentitan-e2e-strict`) that can run
+    alongside `opentitan/E2E` and exports case-level rows to
+    `opentitan-e2e-strict-results.txt` for expected-failure and strict-gate
+    case tracking.
 18. Mutation built-in circt-lec/circt-bmc filters now support automatic tool
     discovery (PATH, then `<circt-root>/build/bin`) when paths are omitted or
     set to `auto`, including chained and matrix default flows.

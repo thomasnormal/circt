@@ -78,6 +78,15 @@ Select OpenTitan E2E LEC mode explicitly (default remains x-optimistic):
 utils/run_formal_all.sh --with-opentitan-e2e --opentitan ~/opentitan --opentitan-e2e-lec-strict-x --include-lane-regex '^opentitan/E2E$'
 ```
 
+Run both OpenTitan E2E lanes side-by-side (default parity + strict audit):
+
+```bash
+utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan ~/opentitan --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'
+```
+
+`opentitan/E2E_STRICT` emits case-level rows in
+`<out-dir>/opentitan-e2e-strict-results.txt` for expected-failure case gates.
+
 ## Mutation Coverage Harness (Certitude-Style Classification)
 
 Use the mutation harness to classify injected faults into:
