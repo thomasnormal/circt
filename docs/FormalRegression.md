@@ -123,12 +123,14 @@ utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutat
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]
 ```
 
 Notes:
 - Use `-` for `activate_cmd` / `propagate_cmd` to disable that stage.
 - Use `-` for `coverage_threshold` to skip threshold gating per lane.
+- For auto-generation lanes, set `mutations_file` to `-` and provide
+  `generate_count` (plus optional top/seed/yosys columns).
 
 Shard/route a run to selected lane IDs:
 

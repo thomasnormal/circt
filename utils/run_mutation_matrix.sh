@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -22,6 +22,7 @@ Optional:
 Notes:
   - Use '-' for activate_cmd or propagate_cmd to disable that stage.
   - coverage_threshold may be '-' to skip threshold gating for a lane.
+  - mutations_file may be '-' when generate_count (>0) is provided.
 USAGE
 }
 
@@ -76,7 +77,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     failures=$((failures + 1))
@@ -92,13 +93,38 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   cmd=(
     "${SCRIPT_DIR}/run_mutation_cover.sh"
     --design "$design"
-    --mutations-file "$mutations_file"
     --tests-manifest "$tests_manifest"
     --work-dir "$lane_dir"
     --metrics-file "$lane_metrics"
     --summary-json-file "$lane_json"
     --jobs "$JOBS_PER_LANE"
   )
+  gen_count="${generate_count:--}"
+  if [[ "$mutations_file" != "-" ]]; then
+    cmd+=(--mutations-file "$mutations_file")
+  elif [[ "$gen_count" != "-" && -n "$gen_count" ]]; then
+    cmd+=(--generate-mutations "$gen_count")
+  else
+    echo "Lane '${lane_id}' missing mutation source (mutations_file or generate_count)." >&2
+    failures=$((failures + 1))
+    if [[ "$STOP_ON_FAIL" -eq 1 ]]; then
+      echo "Mutation matrix summary: pass=${passes} fail=${failures}"
+      echo "Results: $RESULTS_FILE"
+      exit 1
+    fi
+    continue
+  fi
+  if [[ "$gen_count" != "-" && -n "$gen_count" ]]; then
+    if [[ "${mutations_top:--}" != "-" && -n "${mutations_top:-}" ]]; then
+      cmd+=(--mutations-top "$mutations_top")
+    fi
+    if [[ "${mutations_seed:--}" != "-" && -n "${mutations_seed:-}" ]]; then
+      cmd+=(--mutations-seed "$mutations_seed")
+    fi
+    if [[ "${mutations_yosys:--}" != "-" && -n "${mutations_yosys:-}" ]]; then
+      cmd+=(--mutations-yosys "$mutations_yosys")
+    fi
+  fi
   if [[ -n "$CREATE_MUTATED_SCRIPT" ]]; then
     cmd+=(--create-mutated-script "$CREATE_MUTATED_SCRIPT")
   fi
