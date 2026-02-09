@@ -7,7 +7,7 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 ---
 
-## Current Status - February 8, 2026 (Iteration 527)
+## Current Status - February 9, 2026
 
 ### Test Results
 
@@ -15,15 +15,16 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 |------|----------|------|------|------|
 | Parsing | 853 | 853 | 0 | **100%** |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** |
-| Simulation (full) | ~750 | ~698 | 0 | **100%** (0 unexpected failures) |
+| Simulation (full) | 696 | 696 | 0 | **100%** (0 unexpected failures) |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** |
-| circt-sim lit | 187 | 187 | 0 | **100%** |
-| ImportVerilog lit | 267 | 267 | 0 | **100%** |
+| circt-sim lit | 206 | 206 | 0 | **100%** |
+| ImportVerilog lit | 268 | 268 | 0 | **100%** |
 
 ### AVIP Status
 
-8 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
+All 9 AVIPs compile and simulate end-to-end. Performance: ~171 ns/s (APB 10us in 59s).
+Coverage collection now works for parametric covergroups (requires AVIP recompilation).
 
 | AVIP | Status | Notes |
 |------|--------|-------|
@@ -34,17 +35,17 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 | I3C | WORKS | i3c_base_test, 500ns sim time |
 | SPI | WORKS | SpiBaseTest, 500ns sim time |
 | AXI4 | WORKS | hvl_top, 57MB MLIR, passes sim |
+| AXI4Lite | WORKS | Axi4LiteBaseTest, exit code 0 |
 | JTAG | WORKS | HvlTop, 500ns sim time, regex DPI fixed |
-| AXI4Lite | PARTIAL | Exits early — vtable dispatch gap in `get_common_domain` |
 
 ### Workstream Status
 
 | Track | Owner | Status | Next Steps |
 |-------|-------|--------|------------|
-| **Track A: Constraint Solver** | Agent | Active | Build real constraint solver for cross-variable, dist, inline constraints (40+ xfail tests) |
-| **Track B: SVA Runtime** | Agent | Active | Implement concurrent assertion simulation for 17 SVA UVM timeout tests |
-| **Track C: Simulation Gaps** | Agent | Active | AXI4Lite vtable fix; rand_mode/constraint_mode; srandom/randstate |
-| **Track D: External Tests** | Agent | Active | yosys/verilator/OpenTitan regressions; wand/wor net legalization |
+| **Track 1: Constraint Solver** | Agent | Active | Inline constraints, infeasible detection, foreach |
+| **Track 2: Random Stability** | Agent | Active | get/set_randstate, thread stability |
+| **Track 3: Coverage Collection** | Agent | Active | Recompile AVIPs, iff guards, auto-sampling |
+| **Track 4: UVM Test Fixes** | Agent | Active | VIF clock sensitivity, resource_db, SVA runtime |
 | **BMC/LEC** | Codex | Active | Structured Slang event-expression metadata (DO NOT TOUCH) |
 
 ### Feature Gap Table — Road to Xcelium Parity
@@ -53,36 +54,62 @@ Secondary goal: Get to 100% in the ~/sv-tests/ and ~/verilator-verification/ tes
 
 | Feature | Status | Blocking Tests | Priority |
 |---------|--------|----------------|----------|
-| **Constraint solver (full)** | PARTIAL | 40+ sv-tests | **P0** |
-| - Cross-variable constraints | MISSING | `18.5.2`, `18.5.9`, `18.7` | Build real solver |
-| - Distribution constraints | MISSING | `18.5.4` | `dist { val := weight }` |
-| - Inline constraints (`with`) | MISSING | `18.7--*_0/2/4/6` | Parse `randomize() with { }` |
-| - Foreach iterative constraints | MISSING | `18.5.8.1`, `18.5.8.2` | Loop over arrays |
-| - Soft constraints | MISSING | `18.5.14--*` | Priority-based override |
-| - Static constraint blocks | MISSING | `18.5.11` | Class-level constraints |
-| - Functions in constraints | MISSING | `18.5.12` | Call functions in constraint blocks |
-| - Infeasible constraint detection | MISSING | `18.6.3--*_2/3` | Return 0, skip post_randomize |
-| - Constraint inheritance | MISSING | `18.5.2--*_1` | Collect constraints from base classes |
-| **rand_mode / constraint_mode** | MISSING | 6 sv-tests | **P1** |
-| - rand_mode toggle | MISSING | `18.8--*_0/1/2/3` | Enable/disable rand variables |
-| - constraint_mode toggle | MISSING | `18.9--*_0` | Enable/disable constraint blocks |
+| **Constraint solver** | PARTIAL | ~15 sv-tests | **P0** |
+| - Constraint inheritance | **DONE** | 0 | Parent class hierarchy walking |
+| - Distribution constraints | **DONE** | 0 | `traceToPropertyName()` fix |
+| - Static constraint blocks | **DONE** | 0 | VariableOp support |
+| - Soft constraints | **DONE** | 0 | `isSoft` flag extraction |
+| - Constraint guards (null) | **DONE** | 0 | `ClassHandleCmpOp`+`ClassNullOp` |
+| - Implication/if-else/inside | **DONE** | 0 | Conditional range application |
+| - Inline constraints (`with`) | MISSING | `18.7--*_0/2/4/6` | 4 tests |
+| - Foreach iterative constraints | MISSING | `18.5.8.1`, `18.5.8.2` | 2 tests |
+| - Functions in constraints | MISSING | `18.5.12` | 1 test |
+| - Infeasible detection | MISSING | `18.6.3--*_2/3` | 2 tests |
+| - Global constraints | MISSING | `18.5.9` | 1 test |
+| **rand_mode / constraint_mode** | **DONE** | 0 | Receiver resolution fixed |
+| **Random stability** | PARTIAL | 7 sv-tests | **P1** |
+| - srandom seed control | **DONE** | 0 | Per-object RNG via `__moore_class_srandom` |
+| - Per-object RNG | **DONE** | 0 | `std::mt19937` per object address |
+| - get/set_randstate | MISSING | `18.13.4`, `18.13.5` | 2 tests |
+| - Thread/object stability | MISSING | `18.14--*` | 3 tests |
+| - Manual seeding | MISSING | `18.15--*` | 2 tests |
+| **Coverage collection** | PARTIAL | 0 (AVIPs) | **P0** |
+| - Basic covergroups | **DONE** | 0 | Implicit + parametric sample() |
+| - Parametric sample() | **DONE** | 0 | Expression binding with visitSymbolReferences |
+| - Coverpoint iff guard | MISSING | — | Metadata string only, not evaluated |
+| - Auto sampling (@posedge) | MISSING | — | Event-driven trigger not connected |
+| - Wildcard bins | MISSING | — | Pattern matching logic needed |
+| - start()/stop() | MISSING | — | Runtime stubs only |
 | **SVA concurrent assertions** | MISSING | 17 sv-tests | **P1** |
-| - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval of temporal props |
-| - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay ranges |
-| - Multi-clock sequences | MISSING | `16.13--*-uvm` | Cross-clock domain sequences |
-| - expect statement | MISSING | `16.17--*-uvm` | Blocking property check |
-| **Random stability** | MISSING | 7 sv-tests | **P2** |
-| - srandom seed control | MISSING | `18.13.3` | Reproducible sequences |
-| - get/set_randstate | MISSING | `18.13.4`, `18.13.5` | Save/restore RNG state |
-| - Thread/object stability | MISSING | `18.14--*` | Per-process/per-object RNG |
-| - Manual seeding | MISSING | `18.15--*` | `randomize()` with seed arg |
-| **UVM stream_unpack** | PARTIAL | 8 sv-tests | **P1** |
-| - `!moore.ref<open_uarray<i1>>` | BROKEN | `uvm_agent_*`, `uvm_monitor_*` | MooreToCore type mismatch |
+| - assert/assume/cover property | MISSING | `16.2--*-uvm` | Runtime eval |
+| - Sequences with ranges | MISSING | `16.7--*-uvm` | `##[1:3]` delay |
+| - expect statement | MISSING | `16.17--*-uvm` | Blocking check |
+| **UVM virtual interface** | PARTIAL | 6 sv-tests | **P1** |
+| - Signal propagation | **DONE** | 0 | ContinuousAssignOp → llhd.process |
+| - DUT clock sensitivity | MISSING | `uvm_agent_*`, etc. | `always @(posedge vif.clk)` |
+| **UVM resource_db** | PARTIAL | 1 sv-test | **P2** |
 | **Inline constraint checker** | MISSING | 4 sv-tests | **P2** |
-| - `randomize(null)` | MISSING | `18.11--*` | Inline variable control |
-| - `randomize(x) with { }` | MISSING | `18.11.1--*` | Inline constraint check |
-| **pre/post_randomize** | **DONE** | 0 (was 2) | Fixed this session |
-| **Class property initializers** | **DONE** | 0 | Fixed this session |
+| **pre/post_randomize** | **DONE** | 0 | Fixed |
+| **Class property initializers** | **DONE** | 0 | Fixed |
+
+### Session Summary - Latest
+
+1. **Constraint extraction improvements** (8ba20049d)
+   - zext/sext lookup in getPropertyName
+   - Compound range decomposition (`and(uge, ule)` → min/max)
+   - Constraint inheritance via parent class hierarchy
+   - VariableOp support for static blocks
+
+2. **Per-object RNG + VIF clock + dist fix** (c07ce5ed5)
+   - `__moore_class_srandom(objPtr, seed)` in ImportVerilog
+   - Per-object `std::mt19937` in interpreter
+   - ContinuousAssignOp → llhd.process for signal propagation
+   - `traceToPropertyName()` for dist/soft/range constraints
+
+3. **Parametric covergroup sample() fix** (a358f23f6)
+   - Root cause: Raw argument pointers passed instead of evaluating per-coverpoint expressions
+   - Fix: `visitSymbolReferences()` to collect actual symbol pointers + name-based binding
+   - All 9 AVIPs had 0% coverage due to this bug
 
 ### Session Summary - Iteration 527
 

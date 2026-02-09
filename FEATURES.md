@@ -58,7 +58,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt` (173 entries):
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 200 | 200 | 0 | All pass; queue/array ops, config_db, semaphores, vtable, string methods, coverage, reduce ops, short-circuit eval, array contains/find, wand/wor nets, constraint solver, rand_mode, constraint guards, soft constraints |
+| circt-sim | 206 | 206 | 0 | All pass; constraint solver (dist, soft, guards, inheritance, compound), per-object RNG, parametric coverage sampling, VIF clock propagation |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -103,7 +103,7 @@ to commercial simulators like Cadence Xcelium.
 | Short-circuit evaluation | WORKS | `&&`, `\|\|`, `->` only evaluate RHS when needed (IEEE 1800-2017 §11.4.7); uses `moore.conditional` in procedural contexts |
 | ClockVar support | MISSING | Needed by some testbenches |
 | `%c` format specifier | WORKS | `moore.fmt.char` in ImportVerilog, `FormatCharOpConversion` in MooreToCore, `sim.fmt.char` in interpreter |
-| Coverage collection | WORKS | Covergroup/coverpoint sampling + reporting via MooreRuntime; implicit sample() evaluates coverpoint expressions; 4-state value extraction |
+| Coverage collection | WORKS | Covergroup/coverpoint sampling + reporting via MooreRuntime; implicit AND parametric `with function sample()` evaluate per-coverpoint expressions; 4-state value extraction; bin hit tracking with min/max/unique |
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed; UVM regex DPI (`uvm_re_comp/exec/free`) uses `std::regex` for full POSIX extended regex support |
@@ -195,3 +195,9 @@ to commercial simulators like Cadence Xcelium.
 | Soft range constraints from ConstraintExprOp | Extract soft constraints from `ConstraintExprOp` with `isSoft` flag; apply as default ranges when no hard constraint overrides |
 | Constraint guard null checks | Support `if (next == null) b1 == 5;` guards; pre-save pointer predicates before `randomize_basic`; `LLVM::ICmpOp` for pointer comparison (IEEE 1800-2017 §18.5.13) |
 | Function lookup cache pre-population | Pre-populate interpreter function lookup cache during initialization; eliminates repeated O(n) searches during simulation |
+| Constraint extraction zext/sext | `getPropertyName()` looks through `ZExtOp`/`SExtOp` for narrow-type properties; compound `and(uge, ule)` decomposed to min/max ranges |
+| Constraint inheritance | Walk parent class hierarchy via `classDecl.getBaseAttr()` chain to collect inherited constraints |
+| Distribution constraint traceToPropertyName | Replace BlockArgument-based property lookup with `traceToPropertyName()` through ReadOp/ClassPropertyRefOp/VariableOp |
+| Per-object RNG state | `__moore_class_srandom(objPtr, seed)` in ImportVerilog; `std::mt19937` per object address in interpreter (IEEE 1800-2017 §18.13) |
+| Virtual interface clock propagation | `ContinuousAssignOp` at module level creates `llhd.process` to watch source signals and continuously update interface memory |
+| Parametric covergroup sample() | Fix 0% coverage: evaluate per-coverpoint expressions with `visitSymbolReferences()` to collect actual FormalArgument symbol pointers for name-based binding |
