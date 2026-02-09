@@ -38,6 +38,14 @@
   - cached-qualification run with two mutants:
     - expected classes (`detected`, `not_activated`): PASS
     - `reused_pairs=2` in metrics + JSON + summary log: PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-reuse --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
 
 ## Iteration 729 - February 9, 2026
 
