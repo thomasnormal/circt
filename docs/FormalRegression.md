@@ -153,6 +153,8 @@ Lane-state semantics:
     - profile keys:
       - shared:
         `auto_uri_policy`, `auto_uri_allowed_schemes`,
+        `refresh_retries`, `refresh_delay_secs`,
+        `refresh_timeout_secs`, `refresh_jitter_secs`,
         `refresh_metadata_require_transport`,
         `refresh_metadata_require_status`,
         `refresh_metadata_require_uri_regex`,
@@ -165,6 +167,8 @@ Lane-state semantics:
         `refresh_metadata_max_future_skew_secs`
       - per-artifact (`crl.{...}`, `ocsp.{...}`) may override:
         `auto_uri_policy`, `auto_uri_allowed_schemes`,
+        `refresh_retries`, `refresh_delay_secs`,
+        `refresh_timeout_secs`, `refresh_jitter_secs`,
         `refresh_metadata_require_transport`,
         `refresh_metadata_require_status`,
         `refresh_metadata_require_uri_regex`,
@@ -178,6 +182,13 @@ Lane-state semantics:
   - Effective precedence for policy/scheme defaults:
     - per-artifact CLI override
     - shared CLI override
+    - per-artifact profile value
+    - shared profile value
+    - built-in default
+  - Effective precedence for profile-driven refresh execution controls
+    (`...refresh_retries`, `...refresh_delay_secs`,
+    `...refresh_timeout_secs`, `...refresh_jitter_secs`):
+    - explicit per-artifact CLI flag
     - per-artifact profile value
     - shared profile value
     - built-in default
