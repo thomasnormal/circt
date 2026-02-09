@@ -179,10 +179,12 @@ See CHANGELOG.md on recent progress.
 7. OpenTitan LEC no longer depends on `LEC_ACCEPT_XPROP_ONLY=1` for
    `aes_sbox_canright` in default OpenTitan flow (`LEC_X_OPTIMISTIC` default
    enabled in OpenTitan LEC harness).
+8. `SIM i2c` timeout is closed in non-smoke E2E by short-circuiting TL-UL BFM
+   response wait when `a_ready` never handshakes.
+9. OpenTitan non-smoke E2E gate is currently clean (`pass=12 fail=0`).
 
 #### Current Open Non-Smoke Gaps (from latest E2E run)
-1. `SIM i2c`: wall-clock timeout (non-convergent end-to-end run).
-2. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
+1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
    `aes_sbox_canright` still reports `XPROP_ONLY`; default OpenTitan LEC path
    now uses x-optimistic equivalence.
 

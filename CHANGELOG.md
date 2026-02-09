@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 751 - February 9, 2026
+
+### OpenTitan E2E Closure: `SIM i2c` Timeout
+
+- Fixed TL-UL BFM timeout behavior in
+  `utils/opentitan_wrappers/tlul_bfm.sv`:
+  - `tlul_read32`: return immediately after `a_ready` timeout.
+  - `tlul_write32`: return immediately after `a_ready` timeout.
+- Rationale: if the request never handshakes (`a_ready` stays low), waiting for
+  `d_valid` is unnecessary and can cause pathological runtime in large
+  OpenTitan full-IP sims (observed in `SIM:i2c`).
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/circt-sim/tlul-bfm-a-ready-timeout-short-circuit.sv`
+    - verifies no `d_valid` timeout wait/log occurs after `a_ready` timeout
+      for both read and write.
+
+### Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-sim/tlul-bfm-a-ready-timeout-short-circuit.sv test/Tools/circt-sim/tlul-bfm-user-default.sv test/Tools/run-opentitan-sim-timeout-detect.test test/Tools/run-opentitan-formal-e2e.test`:
+    - 4/4 PASS
+- OpenTitan targeted:
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh i2c --timeout=180`:
+    - PASS
+- OpenTitan non-smoke E2E:
+  - `utils/run_opentitan_formal_e2e.sh --out-dir /tmp/opentitan-e2e-after-i2c-bfm-fix-rerun`:
+    - summary: `pass=12 fail=0`
+- Canonical aggregate lane:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-after-i2c-bfm-fix --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/E2E$'`:
+    - `opentitan E2E PASS total=12 pass=12 fail=0`
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state LEC for
+  `aes_sbox_canright` still reports `XPROP_ONLY`.
+
 ## Iteration 750 - February 9, 2026
 
 ### Bidirectional Chained Global Formal Filtering
