@@ -20,12 +20,12 @@ uvm_scoreboard_monitor_env	xfail	UVM testbench: stream_unpack interpretOperation
 18.5.9--global-constraints_1	xfail	Cross-object global constraints not supported
 18.5.11--static-constraint-blocks_1	xfail	Static constraint blocks not resolved
 18.5.12--functions-in-constraint_1	xfail	Function calls in constraints not supported
-18.5.14--soft-constraints_1	xfail	Soft constraint application incomplete
+18.5.14--soft-constraints_1	pass
 18.5.14.1--soft-constraint-priorities_1	xfail	Soft constraint priority resolution
 18.5.14.1--soft-constraint-priorities_4	xfail	Inline soft constraint override
-18.5.14.2--discarding-soft-constraints_1	xfail	Soft constraint disable/discard
-18.5.14.2--discarding-soft-constraints_3	xfail	Soft constraint disable/discard
-18.5.14.2--discarding-soft-constraints_5	xfail	Soft constraint disable/discard
+18.5.14.2--discarding-soft-constraints_1	pass
+18.5.14.2--discarding-soft-constraints_3	pass
+18.5.14.2--discarding-soft-constraints_5	pass
 18.6.2--post-randomize_method_1	pass	post_randomize callback
 18.6.2--pre-randomize-method_1	pass	pre_randomize callback
 18.6.3--behavior-of-randomization-methods_2	xfail	Infeasible constraint detection
