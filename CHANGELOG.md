@@ -1,5 +1,77 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 811 - February 9, 2026
+
+### `circt-mut matrix` Native Default Global-Filter Preflight
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with native `matrix` argument
+   preprocessing for default built-in global-filter options:
+   - `--default-formal-global-propagate-circt-lec`
+   - `--default-formal-global-propagate-circt-bmc`
+   - `--default-formal-global-propagate-circt-chain`
+2. Added native default-global-filter behavior before script dispatch:
+   - resolves bare/default `circt-lec` / `circt-bmc` options to explicit
+     executables
+   - validates chain mode values
+     (`lec-then-bmc|bmc-then-lec|consensus|auto`)
+   - auto-injects default LEC/BMC tool paths when chain mode is set without
+     explicit tool flags
+   - fails fast on conflicting non-chain default global-filter mode mixes
+     (`cmd`+`lec`, `cmd`+`bmc`, `lec`+`bmc`).
+3. Preserved migration compatibility:
+   - matrix execution still dispatches to `run_mutation_matrix.sh` after
+     preflight/rewrite.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-matrix-global-circt-tools-auto.test`
+  - `test/Tools/circt-mut-matrix-global-circt-chain-auto-implicit-tools.test`
+  - `test/Tools/circt-mut-matrix-global-filter-conflict-native.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (57/57)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (116/116)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-matrix-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
+## Iteration 810 - February 9, 2026
+
+### Inline Soft Constraint Override + xfail Reduction to 16
+
+1. Verified inline soft constraint override test (`constraint-inline-soft.sv`):
+   - IEEE 1800-2017 §18.7: `randomize() with { soft b == 90; }` correctly
+     overrides all class-level soft constraints (both base and derived)
+   - Test validates soft priority: inline > derived > base
+2. Reduced xfail count from ~54 to **16 tests** remaining:
+   - 38 tests moved from xfail to pass (constraint solver, random stability,
+     UVM phases, soft priorities, infeasible detection, inline constraints)
+   - Remaining 16: 8 UVM testbench, 2 inline checker (`randomize(null)`),
+     2 inline variable control (`randomize(v,w)`), 2 foreach/array,
+     1 inline var-to-var, 1 static rand_mode
+3. Project plan overhaul:
+   - Track 2 (Random Stability) marked **COMPLETE**
+   - Track 1 re-prioritized: `randomize(null)` → `randomize(v,w)` → foreach
+   - Track 4: re-test 8 UVM xfails (stream_unpack was fixed in b3031c5ec)
+   - Track 5: recompile AVIP .mlir files needed for dual-top testing
+4. Updated FEATURES.md: circt-sim 219/219 (was 211), 16 xfail (was 54)
+
+### Validation
+
+- circt-sim: 219/219 PASS (100%)
+- ImportVerilog: 268/268 PASS (100%)
+
 ## Iteration 809 - February 9, 2026
 
 ### `circt-mut cover` Native Global-Filter Preflight Expansion

@@ -286,6 +286,13 @@ Execution controls:
     conflicting non-chain global-filter mode combinations before dispatch.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
+- `circt-mut matrix` migration note:
+  - default built-in global-filter options are now pre-resolved/validated
+    natively (`--default-formal-global-propagate-circt-lec`,
+    `--default-formal-global-propagate-circt-bmc`,
+    `--default-formal-global-propagate-circt-chain`) before script dispatch.
+  - chain mode auto-injects default built-in LEC/BMC tools when omitted, and
+    conflicting non-chain default global-filter modes are rejected early.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
