@@ -281,6 +281,9 @@ Execution controls:
   - built-in global-filter tool options (`--formal-global-propagate-circt-lec`
     / `--formal-global-propagate-circt-bmc`) are now pre-resolved natively,
     including bare `auto` forms, before script dispatch.
+  - native preflight now validates chain-mode values, injects missing built-in
+    LEC/BMC tools for `--formal-global-propagate-circt-chain`, and rejects
+    conflicting non-chain global-filter mode combinations before dispatch.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design

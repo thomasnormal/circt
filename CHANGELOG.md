@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 809 - February 9, 2026
+
+### `circt-mut cover` Native Global-Filter Preflight Expansion
+
+1. Extended native `circt-mut cover` preprocessing in
+   `tools/circt-mut/circt-mut.cpp` beyond tool-path rewrite to include
+   global-filter mode preflight before script dispatch.
+2. Added native checks/alignment for built-in global-filter behavior:
+   - validates `--formal-global-propagate-circt-chain` values against
+     `lec-then-bmc|bmc-then-lec|consensus|auto`
+   - auto-injects resolved built-in LEC/BMC tool paths when chain mode is set
+     but tool flags are omitted
+   - rejects conflicting non-chain global-filter mode combinations
+     (`cmd`+`circt-lec`, `cmd`+`circt-bmc`, `circt-lec`+`circt-bmc`) with the
+     same compatibility diagnostic string as script mode.
+3. Preserved compatibility:
+   - cover execution still dispatches to `run_mutation_cover.sh` after
+     preflight/rewrite.
+   - native preflight only tightens setup diagnostics and default injection.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-cover-global-circt-chain-auto-implicit-tools.test`
+  - `test/Tools/circt-mut-cover-global-circt-chain-invalid-native.test`
+  - `test/Tools/circt-mut-cover-global-filter-conflict-native.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test`: PASS (14/14)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (116/116)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-cover-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 808 - February 9, 2026
 
 ### `circt-mut cover` Native Global-Filter Tool Resolution

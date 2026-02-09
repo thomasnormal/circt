@@ -236,6 +236,11 @@ struct CoverRewriteResult {
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                                            ArrayRef<StringRef> args) {
   CoverRewriteResult result;
+  bool hasGlobalFilterCmd = false;
+  bool hasGlobalFilterLEC = false;
+  bool hasGlobalFilterBMC = false;
+  bool hasGlobalFilterChain = false;
+  std::string globalFilterChainMode;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
 
@@ -266,6 +271,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
 
     if (arg == "--formal-global-propagate-circt-lec" ||
         arg.starts_with("--formal-global-propagate-circt-lec=")) {
+      hasGlobalFilterLEC = true;
       if (!resolveWithOptionalValue("--formal-global-propagate-circt-lec",
                                     "circt-lec"))
         return result;
@@ -273,14 +279,84 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
     if (arg == "--formal-global-propagate-circt-bmc" ||
         arg.starts_with("--formal-global-propagate-circt-bmc=")) {
+      hasGlobalFilterBMC = true;
       if (!resolveWithOptionalValue("--formal-global-propagate-circt-bmc",
                                     "circt-bmc"))
         return result;
       continue;
     }
+    if (arg == "--formal-global-propagate-cmd" ||
+        arg.starts_with("--formal-global-propagate-cmd="))
+      hasGlobalFilterCmd = true;
+    if (arg == "--formal-global-propagate-circt-chain" ||
+        arg.starts_with("--formal-global-propagate-circt-chain=")) {
+      constexpr StringRef chainPrefix =
+          "--formal-global-propagate-circt-chain=";
+      hasGlobalFilterChain = true;
+      if (arg.starts_with(chainPrefix))
+        globalFilterChainMode = arg.substr(chainPrefix.size()).str();
+      else if (i + 1 < args.size())
+        globalFilterChainMode = args[i + 1].str();
+      else
+        globalFilterChainMode.clear();
+    }
 
     result.rewrittenArgs.push_back(arg.str());
   }
+
+  if (hasGlobalFilterChain) {
+    if (globalFilterChainMode != "lec-then-bmc" &&
+        globalFilterChainMode != "bmc-then-lec" &&
+        globalFilterChainMode != "consensus" &&
+        globalFilterChainMode != "auto") {
+      result.error =
+          (Twine("Invalid --formal-global-propagate-circt-chain value: ") +
+           globalFilterChainMode +
+           " (expected lec-then-bmc|bmc-then-lec|consensus|auto).")
+              .str();
+      return result;
+    }
+    if (hasGlobalFilterCmd) {
+      result.error = "--formal-global-propagate-circt-chain cannot be combined "
+                     "with --formal-global-propagate-cmd.";
+      return result;
+    }
+    if (!hasGlobalFilterLEC) {
+      auto resolved =
+          resolveCoverCirctToolPath(argv0, "auto", "circt-lec");
+      if (!resolved) {
+        result.error =
+            "circt-mut cover: unable to resolve --formal-global-propagate-circt-lec executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
+        return result;
+      }
+      result.rewrittenArgs.push_back("--formal-global-propagate-circt-lec");
+      result.rewrittenArgs.push_back(*resolved);
+      hasGlobalFilterLEC = true;
+    }
+    if (!hasGlobalFilterBMC) {
+      auto resolved =
+          resolveCoverCirctToolPath(argv0, "auto", "circt-bmc");
+      if (!resolved) {
+        result.error =
+            "circt-mut cover: unable to resolve --formal-global-propagate-circt-bmc executable: auto (searched repo build/bin, install-tree sibling bin, and PATH).";
+        return result;
+      }
+      result.rewrittenArgs.push_back("--formal-global-propagate-circt-bmc");
+      result.rewrittenArgs.push_back(*resolved);
+      hasGlobalFilterBMC = true;
+    }
+  } else {
+    int modeCount = 0;
+    modeCount += hasGlobalFilterCmd ? 1 : 0;
+    modeCount += hasGlobalFilterLEC ? 1 : 0;
+    modeCount += hasGlobalFilterBMC ? 1 : 0;
+    if (modeCount > 1) {
+      result.error =
+          "Use only one global filter mode: --formal-global-propagate-cmd, --formal-global-propagate-circt-lec, --formal-global-propagate-circt-bmc, or --formal-global-propagate-circt-chain.";
+      return result;
+    }
+  }
+
   result.ok = true;
   return result;
 }
