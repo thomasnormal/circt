@@ -1,0 +1,21 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/bin %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-opt
+// RUN: chmod +x %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\necho \"c1 != c2\"\necho \"LEC_RESULT=NEQ\"\necho \"LEC_DIAG=XPROP_ONLY\"\necho \"summary: input-unknown-extracts=5 const-unknown-ones=4 unknown-xor-inversions=29 input-unknown-inversions=34\"\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-lec
+// RUN: : > %t/bin/z3
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_SMOKE_ONLY=0 LEC_RUN_SMTLIB=1 LEC_DIAGNOSE_XPROP=1 LEC_ACCEPT_XPROP_ONLY=1 OUT=%t/results.tsv OUT_XPROP_SUMMARY=%t/xprop-summary.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: FileCheck %s --check-prefix=RESULTXFAIL < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=XPROW < %t/xprop-summary.tsv
+//
+// CHECK: Running LEC on 1 AES S-Box implementation(s)...
+// CHECK: aes_sbox_canright XPROP_ONLY (accepted)
+// CHECK: LEC completed successfully.
+// RESULTXFAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[#]}}XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// XPROW: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY{{[[:space:]]+}}NEQ{{[[:space:]]+}}const-unknown-ones=4,input-unknown-extracts=5,input-unknown-inversions=34,unknown-xor-inversions=29{{[[:space:]]+}}{{.*}}/aes_sbox_canright
