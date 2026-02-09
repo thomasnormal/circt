@@ -18356,15 +18356,31 @@ ninja -C build circt-verilog
   - Ensures resume/merge rejects runs that drift in selected profile or profile
     registry content.
 
+### Iteration 714
+- Added signed refresh policy profile-registry manifest verification:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
+- Manifest verification now enforces:
+  - strict schema/version and allowed-key contract
+  - `profiles_sha256` equality to resolved registry SHA
+  - Ed25519 signature verification against a pinned public key
+  - optional signer key-id match when expected key-id is configured.
+- Planning impact:
+  - Moves profile-registry integrity from hash pinning only to authenticated
+    signer identity.
+  - Strengthens cross-worker resume determinism by binding manifest signer/pubkey
+    material into lane-state compatibility hashing.
+
 ### Recent Lane-State Hardening (See CHANGELOG)
-- Iterations 698-713 completed the CRL/OCSP refresh control plane:
+- Iterations 698-714 completed the CRL/OCSP refresh control plane:
   - refresh command/URI/auto-URI modes with strict mutual-exclusion and retry,
     timeout, and jitter controls.
   - signed refresh provenance + strict schema-versioned metadata contracts and
     trust-policy gates (transport/status/URI/TLS/freshness).
   - cert-driven auto-discovery controls with explicit policy/scheme precedence,
-    including shared/per-artifact defaults, profile-based rollout, and optional
-    profile-registry SHA256 pinning.
+    including shared/per-artifact defaults, profile-based rollout, optional
+    profile-registry SHA256 pinning, and signed profile-registry manifests.
 - Detailed implementation, diagnostics, and validation evidence is tracked in
   `CHANGELOG.md`.
 
@@ -18378,8 +18394,8 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add signed, versioned profile-registry distribution flow (keyring-style)
-    so policy profiles can be centrally managed and independently audited.
+  - Add keyring-backed signer rotation policy for refresh profile-manifest
+    verification (multi-signer trust store + not_before/not_after windows).
   - Add recursive refresh trust-evidence capture (peer cert chain + issuer
     linkage + pin material) beyond sidecar field matching.
   - Move metadata trust from schema + static policy matching to active

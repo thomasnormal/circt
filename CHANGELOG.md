@@ -1,5 +1,85 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 714 - February 9, 2026
+
+### Signed Refresh-Policy Profile Registry Manifests
+
+- Added signed profile-manifest verification options in
+  `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-json`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-public-key-file`
+  - `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
+- Added strict dependency checks:
+  - manifest JSON requires profile-registry JSON
+  - manifest public key requires manifest JSON
+  - expected manifest key-id requires manifest JSON
+  - manifest JSON requires manifest public key.
+- Added strict manifest validation and signature verification:
+  - manifest file must be JSON object with `schema_version: 1`
+  - supported keys are fixed and field-qualified diagnostics are emitted for
+    unknown or malformed fields
+  - manifest `profiles_sha256` must match resolved profile-registry SHA256
+  - `signature_mode` must be `ed25519`
+  - `signature_ed25519_base64` must decode successfully
+  - canonical payload is verified with
+    `openssl pkeyutl -verify -pubin -rawin`.
+- Added optional signer identity pinning:
+  - when `--lane-state-manifest-ed25519-refresh-policy-profiles-manifest-key-id`
+    is set, manifest `key_id` must match exactly.
+
+### Resume Compatibility Hardening
+
+- Extended lane-state config-hash material with:
+  - refresh-policy manifest file SHA256
+  - refresh-policy manifest public-key SHA256
+  - resolved manifest signer key-id
+  - expected manifest signer key-id
+- Resume/merge now rejects drift in signed profile-manifest trust inputs.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative: manifest JSON without profiles JSON
+    - negative: manifest public key without manifest JSON
+    - negative: manifest key-id without manifest JSON
+    - negative: manifest JSON without manifest public key
+    - negative: manifest signature verification failure
+    - negative: manifest signer key-id mismatch
+    - positive: CRL/OCSP profile-driven auto-URI flow with signed manifest
+  - `docs/FormalRegression.md`
+    - documented signed profile-manifest options, schema contract, and usage.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- External smoke sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
 ## Iteration 713 - February 9, 2026
 
 ### Lane-State Refresh Policy Registry Integrity Pinning
