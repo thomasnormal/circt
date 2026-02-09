@@ -206,6 +206,7 @@ circt-mut cover \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
   --formal-global-propagate-circt-chain auto \
+  --formal-global-propagate-timeout-seconds 60 \
   --work-dir /tmp/mutation-cover
 ```
 
@@ -215,6 +216,10 @@ global filters:
 - then from `PATH`
 - then from `./build/bin` in this CIRCT checkout
 - you can still override with explicit paths.
+
+For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
+global formal filter wall time per mutant. Timeout outcomes are classified
+conservatively as `propagated` (mutants are not pruned).
 
 For installed toolchains, `circt-mut` expects mutation workflow scripts under
 `<prefix>/share/circt/utils` and CIRCT now installs them there by default.
@@ -240,6 +245,7 @@ circt-mut matrix \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
+  --default-formal-global-propagate-timeout-seconds 60 \
   --skip-baseline \
   --fail-on-undetected \
   --include-lane-regex '^sv-tests|^verilator' \
@@ -265,6 +271,7 @@ circt-mut cover \
   --mutations-file /path/to/mutations.txt \
   --tests-manifest /path/to/tests.tsv \
   --formal-global-propagate-circt-chain auto \
+  --formal-global-propagate-timeout-seconds 60 \
   --work-dir /tmp/mutation-cover
 ```
 
@@ -330,6 +337,7 @@ circt-mut matrix \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
+  --default-formal-global-propagate-timeout-seconds 60 \
   --include-lane-regex '^sv-tests|^verilator' \
   --exclude-lane-regex 'slow'
 ```
@@ -362,6 +370,8 @@ Core input formats:
 - `lanes.tsv`:
   first columns are
   `lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<...>`
+  with optional tail override `global_propagate_timeout_seconds` to set
+  per-lane global formal timeout.
 
 Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and

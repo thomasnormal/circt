@@ -1,5 +1,110 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 796 - February 9, 2026
+
+### Global Formal Timeout Guard (Mutation Cover/Matrix)
+
+1. Added a per-mutant global formal timeout control in
+   `utils/run_mutation_cover.sh`:
+   - `--formal-global-propagate-timeout-seconds <N>` (`0` disables).
+   - Applies to built-in `circt-lec`, built-in differential `circt-bmc`,
+     chained modes (`lec-then-bmc|bmc-then-lec|consensus|auto`), and
+     command-mode global filters (`--formal-global-propagate-cmd`).
+2. Timeout outcomes are now treated conservatively as `propagated`
+   (no false pruning, no infra-error inflation).
+3. Added timeout telemetry + reuse-note propagation:
+   - `global_filter_timeout_mutants`
+   - `global_filter_lec_timeout_mutants`
+   - `global_filter_bmc_timeout_mutants`
+4. Extended reuse compatibility manifest/hash to include
+   `formal_global_propagate_timeout_seconds`.
+
+### Matrix Wiring + Lane Overrides
+
+1. Added matrix default passthrough:
+   - `--default-formal-global-propagate-timeout-seconds <N>`
+2. Added lane TSV optional override column:
+   - `global_propagate_timeout_seconds`
+
+### Tests and Docs
+
+- Added tests:
+  - `test/Tools/run-mutation-cover-global-circt-lec-timeout.test`
+  - `test/Tools/run-mutation-matrix-global-circt-lec-timeout.test`
+- Updated tests:
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-matrix-help.test`
+- Updated docs:
+  - `README.md` (timeout usage in `circt-mut cover/matrix` examples)
+  - `docs/FormalRegression.md` (option reference, lane schema, timeout metrics)
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation*.test`: PASS (88/88)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-timeout --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
+## Iteration 795 - February 9, 2026
+
+### Mutation Chain Auto Mode: Safe Propagation Short-Circuit
+
+1. Improved `utils/run_mutation_cover.sh` `--formal-global-propagate-circt-chain auto`
+   performance with conservative early exit:
+   - run LEC and differential BMC in parallel (unchanged),
+   - if either engine returns decisive propagated evidence (`LEC=NEQ|UNKNOWN`
+     or `BMC=different|unknown`) before the peer finishes, cancel the peer and
+     classify `propagated` immediately.
+2. Preserved correctness and safety semantics:
+   - `not_propagated` still requires both engines to agree (`LEC=EQ` and
+     `BMC=equal`).
+   - single-engine errors remain conservative (`propagated` when peer-only
+     non-propagation evidence is insufficient).
+3. Added explicit telemetry for this optimization:
+   - `chain_auto_short_circuit_mutants`
+   - serialized in global-filter reuse notes (`pair_qualification.tsv`,
+     `test_id=-`) for reuse-stable analytics.
+4. Closed telemetry consistency debt:
+   - summary JSON / console summary now include previously-added propagated
+     fallback counters (`chain_bmc_resolved_propagated_mutants`,
+     `chain_lec_resolved_propagated_mutants`).
+
+### Tests and Documentation
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-chain-auto-short-circuit.test`
+  - `test/Tools/run-mutation-matrix-global-circt-chain-auto-short-circuit.test`
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-circt-chain-auto-filter.test test/Tools/run-mutation-matrix-global-circt-chain-auto-filter.test test/Tools/run-mutation-cover-global-circt-chain-auto-short-circuit.test test/Tools/run-mutation-matrix-global-circt-chain-auto-short-circuit.test test/Tools/run-mutation-cover-global-circt-chain-consensus-filter.test test/Tools/run-mutation-cover-global-filter-reuse.test`: PASS (6/6)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation*.test`: PASS (86/86)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-chain-auto-short-circuit --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 793 - February 9, 2026
 
 ### Mutation Chain Telemetry: Symmetric Fallback Resolution Metrics
@@ -41310,3 +41415,55 @@ CIRCT/slang correctly enforces LRM restrictions.
   `XPROP_ONLY` on `aes_sbox_canright`.
 - OpenTitan default E2E currently fails on `SIM:gpio` and `SIM:uart` while
   strict E2E passes those targets (`strict_only_pass=2`).
+
+## Iteration 796 - February 9, 2026
+
+### OpenTitan SIM Reliability Hardening: Auto-Recover Tool Execute-Bit Drift
+
+1. Fixed a real OpenTitan E2E flake class where SIM targets failed with
+   `Permission denied` when `circt-sim` lost executable mode (`exit 126`).
+2. Updated `utils/run_opentitan_circt_sim.sh` with explicit tool preflight:
+   - new helper `ensure_executable_tool`
+   - validates tool existence
+   - if non-executable, attempts `chmod +x` and continues
+   - hard-fails only when execute permission cannot be recovered.
+3. Applied preflight to both required SIM-path tools:
+   - `circt-verilog`
+   - `circt-sim`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-opentitan-sim-auto-chmod-circt-sim.test`
+    - reproduces non-executable `circt-sim` mode
+    - verifies warning + automatic chmod recovery + successful simulation.
+- Existing timeout safety coverage retained:
+  - `test/Tools/run-opentitan-sim-timeout-detect.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_opentitan_circt_sim.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-sim-auto-chmod-circt-sim.test test/Tools/run-opentitan-sim-timeout-detect.test test/Tools/run-opentitan-formal-e2e.test test/Tools/run-formal-all-opentitan-e2e.test test/Tools/run-formal-all-opentitan-e2e-strict-lane.test`:
+    - 5/5 PASS
+- External filtered cadence:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`: PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`: PASS
+- OpenTitan canonical dual-lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-opentitan-e2e-autoexec-20260209-165819 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(E2E|E2E_STRICT)$'`:
+    - `E2E`: `total=12 pass=12 fail=0`
+    - `E2E_STRICT`: `total=12 pass=11 fail=1`
+    - `E2E_MODE_DIFF`: `strict_only_fail=1 strict_only_pass=0 status_diff=0 missing_in_e2e=0 missing_in_e2e_strict=0`
+
+### Remaining Limitations
+
+- Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) OpenTitan LEC still reports
+  `XPROP_ONLY` on `aes_sbox_canright`.
