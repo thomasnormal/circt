@@ -328,14 +328,19 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // (continuous assignments like port connections).
   registerContinuousAssignments(hwModule, 0, InstanceInputMapping{});
 
+  // Discover global ops once, shared between initializeGlobals and
+  // executeGlobalConstructors to avoid duplicate module walks.
+  DiscoveredGlobalOps globalOps;
+  discoverGlobalOpsIteratively(globalOps);
+
   // Initialize LLVM global variables (especially vtables) using iterative discovery
-  if (failed(initializeGlobals()))
+  if (failed(initializeGlobals(globalOps)))
     return failure();
 
   inGlobalInit = true;
   // Execute LLVM global constructors (e.g., __moore_global_init_uvm_pkg::uvm_top)
   // This initializes UVM globals like uvm_top before processes start
-  if (failed(executeGlobalConstructors()))
+  if (failed(executeGlobalConstructors(globalOps)))
     return failure();
 
   // Execute module-level LLVM ops (alloca, call, store) that initialize
@@ -20940,15 +20945,12 @@ bool LLHDProcessInterpreter::checkRTTICast(int32_t srcTypeId,
 // Global Variable and VTable Support
 //===----------------------------------------------------------------------===//
 
-LogicalResult LLHDProcessInterpreter::initializeGlobals() {
+LogicalResult
+LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) {
   if (!rootModule)
     return success();
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing globals\n");
-
-  // === Use iterative discovery for globals (stack overflow prevention) ===
-  DiscoveredGlobalOps globalOps;
-  discoverGlobalOpsIteratively(globalOps);
 
   // Process all pre-discovered LLVM global operations (no walk() needed)
   for (LLVM::GlobalOp globalOp : globalOps.globals) {
@@ -21042,16 +21044,13 @@ LogicalResult LLHDProcessInterpreter::initializeGlobals() {
   return success();
 }
 
-LogicalResult LLHDProcessInterpreter::executeGlobalConstructors() {
+LogicalResult LLHDProcessInterpreter::executeGlobalConstructors(
+    const DiscoveredGlobalOps &globalOps) {
   if (!rootModule)
     return success();
 
   LLVM_DEBUG(llvm::dbgs()
              << "LLHDProcessInterpreter: Executing global constructors\n");
-
-  // === Use iterative discovery for global constructors (stack overflow prevention) ===
-  DiscoveredGlobalOps globalOps;
-  discoverGlobalOpsIteratively(globalOps);
 
   // Collect all constructor entries with their priorities from pre-discovered ops
   SmallVector<std::pair<int32_t, StringRef>, 4> ctorEntries;
@@ -21230,45 +21229,8 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
   // Clean up the temporary process state
   processStates.erase(tempProcId);
 
-  // Pre-populate all constant ops into moduleInitValueMap so that getValue()
-  // finds them with a single DenseMap lookup (at the moduleInitValueMap check)
-  // instead of falling through to multiple dyn_cast checks per constant.
-  unsigned constantsPrepopulated = 0;
-  hwModule->walk([&](Operation *op) {
-    if (auto constOp = dyn_cast<hw::ConstantOp>(op)) {
-      if (!moduleInitValueMap.count(constOp.getResult())) {
-        moduleInitValueMap[constOp.getResult()] =
-            InterpretedValue(constOp.getValue());
-        ++constantsPrepopulated;
-      }
-    } else if (auto arithConstOp = dyn_cast<arith::ConstantOp>(op)) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(arithConstOp.getValue())) {
-        if (!moduleInitValueMap.count(arithConstOp.getResult())) {
-          moduleInitValueMap[arithConstOp.getResult()] =
-              InterpretedValue(intAttr.getValue());
-          ++constantsPrepopulated;
-        }
-      }
-    } else if (auto llvmConstOp = dyn_cast<LLVM::ConstantOp>(op)) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(llvmConstOp.getValue())) {
-        if (!moduleInitValueMap.count(llvmConstOp.getResult())) {
-          moduleInitValueMap[llvmConstOp.getResult()] =
-              InterpretedValue(intAttr.getValue());
-          ++constantsPrepopulated;
-        }
-      }
-    } else if (auto aggConstOp = dyn_cast<hw::AggregateConstantOp>(op)) {
-      if (!moduleInitValueMap.count(aggConstOp.getResult())) {
-        moduleInitValueMap[aggConstOp.getResult()] =
-            InterpretedValue(flattenAggregateConstant(aggConstOp));
-        ++constantsPrepopulated;
-      }
-    }
-  });
-
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executed " << opsExecuted
-                          << " module-level LLVM ops, pre-populated "
-                          << constantsPrepopulated << " constants\n");
+                          << " module-level LLVM ops\n");
 
   return success();
 }

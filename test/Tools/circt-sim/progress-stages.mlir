@@ -1,9 +1,9 @@
 // RUN: circt-sim %s -v=1 2>&1 | FileCheck %s
 
-// CHECK: [circt-sim] Stage: parse
-// CHECK: [circt-sim] Stage: passes
-// CHECK: [circt-sim] Stage: init
-// CHECK: [circt-sim] Stage: run
+// CHECK: [circt-sim] Stage: parse (prev:
+// CHECK: [circt-sim] Stage: passes (prev:
+// CHECK: [circt-sim] Stage: init (prev:
+// CHECK: [circt-sim] Stage: run (prev:
 
 hw.module @test() {
   %fmt_prefix = sim.fmt.literal "ok"

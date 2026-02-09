@@ -37,6 +37,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
@@ -128,6 +129,11 @@ struct CLOptions {
 
   cl::opt<bool> debugInfo{"g", cl::desc("Generate debug information"),
                           cl::cat(cat)};
+
+  cl::opt<bool> emitBytecode{
+      "emit-bytecode",
+      cl::desc("Emit MLIR bytecode format instead of text (faster to parse)"),
+      cl::init(false), cl::cat(cat)};
 
   cl::opt<bool> lowerAlwaysAtStarAsComb{
       "always-at-star-as-comb",
@@ -810,7 +816,14 @@ static LogicalResult executeWithSources(MLIRContext *context,
 
   // Print the final MLIR.
   auto outputTimer = ts.nest("MLIR Printer");
-  module->print(outputFile->os());
+  if (opts.emitBytecode) {
+    if (failed(mlir::writeBytecodeToFile(
+            module.get(), outputFile->os(),
+            mlir::BytecodeWriterConfig(circt::getCirctVersion()))))
+      return failure();
+  } else {
+    module->print(outputFile->os());
+  }
   outputFile->keep();
   return success();
 }

@@ -1243,9 +1243,22 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 
 static LogicalResult processInput(MLIRContext &context,
                                    llvm::SourceMgr &sourceMgr) {
-  auto reportStage = [](llvm::StringRef stage) {
-    if (verbosity >= 1)
-      llvm::errs() << "[circt-sim] Stage: " << stage << "\n";
+  auto startTime = std::chrono::steady_clock::now();
+  auto lastStageTime = startTime;
+  auto reportStage = [&lastStageTime, &startTime](llvm::StringRef stage) {
+    auto now = std::chrono::steady_clock::now();
+    if (verbosity >= 1) {
+      auto elapsed =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now -
+                                                                lastStageTime)
+              .count();
+      auto total =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime)
+              .count();
+      llvm::errs() << "[circt-sim] Stage: " << stage << " (prev: " << elapsed
+                    << "ms, total: " << total << "ms)\n";
+    }
+    lastStageTime = now;
   };
 
   std::unique_ptr<WallClockTimeout> wallClockTimeout;
