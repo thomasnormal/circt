@@ -346,7 +346,18 @@ Options:
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
   --with-opentitan       Run OpenTitan LEC script
+  --with-opentitan-e2e   Run OpenTitan non-smoke E2E parity lane
   --opentitan DIR        OpenTitan root (default: ~/opentitan)
+  --opentitan-e2e-sim-targets LIST
+                         Comma-separated OpenTitan E2E sim targets
+  --opentitan-e2e-verilog-targets LIST
+                         Comma-separated OpenTitan E2E parse targets
+  --opentitan-e2e-sim-timeout SECS
+                         OpenTitan E2E sim timeout per target
+  --opentitan-e2e-impl-filter REGEX
+                         OpenTitan E2E LEC implementation regex filter
+  --opentitan-e2e-include-masked
+                         Include masked OpenTitan E2E LEC implementations
   --circt-verilog PATH   Path to circt-verilog (default: <repo>/build/bin/circt-verilog)
   --circt-verilog-avip PATH
                          Path override for AVIP runs (default: --circt-verilog value)
@@ -1757,7 +1768,13 @@ LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_MODE="none"
 INCLUDE_LANE_REGEX=""
 EXCLUDE_LANE_REGEX=""
 WITH_OPENTITAN=0
+WITH_OPENTITAN_E2E=0
 WITH_AVIP=0
+OPENTITAN_E2E_SIM_TARGETS=""
+OPENTITAN_E2E_VERILOG_TARGETS=""
+OPENTITAN_E2E_SIM_TIMEOUT=""
+OPENTITAN_E2E_IMPL_FILTER=""
+OPENTITAN_E2E_INCLUDE_MASKED=0
 BMC_RUN_SMTLIB=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
@@ -1783,6 +1800,18 @@ while [[ $# -gt 0 ]]; do
       OPENTITAN_DIR="$2"; WITH_OPENTITAN=1; shift 2 ;;
     --with-opentitan)
       WITH_OPENTITAN=1; shift ;;
+    --with-opentitan-e2e)
+      WITH_OPENTITAN_E2E=1; shift ;;
+    --opentitan-e2e-sim-targets)
+      OPENTITAN_E2E_SIM_TARGETS="$2"; shift 2 ;;
+    --opentitan-e2e-verilog-targets)
+      OPENTITAN_E2E_VERILOG_TARGETS="$2"; shift 2 ;;
+    --opentitan-e2e-sim-timeout)
+      OPENTITAN_E2E_SIM_TIMEOUT="$2"; shift 2 ;;
+    --opentitan-e2e-impl-filter)
+      OPENTITAN_E2E_IMPL_FILTER="$2"; shift 2 ;;
+    --opentitan-e2e-include-masked)
+      OPENTITAN_E2E_INCLUDE_MASKED=1; shift ;;
     --circt-verilog)
       CIRCT_VERILOG_BIN="$2"; shift 2 ;;
     --circt-verilog-avip)
@@ -5549,7 +5578,13 @@ compute_lane_state_config_hash() {
     printf "lec_assume_known_inputs=%s\n" "$LEC_ASSUME_KNOWN_INPUTS"
     printf "lec_accept_xprop_only=%s\n" "$LEC_ACCEPT_XPROP_ONLY"
     printf "with_opentitan=%s\n" "$WITH_OPENTITAN"
+    printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_avip=%s\n" "$WITH_AVIP"
+    printf "opentitan_e2e_sim_targets=%s\n" "$OPENTITAN_E2E_SIM_TARGETS"
+    printf "opentitan_e2e_verilog_targets=%s\n" "$OPENTITAN_E2E_VERILOG_TARGETS"
+    printf "opentitan_e2e_sim_timeout=%s\n" "$OPENTITAN_E2E_SIM_TIMEOUT"
+    printf "opentitan_e2e_impl_filter=%s\n" "$OPENTITAN_E2E_IMPL_FILTER"
+    printf "opentitan_e2e_include_masked=%s\n" "$OPENTITAN_E2E_INCLUDE_MASKED"
     printf "z3_bin=%s\n" "$Z3_BIN"
     printf "circt_verilog=%s\n" "$CIRCT_VERILOG_BIN"
     printf "circt_verilog_avip=%s\n" "$CIRCT_VERILOG_BIN_AVIP"
@@ -6641,6 +6676,103 @@ PY
   fi
 fi
 
+# OpenTitan non-smoke end-to-end parity lane (optional)
+if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
+  if lane_resume_from_state "opentitan/E2E"; then
+    :
+  else
+    opentitan_e2e_results_tsv="$OUT_DIR/opentitan-e2e-results.tsv"
+    opentitan_e2e_case_results="$OUT_DIR/opentitan-e2e-results.txt"
+    : > "$opentitan_e2e_case_results"
+    opentitan_e2e_cmd=(
+      utils/run_opentitan_formal_e2e.sh
+      --opentitan-root "$OPENTITAN_DIR"
+      --out-dir "$OUT_DIR/opentitan-formal-e2e"
+      --results-file "$opentitan_e2e_results_tsv"
+    )
+    if [[ -n "$OPENTITAN_E2E_SIM_TARGETS" ]]; then
+      opentitan_e2e_cmd+=(--sim-targets "$OPENTITAN_E2E_SIM_TARGETS")
+    fi
+    if [[ -n "$OPENTITAN_E2E_VERILOG_TARGETS" ]]; then
+      opentitan_e2e_cmd+=(--verilog-targets "$OPENTITAN_E2E_VERILOG_TARGETS")
+    fi
+    if [[ -n "$OPENTITAN_E2E_SIM_TIMEOUT" ]]; then
+      opentitan_e2e_cmd+=(--sim-timeout "$OPENTITAN_E2E_SIM_TIMEOUT")
+    fi
+    if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
+      opentitan_e2e_cmd+=(--impl-filter "$OPENTITAN_E2E_IMPL_FILTER")
+    fi
+    if [[ "$OPENTITAN_E2E_INCLUDE_MASKED" == "1" ]]; then
+      opentitan_e2e_cmd+=(--include-masked)
+    fi
+    if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+      opentitan_e2e_cmd+=(--allow-xprop-only)
+    fi
+    run_suite opentitan-e2e \
+      env CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN" \
+      "${opentitan_e2e_cmd[@]}" || true
+
+    opentitan_e2e_total=""
+    opentitan_e2e_pass=""
+    opentitan_e2e_fail=""
+    if [[ -s "$opentitan_e2e_results_tsv" ]]; then
+      opentitan_e2e_counts="$(OPENTITAN_E2E_RESULTS_TSV="$opentitan_e2e_results_tsv" OPENTITAN_E2E_CASE_RESULTS="$opentitan_e2e_case_results" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+results_path = Path(os.environ["OPENTITAN_E2E_RESULTS_TSV"])
+case_results_path = Path(os.environ["OPENTITAN_E2E_CASE_RESULTS"])
+rows = []
+total = 0
+passed = 0
+failed = 0
+with results_path.open() as f:
+  reader = csv.DictReader(f, delimiter="\t")
+  for row in reader:
+    kind = (row.get("kind") or "").strip()
+    target = (row.get("target") or "").strip()
+    status = (row.get("status") or "").strip().upper()
+    detail = (row.get("detail") or "").strip()
+    artifact = (row.get("artifact") or "").strip()
+    if not kind and not target:
+      continue
+    total += 1
+    case_status = "PASS" if status == "PASS" else "FAIL"
+    if case_status == "PASS":
+      passed += 1
+    else:
+      failed += 1
+    base = f"{kind}:{target}" if kind and target else (kind or target)
+    path = artifact or detail or base
+    rows.append((case_status, base, path, "opentitan", "E2E"))
+
+rows.sort(key=lambda r: (r[1], r[0], r[2]))
+with case_results_path.open("w") as f:
+  for row in rows:
+    f.write("\t".join(row) + "\n")
+
+print(f"{total}\t{passed}\t{failed}")
+PY
+)"
+      IFS=$'\t' read -r opentitan_e2e_total opentitan_e2e_pass opentitan_e2e_fail <<< "$opentitan_e2e_counts"
+    fi
+    if [[ -z "$opentitan_e2e_total" || -z "$opentitan_e2e_pass" || -z "$opentitan_e2e_fail" ]]; then
+      line=$(grep -E "OpenTitan E2E summary: pass=[0-9]+ fail=[0-9]+" "$OUT_DIR/opentitan-e2e.log" | tail -1 || true)
+      if [[ -n "$line" ]]; then
+        opentitan_e2e_pass=$(extract_kv "$line" pass)
+        opentitan_e2e_fail=$(extract_kv "$line" fail)
+        if [[ -n "$opentitan_e2e_pass" && -n "$opentitan_e2e_fail" ]]; then
+          opentitan_e2e_total=$((opentitan_e2e_pass + opentitan_e2e_fail))
+        fi
+      fi
+    fi
+    if [[ -n "$opentitan_e2e_total" && -n "$opentitan_e2e_pass" && -n "$opentitan_e2e_fail" ]]; then
+      record_result "opentitan" "E2E" "$opentitan_e2e_total" "$opentitan_e2e_pass" "$opentitan_e2e_fail" 0 0 0 0
+    fi
+  fi
+fi
+
 # AVIP compile smoke (optional)
 if [[ "$WITH_AVIP" == "1" ]]; then
   avip_case_results="$OUT_DIR/avip-results.txt"
@@ -7215,6 +7347,7 @@ result_sources = [
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
 detailed_source_pairs = {
@@ -7722,6 +7855,7 @@ result_sources = [
     ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
     ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-results.txt"),
     ("opentitan", "LEC", out_dir / "opentitan-lec-results.txt"),
+    ("opentitan", "E2E", out_dir / "opentitan-e2e-results.txt"),
     ("", "", out_dir / "avip-results.txt"),
 ]
 detailed_pairs_observed = set()

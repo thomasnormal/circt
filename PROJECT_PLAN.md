@@ -122,21 +122,6 @@ See CHANGELOG.md on recent progress.
   - Promote lane-state inspector to required pre-resume CI gate.
   - Add per-lane historical trend dashboards and automatic anomaly detection.
 
-### Iteration 733 (OpenTitan Parity Gate)
-- Added `utils/run_opentitan_formal_e2e.sh` to run non-smoke OpenTitan
-  end-to-end checks across:
-  - full-IP simulation targets
-  - full parse targets
-  - AES S-Box LEC
-- Hardened `utils/run_opentitan_circt_sim.sh` so wall-clock timeout markers are
-  treated as failures (prevents false PASS).
-- Planning impact:
-  - OpenTitan parity claims are now backed by explicit non-smoke E2E evidence,
-    not smoke-only checks.
-  - Gaps remain visible via machine-readable `results.tsv` outputs and can be
-    tracked to closure.
-- Detailed logs and validation commands are tracked in `CHANGELOG.md`.
-
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
 #### Scope (Required Lanes)
@@ -162,12 +147,23 @@ See CHANGELOG.md on recent progress.
 4. `--allow-xprop-only` is permitted only for transitional tracking and must be
    marked as non-parity status in summaries.
 
+#### Current Integration Status
+1. `utils/run_opentitan_formal_e2e.sh` is the canonical non-smoke OpenTitan
+   parity runner.
+2. `utils/run_formal_all.sh` exposes this lane as `opentitan/E2E` via
+   `--with-opentitan-e2e`, with case-level failure export to
+   `opentitan-e2e-results.txt` for expected-failure case tracking.
+3. All command-level validation and run evidence remain in `CHANGELOG.md`.
+
 #### Current Open Non-Smoke Gaps (from latest E2E run)
-1. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram`.
-2. `VERILOG spi_device`: `moore.builtin.readmemh` region-isolation verifier
-   failure.
-3. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` resolution issue.
-4. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
+1. `SIM i2c`: wall-clock timeout (non-convergent end-to-end run).
+2. `SIM usbdev`: MLIR verifier failure in `tlul_adapter_sram` index handling.
+3. `VERILOG i2c` and `VERILOG spi_device`: `moore.builtin.readmemh`
+   region-isolation verifier failure.
+4. `VERILOG usbdev`: unknown `prim_sec_anchor_buf/flop` module resolution.
+5. `VERILOG dma` and `VERILOG keymgr_dpe`: target-matrix mismatch (`Unknown
+   target`) between parity plan and parse runner support.
+6. `LEC aes_sbox_canright`: `XPROP_ONLY` mismatch in strict mode.
 
 #### Closure Workflow
 1. Keep one issue per failing lane target with owner, reproducer, and expected

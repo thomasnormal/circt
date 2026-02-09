@@ -37048,3 +37048,79 @@ CIRCT/slang correctly enforces LRM restrictions.
   current status is not commercial parity.
 - `aes_sbox_canright` still requires `LEC_ACCEPT_XPROP_ONLY=1` for acceptance
   in relaxed mode.
+
+## Iteration 734 - February 9, 2026
+
+### OpenTitan E2E Integration in `run_formal_all.sh`
+
+- Added OpenTitan non-smoke parity lane wiring to `utils/run_formal_all.sh`:
+  - new lane: `opentitan/E2E`
+  - new flag: `--with-opentitan-e2e`
+  - lane runner: `utils/run_opentitan_formal_e2e.sh`
+- Added OpenTitan E2E lane tuning flags:
+  - `--opentitan-e2e-sim-targets`
+  - `--opentitan-e2e-verilog-targets`
+  - `--opentitan-e2e-sim-timeout`
+  - `--opentitan-e2e-impl-filter`
+  - `--opentitan-e2e-include-masked`
+- `--lec-accept-xprop-only` now also forwards to OpenTitan E2E as
+  `--allow-xprop-only`.
+- Added case-level OpenTitan E2E export for failure-case gates:
+  - output: `<out-dir>/opentitan-e2e-results.txt`
+  - row format aligns with existing expected-failure-case processing.
+- Added OpenTitan E2E inputs to lane-state config hash for deterministic resume
+  compatibility.
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-formal-all-opentitan-e2e.test`
+    - validates `opentitan/E2E` lane execution
+    - validates `CIRCT_VERILOG` propagation to OpenTitan E2E runner
+    - validates `--lec-accept-xprop-only` forwarding
+    - validates expected-failure-case matching for `opentitan/E2E`
+
+### Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-opentitan-e2e.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Tools/run-opentitan-formal-e2e.test`:
+    - 1/1 PASS
+- Real non-smoke OpenTitan E2E via aggregate runner:
+  - `utils/run_formal_all.sh --with-opentitan-e2e --include-lane-regex '^opentitan/E2E$' ...`:
+    - summary: `total=12 pass=4 fail=8`
+    - FAIL:
+      - `SIM`: `i2c` (timeout), `usbdev` (MLIR verify failure)
+      - `VERILOG`: `dma` (unknown target), `i2c` (`readmemh` region isolation),
+        `keymgr_dpe` (unknown target), `spi_device` (`readmemh` region
+        isolation), `usbdev` (unknown `prim_sec_anchor_*`)
+      - `LEC`: `aes_sbox_canright` (`XPROP_ONLY`, strict fail)
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+
+### Remaining Limitations
+
+- OpenTitan E2E parity matrix still fails 8/12 targets in strict mode.
+- Parse-target coverage in `run_opentitan_circt_verilog.sh` does not yet match
+  all parity-plan targets (`dma`, `keymgr_dpe` currently unresolved).
+- `aes_sbox_canright` remains blocked on strict 4-state/X-prop parity.

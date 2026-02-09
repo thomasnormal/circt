@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${CIRCT_VERILOG:-}\" != \"%t/fake-circt-verilog-opentitan\" ]]; then\n  echo \"bad_CIRCT_VERILOG_OPENTITAN_E2E=${CIRCT_VERILOG:-}\"\n  exit 9\nfi\nallow_xprop=0\nresults_file=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --allow-xprop-only) allow_xprop=1; shift ;;\n    --results-file) results_file=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nif [[ \"$allow_xprop\" != \"1\" ]]; then\n  echo \"missing_allow_xprop_only\"\n  exit 7\nfi\nif [[ -z \"$results_file\" ]]; then\n  echo \"missing_results_file\"\n  exit 6\nfi\nmkdir -p \"$(dirname \"$results_file\")\"\nprintf \"kind\\ttarget\\tstatus\\tdetail\\tartifact\\n\" > \"$results_file\"\nprintf \"SIM\\tuart\\tPASS\\tend_to_end\\t%t/log-uart.log\\n\" >> \"$results_file\"\nprintf \"SIM\\tusbdev\\tFAIL\\tend_to_end\\t%t/log-usbdev.log\\n\" >> \"$results_file\"\necho \"OpenTitan E2E summary: pass=1 fail=1\"\necho \"CIRCT_VERILOG_OPENTITAN_E2E_OK\"\n' > %t/utils/run_opentitan_formal_e2e.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_formal_e2e.sh %t/fake-circt-verilog %t/fake-circt-verilog-opentitan
+// RUN: printf 'suite\tmode\tid\tid_kind\tstatus\texpires_on\treason\nopentitan\tE2E\tSIM:usbdev\tbase\tFAIL\t2099-01-01\tknown_ot_e2e_fail\n' > %t/expected-failure-cases-opentitan-e2e.tsv
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --opentitan %t/opentitan --circt-verilog %t/fake-circt-verilog --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/E2E$' --lec-accept-xprop-only --expected-failure-cases-file %t/expected-failure-cases-opentitan-e2e.tsv --fail-on-unexpected-failure-cases
+// RUN: FileCheck %s --check-prefix=OTE2ESUM < %t/out/summary.tsv
+// RUN: FileCheck %s --check-prefix=OTE2ELOG < %t/out/opentitan-e2e.log
+// RUN: FileCheck %s --check-prefix=OTE2EDETAIL < %t/out/opentitan-e2e-results.txt
+// RUN: FileCheck %s --check-prefix=OTE2ECASE < %t/out/expected-failure-cases-summary.tsv
+
+// OTE2ESUM: suite{{[[:space:]]+}}mode{{[[:space:]]+}}total
+// OTE2ESUM: opentitan{{[[:space:]]+}}E2E{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}1
+// OTE2ELOG: CIRCT_VERILOG_OPENTITAN_E2E_OK
+// OTE2EDETAIL: FAIL{{[[:space:]]+}}SIM:usbdev{{[[:space:]]+}}{{.*}}log-usbdev.log{{[[:space:]]+}}opentitan{{[[:space:]]+}}E2E
+// OTE2ECASE: opentitan{{[[:space:]]+}}E2E{{[[:space:]]+}}base{{[[:space:]]+}}SIM:usbdev{{[[:space:]]+}}FAIL{{[[:space:]]+}}2099-01-01{{[[:space:]]+}}1{{[[:space:]]+}}no{{[[:space:]]+}}known_ot_e2e_fail
