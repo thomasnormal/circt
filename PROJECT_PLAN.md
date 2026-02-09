@@ -18333,6 +18333,9 @@ ninja -C build circt-verilog
   manifests for post-run auditability of refresh attempt behavior.
 - Iteration 702 adds optional JSON source-metadata sidecars for CRL/OCSP refresh
   hooks and signs those source metadata objects inside refresh provenance.
+- Iteration 703 enforces a strict versioned (`schema_version=1`) metadata
+  contract for CRL/OCSP source-metadata sidecars and rejects malformed metadata
+  before manifest emission.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 
@@ -18348,8 +18351,8 @@ ninja -C build circt-verilog
 - Lane-state:
   - Add CRL/OCSP distribution-point fetchers (AIA/CDP) and bundle validation
     policy for refresh commands.
-  - Standardize and enforce a versioned source-metadata schema (URL, transport
-    status, TLS/issuer chain fields) for refresh provenance sidecars.
+  - Extend source-metadata trust from schema validation to transport-chain
+    attestation policy (TLS peer/cert-chain pinning and verification outcomes).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
   - Close known local-variable and `disable iff` semantic mismatches.
