@@ -12595,6 +12595,8 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     // (finish_on_completion -> $finish), the forked children (phase hopper)
     // need to keep running - they are NOT stuck, they just haven't finished
     // their work yet. Setting terminationRequested=true here would kill them.
+    // Instead, start a grace period so cleanup phases can run but the sim
+    // doesn't hang forever in the phase hopper loop.
     // Skip during global init - UVM's m_uvm_get_root() can trigger
     // sim.terminate re-entrantly, and we must let init finish.
     if (!inGlobalInit && !success) {
@@ -12602,6 +12604,16 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       if (terminateCallback) {
         terminateCallback(success, verbose);
       }
+    } else if (!inGlobalInit && success && !finishGracePeriodActive) {
+      // Start a wall-clock grace period for successful $finish with active
+      // children. This gives UVM cleanup phases time to run (extract, check,
+      // report, final) but prevents infinite hangs from the phase hopper loop.
+      // Uses wall-clock time because UVM phase execution happens at sim time 0.
+      finishGracePeriodActive = true;
+      finishGracePeriodStart = std::chrono::steady_clock::now();
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Started $finish grace period ("
+                 << kFinishGracePeriodSecs << "s wall-clock)\n");
     }
 
     // Suspend the process instead of terminating - it will be resumed when

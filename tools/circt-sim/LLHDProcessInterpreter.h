@@ -34,6 +34,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include <chrono>
 #include <deque>
 #include <map>
 #include <optional>
@@ -548,6 +549,21 @@ public:
 
   /// Check if termination has been requested.
   bool isTerminationRequested() const { return terminationRequested; }
+
+  /// Check if the $finish grace period has expired. Call this from the main
+  /// simulation loop periodically. Returns true if the grace period is active
+  /// and has expired, meaning we should force termination.
+  bool checkFinishGracePeriod() {
+    if (!finishGracePeriodActive)
+      return false;
+    auto elapsed = std::chrono::steady_clock::now() - finishGracePeriodStart;
+    if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >=
+        kFinishGracePeriodSecs) {
+      terminationRequested = true;
+      return true;
+    }
+    return false;
+  }
 
   /// Set a callback to check if abort has been requested (e.g., by timeout).
   void setShouldAbortCallback(std::function<bool()> callback) {
@@ -1144,6 +1160,20 @@ private:
   /// During this phase, sim.terminate should not halt the process to allow
   /// UVM initialization to complete (re-entrant calls set uvm_top properly).
   bool inGlobalInit = false;
+
+  /// Grace period for $finish with active forked children.
+  /// When $finish(success=true) fires but forked children are still running
+  /// (e.g., UVM phase hopper), we record the wall-clock time and allow a
+  /// grace period for cleanup phases to run. After the grace period, we force
+  /// termination. Uses wall-clock time (not simulation time) because UVM
+  /// phase execution happens entirely at simulation time 0 in delta cycles.
+  bool finishGracePeriodActive = false;
+  std::chrono::steady_clock::time_point finishGracePeriodStart;
+  /// Grace period duration: 30 seconds wall-clock. UVM phase dispatch in the
+  /// interpreter takes ~10-15s, so 30s gives enough margin for phases to
+  /// complete and produce output while still being much shorter than the
+  /// 120s external timeout.
+  static constexpr int kFinishGracePeriodSecs = 30;
 
   /// Cache of function lookups to avoid repeated moduleOp.lookupSymbol calls.
   /// Maps function name to a cached result:
