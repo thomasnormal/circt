@@ -18314,6 +18314,18 @@ ninja -C build circt-verilog
     explicit key-identifier linkage.
   - Reduces multi-issuer ambiguity risk in long-running distributed closure.
 
+### Iteration 697
+- Added explicit OCSP issuer certificate selection for Ed25519 lane-state
+  keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-issuer-cert-file`
+  - defaults to `--lane-state-manifest-ed25519-ca-file` when unset
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`.
+- Planning impact:
+  - Removes issuer ambiguity when CA bundles contain multiple issuer
+    certificates.
+  - Binds issuer-cert hash into lane-state config/manifest verification
+    contracts for deterministic resume safety.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18324,8 +18336,6 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add explicit responder-issuer cert selection controls when CA bundles
-    contain multiple issuers.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:

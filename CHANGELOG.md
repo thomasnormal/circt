@@ -34628,6 +34628,49 @@ CIRCT/slang correctly enforces LRM restrictions.
 - OCSP mode remains pinned-response-file based (no live responder URL mode).
 - No CRL/OCSP distribution-point fetch/refresh automation yet.
 
+## Iteration 697 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Issuer Certificate Selection
+
+- Added `--lane-state-manifest-ed25519-ocsp-issuer-cert-file` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - uses explicit issuer cert for OCSP `-issuer` selection
+  - defaults to `--lane-state-manifest-ed25519-ca-file` when unset.
+- Lane-state trust-contract updates:
+  - issuer-cert hash now contributes to lane-state config hash material
+    (`lane_state_ed25519_ocsp_issuer_cert_sha256`)
+  - Ed25519 lane-state manifest now includes
+    `ed25519_ocsp_issuer_cert_sha256` when configured.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency check for issuer-cert option without OCSP response
+    - positive manifest coverage for issuer-cert hash emission
+  - `docs/FormalRegression.md`
+    - documented issuer-cert selection semantics and CLI usage.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (fresh OCSP response, seed + resume, strict OCSP +
+  issuer-cert + responder pin/EKU/AKI policies enabled):
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh ... --with-opentitan ... --with-avip ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-response-sha256 ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --lane-state-manifest-ed25519-ocsp-require-next-update --lane-state-manifest-ed25519-ocsp-responder-id-regex 'lane-state-ed25519-ocsp-responder' --lane-state-manifest-ed25519-ocsp-issuer-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-file ... --lane-state-manifest-ed25519-ocsp-responder-cert-sha256 ... --lane-state-manifest-ed25519-ocsp-require-responder-ocsp-signing --lane-state-manifest-ed25519-ocsp-require-responder-aki-match-ca-ski --reset-lane-state`:
+    - PASS
+  - same command with `--resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-issuer-sweep-20260209-024421/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-issuer-sweep-20260209-024421/out-resume`
+
 ## Iteration 679 - February 8, 2026
 
 ### Lane-State Compatibility Policy Versioning
