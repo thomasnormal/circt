@@ -6,7 +6,7 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 211/211 | 100% |
+| circt-sim unit tests | 212/212 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
 | sv-tests simulation | 696/696 eligible pass+xfail | 100% |
 | sv-tests xfail (runtime gaps) | ~54 | See breakdown below |
@@ -25,6 +25,9 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 4. **Coverpoint iff guard lowering**: Added iff_conditions to CovergroupSampleOp with AttrSizedOperandSegments
 5. **Class get/set_randstate lowering**: ImportVerilog emits __moore_class_get_randstate/__moore_class_set_randstate calls
 6. **Debug output cleanup**: Removed all [PH-TRACE] and [DBG-] debug logging from interpreter
+7. **Fork RNG hierarchical seeding**: Child threads seeded from parent's RNG per IEEE 1800-2017 §18.13-18.14
+8. **Deferred sim.terminate fix**: Normal $finish no longer kills forked children (phase hopper); only UVM_FATAL sets terminationRequested
+9. **Suspension propagation**: call_indirect failure with waiting state treated as valid suspension, not error
 
 ### xfail Breakdown (~35 tests remaining)
 
@@ -165,7 +168,7 @@ No transactions flow, no scoreboard comparisons happen, coverage is always 0%.
 
 | Suite | Command | Expected |
 |-------|---------|----------|
-| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 210+ pass |
+| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 212 pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
 | sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh ~/sv-tests` | 0 fail, 0 timeout |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |
