@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 797 - February 9, 2026
+
+### Per-Engine Global Formal Timeout Controls
+
+1. Extended mutation global-filter timeout policy in
+   `utils/run_mutation_cover.sh` with engine-specific overrides:
+   - `--formal-global-propagate-timeout-seconds <N>` (global default)
+   - `--formal-global-propagate-lec-timeout-seconds <N>` (LEC override)
+   - `--formal-global-propagate-bmc-timeout-seconds <N>` (BMC override)
+2. Preserved conservative semantics:
+   - timeout outcomes continue to classify as `propagated` (no false pruning).
+3. Extended reuse compatibility manifest/hash to include per-engine timeout
+   configuration so reuse stays behavior-safe across timeout-policy changes.
+
+### Matrix Lane Integration
+
+1. Added matrix defaults:
+   - `--default-formal-global-propagate-lec-timeout-seconds <N>`
+   - `--default-formal-global-propagate-bmc-timeout-seconds <N>`
+2. Extended lane TSV optional columns:
+   - `global_propagate_lec_timeout_seconds`
+   - `global_propagate_bmc_timeout_seconds`
+
+### Tests and Docs
+
+- Added regression tests:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-timeout.test`
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-timeout.test`
+- Updated timeout tests to exercise per-engine overrides:
+  - `test/Tools/run-mutation-cover-global-circt-lec-timeout.test`
+  - `test/Tools/run-mutation-matrix-global-circt-lec-timeout.test`
+- Updated help tests:
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-matrix-help.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation*.test`: PASS (90/90)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-timeout-per-engine --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `i2s_avip`, `i3c_avip`,
+      `jtag_avip`, `spi_avip`, `uart_avip`
+
 ## Iteration 796 - February 9, 2026
 
 ### Global Formal Timeout Guard (Mutation Cover/Matrix)

@@ -56,6 +56,14 @@ Optional:
                              formal filtering commands (0 disables, default: 0).
                              Timeout outcomes are handled conservatively as
                              propagated (no pruning).
+  --formal-global-propagate-lec-timeout-seconds N
+                             Optional wall timeout override for built-in
+                             circt-lec global filtering. Defaults to
+                             --formal-global-propagate-timeout-seconds.
+  --formal-global-propagate-bmc-timeout-seconds N
+                             Optional wall timeout override for built-in
+                             circt-bmc global filtering. Defaults to
+                             --formal-global-propagate-timeout-seconds.
   --formal-global-propagate-circt-lec [PATH]
                              Use circt-lec as built-in per-mutant global
                              propagation filter (mutually exclusive with
@@ -190,6 +198,8 @@ FORMAL_ACTIVATE_CMD=""
 FORMAL_PROPAGATE_CMD=""
 FORMAL_GLOBAL_PROPAGATE_CMD=""
 FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS=0
+FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS=""
+FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS=""
 FORMAL_GLOBAL_PROPAGATE_C1="top"
@@ -273,6 +283,8 @@ while [[ $# -gt 0 ]]; do
     --formal-propagate-cmd) FORMAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --formal-global-propagate-cmd) FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --formal-global-propagate-timeout-seconds) FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --formal-global-propagate-lec-timeout-seconds) FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS="$2"; shift 2 ;;
+    --formal-global-propagate-bmc-timeout-seconds) FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS="$2"; shift 2 ;;
     --formal-global-propagate-circt-lec)
       if [[ "$#" -gt 1 && "${2:0:2}" != "--" ]]; then
         FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC="$2"
@@ -426,8 +438,22 @@ if [[ ! "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --formal-global-propagate-timeout-seconds value: $FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" >&2
   exit 1
 fi
-if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -gt 0 ]] && ! command -v timeout >/dev/null 2>&1; then
-  echo "--formal-global-propagate-timeout-seconds requires 'timeout' in PATH." >&2
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" ]] && ! [[ "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --formal-global-propagate-lec-timeout-seconds value: $FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if [[ -n "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" ]] && ! [[ "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --formal-global-propagate-bmc-timeout-seconds value: $FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" >&2
+  exit 1
+fi
+if [[ -z "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" ]]; then
+  FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS="$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS"
+fi
+if [[ -z "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" ]]; then
+  FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS="$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS"
+fi
+if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -gt 0 || "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" -gt 0 || "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" -gt 0 ]] && ! command -v timeout >/dev/null 2>&1; then
+  echo "Global formal timeout options require 'timeout' in PATH." >&2
   exit 1
 fi
 
@@ -663,6 +689,8 @@ FORMAL_ACTIVATE_CMD_HASH=""
 FORMAL_PROPAGATE_CMD_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CMD_HASH=""
 FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH=""
+FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS_HASH=""
+FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH=""
 FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH=""
 FORMAL_GLOBAL_PROPAGATE_Z3_HASH=""
@@ -898,6 +926,8 @@ build_reuse_compat_hash() {
   FORMAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_PROPAGATE_CMD")"
   FORMAL_GLOBAL_PROPAGATE_CMD_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CMD")"
   FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS")"
+  FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS")"
+  FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS")"
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED")"
   FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS")"
   FORMAL_GLOBAL_PROPAGATE_Z3_HASH="$(hash_string "$FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED")"
@@ -924,6 +954,8 @@ formal_activate_cmd_hash=${FORMAL_ACTIVATE_CMD_HASH}
 formal_propagate_cmd_hash=${FORMAL_PROPAGATE_CMD_HASH}
 formal_global_propagate_cmd_hash=${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}
 formal_global_propagate_timeout_seconds_hash=${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH}
+formal_global_propagate_lec_timeout_seconds_hash=${FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS_HASH}
+formal_global_propagate_bmc_timeout_seconds_hash=${FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS_HASH}
 formal_global_propagate_circt_lec_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}
 formal_global_propagate_circt_lec_args_hash=${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}
 formal_global_propagate_z3_hash=${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}
@@ -1022,6 +1054,10 @@ write_reuse_manifest() {
   "formal_global_propagate_cmd_sha256": "${FORMAL_GLOBAL_PROPAGATE_CMD_HASH}",
   "formal_global_propagate_timeout_seconds": ${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS},
   "formal_global_propagate_timeout_seconds_sha256": "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS_HASH}",
+  "formal_global_propagate_lec_timeout_seconds": ${FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS},
+  "formal_global_propagate_lec_timeout_seconds_sha256": "${FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS_HASH}",
+  "formal_global_propagate_bmc_timeout_seconds": ${FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS},
+  "formal_global_propagate_bmc_timeout_seconds_sha256": "${FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS_HASH}",
   "formal_global_propagate_circt_lec_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_HASH}",
   "formal_global_propagate_circt_lec_args_sha256": "${FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_ARGS_HASH}",
   "formal_global_propagate_z3_sha256": "${FORMAL_GLOBAL_PROPAGATE_Z3_HASH}",
@@ -1449,10 +1485,11 @@ is_timeout_exit_code() {
 mark_global_filter_timeout_if_needed() {
   local log_file="$1"
   local tool_label="$2"
-  local rc="$3"
+  local timeout_seconds="$3"
+  local rc="$4"
   if is_timeout_exit_code "$rc"; then
     printf "\nGLOBAL_FILTER_TIMEOUT=1 tool=%s timeout_seconds=%s exit_code=%s\n" \
-      "$tool_label" "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" "$rc" >> "$log_file"
+      "$tool_label" "$timeout_seconds" "$rc" >> "$log_file"
   fi
 }
 
@@ -1474,9 +1511,10 @@ run_command_global_filter() {
   local cmd="$2"
   local log_file="$3"
   local tool_label="$4"
+  local timeout_seconds="$5"
   local exit_code=0
 
-  if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -le 0 ]]; then
+  if [[ "$timeout_seconds" -le 0 ]]; then
     run_command "$run_dir" "$cmd" "$log_file"
     return $?
   fi
@@ -1484,11 +1522,11 @@ run_command_global_filter() {
   set +e
   (
     cd "$run_dir"
-    timeout --signal=TERM --kill-after=5 "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS}" bash -lc "$cmd"
+    timeout --signal=TERM --kill-after=5 "${timeout_seconds}" bash -lc "$cmd"
   ) >"$log_file" 2>&1
   exit_code=$?
   set -e
-  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$exit_code"
+  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$timeout_seconds" "$exit_code"
   return "$exit_code"
 }
 
@@ -1496,10 +1534,11 @@ run_command_argv_global_filter() {
   local run_dir="$1"
   local log_file="$2"
   local tool_label="$3"
-  shift 3
+  local timeout_seconds="$4"
+  shift 4
   local exit_code=0
 
-  if [[ "$FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS" -le 0 ]]; then
+  if [[ "$timeout_seconds" -le 0 ]]; then
     run_command_argv "$run_dir" "$log_file" "$@"
     return $?
   fi
@@ -1507,11 +1546,11 @@ run_command_argv_global_filter() {
   set +e
   (
     cd "$run_dir"
-    timeout --signal=TERM --kill-after=5 "${FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS}" "$@"
+    timeout --signal=TERM --kill-after=5 "${timeout_seconds}" "$@"
   ) >"$log_file" 2>&1
   exit_code=$?
   set -e
-  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$exit_code"
+  mark_global_filter_timeout_if_needed "$log_file" "$tool_label" "$timeout_seconds" "$exit_code"
   return "$exit_code"
 }
 
@@ -1559,7 +1598,7 @@ classify_propagate_cmd() {
 
   rc=0
   if [[ "$timeout_seconds" -gt 0 ]]; then
-    if ! run_command_global_filter "$run_dir" "$propagate_cmd" "$log_file" "$tool_label"; then
+    if ! run_command_global_filter "$run_dir" "$propagate_cmd" "$log_file" "$tool_label" "$timeout_seconds"; then
       rc=$?
     fi
   elif ! run_command "$run_dir" "$propagate_cmd" "$log_file"; then
@@ -1617,7 +1656,7 @@ classify_global_propagate_circt_lec_raw() {
   lec_cmd+=("-c1=$FORMAL_GLOBAL_PROPAGATE_C1" "-c2=$FORMAL_GLOBAL_PROPAGATE_C2" "$ORIG_DESIGN" "$MUTANT_DESIGN")
 
   rc=0
-  if ! run_command_argv_global_filter "$run_dir" "$log_file" "circt-lec" "${lec_cmd[@]}"; then
+  if ! run_command_argv_global_filter "$run_dir" "$log_file" "circt-lec" "$FORMAL_GLOBAL_PROPAGATE_LEC_TIMEOUT_SECONDS" "${lec_cmd[@]}"; then
     rc=$?
   fi
 
@@ -1757,7 +1796,7 @@ classify_global_propagate_circt_bmc_raw() {
         if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
           orig_rc=0
           orig_start_ns="$(current_epoch_ns)"
-          if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+          if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
             orig_rc=$?
           fi
           orig_end_ns="$(current_epoch_ns)"
@@ -1796,7 +1835,7 @@ classify_global_propagate_circt_bmc_raw() {
       if [[ "$bmc_orig_cache_wait_loops" -ge "$bmc_orig_cache_wait_max" ]]; then
         orig_rc=0
         orig_start_ns="$(current_epoch_ns)"
-        if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
+        if ! run_command_argv_global_filter "$run_dir" "$orig_log" "circt-bmc" "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" "${bmc_common_cmd[@]}" "$ORIG_DESIGN"; then
           orig_rc=$?
         fi
         orig_end_ns="$(current_epoch_ns)"
@@ -1820,7 +1859,7 @@ classify_global_propagate_circt_bmc_raw() {
   fi
 
   mutant_rc=0
-  if ! run_command_argv_global_filter "$run_dir" "$mutant_log" "circt-bmc" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
+  if ! run_command_argv_global_filter "$run_dir" "$mutant_log" "circt-bmc" "$FORMAL_GLOBAL_PROPAGATE_BMC_TIMEOUT_SECONDS" "${bmc_common_cmd[@]}" "$MUTANT_DESIGN"; then
     mutant_rc=$?
   fi
 
@@ -2444,13 +2483,15 @@ process_mutation() {
       if grep -Eq 'LEC_RESULT=UNKNOWN' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_mode=lec-then-bmc primary=lec primary_state=unknown ' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_fallback=lec fallback_state=unknown ' "$mutation_dir/global_propagate.log" || \
-         grep -Eq '^# chain_mode=consensus lec_state=unknown ' "$mutation_dir/global_propagate.log"; then
+         grep -Eq '^# chain_mode=consensus lec_state=unknown ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_mode=auto lec_state=unknown ' "$mutation_dir/global_propagate.log"; then
         global_filter_lec_unknown=1
       fi
       if grep -Eq 'GLOBAL_FILTER_TIMEOUT=1 tool=circt-lec( |$)' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_mode=lec-then-bmc primary=lec primary_state=timeout ' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_fallback=lec fallback_state=timeout ' "$mutation_dir/global_propagate.log" || \
-         grep -Eq '^# chain_mode=consensus lec_state=timeout ' "$mutation_dir/global_propagate.log"; then
+         grep -Eq '^# chain_mode=consensus lec_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_mode=auto lec_state=timeout ' "$mutation_dir/global_propagate.log"; then
         global_filter_lec_timeout=1
       fi
     fi
@@ -2460,7 +2501,8 @@ process_mutation() {
          grep -Eq '^# bmc_mutant_exit=.* bmc_mutant_result=unknown' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_mode=bmc-then-lec primary=bmc primary_state=unknown ' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_fallback=bmc fallback_state=unknown ' "$mutation_dir/global_propagate.log" || \
-         grep -Eq '^# chain_consensus_bmc_state=unknown ' "$mutation_dir/global_propagate.log"; then
+         grep -Eq '^# chain_consensus_bmc_state=unknown ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_auto_bmc_state=unknown ' "$mutation_dir/global_propagate.log"; then
         global_filter_bmc_unknown=1
       fi
       if grep -Eq 'GLOBAL_FILTER_TIMEOUT=1 tool=circt-bmc( |$)' "$mutation_dir/global_propagate.log" || \
@@ -2468,7 +2510,8 @@ process_mutation() {
          grep -Eq '^# bmc_mutant_exit=.* bmc_mutant_result=timeout' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_mode=bmc-then-lec primary=bmc primary_state=timeout ' "$mutation_dir/global_propagate.log" || \
          grep -Eq '^# chain_fallback=bmc fallback_state=timeout ' "$mutation_dir/global_propagate.log" || \
-         grep -Eq '^# chain_consensus_bmc_state=timeout ' "$mutation_dir/global_propagate.log"; then
+         grep -Eq '^# chain_consensus_bmc_state=timeout ' "$mutation_dir/global_propagate.log" || \
+         grep -Eq '^# chain_auto_bmc_state=timeout ' "$mutation_dir/global_propagate.log"; then
         global_filter_bmc_timeout=1
       fi
     fi
