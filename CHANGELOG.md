@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 736 - February 9, 2026
+
+### Content-Addressed Mutation Reuse Cache
+
+- Extended `utils/run_mutation_cover.sh` with automatic compatibility-keyed
+  cache reuse:
+  - `--reuse-cache-dir <dir>`
+  - `--reuse-cache-mode off|read|read-write`
+- New behavior:
+  - cache lookup keys by `compat_hash` and auto-loads:
+    - `<cache>/<compat_hash>/pair_qualification.tsv`
+    - `<cache>/<compat_hash>/summary.tsv`
+  - cache publish writes pair/summary artifacts plus sidecar manifests and
+    run manifest for future reuse.
+- Added reuse provenance reporting:
+  - `reuse_pair_source` (`none|explicit|cache`)
+  - `reuse_summary_source` (`none|explicit|cache`)
+  - `reuse_cache_mode`
+  - `reuse_cache_write_status`
+  - emitted in `metrics.tsv`, `summary.json`, and run logs.
+
+### Matrix Cache Integration
+
+- Extended `utils/run_mutation_matrix.sh` with:
+  - `--reuse-cache-dir <dir>`
+    - pass-through to each lane's `run_mutation_cover.sh` run.
+
+### Tests and Docs Updates
+
+- Added lit regressions:
+  - `test/Tools/run-mutation-cover-cache.test`
+    - validates cache seed + cache-only reuse path and confirms formal helper
+      scripts are not invoked on reuse.
+  - `test/Tools/run-mutation-matrix-cache.test`
+    - validates matrix-level cache pass-through and lane reuse behavior.
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks `--reuse-cache-dir`, `--reuse-cache-mode`
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks `--reuse-cache-dir`
+  - `docs/FormalRegression.md`
+    - documented cache controls and cache entry layout
+  - `PROJECT_PLAN.md`
+    - marked content-addressed reuse cache as done; updated matrix integration
+      note with cache pass-through.
+
+### Validation
+
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- Manual command-level validation:
+  - cover cache seed + reuse run: PASS (`reused_pairs=3`, sources=`cache`)
+  - matrix cache seed + reuse run: PASS (lane PASS, sources=`cache`)
+  - compatibility regression (warn/strict mismatch): PASS.
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-reuse-cache --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 735 - February 9, 2026
 
 ### Mutation Matrix Reuse-Compatibility Policy Pass-Through

@@ -1,0 +1,32 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n2 M_NOACT\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${MUTATION_SPEC:-}" == "M_NOACT" ]]; then\n  echo NOT_ACTIVATED\n  exit 0\nfi\necho ACTIVATED\nexit 1\n' > %t/activate.sh
+// RUN: chmod +x %t/activate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho PROPAGATED\nexit 1\n' > %t/propagate.sh
+// RUN: chmod +x %t/propagate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${BASELINE:-0}" == "1" ]]; then\n  echo SURVIVED > "result-${TEST_ID}.txt"\nelif [[ "${MUTATION_SPEC:-}" == "M_DETECT" && "${TEST_ID:-}" == "t2" ]]; then\n  echo DETECTED > "result-${TEST_ID}.txt"\nelse\n  echo SURVIVED > "result-${TEST_ID}.txt"\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't1\tbash %t/fake-test.sh\tresult-t1.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 't2\tbash %t/fake-test.sh\tresult-t2.txt\t^DETECTED$\t^SURVIVED$\n' >> %t/tests.tsv
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\tbash %t/activate.sh\tbash %t/propagate.sh\t90\n' > %t/lanes.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-seed --reuse-cache-dir %t/cache --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=SEEDLOG
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SHOULD_NOT_RUN_ACTIVATE\nexit 2\n' > %t/activate.sh
+// RUN: chmod +x %t/activate.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SHOULD_NOT_RUN_PROPAGATE\nexit 2\n' > %t/propagate.sh
+// RUN: chmod +x %t/propagate.sh
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out-reuse --reuse-cache-dir %t/cache --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=REUSELOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out-reuse/results.tsv
+// RUN: FileCheck %s --check-prefix=LANELOG < %t/out-reuse/lane1/lane.log
+
+// SEEDLOG: Mutation matrix summary: pass=1 fail=0
+// REUSELOG: Mutation matrix summary: pass=1 fail=0
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code
+// RESULTS-NEXT: lane1{{.*}}PASS{{.*}}0
+// LANELOG: Reuse pair source: cache
+// LANELOG: Reuse summary source: cache
+// LANELOG-NOT: SHOULD_NOT_RUN_ACTIVATE
+// LANELOG-NOT: SHOULD_NOT_RUN_PROPAGATE
