@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 755 - February 9, 2026
+
+### MutationCover Global Filter Reuse
+
+- Added compatibility-guarded reuse of per-mutant global filter outcomes in
+  `utils/run_mutation_cover.sh` using prior `pair_qualification.tsv` rows with
+  synthetic `test_id=-`.
+- Reuse now short-circuits redundant global formal classification for:
+  - `--formal-global-propagate-cmd`
+  - `--formal-global-propagate-circt-lec`
+  - `--formal-global-propagate-circt-bmc`
+  - `--formal-global-propagate-circt-chain`
+- Global filter rows now include cached/propagated variants to persist reuse
+  data across runs.
+
+### Metrics
+
+- Added `reused_global_filters` to:
+  - `metrics.tsv`
+  - `summary.json`
+  - CLI summary line
+
+### Tests
+
+- Added `test/Tools/run-mutation-cover-global-filter-reuse.test`
+  - verifies second-run reuse skips global filter execution and reports
+    `reused_global_filters`.
+- Validation:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global-filter-reuse.test test/Tools/run-mutation-cover-reuse.test test/Tools/run-mutation-cover-cache.test test/Tools/run-mutation-matrix-reuse.test test/Tools/run-mutation-matrix-cache.test`: PASS
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (28/28)
+
+### External Cadence
+
+- `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-global-reuse-rerun --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary: `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped), `verilator` BMC/LEC PASS (1/1 each), `yosys` BMC/LEC PASS (1/1 each), `opentitan` LEC PASS (1/1), AVIP compile PASS (9/9).
+
 ## Iteration 754 - February 9, 2026
 
 ### Runtime VTable Override (Critical Fix)
