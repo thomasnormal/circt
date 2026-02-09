@@ -18341,6 +18341,9 @@ ninja -C build circt-verilog
 - Iteration 705 adds metadata freshness policy gates (`max-age` and
   `max-future-skew`) for CRL/OCSP refresh sidecars to prevent stale/future-skew
   provenance acceptance.
+- Iteration 706 adds transport-aware metadata evidence requirements:
+  HTTP(S) metadata must include `http_status`; HTTPS metadata must include TLS
+  peer digest and non-empty cert-chain digests.
 - These controls are part of lane-state config hash material, preserving strict
   resume/merge policy compatibility checks across workers.
 

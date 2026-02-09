@@ -1363,6 +1363,18 @@ if http_status is not None:
         file=sys.stderr,
     )
     raise SystemExit(1)
+if transport in {"http", "https"} and http_status is None:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': {transport} transport requires http_status",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if status == "ok" and http_status is not None and not (200 <= http_status < 400):
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': status=ok requires http_status in [200,399]",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
 
 tls_peer_sha256 = parsed.get("tls_peer_sha256")
 if tls_peer_sha256 is not None:
@@ -1388,6 +1400,19 @@ if cert_chain_sha256 is not None:
           file=sys.stderr,
       )
       raise SystemExit(1)
+if transport == "https" and tls_peer_sha256 is None:
+  print(
+      f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': https transport requires tls_peer_sha256",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
+if transport == "https":
+  if cert_chain_sha256 is None or len(cert_chain_sha256) == 0:
+    print(
+        f"invalid lane state Ed25519 refresh metadata file '{metadata_path}': https transport requires non-empty cert_chain_sha256",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 error_text = parsed.get("error")
 if error_text is not None and not isinstance(error_text, str):

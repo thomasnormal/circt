@@ -145,6 +145,9 @@ Lane-state semantics:
     `source`, `transport`, `uri`, `fetched_at_utc`, `status`.
   - Optional fields: `http_status`, `tls_peer_sha256`, `cert_chain_sha256`,
     `error`.
+    - `http_status` is required when `transport` is `http` or `https`.
+    - `tls_peer_sha256` and non-empty `cert_chain_sha256` are required when
+      `transport` is `https`.
   - Optional policy gates:
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-transport`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-status`
