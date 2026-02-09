@@ -40,6 +40,8 @@
     - verifies cover-mode pass-through of generation cfg/select controls.
   - `test/Tools/run-mutation-matrix-generate.test`
     - verifies matrix default generation cfg/select pass-through.
+  - `test/Tools/run-mutation-matrix-generate-cfg-select-lane.test`
+    - verifies lane-specific cfg/select columns override matrix defaults.
   - `test/Tools/run-mutation-generate-help.test`
     - checks new generator options.
   - `test/Tools/run-mutation-cover-help.test`
@@ -62,6 +64,7 @@
   - generator cfg/select emission scenario: PASS
   - cover generated-mutation cfg/select pass-through scenario: PASS
   - matrix generated-lane cfg/select default pass-through scenario: PASS
+  - matrix generated-lane cfg/select lane-override scenario: PASS
   - matrix old-schema BMC lane compatibility (no new generation columns): PASS
 - External formal smoke cadence run:
   - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-cfg-select --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
