@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 790 - February 9, 2026
+
+### Mutation Generation: Correct Duplicate `--mode-count` Aggregation
+
+1. Fixed a correctness bug in `utils/generate_mutations_yosys.sh` mode-count
+   parsing:
+   - duplicate `--mode-count` / `--mode-counts` entries for the same mode are
+     now summed deterministically instead of last-write-wins.
+2. Prior behavior could silently under-generate mutations:
+   - total validation used summed entries, but per-mode generation used only the
+     last value for duplicate keys.
+3. New behavior guarantees requested counts are preserved across repeated mode
+   entries while keeping existing mode-family expansion semantics.
+
+### Tests
+
+- Added:
+  - `test/Tools/run-mutation-generate-mode-counts-duplicate.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate-mode-counts.test test/Tools/run-mutation-generate-mode-counts-duplicate.test test/Tools/run-mutation-generate-modes.test test/Tools/run-mutation-generate-profiles.test test/Tools/run-mutation-generate-basic.test`: PASS (5/5)
+  - `bash -n utils/run_mutation_cover.sh && bash -n utils/run_mutation_matrix.sh && bash -n utils/generate_mutations_yosys.sh && build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-generate*.test`: PASS (73/73)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-duplicate-mode-counts --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 789 - February 9, 2026
 
 ### Mutation Chain Filters: Conservative Single-Engine Error Fallback
