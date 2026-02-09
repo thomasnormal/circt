@@ -1,0 +1,24 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_HINT\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${BASELINE:-0}" == "1" ]]; then\n  echo SURVIVED > "result-${TEST_ID}.txt"\nelif [[ "${MUTATION_ID:-}" == "1" && "${TEST_ID:-}" == "t2" ]]; then\n  echo DETECTED > "result-${TEST_ID}.txt"\nelse\n  echo SURVIVED > "result-${TEST_ID}.txt"\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't1\tbash %t/fake-test.sh\tresult-t1.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 't2\tbash %t/fake-test.sh\tresult-t2.txt\t^DETECTED$\t^SURVIVED$\n' >> %t/tests.tsv
+// RUN: printf 'mutation_id\tclassification\trelevant_pairs\tdetected_by_test\tmutant_design\tmutation_spec\n' > %t/reuse-summary.tsv
+// RUN: printf '1\tdetected\t1\tt2\t-\t-\n' >> %t/reuse-summary.tsv
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\t-\t-\t90\t-\t-\t-\t-\t-\t%t/reuse-summary.tsv\n' > %t/lanes.tsv
+
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: FileCheck %s --check-prefix=PAIR < %t/out/lane1/pair_qualification.tsv
+// RUN: FileCheck %s --check-prefix=LRES < %t/out/lane1/results.tsv
+
+// LOG: Mutation matrix summary: pass=1 fail=0
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code
+// RESULTS-NEXT: lane1{{.*}}PASS{{.*}}0
+// PAIR: 1{{.*}}t2{{.*}}hinted_run_detection
+// LRES: 1{{.*}}t2{{.*}}detected
+// LRES-NOT: 1{{.*}}t1
