@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 792 - February 9, 2026
+
+### Mutation Generation: Batch Per-Round Yosys Invocations
+
+1. Improved `utils/generate_mutations_yosys.sh` generation throughput:
+   - each generation/top-up round now emits one Yosys script containing all
+     mode/profile `mutate -list` commands for that round.
+   - Yosys is invoked once per round instead of once per mode target.
+2. Added strict output validation for batched generation:
+   - verify every expected per-mode output file exists after each round.
+3. This reduces process-launch overhead for large mode mixes while preserving
+   deterministic ordering and existing dedup/top-up behavior.
+
+### Tests
+
+- Updated fake-Yosys regression harnesses to support multiple `mutate -list`
+  commands per script (batched round execution):
+  - `test/Tools/run-mutation-generate-modes.test`
+  - `test/Tools/run-mutation-generate-mode-counts.test`
+  - `test/Tools/run-mutation-generate-profiles.test`
+  - `test/Tools/run-mutation-generate-topup-dedup.test`
+  - `test/Tools/run-mutation-cover-generate-modes.test`
+  - `test/Tools/run-mutation-cover-generate-mode-counts.test`
+  - `test/Tools/run-mutation-cover-generate-profiles.test`
+  - `test/Tools/run-mutation-matrix-generate-modes.test`
+  - `test/Tools/run-mutation-matrix-generate-mode-counts.test`
+  - `test/Tools/run-mutation-matrix-generate-profiles.test`
+- Updated `README.md` mutation tooling section with batched-generation behavior.
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/generate_mutations_yosys.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/run-mutation-cover-generate*.test`: PASS (13/13)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation*.test`: PASS (84/84)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-batched-round --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - OpenTitan LEC PASS (1/1)
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`
+
 ## Iteration 791 - February 9, 2026
 
 ### Mutation Generation: Deterministic Dedup Top-Up to Requested Count
