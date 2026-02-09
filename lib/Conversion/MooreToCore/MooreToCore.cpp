@@ -4988,6 +4988,9 @@ struct CovergroupSampleOpConversion
     // Get the covergroup handle.
     Value cgHandle = adaptor.getCovergroup();
 
+    // Get iff conditions (may be empty if no iff conditions were provided).
+    auto iffConditions = adaptor.getIffConditions();
+
     // Collect i64 values for cross sampling
     SmallVector<Value> i64Values;
     int32_t numValues = adaptor.getValues().size();
@@ -5033,9 +5036,46 @@ struct CovergroupSampleOpConversion
       auto idxConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
 
-      LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                           SymbolRefAttr::get(sampleFn),
-                           ValueRange{cgHandle, idxConst, i64Val});
+      // Check the iff condition for this coverpoint.
+      // IEEE 1800-2017 Section 19.5: coverpoint iff guard - only sample
+      // when the iff condition is true (nonzero).
+      if (cpIndex < static_cast<int32_t>(iffConditions.size())) {
+        Value iffCond = iffConditions[cpIndex];
+        // The iff condition should be i1 (two-valued bool from ImportVerilog).
+        // If it's a wider integer, compare != 0 to get i1.
+        if (!iffCond.getType().isInteger(1)) {
+          if (iffCond.getType().isIntOrIndex()) {
+            auto zero = hw::ConstantOp::create(
+                rewriter, loc, iffCond.getType(), 0);
+            iffCond = comb::ICmpOp::create(
+                rewriter, loc, comb::ICmpPredicate::ne, iffCond, zero);
+          }
+        }
+        // Use cf dialect to implement the conditional. SCF ops are illegal
+        // inside llhd.process, so we use basic blocks with branches.
+        // Split the current block to create a merge point after the
+        // conditional sample call.
+        Block *currentBlock = rewriter.getInsertionBlock();
+        Block *mergeBlock = rewriter.splitBlock(
+            currentBlock, rewriter.getInsertionPoint());
+        // Create a "then" block for the sample call.
+        Block *thenBlock = rewriter.createBlock(mergeBlock);
+        LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                             SymbolRefAttr::get(sampleFn),
+                             ValueRange{cgHandle, idxConst, i64Val});
+        cf::BranchOp::create(rewriter, loc, mergeBlock);
+        // Add the conditional branch in the current block.
+        rewriter.setInsertionPointToEnd(currentBlock);
+        cf::CondBranchOp::create(rewriter, loc, iffCond, thenBlock,
+                                 mergeBlock);
+        // Continue inserting at the merge block.
+        rewriter.setInsertionPointToStart(mergeBlock);
+      } else {
+        // No iff condition - always sample.
+        LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                             SymbolRefAttr::get(sampleFn),
+                             ValueRange{cgHandle, idxConst, i64Val});
+      }
       ++cpIndex;
     }
 
@@ -5164,6 +5204,8 @@ struct ConstraintExprOpConversion
   matchAndRewrite(ConstraintExprOp op, OpAdaptor,
                   ConversionPatternRewriter &rewriter) const override {
     // Constraint expressions are evaluated during RandomizeOp processing.
+    // For inline constraints, expression-based constraints are pre-extracted
+    // to attributes by the pre-pass, so they can be safely erased here.
     // The expression itself is erased as part of the parent constraint block.
     rewriter.eraseOp(op);
     return success();
@@ -8174,8 +8216,6 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       }
 
       unsigned idxWidth = llvm::Log2_64_Ceil(arrType.getNumElements());
-      if (idxWidth == 0)
-        idxWidth = 1;
       idx = adjustIntegerWidth(rewriter, idx, idxWidth, loc);
       if (idxUnknown)
         idxUnknown = adjustIntegerWidth(rewriter, idxUnknown, idxWidth, loc);
@@ -22927,6 +22967,30 @@ extractInlineRangeConstraints(Region &inlineRegion,
     }
   }
 
+  // Helper: extract property name from a value, looking through zext/sext/trunc
+  // which slang inserts when widening narrow types to i32 before comparison.
+  auto getPropertyName = [](Value v) -> StringRef {
+    // Look through zext/sext/trunc
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
+    return traceToPropertyName(v);
+  };
+
+  // Helper: extract a constant int64_t value from a ConstantOp
+  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+      FVInt fvVal = constOp.getValue();
+      if (fvVal.hasUnknown())
+        return std::nullopt;
+      return fvVal.getRawValue().getSExtValue();
+    }
+    return std::nullopt;
+  };
+
   // Walk through the inline constraint region looking for ConstraintInsideOp
   for (auto &op : inlineRegion.front().getOperations()) {
     if (auto insideOp = dyn_cast<ConstraintInsideOp>(op)) {
@@ -22977,6 +23041,249 @@ extractInlineRangeConstraints(Region &inlineRegion,
       }
       constraints.push_back(info);
     }
+  }
+
+  // Also extract constraints from ConstraintExprOp ops in the inline region.
+  // Pattern: randomize() with { x > 0; x < 100; } generates separate
+  //   moore.constraint.expr ops for each comparison.
+  // We collect per-property lower/upper bounds and merge into ranges,
+  // mirroring the logic in extractRangeConstraints for class-level constraints.
+  struct InlineBoundInfo {
+    std::optional<int64_t> lower, upper;
+    StringRef propName;
+    bool isSigned = false;
+    bool isSoft = false;
+  };
+  DenseMap<StringRef, InlineBoundInfo> varBounds;
+
+  // Helper: try to extract range bounds from a single comparison op.
+  // Returns true if the op was matched and bounds were updated.
+  auto tryExtractInlineComparisonBounds =
+      [&](Operation *defOp,
+          bool isSoft) -> bool {
+    if (!defOp || defOp->getNumOperands() != 2)
+      return false;
+    Value lhs = defOp->getOperand(0);
+    Value rhs = defOp->getOperand(1);
+
+    StringRef propName = getPropertyName(lhs);
+    auto constVal = getConstVal(rhs);
+    bool varOnLhs = true;
+    if (propName.empty() || !constVal) {
+      propName = getPropertyName(rhs);
+      constVal = getConstVal(lhs);
+      varOnLhs = false;
+    }
+    if (propName.empty() || !constVal)
+      return false;
+
+    auto &bounds = varBounds[propName];
+    bounds.propName = propName;
+    bounds.isSoft = isSoft;
+
+    int64_t cv = *constVal;
+    if (isa<SgeOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+      } else {
+        if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+      }
+    } else if (isa<SleOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+      } else {
+        if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+      }
+    } else if (isa<SgtOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+      }
+    } else if (isa<SltOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+      }
+    } else if (isa<UgeOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+      } else {
+        if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+      }
+    } else if (isa<UleOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv;
+      } else {
+        if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv;
+      }
+    } else if (isa<UgtOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+      }
+    } else if (isa<UltOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo;
+      }
+    } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+      bounds.lower = cv;
+      bounds.upper = cv;
+    } else {
+      return false;
+    }
+    return true;
+  };
+
+  for (auto &op : inlineRegion.front().getOperations()) {
+    auto exprOp = dyn_cast<ConstraintExprOp>(op);
+    if (!exprOp)
+      continue;
+
+    Value cond = exprOp.getCondition();
+    Operation *defOp = cond.getDefiningOp();
+    if (!defOp)
+      continue;
+
+    bool isSoft = exprOp.getIsSoft();
+
+    // Try to decompose and(cmp1, cmp2) compound constraints.
+    // Slang compiles `inside {[a:b]}` into `and(uge(x, a), ule(x, b))`.
+    if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+      Operation *lhsOp = defOp->getOperand(0).getDefiningOp();
+      Operation *rhsOp = defOp->getOperand(1).getDefiningOp();
+      if (lhsOp && rhsOp) {
+        bool matched = tryExtractInlineComparisonBounds(lhsOp, isSoft);
+        matched |= tryExtractInlineComparisonBounds(rhsOp, isSoft);
+        if (matched)
+          continue;
+      }
+    }
+
+    // Try direct comparison match.
+    if (tryExtractInlineComparisonBounds(defOp, isSoft))
+      continue;
+  }
+
+  // Also look for set membership patterns: or(eq(prop, c1), eq(prop, c2))
+  // These arise from `x inside {3, 10}` in inline constraints.
+  for (auto &op : inlineRegion.front().getOperations()) {
+    auto exprOp = dyn_cast<ConstraintExprOp>(op);
+    if (!exprOp)
+      continue;
+    Value cond = exprOp.getCondition();
+    Operation *defOp = cond.getDefiningOp();
+    if (!defOp || !isa<OrOp>(defOp) || defOp->getNumOperands() != 2)
+      continue;
+
+    // Helper to extract property name and constant from eq/weq operand
+    auto extractEqMember =
+        [&](Value v) -> std::pair<StringRef, std::optional<int64_t>> {
+      Operation *memberOp = v.getDefiningOp();
+      if (!memberOp || memberOp->getNumOperands() != 2)
+        return {"", std::nullopt};
+      if (!isa<EqOp>(memberOp) && !isa<WildcardEqOp>(memberOp))
+        return {"", std::nullopt};
+      Value mLhs = memberOp->getOperand(0);
+      Value mRhs = memberOp->getOperand(1);
+      StringRef name = getPropertyName(mLhs);
+      auto val = getConstVal(mRhs);
+      if (name.empty() || !val) {
+        name = getPropertyName(mRhs);
+        val = getConstVal(mLhs);
+      }
+      return {name, val};
+    };
+
+    auto [name1, val1] = extractEqMember(defOp->getOperand(0));
+    auto [name2, val2] = extractEqMember(defOp->getOperand(1));
+
+    // Both arms should reference the same property
+    if (name1.empty() || name2.empty() || name1 != name2 || !val1 || !val2)
+      continue;
+
+    // Check this property is in our map
+    auto it = propertyMap.find(name1);
+    if (it == propertyMap.end())
+      continue;
+
+    unsigned fieldIdx = it->second.first;
+    Type fieldType = it->second.second;
+    unsigned bitWidth = 32;
+    if (auto intType = dyn_cast<IntType>(fieldType))
+      bitWidth = intType.getWidth();
+
+    RangeConstraintInfo info;
+    info.propertyName = name1;
+    info.constraintName = "";
+    info.fieldIndex = fieldIdx;
+    info.bitWidth = bitWidth;
+    info.isSoft = exprOp.getIsSoft();
+    info.isMultiRange = true;
+    info.minValue = *val1;
+    info.maxValue = *val1;
+    info.ranges.push_back({*val1, *val1});
+    info.ranges.push_back({*val2, *val2});
+    constraints.push_back(info);
+  }
+
+  // Convert collected bounds into RangeConstraintInfo entries
+  for (auto &[propName, bounds] : varBounds) {
+    if (!bounds.lower && !bounds.upper)
+      continue;
+
+    auto it = propertyMap.find(propName);
+    if (it == propertyMap.end())
+      continue;
+
+    // Skip if an InsideOp-based constraint already covers this property
+    bool alreadyCovered = false;
+    for (auto &existing : constraints) {
+      if (existing.propertyName == propName) {
+        alreadyCovered = true;
+        break;
+      }
+    }
+    if (alreadyCovered)
+      continue;
+
+    unsigned fieldIdx = it->second.first;
+    Type fieldType = it->second.second;
+    unsigned bitWidth = 32;
+    if (auto intType = dyn_cast<IntType>(fieldType))
+      bitWidth = intType.getWidth();
+
+    RangeConstraintInfo info;
+    info.propertyName = propName;
+    info.constraintName = "";
+    info.fieldIndex = fieldIdx;
+    info.bitWidth = bitWidth;
+    info.isSoft = bounds.isSoft;
+    info.isMultiRange = false;
+
+    int64_t typeMin = bounds.isSigned ? -(1LL << (bitWidth - 1)) : 0;
+    int64_t typeMax = bounds.isSigned ? ((1LL << (bitWidth - 1)) - 1)
+                                      : ((1ULL << bitWidth) - 1);
+    info.minValue = bounds.lower.value_or(typeMin);
+    info.maxValue = bounds.upper.value_or(typeMax);
+
+    constraints.push_back(info);
   }
 
   return constraints;
@@ -23476,6 +23783,73 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         opsToErase.push_back(&op);
       for (auto *op : llvm::reverse(opsToErase))
         rewriter.eraseOp(op);
+    }
+
+    // Read pre-extracted ConstraintExprOp constraints from the attribute
+    // (set by the pre-pass before conversion). These are expression-based
+    // inline constraints like `x > 0; x < 100;` that use comparison ops
+    // which would be converted before RandomizeOp sees them.
+    if (auto exprAttr = op->getAttrOfType<ArrayAttr>(
+            "circt.inline_expr_constraints")) {
+      // Build property map for looking up field indices
+      DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
+      unsigned propIdx = 1; // Account for type ID or base class at index 0
+      if (classDecl) {
+        for (auto &classOp : classDecl.getBody().getOps()) {
+          if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(classOp)) {
+            propertyMap[propDecl.getSymName()] = {propIdx,
+                                                   propDecl.getPropertyType()};
+            propIdx++;
+          }
+        }
+      }
+
+      for (auto attr : exprAttr.getValue()) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+
+        auto propAttr = dict.getAs<StringAttr>("prop");
+        if (!propAttr)
+          continue;
+        StringRef propName = propAttr.getValue();
+
+        auto it = propertyMap.find(propName);
+        if (it == propertyMap.end())
+          continue;
+
+        unsigned fieldIdx = it->second.first;
+        Type fieldType = it->second.second;
+        unsigned bitWidth = 32;
+        if (auto intType = dyn_cast<IntType>(fieldType))
+          bitWidth = intType.getWidth();
+
+        bool isSigned = dict.get("signed") != nullptr;
+        bool isSoft = dict.get("soft") != nullptr;
+
+        int64_t typeMin = isSigned ? -(1LL << (bitWidth - 1)) : 0;
+        int64_t typeMax = isSigned ? ((1LL << (bitWidth - 1)) - 1)
+                                    : ((1ULL << bitWidth) - 1);
+
+        auto minAttr = dict.getAs<IntegerAttr>("min");
+        auto maxAttr = dict.getAs<IntegerAttr>("max");
+        int64_t minVal = minAttr ? minAttr.getInt() : typeMin;
+        int64_t maxVal = maxAttr ? maxAttr.getInt() : typeMax;
+
+        RangeConstraintInfo info;
+        info.propertyName = propName;
+        info.constraintName = "";
+        info.fieldIndex = fieldIdx;
+        info.bitWidth = bitWidth;
+        info.isSoft = isSoft;
+        info.isMultiRange = false;
+        info.minValue = minVal;
+        info.maxValue = maxVal;
+        rangeConstraints.push_back(info);
+      }
+
+      // Remove the attribute now that we've read it
+      op->removeAttr("circt.inline_expr_constraints");
     }
 
     // Separate hard constraints from soft range constraints
@@ -25681,6 +26055,184 @@ void MooreToCorePass::runOnOperation() {
                                         greedyConfig)))
         signalPassFailure();
     }
+  }
+
+  // Pre-extract ConstraintExprOp-based constraints from inline regions of
+  // RandomizeOp/StdRandomizeOp BEFORE the conversion patterns run.
+  // This is necessary because the dialect conversion processes inner ops
+  // (comparison, constant, read ops) before the enclosing RandomizeOp,
+  // converting them to target dialect ops. By that point, we can't trace
+  // through the original Moore IR to extract constraint bounds.
+  // The extracted constraints are stored as attributes on the RandomizeOp.
+  {
+    auto preExtractInlineExprConstraints = [&](Region &inlineRegion,
+                                                Operation *randomizeOp) {
+      if (inlineRegion.empty())
+        return;
+      llvm::errs() << "[PREPASS] Found inline region with "
+                    << std::distance(inlineRegion.front().begin(),
+                                    inlineRegion.front().end())
+                    << " ops\n";
+
+      // Helper to get property name through zext/sext/trunc + read + propref
+      auto getPropertyName = [](Value v) -> StringRef {
+        if (auto zextOp = v.getDefiningOp<ZExtOp>())
+          v = zextOp.getInput();
+        else if (auto sextOp = v.getDefiningOp<SExtOp>())
+          v = sextOp.getInput();
+        else if (auto truncOp = v.getDefiningOp<TruncOp>())
+          v = truncOp.getInput();
+        return traceToPropertyName(v);
+      };
+
+      // Helper to get constant value
+      auto getConstVal = [](Value v) -> std::optional<int64_t> {
+        if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+          FVInt fvVal = constOp.getValue();
+          if (fvVal.hasUnknown())
+            return std::nullopt;
+          return fvVal.getRawValue().getSExtValue();
+        }
+        return std::nullopt;
+      };
+
+      // Collect bound info per property
+      struct BoundInfo {
+        std::optional<int64_t> lower, upper;
+        StringRef propName;
+        bool isSigned = false;
+        bool isSoft = false;
+      };
+      DenseMap<StringRef, BoundInfo> varBounds;
+
+      auto tryExtractBounds = [&](Operation *defOp, bool isSoft) -> bool {
+        if (!defOp || defOp->getNumOperands() != 2)
+          return false;
+        Value lhs = defOp->getOperand(0);
+        Value rhs = defOp->getOperand(1);
+        StringRef propName = getPropertyName(lhs);
+        auto constVal = getConstVal(rhs);
+        bool varOnLhs = true;
+        if (propName.empty() || !constVal) {
+          propName = getPropertyName(rhs);
+          constVal = getConstVal(lhs);
+          varOnLhs = false;
+        }
+        if (propName.empty() || !constVal)
+          return false;
+
+        auto &bounds = varBounds[propName];
+        bounds.propName = propName;
+        bounds.isSoft = isSoft;
+        int64_t cv = *constVal;
+
+        if (isa<SgeOp>(defOp)) {
+          bounds.isSigned = true;
+          if (varOnLhs) { if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv; }
+          else { if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv; }
+        } else if (isa<SleOp>(defOp)) {
+          bounds.isSigned = true;
+          if (varOnLhs) { if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv; }
+          else { if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv; }
+        } else if (isa<SgtOp>(defOp)) {
+          bounds.isSigned = true;
+          if (varOnLhs) { int64_t lo = cv + 1; if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo; }
+          else { int64_t hi = cv - 1; if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi; }
+        } else if (isa<SltOp>(defOp)) {
+          bounds.isSigned = true;
+          if (varOnLhs) { int64_t hi = cv - 1; if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi; }
+          else { int64_t lo = cv + 1; if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo; }
+        } else if (isa<UgeOp>(defOp)) {
+          if (varOnLhs) { if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv; }
+          else { if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv; }
+        } else if (isa<UleOp>(defOp)) {
+          if (varOnLhs) { if (!bounds.upper || cv < *bounds.upper) bounds.upper = cv; }
+          else { if (!bounds.lower || cv > *bounds.lower) bounds.lower = cv; }
+        } else if (isa<UgtOp>(defOp)) {
+          if (varOnLhs) { int64_t lo = cv + 1; if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo; }
+          else { int64_t hi = cv - 1; if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi; }
+        } else if (isa<UltOp>(defOp)) {
+          if (varOnLhs) { int64_t hi = cv - 1; if (!bounds.upper || hi < *bounds.upper) bounds.upper = hi; }
+          else { int64_t lo = cv + 1; if (!bounds.lower || lo > *bounds.lower) bounds.lower = lo; }
+        } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+          bounds.lower = cv;
+          bounds.upper = cv;
+        } else {
+          return false;
+        }
+        return true;
+      };
+
+      // Walk inline region for ConstraintExprOp with comparison operands
+      for (auto &op : inlineRegion.front().getOperations()) {
+        auto exprOp = dyn_cast<ConstraintExprOp>(op);
+        if (!exprOp)
+          continue;
+        Value cond = exprOp.getCondition();
+        Operation *defOp = cond.getDefiningOp();
+        if (!defOp)
+          continue;
+        bool isSoft = exprOp.getIsSoft();
+
+        // Try and(cmp1, cmp2) decomposition
+        if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+          Operation *lhsOp = defOp->getOperand(0).getDefiningOp();
+          Operation *rhsOp = defOp->getOperand(1).getDefiningOp();
+          if (lhsOp && rhsOp) {
+            bool matched = tryExtractBounds(lhsOp, isSoft);
+            matched |= tryExtractBounds(rhsOp, isSoft);
+            if (matched)
+              continue;
+          }
+        }
+        // Direct comparison
+        tryExtractBounds(defOp, isSoft);
+      }
+
+      // Convert bounds to attributes and store on the RandomizeOp
+      if (varBounds.empty())
+        return;
+
+      SmallVector<Attribute> constraintAttrs;
+      for (auto &[propName, bounds] : varBounds) {
+        if (!bounds.lower && !bounds.upper)
+          continue;
+        // Store as a dictionary: {prop, min, max, signed, soft}
+        SmallVector<NamedAttribute> entries;
+        entries.push_back(NamedAttribute(
+            StringAttr::get(&context, "prop"),
+            StringAttr::get(&context, propName)));
+        if (bounds.lower)
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "min"),
+              IntegerAttr::get(IntegerType::get(&context, 64), *bounds.lower)));
+        if (bounds.upper)
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "max"),
+              IntegerAttr::get(IntegerType::get(&context, 64), *bounds.upper)));
+        if (bounds.isSigned)
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "signed"),
+              UnitAttr::get(&context)));
+        if (bounds.isSoft)
+          entries.push_back(NamedAttribute(
+              StringAttr::get(&context, "soft"),
+              UnitAttr::get(&context)));
+        constraintAttrs.push_back(DictionaryAttr::get(&context, entries));
+      }
+
+      if (!constraintAttrs.empty()) {
+        randomizeOp->setAttr("circt.inline_expr_constraints",
+                             ArrayAttr::get(&context, constraintAttrs));
+      }
+    };
+
+    module.walk([&](RandomizeOp op) {
+      preExtractInlineExprConstraints(op.getInlineConstraints(), op);
+    });
+    module.walk([&](StdRandomizeOp op) {
+      preExtractInlineExprConstraints(op.getInlineConstraints(), op);
+    });
   }
 
   ConversionPatternSet patterns(&context, typeConverter);

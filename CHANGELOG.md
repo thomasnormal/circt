@@ -37331,3 +37331,70 @@ CIRCT/slang correctly enforces LRM restrictions.
   for single-element arrays.
 - Other previously known OpenTitan strict-parity blockers remain (`usbdev`
   sim/parse and `aes_sbox_canright` XPROP_ONLY).
+
+## Iteration 736 - February 9, 2026
+
+### MooreToCore Singleton LLHD Index Normalization
+
+- Fixed `moore.dyn_extract_ref` lowering for `llhd.ref<hw.array<...>>` when the
+  source array has one element.
+- Change in `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+  - use LLHD index width `clog2(N)` directly for `llhd.sig.array_get` /
+    `llhd.sig.array_slice` lowering paths (no forced min-width of 1).
+- This resolves OpenTitan parse failures where singleton array refs reached
+  `llhd.sig.array_get` with `i1` index and tripped LLHD verifier expectations
+  (`clog2(1)=0`).
+
+### Test Coverage
+
+- Added:
+  - `test/Conversion/MooreToCore/dyn-extract-ref-singleton-array.mlir`
+    - regression for dynamic extract-ref on singleton arrays through
+      `--convert-moore-to-core`.
+
+### Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-verilog`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Conversion/MooreToCore/dyn-extract-ref-singleton-array.mlir`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv test/Conversion/MooreToCore/dyn-extract-ref-array-xprop.mlir test/Conversion/ImportVerilog/readmemh-task-capture.sv`:
+    - 2/2 PASS
+- OpenTitan targeted parse:
+  - `utils/run_opentitan_circt_verilog.sh i2c --ir-hw`:
+    - PASS
+  - `utils/run_opentitan_circt_verilog.sh spi_device --ir-hw`:
+    - PASS
+- OpenTitan targeted E2E (verilog lane):
+  - `utils/run_opentitan_formal_e2e.sh --skip-sim --skip-lec --verilog-targets i2c,spi_device --out-dir /tmp/opentitan-e2e-singleton-fix`:
+    - summary: `pass=2 fail=0`
+- External filtered sweep:
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=2 pass=2 fail=0
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`:
+    - total=1 pass=1 fail=0 error=0 skip=0
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=1027
+  - `TEST_FILTER='16.9--sequence-goto-repetition' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh /home/thomas-ahle/sv-tests`:
+    - total=1 pass=1 fail=0 error=0 skip=1027
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=16
+  - `TEST_FILTER='assert_fell' BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh /home/thomas-ahle/verilator-verification`:
+    - total=1 pass=1 fail=0 error=0 skip=16
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/ahb_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog utils/run_avip_circt_verilog.sh /home/thomas-ahle/mbit/jtag_avip`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog OPENTITAN_DIR=/home/thomas-ahle/opentitan utils/run_opentitan_circt_sim.sh prim_count --timeout=120`:
+    - PASS
+  - `CIRCT_VERILOG=/home/thomas-ahle/circt/build/bin/circt-verilog LEC_ACCEPT_XPROP_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright`:
+    - `aes_sbox_canright` XPROP_ONLY (accepted)
+
+### Remaining Limitations
+
+- OpenTitan strict parity still has unresolved failures (`usbdev` sim/parse,
+  unsupported parse targets in the current matrix, strict `aes_sbox_canright`
+  `XPROP_ONLY`).
+- Full non-smoke OpenTitan matrix must be re-run after each closure batch to
+  maintain parity tracking fidelity.
