@@ -1,5 +1,67 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 742 - February 9, 2026
+
+### Mutation Matrix LEC Option Parity
+
+- Extended `utils/run_mutation_matrix.sh` with full circt-lec global-filter
+  default/lane passthrough:
+  - defaults:
+    - `--default-formal-global-propagate-circt-lec-args <args>`
+    - `--default-formal-global-propagate-c1 <name>`
+    - `--default-formal-global-propagate-c2 <name>`
+    - `--default-formal-global-propagate-z3 <path>`
+    - `--default-formal-global-propagate-assume-known-inputs`
+    - `--default-formal-global-propagate-accept-xprop-only`
+  - lane TSV optional columns:
+    - `global_propagate_circt_lec_args`
+    - `global_propagate_c1`
+    - `global_propagate_c2`
+    - `global_propagate_z3`
+    - `global_propagate_assume_known_inputs`
+    - `global_propagate_accept_xprop_only`
+- Backward compatibility:
+  - new lane TSV columns are appended after existing BMC columns to preserve
+    parsing for pre-existing matrix lane files.
+- Completed matrix parity for built-in LEC global filtering so all relevant
+  cover-level LEC controls can now be routed per lane/default.
+
+### Tests and Docs Updates
+
+- Updated tests:
+  - `test/Tools/run-mutation-matrix-global-circt-lec-filter.test`
+    - now verifies forwarding of LEC args, c1/c2, z3, assume-known-inputs, and
+      accept-xprop-only defaults.
+  - `test/Tools/run-mutation-cover-global-circt-lec-filter.test`
+    - now verifies direct cover-mode forwarding of the same LEC options.
+  - `test/Tools/run-mutation-matrix-help.test`
+    - checks new LEC matrix default options.
+  - `test/Tools/run-mutation-cover-help.test`
+    - checks LEC global filter options in cover help output.
+- Updated docs/planning:
+  - `docs/FormalRegression.md`
+    - documented matrix default/lane LEC option wiring.
+  - `PROJECT_PLAN.md`
+    - CI-lane integration notes now call out full LEC option parity.
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- Manual command-level validation:
+  - `test/Tools/run-mutation-cover-global-circt-lec-filter.test` scenario: PASS
+  - `test/Tools/run-mutation-matrix-global-circt-lec-filter.test` scenario: PASS
+  - matrix old-schema BMC lane compatibility (no new LEC columns): PASS
+  - help output checks for new options: PASS
+- External formal smoke cadence run:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-lec-matrix-parity --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - `sv-tests` BMC/LEC: 0 selected (1028 skipped under filter), PASS.
+    - `verilator-verification` BMC/LEC: 1/1 PASS each.
+    - `yosys/tests/sva` BMC/LEC: 1/1 PASS each.
+    - OpenTitan LEC: 1/1 PASS.
+    - AVIP compile lanes: 9/9 PASS.
+
 ## Iteration 741 - February 9, 2026
 
 ### Mutation Matrix BMC Ignore-Window Parity

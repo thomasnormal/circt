@@ -9,6 +9,12 @@
 // CHECK: --default-mutations-modes
 // CHECK: --default-formal-global-propagate-cmd
 // CHECK: --default-formal-global-propagate-circt-lec
+// CHECK: --default-formal-global-propagate-circt-lec-args
+// CHECK: --default-formal-global-propagate-c1
+// CHECK: --default-formal-global-propagate-c2
+// CHECK: --default-formal-global-propagate-z3
+// CHECK: --default-formal-global-propagate-assume-known-inputs
+// CHECK: --default-formal-global-propagate-accept-xprop-only
 // CHECK: --default-formal-global-propagate-circt-bmc
 // CHECK: --default-formal-global-propagate-bmc-ignore-asserts-until
 // CHECK: --reuse-cache-dir
