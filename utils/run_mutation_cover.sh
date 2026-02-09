@@ -512,7 +512,13 @@ if [[ "$REUSE_CACHE_MODE" != "off" ]]; then
   mkdir -p "$REUSE_CACHE_DIR"
 fi
 
+GENERATED_MUTATIONS_ENABLED=0
+GENERATED_MUTATIONS_CACHE_HIT=0
+GENERATED_MUTATIONS_CACHE_MISS=0
+GENERATED_MUTATIONS_CACHE_STATUS="disabled"
+
 if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
+  GENERATED_MUTATIONS_ENABLED=1
   MUTATIONS_FILE="${WORK_DIR}/generated_mutations.txt"
   gen_cmd=(
     "${SCRIPT_DIR}/generate_mutations_yosys.sh"
@@ -544,6 +550,17 @@ if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
     gen_cmd+=(--selects "$MUTATIONS_SELECT")
   fi
   "${gen_cmd[@]}" > "${WORK_DIR}/generate_mutations.log" 2>&1
+  if grep -Eq '^Mutation cache status: hit$' "${WORK_DIR}/generate_mutations.log" || \
+     grep -Eq 'Generated mutations: .*\(cache hit\)$' "${WORK_DIR}/generate_mutations.log"; then
+    GENERATED_MUTATIONS_CACHE_STATUS="hit"
+    GENERATED_MUTATIONS_CACHE_HIT=1
+  elif grep -Eq '^Mutation cache status: miss$' "${WORK_DIR}/generate_mutations.log"; then
+    GENERATED_MUTATIONS_CACHE_STATUS="miss"
+    GENERATED_MUTATIONS_CACHE_MISS=1
+  elif [[ "$REUSE_CACHE_MODE" != "off" && -n "$REUSE_CACHE_DIR" ]]; then
+    GENERATED_MUTATIONS_CACHE_STATUS="miss"
+    GENERATED_MUTATIONS_CACHE_MISS=1
+  fi
 fi
 if [[ ! -f "$MUTATIONS_FILE" ]]; then
   echo "Mutations file not found: $MUTATIONS_FILE" >&2
@@ -2740,6 +2757,10 @@ fi
   printf "bmc_orig_cache_miss_runtime_ns\t%s\n" "$count_bmc_orig_cache_miss_runtime_ns"
   printf "global_filter_lec_unknown_mutants\t%s\n" "$count_global_filter_lec_unknown"
   printf "global_filter_bmc_unknown_mutants\t%s\n" "$count_global_filter_bmc_unknown"
+  printf "generated_mutations_enabled\t%s\n" "$GENERATED_MUTATIONS_ENABLED"
+  printf "generated_mutations_cache_hit\t%s\n" "$GENERATED_MUTATIONS_CACHE_HIT"
+  printf "generated_mutations_cache_miss\t%s\n" "$GENERATED_MUTATIONS_CACHE_MISS"
+  printf "generated_mutations_cache_status\t%s\n" "$GENERATED_MUTATIONS_CACHE_STATUS"
   printf "bmc_orig_cache_max_entries\t%s\n" "$BMC_ORIG_CACHE_MAX_ENTRIES"
   printf "bmc_orig_cache_max_bytes\t%s\n" "$BMC_ORIG_CACHE_MAX_BYTES"
   printf "bmc_orig_cache_max_age_seconds\t%s\n" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
@@ -2792,6 +2813,10 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "bmc_orig_cache_miss_runtime_ns": $count_bmc_orig_cache_miss_runtime_ns,
   "global_filter_lec_unknown_mutants": $count_global_filter_lec_unknown,
   "global_filter_bmc_unknown_mutants": $count_global_filter_bmc_unknown,
+  "generated_mutations_enabled": $GENERATED_MUTATIONS_ENABLED,
+  "generated_mutations_cache_hit": $GENERATED_MUTATIONS_CACHE_HIT,
+  "generated_mutations_cache_miss": $GENERATED_MUTATIONS_CACHE_MISS,
+  "generated_mutations_cache_status": "$(json_escape "$GENERATED_MUTATIONS_CACHE_STATUS")",
   "bmc_orig_cache_max_entries": $BMC_ORIG_CACHE_MAX_ENTRIES,
   "bmc_orig_cache_max_bytes": $BMC_ORIG_CACHE_MAX_BYTES,
   "bmc_orig_cache_max_age_seconds": $BMC_ORIG_CACHE_MAX_AGE_SECONDS,
@@ -2824,7 +2849,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
 }
 EOF
 
-echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
+echo "Mutation coverage summary: total=${total_mutants} relevant=${count_relevant} detected=${count_detected} propagated_not_detected=${count_propagated_not_detected} not_propagated=${count_not_propagated} not_activated=${count_not_activated} reused_pairs=${count_reused_pairs} reused_global_filters=${count_reused_global_filters} hinted_mutants=${count_hinted_mutants} hint_hits=${count_hint_hits} global_filtered_not_propagated=${count_global_filtered_not_propagated} chain_lec_unknown_fallbacks=${count_chain_lec_unknown_fallbacks} chain_bmc_resolved_not_propagated=${count_chain_bmc_resolved_not_propagated} chain_bmc_unknown_fallbacks=${count_chain_bmc_unknown_fallbacks} chain_lec_resolved_not_propagated=${count_chain_lec_resolved_not_propagated} chain_consensus_not_propagated=${count_chain_consensus_not_propagated} chain_consensus_disagreement=${count_chain_consensus_disagreement} chain_consensus_error=${count_chain_consensus_error} chain_auto_parallel=${count_chain_auto_parallel} bmc_orig_cache_hit=${count_bmc_orig_cache_hit} bmc_orig_cache_miss=${count_bmc_orig_cache_miss} bmc_orig_cache_saved_runtime_ns=${count_bmc_orig_cache_saved_runtime_ns} bmc_orig_cache_miss_runtime_ns=${count_bmc_orig_cache_miss_runtime_ns} global_filter_lec_unknown=${count_global_filter_lec_unknown} global_filter_bmc_unknown=${count_global_filter_bmc_unknown} generated_mutations_cache_status=${GENERATED_MUTATIONS_CACHE_STATUS} bmc_orig_cache_entries=${BMC_ORIG_CACHE_ENTRIES} bmc_orig_cache_pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} bmc_orig_cache_pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} errors=${errors} coverage=${coverage_pct}%"
 echo "Gate status: ${gate_status}"
 echo "Summary: ${SUMMARY_FILE}"
 echo "Pair qualification: ${PAIR_FILE}"

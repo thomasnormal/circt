@@ -331,6 +331,14 @@ Generated artifacts (default under `./mutation-cover-results`):
     global filtering observed LEC `UNKNOWN`.
   - `global_filter_bmc_unknown_mutants`: count of mutants where built-in
     global filtering observed BMC `UNKNOWN`.
+  - `generated_mutations_enabled`: whether this run used built-in mutation-list
+    generation (`1`/`0`).
+  - `generated_mutations_cache_hit`: whether generated-mutation cache lookup
+    resolved from cache (`1`/`0`).
+  - `generated_mutations_cache_miss`: whether generated-mutation cache was
+    enabled but required fresh synthesis (`1`/`0`).
+  - `generated_mutations_cache_status`: generated-mutation cache result
+    (`hit`, `miss`, or `disabled`).
   - `chain_lec_unknown_fallbacks`: count of mutants where chained mode fell
     back from LEC `UNKNOWN` to BMC.
   - `chain_bmc_resolved_not_propagated_mutants`: count of mutants classified as
