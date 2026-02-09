@@ -18246,6 +18246,15 @@ ninja -C build circt-verilog
   - Closes online-status parity gap by supporting revocation proofs beyond CRL.
   - Strengthens signer revocation policy for distributed 24/7 checkpoint trust.
 
+### Iteration 690
+- Added OCSP freshness-age policy for Ed25519 lane-state keyring mode:
+  - `--lane-state-manifest-ed25519-ocsp-max-age-secs`
+  - default when OCSP mode is enabled: 604800 seconds
+  - enforces freshness from OCSP `This Update` and blocks stale responses.
+- Planning impact:
+  - Prevents replay of old but syntactically valid OCSP responses.
+  - Tightens revocation policy from status-only to status + freshness.
+
 ### Project-Plan Logging Policy
 - `PROJECT_PLAN.md` now keeps intent/roadmap-level summaries only.
 - `CHANGELOG.md` is the source of truth for execution history, validations, and
@@ -18256,8 +18265,9 @@ ninja -C build circt-verilog
 
 ### Active Formal Gaps (Near-Term)
 - Lane-state:
-  - Add OCSP freshness and responder-identity policy controls (currently
-    response-file based only).
+  - Add OCSP responder-identity policy controls (currently response-file based
+    only).
+  - Add OCSP `nextUpdate` policy controls for responses that include it.
   - Add CRL/OCSP distribution-point fetch and refresh automation.
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:

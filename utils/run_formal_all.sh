@@ -122,6 +122,9 @@ Options:
                          Optional DER OCSP response checked with
                          --lane-state-manifest-ed25519-ca-file during Ed25519
                          keyring cert verification
+  --lane-state-manifest-ed25519-ocsp-max-age-secs N
+                         Max allowed OCSP response age in seconds from
+                         thisUpdate (default when OCSP is enabled: 604800)
   --lane-state-manifest-ed25519-cert-subject-regex REGEX
                          Optional regex constraint applied to selected Ed25519
                          certificate subject (keyring mode)
@@ -220,6 +223,8 @@ LANE_STATE_MANIFEST_ED25519_KEYRING_SHA256=""
 LANE_STATE_MANIFEST_ED25519_CA_FILE=""
 LANE_STATE_MANIFEST_ED25519_CRL_FILE=""
 LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE=""
+LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS=""
+LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE=""
 LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX=""
 LANE_STATE_MANIFEST_ED25519_KEY_ID=""
 LANE_STATE_MANIFEST_ED25519_PUBLIC_KEY_SHA256=""
@@ -379,6 +384,8 @@ while [[ $# -gt 0 ]]; do
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-ocsp-response-file)
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$2"; shift 2 ;;
+    --lane-state-manifest-ed25519-ocsp-max-age-secs)
+      LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-cert-subject-regex)
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$2"; shift 2 ;;
     --lane-state-manifest-ed25519-key-id)
@@ -542,6 +549,14 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && -z "$LANE_STATE_MA
   echo "--lane-state-manifest-ed25519-ocsp-response-file requires --lane-state-manifest-ed25519-ca-file" >&2
   exit 1
 fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && -z "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  echo "--lane-state-manifest-ed25519-ocsp-max-age-secs requires --lane-state-manifest-ed25519-ocsp-response-file" >&2
+  exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" && ! "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" =~ ^[0-9]+$ ]]; then
+  echo "invalid --lane-state-manifest-ed25519-ocsp-max-age-secs: expected non-negative integer" >&2
+  exit 1
+fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" && -z "$LANE_STATE_MANIFEST_ED25519_KEYRING_TSV" ]]; then
   echo "--lane-state-manifest-ed25519-cert-subject-regex requires --lane-state-manifest-ed25519-keyring-tsv" >&2
   exit 1
@@ -587,6 +602,13 @@ fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
   echo "lane state Ed25519 OCSP response file not readable: $LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" >&2
   exit 1
+fi
+if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" ]]; then
+  if [[ -n "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS" ]]; then
+    LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS"
+  else
+    LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE="604800"
+  fi
 fi
 if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" && ! -r "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
   echo "lane state Ed25519 private key file not readable: $LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" >&2
@@ -704,10 +726,11 @@ if [[ -n "$LANE_STATE_MANIFEST_ED25519_PRIVATE_KEY_FILE" ]]; then
       LANE_STATE_MANIFEST_ED25519_CA_FILE="$LANE_STATE_MANIFEST_ED25519_CA_FILE" \
       LANE_STATE_MANIFEST_ED25519_CRL_FILE="$LANE_STATE_MANIFEST_ED25519_CRL_FILE" \
       LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE="$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE" \
+      LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS="$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE" \
       LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX="$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX" \
       python3 - <<'PY'
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import re
 import subprocess
@@ -721,6 +744,7 @@ target_key_id = os.environ["LANE_STATE_MANIFEST_ED25519_KEY_ID"].strip()
 ca_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CA_FILE", "").strip()
 crl_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_CRL_FILE", "").strip()
 ocsp_response_file = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_RESPONSE_FILE", "").strip()
+ocsp_max_age_secs = os.environ.get("LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS", "").strip()
 cert_subject_regex = os.environ.get("LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX", "").strip()
 
 keyring_bytes = keyring_path.read_bytes()
@@ -767,6 +791,19 @@ def parse_date(value: str, field: str) -> str:
     )
     raise SystemExit(1)
   return value
+
+def parse_ocsp_time(value: str, field: str):
+  raw = value.strip()
+  for fmt in ("%b %d %H:%M:%S %Y GMT", "%Y-%m-%d %H:%M:%SZ"):
+    try:
+      return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+    except ValueError:
+      continue
+  print(
+      f"lane state Ed25519 OCSP {field} parse failed for key_id '{target_key_id}': unsupported timestamp '{raw}'",
+      file=sys.stderr,
+  )
+  raise SystemExit(1)
 
 for line_no, raw_line in enumerate(keyring_bytes.decode("utf-8").splitlines(), start=1):
   line = raw_line.strip()
@@ -1018,6 +1055,39 @@ if cert_file_path:
             file=sys.stderr,
         )
         raise SystemExit(1)
+      this_update_match = re.search(r"This Update:\s*(.+)", ocsp_status_raw)
+      if this_update_match is None:
+        print(
+            f"lane state Ed25519 OCSP thisUpdate missing for key_id '{target_key_id}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      this_update_dt = parse_ocsp_time(this_update_match.group(1), "thisUpdate")
+      now_utc = datetime.now(timezone.utc)
+      if this_update_dt > now_utc + timedelta(minutes=5):
+        print(
+            f"lane state Ed25519 OCSP thisUpdate is in the future for key_id '{target_key_id}': {this_update_dt.strftime('%Y-%m-%d %H:%M:%SZ')}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+      if ocsp_max_age_secs:
+        max_age = int(ocsp_max_age_secs)
+        age_seconds = (now_utc - this_update_dt).total_seconds()
+        if age_seconds > max_age:
+          print(
+              f"lane state Ed25519 OCSP response is stale for key_id '{target_key_id}': age {int(age_seconds)}s exceeds max {max_age}s",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
+      next_update_match = re.search(r"Next Update:\s*(.+)", ocsp_status_raw)
+      if next_update_match is not None:
+        next_update_dt = parse_ocsp_time(next_update_match.group(1), "nextUpdate")
+        if next_update_dt < now_utc:
+          print(
+              f"lane state Ed25519 OCSP nextUpdate is stale for key_id '{target_key_id}': {next_update_dt.strftime('%Y-%m-%d %H:%M:%SZ')}",
+              file=sys.stderr,
+          )
+          raise SystemExit(1)
 elif ca_file:
   print(
       f"lane state Ed25519 keyring key_id '{target_key_id}' missing cert_file_path while --lane-state-manifest-ed25519-ca-file is set",
@@ -1398,6 +1468,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ca_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CA_SHA256"
     printf "lane_state_ed25519_crl_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_CRL_SHA256"
     printf "lane_state_ed25519_ocsp_sha256=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_SHA256"
+    printf "lane_state_ed25519_ocsp_max_age_secs=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_MAX_AGE_SECS_EFFECTIVE"
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"

@@ -34291,7 +34291,56 @@ CIRCT/slang correctly enforces LRM restrictions.
 ### Remaining Limitations
 
 - OCSP mode is currently pinned-response-file based (no live responder URL).
-- No OCSP response freshness policy (thisUpdate/nextUpdate) enforcement yet.
+- No CRL/OCSP distribution-point fetch/refresh automation yet.
+
+## Iteration 690 - February 9, 2026
+
+### Lane-State Ed25519 OCSP Freshness Policy
+
+- Added `--lane-state-manifest-ed25519-ocsp-max-age-secs` in
+  `utils/run_formal_all.sh`.
+- New option semantics:
+  - requires `--lane-state-manifest-ed25519-ocsp-response-file`
+  - default when OCSP mode is enabled: `604800` seconds
+  - enforces response freshness against OCSP `This Update`
+  - rejects future-skewed `This Update` values and stale `Next Update` when
+    present.
+- Lane-state trust-contract updates:
+  - effective OCSP max-age policy now contributes to lane-state config hash
+    material (`lane_state_ed25519_ocsp_max_age_secs`), so resume/merge detects
+    policy drift.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative option dependency check for
+      `--lane-state-manifest-ed25519-ocsp-max-age-secs` without OCSP response
+    - deterministic stale OCSP response rejection case using
+      `--lane-state-manifest-ed25519-ocsp-max-age-secs 1`
+  - `docs/FormalRegression.md`
+    - documented OCSP max-age option and default behavior.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (seed + resume, OCSP max-age policy enabled):
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --reset-lane-state`:
+    - PASS
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' utils/run_formal_all.sh ... --lane-state-manifest-ed25519-ocsp-response-file ... --lane-state-manifest-ed25519-ocsp-max-age-secs 3600 --resume-from-lane-state`:
+    - PASS
+  - run outputs:
+    - `/tmp/formal-all-ed25519-ocsp-age-sweep-20260209-014816/out-seed`
+    - `/tmp/formal-all-ed25519-ocsp-age-sweep-20260209-014816/out-resume`
+
+### Remaining Limitations
+
+- OCSP mode is still pinned-response-file based (no live responder URL).
 - No CRL/OCSP distribution-point fetch/refresh automation yet.
 
 ## Iteration 679 - February 8, 2026
