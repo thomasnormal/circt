@@ -1,5 +1,50 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 764 - February 9, 2026
+
+### Mutation BMC Original-Cache Eviction Policy
+
+- Added configurable differential-BMC original-cache count/byte eviction mode in
+  `utils/run_mutation_cover.sh`:
+  - `--bmc-orig-cache-eviction-policy lru|fifo` (default: `lru`)
+- Implemented LRU tracking via per-entry access sidecars
+  (`*.orig.atime`) for cache-hit refresh without mutating cache payload files.
+- Included access sidecars in cache accounting and persistence/hydration paths.
+- Added eviction policy telemetry to mutation cover outputs:
+  - `bmc_orig_cache_eviction_policy`
+- Extended `utils/run_mutation_matrix.sh` to pass through eviction policy:
+  - `--default-bmc-orig-cache-eviction-policy`
+  - lane TSV optional column `bmc_orig_cache_eviction_policy`
+
+### Test Coverage
+
+- Added:
+  - `test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-lru-eviction.test`
+    - verifies LRU cache-hit refresh preserves active entry under count-bound
+      pruning.
+  - `test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-eviction-policy.test`
+    - verifies matrix default eviction policy is propagated to lane cover runs.
+- Updated:
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-matrix-help.test`
+
+### Validation
+
+- Script sanity:
+  - `bash -n utils/run_mutation_cover.sh`: PASS
+  - `bash -n utils/run_mutation_matrix.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-prune.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-age-prune.test test/Tools/run-mutation-cover-global-circt-bmc-orig-cache-lru-eviction.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-prune.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-age-prune.test test/Tools/run-mutation-matrix-global-circt-bmc-orig-cache-eviction-policy.test`: PASS (10/10)
+  - `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (42/42)
+- External cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mutation-bmc-eviction-policy --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`: PASS
+  - summary:
+    - `sv-tests` BMC/LEC PASS (0 selected, 1028 skipped)
+    - `verilator-verification` BMC/LEC PASS (1/1 each)
+    - `yosys/tests/sva` BMC/LEC PASS (1/1 each)
+    - `opentitan` LEC PASS (1/1)
+    - AVIP compile PASS (9/9)
+
 ## Iteration 763 - February 9, 2026
 
 ### BMC Original-Cache Age/TTL Policy (Cover + Matrix)

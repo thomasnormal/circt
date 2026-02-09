@@ -38,6 +38,9 @@ Optional:
   --bmc-orig-cache-max-age-seconds N
                              Max differential-BMC original-cache entry age
                              in seconds (0 disables limit, default: 0)
+  --bmc-orig-cache-eviction-policy MODE
+                             Differential-BMC original-cache eviction policy
+                             for count/byte limits: lru|fifo (default: lru)
   --create-mutated-script FILE
                              Script compatible with mcy scripts/create_mutated.sh
                              (default: ~/mcy/scripts/create_mutated.sh)
@@ -195,6 +198,7 @@ BMC_ORIG_CACHE_PERSIST_DIR=""
 BMC_ORIG_CACHE_MAX_ENTRIES=0
 BMC_ORIG_CACHE_MAX_BYTES=0
 BMC_ORIG_CACHE_MAX_AGE_SECONDS=0
+BMC_ORIG_CACHE_EVICTION_POLICY="lru"
 BMC_ORIG_CACHE_ENTRIES=0
 BMC_ORIG_CACHE_BYTES=0
 BMC_ORIG_CACHE_PRUNED_ENTRIES=0
@@ -245,6 +249,7 @@ while [[ $# -gt 0 ]]; do
     --bmc-orig-cache-max-entries) BMC_ORIG_CACHE_MAX_ENTRIES="$2"; shift 2 ;;
     --bmc-orig-cache-max-bytes) BMC_ORIG_CACHE_MAX_BYTES="$2"; shift 2 ;;
     --bmc-orig-cache-max-age-seconds) BMC_ORIG_CACHE_MAX_AGE_SECONDS="$2"; shift 2 ;;
+    --bmc-orig-cache-eviction-policy) BMC_ORIG_CACHE_EVICTION_POLICY="$2"; shift 2 ;;
     --create-mutated-script) CREATE_MUTATED_SCRIPT="$2"; shift 2 ;;
     --mutant-format) MUTANT_FORMAT="$2"; shift 2 ;;
     --formal-activate-cmd) FORMAL_ACTIVATE_CMD="$2"; shift 2 ;;
@@ -330,6 +335,10 @@ if [[ ! "$BMC_ORIG_CACHE_MAX_BYTES" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "Invalid --bmc-orig-cache-max-age-seconds value: $BMC_ORIG_CACHE_MAX_AGE_SECONDS" >&2
+  exit 1
+fi
+if [[ ! "$BMC_ORIG_CACHE_EVICTION_POLICY" =~ ^(lru|fifo)$ ]]; then
+  echo "Invalid --bmc-orig-cache-eviction-policy value: $BMC_ORIG_CACHE_EVICTION_POLICY (expected lru|fifo)." >&2
   exit 1
 fi
 if [[ -z "$REUSE_CACHE_DIR" ]]; then
@@ -932,14 +941,71 @@ cache_copy_file() {
   mv "$tmp" "$dst"
 }
 
+file_mtime_epoch() {
+  local path="$1"
+  local ts=0
+  ts="$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || printf "0")"
+  if [[ ! "$ts" =~ ^[0-9]+$ ]]; then
+    ts=0
+  fi
+  printf "%s\n" "$ts"
+}
+
+normalize_epoch_for_compare() {
+  local raw="$1"
+  if [[ ! "$raw" =~ ^[0-9]+$ ]]; then
+    raw=0
+  fi
+  if [[ "$raw" -lt 1000000000000 ]]; then
+    raw=$((raw * 1000000000))
+  fi
+  printf "%s\n" "$raw"
+}
+
+touch_bmc_orig_cache_access() {
+  local cache_base="$1"
+  local atime="${cache_base}.orig.atime"
+  local tmp="${atime}.tmp.$$"
+  local now_raw=0
+  local now_norm=0
+  if [[ "$BMC_ORIG_CACHE_EVICTION_POLICY" != "lru" ]]; then
+    return 0
+  fi
+  now_raw="$(date +%s%N 2>/dev/null || date +%s 2>/dev/null || printf "0")"
+  now_norm="$(normalize_epoch_for_compare "$now_raw")"
+  printf "%s\n" "$now_norm" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$atime" 2>/dev/null || true
+}
+
+cache_entry_access_epoch() {
+  local meta_file="$1"
+  local policy="$2"
+  local atime_file="${meta_file%.orig.meta}.orig.atime"
+  local raw_access=0
+  local raw_mtime=0
+  if [[ "$policy" == "lru" && -f "$atime_file" ]]; then
+    if read -r raw_access < "$atime_file"; then
+      printf "%s\n" "$(normalize_epoch_for_compare "$raw_access")"
+      return 0
+    fi
+    raw_mtime="$(file_mtime_epoch "$atime_file")"
+    printf "%s\n" "$(normalize_epoch_for_compare "$raw_mtime")"
+    return 0
+  fi
+  raw_mtime="$(file_mtime_epoch "$meta_file")"
+  printf "%s\n" "$(normalize_epoch_for_compare "$raw_mtime")"
+}
+
 measure_bmc_orig_cache_dir() {
   local cache_dir="$1"
   local entries=0
   local total_bytes=0
   local meta=""
   local log=""
+  local atime=""
   local meta_bytes=0
   local log_bytes=0
+  local atime_bytes=0
 
   if [[ ! -d "$cache_dir" ]]; then
     printf "0\t0\n"
@@ -957,8 +1023,16 @@ measure_bmc_orig_cache_dir() {
     if [[ ! "$log_bytes" =~ ^[0-9]+$ ]]; then
       log_bytes=0
     fi
+    atime="${meta%.orig.meta}.orig.atime"
+    atime_bytes=0
+    if [[ -f "$atime" ]]; then
+      atime_bytes="$(wc -c < "$atime" 2>/dev/null || printf "0")"
+      if [[ ! "$atime_bytes" =~ ^[0-9]+$ ]]; then
+        atime_bytes=0
+      fi
+    fi
     entries=$((entries + 1))
-    total_bytes=$((total_bytes + meta_bytes + log_bytes))
+    total_bytes=$((total_bytes + meta_bytes + log_bytes + atime_bytes))
   done
   printf "%s\t%s\n" "$entries" "$total_bytes"
 }
@@ -968,6 +1042,7 @@ prune_bmc_orig_cache_dir() {
   local max_entries="$2"
   local max_bytes="$3"
   local max_age_seconds="$4"
+  local eviction_policy="$5"
   local pruned_entries=0
   local pruned_bytes=0
   local pruned_age_entries=0
@@ -976,12 +1051,16 @@ prune_bmc_orig_cache_dir() {
   local total_bytes=0
   local oldest_meta=""
   local oldest_log=""
+  local oldest_atime=""
   local now_epoch=0
   local meta_mtime=0
   local age_seconds=0
+  local access_epoch=0
+  local oldest_access_epoch=0
   local meta=""
   local meta_bytes=0
   local log_bytes=0
+  local atime_bytes=0
 
   read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
   if [[ "$max_entries" -eq 0 && "$max_bytes" -eq 0 && "$max_age_seconds" -eq 0 ]]; then
@@ -996,10 +1075,7 @@ prune_bmc_orig_cache_dir() {
         [[ -f "$meta" ]] || continue
         oldest_log="${meta%.orig.meta}.orig.log"
         [[ -f "$oldest_log" ]] || continue
-        meta_mtime="$(stat -c %Y "$meta" 2>/dev/null || stat -f %m "$meta" 2>/dev/null || printf "0")"
-        if [[ ! "$meta_mtime" =~ ^[0-9]+$ ]]; then
-          meta_mtime=0
-        fi
+        meta_mtime="$(file_mtime_epoch "$meta")"
         age_seconds=$((now_epoch - meta_mtime))
         if [[ "$age_seconds" -le "$max_age_seconds" ]]; then
           continue
@@ -1018,11 +1094,19 @@ prune_bmc_orig_cache_dir() {
             log_bytes=0
           fi
         fi
-        rm -f "$meta" "$oldest_log"
+        oldest_atime="${meta%.orig.meta}.orig.atime"
+        atime_bytes=0
+        if [[ -f "$oldest_atime" ]]; then
+          atime_bytes="$(wc -c < "$oldest_atime" 2>/dev/null || printf "0")"
+          if [[ ! "$atime_bytes" =~ ^[0-9]+$ ]]; then
+            atime_bytes=0
+          fi
+        fi
+        rm -f "$meta" "$oldest_log" "$oldest_atime"
         pruned_entries=$((pruned_entries + 1))
-        pruned_bytes=$((pruned_bytes + meta_bytes + log_bytes))
+        pruned_bytes=$((pruned_bytes + meta_bytes + log_bytes + atime_bytes))
         pruned_age_entries=$((pruned_age_entries + 1))
-        pruned_age_bytes=$((pruned_age_bytes + meta_bytes + log_bytes))
+        pruned_age_bytes=$((pruned_age_bytes + meta_bytes + log_bytes + atime_bytes))
       done
       read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
     fi
@@ -1037,7 +1121,22 @@ prune_bmc_orig_cache_dir() {
       break
     fi
 
-    oldest_meta="$(ls -1tr "$cache_dir"/*.orig.meta 2>/dev/null | head -n1 || true)"
+    oldest_meta=""
+    if [[ "$eviction_policy" == "fifo" ]]; then
+      oldest_meta="$(ls -1tr "$cache_dir"/*.orig.meta 2>/dev/null | head -n1 || true)"
+    else
+      oldest_access_epoch=0
+      for meta in "$cache_dir"/*.orig.meta; do
+        [[ -f "$meta" ]] || continue
+        oldest_log="${meta%.orig.meta}.orig.log"
+        [[ -f "$oldest_log" ]] || continue
+        access_epoch="$(cache_entry_access_epoch "$meta" "$eviction_policy")"
+        if [[ -z "$oldest_meta" || "$access_epoch" -lt "$oldest_access_epoch" ]]; then
+          oldest_meta="$meta"
+          oldest_access_epoch="$access_epoch"
+        fi
+      done
+    fi
     if [[ -z "$oldest_meta" || ! -f "$oldest_meta" ]]; then
       break
     fi
@@ -1056,9 +1155,17 @@ prune_bmc_orig_cache_dir() {
         log_bytes=0
       fi
     fi
-    rm -f "$oldest_meta" "$oldest_log"
+    oldest_atime="${oldest_meta%.orig.meta}.orig.atime"
+    atime_bytes=0
+    if [[ -f "$oldest_atime" ]]; then
+      atime_bytes="$(wc -c < "$oldest_atime" 2>/dev/null || printf "0")"
+      if [[ ! "$atime_bytes" =~ ^[0-9]+$ ]]; then
+        atime_bytes=0
+      fi
+    fi
+    rm -f "$oldest_meta" "$oldest_log" "$oldest_atime"
     pruned_entries=$((pruned_entries + 1))
-    pruned_bytes=$((pruned_bytes + meta_bytes + log_bytes))
+    pruned_bytes=$((pruned_bytes + meta_bytes + log_bytes + atime_bytes))
     read -r entries total_bytes < <(measure_bmc_orig_cache_dir "$cache_dir")
   done
 
@@ -1073,7 +1180,7 @@ hydrate_bmc_orig_cache() {
     return 0
   fi
   mkdir -p "$BMC_ORIG_CACHE_DIR"
-  for src in "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.log "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.meta; do
+  for src in "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.log "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.meta "$BMC_ORIG_CACHE_PERSIST_DIR"/*.orig.atime; do
     [[ -f "$src" ]] || continue
     dst="${BMC_ORIG_CACHE_DIR}/$(basename "$src")"
     cp "$src" "$dst" 2>/dev/null || true
@@ -1088,7 +1195,7 @@ publish_bmc_orig_cache() {
     return 0
   fi
   mkdir -p "$BMC_ORIG_CACHE_PERSIST_DIR"
-  for src in "$BMC_ORIG_CACHE_DIR"/*.orig.log "$BMC_ORIG_CACHE_DIR"/*.orig.meta; do
+  for src in "$BMC_ORIG_CACHE_DIR"/*.orig.log "$BMC_ORIG_CACHE_DIR"/*.orig.meta "$BMC_ORIG_CACHE_DIR"/*.orig.atime; do
     [[ -f "$src" ]] || continue
     dst="${BMC_ORIG_CACHE_PERSIST_DIR}/$(basename "$src")"
     cache_copy_file "$src" "$dst"
@@ -1353,6 +1460,7 @@ classify_global_propagate_circt_bmc_raw() {
     if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
       read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
       bmc_orig_cache_mode="hit"
+      touch_bmc_orig_cache_access "$bmc_orig_cache_base"
     fi
   fi
 
@@ -1363,6 +1471,7 @@ classify_global_propagate_circt_bmc_raw() {
           if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
             read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
             bmc_orig_cache_mode="hit"
+            touch_bmc_orig_cache_access "$bmc_orig_cache_base"
           fi
         fi
         if [[ "$bmc_orig_cache_mode" != "hit" ]]; then
@@ -1377,6 +1486,7 @@ classify_global_propagate_circt_bmc_raw() {
           printf "%s\t%s\n" "$orig_rc" "$orig_result" > "$bmc_orig_cache_tmp_meta"
           mv "$bmc_orig_cache_tmp_log" "$bmc_orig_cache_log" 2>/dev/null || true
           mv "$bmc_orig_cache_tmp_meta" "$bmc_orig_cache_meta" 2>/dev/null || true
+          touch_bmc_orig_cache_access "$bmc_orig_cache_base"
           bmc_orig_cache_mode="miss"
         fi
         rmdir "$bmc_orig_cache_lock" 2>/dev/null || true
@@ -1387,6 +1497,7 @@ classify_global_propagate_circt_bmc_raw() {
         if cp "$bmc_orig_cache_log" "$orig_log" 2>/dev/null; then
           read -r orig_rc orig_result < "$bmc_orig_cache_meta" || true
           bmc_orig_cache_mode="hit"
+          touch_bmc_orig_cache_access "$bmc_orig_cache_base"
           break
         fi
       fi
@@ -2036,7 +2147,7 @@ load_reuse_pairs
 load_reuse_summary
 hydrate_bmc_orig_cache
 read -r local_pruned_entries local_pruned_bytes local_age_pruned_entries local_age_pruned_bytes local_entries local_bytes < <(
-  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
+  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" "$BMC_ORIG_CACHE_EVICTION_POLICY"
 )
 BMC_ORIG_CACHE_PRUNED_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_ENTRIES + local_pruned_entries))
 BMC_ORIG_CACHE_PRUNED_BYTES=$((BMC_ORIG_CACHE_PRUNED_BYTES + local_pruned_bytes))
@@ -2336,7 +2447,7 @@ fi
 
 # Enforce local BMC-orig cache bounds after this run's updates.
 read -r local_pruned_entries local_pruned_bytes local_age_pruned_entries local_age_pruned_bytes local_entries local_bytes < <(
-  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
+  prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" "$BMC_ORIG_CACHE_EVICTION_POLICY"
 )
 BMC_ORIG_CACHE_PRUNED_ENTRIES=$((BMC_ORIG_CACHE_PRUNED_ENTRIES + local_pruned_entries))
 BMC_ORIG_CACHE_PRUNED_BYTES=$((BMC_ORIG_CACHE_PRUNED_BYTES + local_pruned_bytes))
@@ -2375,7 +2486,7 @@ write_reuse_manifest "${SUMMARY_FILE}.manifest.json" "summary"
 if [[ "$BMC_ORIG_CACHE_WRITE_STATUS" == "pending_write" ]]; then
   if publish_bmc_orig_cache; then
     read -r persist_pruned_entries persist_pruned_bytes persist_age_pruned_entries persist_age_pruned_bytes persist_entries persist_bytes < <(
-      prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_PERSIST_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
+      prune_bmc_orig_cache_dir "$BMC_ORIG_CACHE_PERSIST_DIR" "$BMC_ORIG_CACHE_MAX_ENTRIES" "$BMC_ORIG_CACHE_MAX_BYTES" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS" "$BMC_ORIG_CACHE_EVICTION_POLICY"
     )
     BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES="$persist_pruned_entries"
     BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES="$persist_pruned_bytes"
@@ -2428,6 +2539,7 @@ fi
   printf "bmc_orig_cache_max_entries\t%s\n" "$BMC_ORIG_CACHE_MAX_ENTRIES"
   printf "bmc_orig_cache_max_bytes\t%s\n" "$BMC_ORIG_CACHE_MAX_BYTES"
   printf "bmc_orig_cache_max_age_seconds\t%s\n" "$BMC_ORIG_CACHE_MAX_AGE_SECONDS"
+  printf "bmc_orig_cache_eviction_policy\t%s\n" "$BMC_ORIG_CACHE_EVICTION_POLICY"
   printf "bmc_orig_cache_entries\t%s\n" "$BMC_ORIG_CACHE_ENTRIES"
   printf "bmc_orig_cache_bytes\t%s\n" "$BMC_ORIG_CACHE_BYTES"
   printf "bmc_orig_cache_pruned_entries\t%s\n" "$BMC_ORIG_CACHE_PRUNED_ENTRIES"
@@ -2475,6 +2587,7 @@ cat > "$SUMMARY_JSON_FILE" <<EOF
   "bmc_orig_cache_max_entries": $BMC_ORIG_CACHE_MAX_ENTRIES,
   "bmc_orig_cache_max_bytes": $BMC_ORIG_CACHE_MAX_BYTES,
   "bmc_orig_cache_max_age_seconds": $BMC_ORIG_CACHE_MAX_AGE_SECONDS,
+  "bmc_orig_cache_eviction_policy": "$(json_escape "$BMC_ORIG_CACHE_EVICTION_POLICY")",
   "bmc_orig_cache_entries": $BMC_ORIG_CACHE_ENTRIES,
   "bmc_orig_cache_bytes": $BMC_ORIG_CACHE_BYTES,
   "bmc_orig_cache_pruned_entries": $BMC_ORIG_CACHE_PRUNED_ENTRIES,
@@ -2515,7 +2628,7 @@ echo "Reuse manifest: ${REUSE_MANIFEST_FILE}"
 echo "Reuse pair source: ${REUSE_PAIR_SOURCE}"
 echo "Reuse summary source: ${REUSE_SUMMARY_SOURCE}"
 echo "Reuse cache mode: ${REUSE_CACHE_MODE}"
-echo "BMC orig cache limits: entries=${BMC_ORIG_CACHE_MAX_ENTRIES} bytes=${BMC_ORIG_CACHE_MAX_BYTES} max_age_seconds=${BMC_ORIG_CACHE_MAX_AGE_SECONDS}"
+echo "BMC orig cache limits: entries=${BMC_ORIG_CACHE_MAX_ENTRIES} bytes=${BMC_ORIG_CACHE_MAX_BYTES} max_age_seconds=${BMC_ORIG_CACHE_MAX_AGE_SECONDS} eviction_policy=${BMC_ORIG_CACHE_EVICTION_POLICY}"
 echo "BMC orig cache stats: entries=${BMC_ORIG_CACHE_ENTRIES} bytes=${BMC_ORIG_CACHE_BYTES} pruned_entries=${BMC_ORIG_CACHE_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PRUNED_AGE_BYTES}"
 if [[ -n "$BMC_ORIG_CACHE_PERSIST_DIR" ]]; then
   echo "BMC orig cache persist stats: entries=${BMC_ORIG_CACHE_PERSIST_ENTRIES} bytes=${BMC_ORIG_CACHE_PERSIST_BYTES} pruned_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_ENTRIES} pruned_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_BYTES} pruned_age_entries=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_ENTRIES} pruned_age_bytes=${BMC_ORIG_CACHE_PERSIST_PRUNED_AGE_BYTES}"
