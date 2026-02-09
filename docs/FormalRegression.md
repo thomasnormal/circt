@@ -160,6 +160,7 @@ Lane-state semantics:
         `refresh_metadata_require_uri_regex`,
         `refresh_metadata_require_tls_peer_sha256`,
         `refresh_metadata_require_cert_chain_sha256`,
+        `refresh_metadata_require_artifact_sha256`,
         `refresh_metadata_require_cert_chain_length_min`,
         `refresh_metadata_require_ca_cert_in_cert_chain`,
         `refresh_metadata_require_tls_peer_in_cert_chain`,
@@ -174,6 +175,7 @@ Lane-state semantics:
         `refresh_metadata_require_uri_regex`,
         `refresh_metadata_require_tls_peer_sha256`,
         `refresh_metadata_require_cert_chain_sha256`,
+        `refresh_metadata_require_artifact_sha256`,
         `refresh_metadata_require_cert_chain_length_min`,
         `refresh_metadata_require_ca_cert_in_cert_chain`,
         `refresh_metadata_require_tls_peer_in_cert_chain`,
@@ -202,7 +204,8 @@ Lane-state semantics:
   - Effective precedence for profile-driven refresh metadata match defaults
     (`...require_transport`, `...require_status`,
     `...require_uri_regex`, `...require_tls_peer_sha256`,
-    `...require_cert_chain_sha256`, `...require_cert_chain_length_min`):
+    `...require_cert_chain_sha256`, `...require_artifact_sha256`,
+    `...require_cert_chain_length_min`):
     - explicit per-artifact CLI flag
     - per-artifact profile value
     - shared profile value
