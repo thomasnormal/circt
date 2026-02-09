@@ -188,6 +188,9 @@ See CHANGELOG.md on recent progress.
 11. OpenTitan LEC case artifacts now retain mismatch diagnostics in the
     artifact field (e.g. `#XPROP_ONLY`) for case-level expected-failure
     tracking and strict-lane triage.
+12. `run_formal_all.sh` expected-failure case matching now supports regex-based
+    selectors (`id_kind=base_regex|path_regex`) for stable strict-lane
+    diagnostic tracking across non-deterministic artifact paths.
 
 #### Current Open Non-Smoke Gaps (latest parity tracking)
 1. Strict non-optimistic (`LEC_X_OPTIMISTIC=0`) 4-state parity for
