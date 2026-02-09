@@ -356,6 +356,10 @@ Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and
 `summary.json`.
 
+When `--reuse-cache-dir` is set, generated mutation lists are now cached by
+design+generator options to avoid repeated Yosys mutation-list synthesis across
+runs/lanes.
+
 For full option reference, global-filter modes, cache/reuse controls, and the
 complete lane TSV schema, see `docs/FormalRegression.md`.
 

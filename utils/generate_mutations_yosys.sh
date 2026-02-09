@@ -15,6 +15,8 @@ Optional:
   --count N                 Number of mutations to generate (default: 1000)
   --seed N                  Random seed for mutate (default: 1)
   --yosys PATH              Yosys executable (default: yosys)
+  --cache-dir DIR           Optional cache directory for generated mutation
+                            lists (content-addressed by design+options)
   --mode NAME               Mutate mode (repeatable)
                             Concrete: inv,const0,const1,cnot0,cnot1
                             Families: arith,control,balanced,all
@@ -40,6 +42,7 @@ TOP=""
 COUNT=1000
 SEED=1
 YOSYS_BIN="yosys"
+CACHE_DIR=""
 MODES_CSV=""
 MODE_COUNTS_CSV=""
 PROFILES_CSV=""
@@ -59,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --count) COUNT="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     --yosys) YOSYS_BIN="$2"; shift 2 ;;
+    --cache-dir) CACHE_DIR="$2"; shift 2 ;;
     --mode) MODE_LIST+=("$2"); shift 2 ;;
     --modes) MODES_CSV="$2"; shift 2 ;;
     --mode-count) MODE_COUNT_LIST+=("$2"); shift 2 ;;
@@ -95,6 +99,41 @@ if [[ ! "$SEED" =~ ^[0-9]+$ ]]; then
   echo "Invalid --seed value: $SEED" >&2
   exit 1
 fi
+if [[ -n "$CACHE_DIR" ]]; then
+  mkdir -p "$CACHE_DIR"
+fi
+
+hash_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+    return
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | awk '{print $NF}'
+    return
+  fi
+  python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+}
+
+hash_file() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    printf "missing\n"
+    return
+  fi
+  hash_stdin < "$file"
+}
+
+hash_string() {
+  local s="$1"
+  printf "%s" "$s" | hash_stdin
+}
+
+yosys_resolved="$(command -v "$YOSYS_BIN" 2>/dev/null || printf "%s" "$YOSYS_BIN")"
 if [[ -n "$MODES_CSV" ]]; then
   IFS=',' read -r -a modes_from_csv <<< "$MODES_CSV"
   for mode in "${modes_from_csv[@]}"; do
@@ -314,6 +353,41 @@ for sel in "${COMBINED_SELECT_LIST[@]}"; do
 done
 SELECT_LIST=("${FINAL_SELECT_LIST[@]}")
 
+cache_key=""
+cache_file=""
+if [[ -n "$CACHE_DIR" ]]; then
+  design_hash="$(hash_file "$DESIGN")"
+  mode_payload="$(printf "%s\n" "${MODE_LIST[@]}")"
+  mode_count_payload="$(printf "%s\n" "${MODE_COUNT_LIST[@]}")"
+  profile_payload="$(printf "%s\n" "${PROFILE_LIST[@]}")"
+  cfg_payload="$(printf "%s\n" "${CFG_LIST[@]}")"
+  select_payload="$(printf "%s\n" "${SELECT_LIST[@]}")"
+  cache_payload="$(
+    cat <<EOF
+v1
+design_hash=$design_hash
+top=$TOP
+count=$COUNT
+seed=$SEED
+yosys_bin=$yosys_resolved
+modes=$mode_payload
+mode_counts=$mode_count_payload
+profiles=$profile_payload
+cfg=$cfg_payload
+select=$select_payload
+EOF
+  )"
+  cache_key="$(hash_string "$cache_payload")"
+  cache_file="${CACHE_DIR}/${cache_key}.mutations.txt"
+  if [[ -s "$cache_file" ]]; then
+    cp "$cache_file" "$OUT_FILE"
+    echo "Generated mutations: $(wc -l < "$OUT_FILE") (cache hit)"
+    echo "Mutation file: $OUT_FILE"
+    echo "Mutation cache file: $cache_file"
+    exit 0
+  fi
+fi
+
 
 mkdir -p "$(dirname "$OUT_FILE")"
 WORK_DIR="$(mktemp -d)"
@@ -452,5 +526,14 @@ if [[ ! -s "$OUT_FILE" ]]; then
   exit 1
 fi
 
+if [[ -n "$cache_file" && -n "$cache_key" ]]; then
+  cache_tmp="${cache_file}.tmp.$$"
+  cp "$OUT_FILE" "$cache_tmp"
+  mv "$cache_tmp" "$cache_file"
+fi
+
 echo "Generated mutations: $(wc -l < "$OUT_FILE")"
 echo "Mutation file: $OUT_FILE"
+if [[ -n "$cache_file" ]]; then
+  echo "Mutation cache file: $cache_file"
+fi

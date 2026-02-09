@@ -522,6 +522,9 @@ if [[ "$GENERATE_MUTATIONS" -gt 0 ]]; then
     --seed "$MUTATIONS_SEED"
     --yosys "$MUTATIONS_YOSYS"
   )
+  if [[ "$REUSE_CACHE_MODE" != "off" && -n "$REUSE_CACHE_DIR" ]]; then
+    gen_cmd+=(--cache-dir "${REUSE_CACHE_DIR}/generated_mutations")
+  fi
   if [[ -n "$MUTATIONS_TOP" ]]; then
     gen_cmd+=(--top "$MUTATIONS_TOP")
   fi
