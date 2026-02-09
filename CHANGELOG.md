@@ -1,5 +1,95 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 721 - February 9, 2026
+
+### Refresh Metadata TLS-Linkage Policy Gates
+
+- Extended lane-state Ed25519 refresh metadata policy controls in
+  `utils/run_formal_all.sh` with explicit TLS peer-to-chain linkage options:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-in-cert-chain`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-in-cert-chain`
+- New behavior:
+  - each option requires its corresponding `...refresh-metadata-file`
+  - policy is opt-in (no compatibility break for existing metadata)
+  - when enabled, metadata must be `https` transport and `tls_peer_sha256` must
+    appear in `cert_chain_sha256`.
+
+### Refresh Hook and Resume-Hash Integration
+
+- Propagated new policy options through refresh hook metadata parsing path for
+  both CRL and OCSP refresh handling.
+- Bound both policy options into lane-state config-hash computation to preserve
+  deterministic resume compatibility contracts.
+
+### Test and Docs Updates
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - negative dependency checks for new CRL/OCSP `...require-tls-peer-in-cert-chain`
+      options without metadata file
+    - negative CRL metadata policy mismatch (`file` transport under TLS-linkage
+      policy)
+    - positive OCSP metadata case with linked chain (`tls_peer_sha256` included
+      in `cert_chain_sha256`)
+    - negative OCSP metadata mismatch where TLS peer digest is not present in
+      cert chain
+  - `docs/FormalRegression.md`
+    - documented new CRL/OCSP TLS-linkage policy flags and semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Integrated filtered external sweep:
+  - `TEST_FILTER='basic02|16.9--sequence-goto-repetition|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-tls-chain-link-sweep-20260209 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`:
+    - summary:
+      - sv-tests BMC/LEC: 1/1 PASS each
+      - verilator-verification BMC/LEC: 1/1 PASS each
+      - yosys/tests/sva BMC/LEC: 1/1 PASS each
+      - OpenTitan LEC: 1/1 PASS
+      - AVIP compile lanes: 9/9 PASS.
+
+## Iteration 720 (Sim) - February 9, 2026
+
+### Constraint Solver Improvements
+
+- **Constraint guard null checks** (`8e90c7517`): Support `if (next == null) b1 == 5;`
+  constraint guards (IEEE 1800-2017 §18.5.13). Extended `extractPredicate()` to handle
+  `ClassHandleCmpOp` with `ClassNullOp`. Added `predicateIsPointer` flag to distinguish
+  pointer vs integer predicates. Pre-save only pointer predicates before `randomize_basic`
+  (integer predicates loaded after hard constraints applied).
+
+- **Soft range constraints** (`5cd20c6ef`): Extract soft constraints from `ConstraintExprOp`
+  with `isSoft` flag. Apply as default ranges when no hard constraint overrides.
+
+- **Implication/if-else/set-membership constraints** (`c514f1235`): Extract `->`, `if/else`,
+  `inside` constraint patterns from `ConstraintExprOp` in MooreToCore. Lowers to conditional
+  range application with pre-save/restore for non-rand predicate properties.
+
+- **rand_mode receiver resolution** (`a558822bb`): Fix `rand_mode()` to use implicit class
+  receiver instead of requiring explicit operand. Correct return value semantics per
+  IEEE 1800-2017 §18.8.
+
+- **Function lookup cache** (`836aa8277`): Pre-populate interpreter function lookup cache
+  during initialization. Eliminates repeated O(n) searches during simulation.
+
+### Test Results
+
+- circt-sim: **200/200** (100%) - 8 new tests for constraint solver features
+- sv-tests: 7 tests promoted from xfail to pass (constraint guards, soft constraints,
+  rand_mode, randomize behavior)
+- AVIPs: **9/9** pass (APB, AHB, UART, I2S, I3C, SPI, AXI4, AXI4Lite, JTAG)
+
+### Project Plan
+
+- Created `PLAN.md` with 4 workstream tracks toward Xcelium parity
+- Updated `FEATURES.md` with current test counts and recent fixes
+- 41 sv-tests xfails remaining, categorized by difficulty and impact
+
 ## Iteration 719 - February 9, 2026
 
 ### Lane-State Refresh Metadata Chain-Length Policies

@@ -18138,7 +18138,20 @@ ninja -C build circt-verilog
   - improves long-term closure readiness for stricter transport provenance
     contracts.
 
-### Lane-State Hardening Snapshot (Iterations 713-719)
+### Iteration 721
+- Added opt-in TLS peer-to-chain linkage policy controls for Ed25519 CRL/OCSP
+  refresh metadata:
+  - `...crl-refresh-metadata-require-tls-peer-in-cert-chain`
+  - `...ocsp-refresh-metadata-require-tls-peer-in-cert-chain`
+- Added strict linkage semantics under policy:
+  - require `https` transport
+  - require `tls_peer_sha256` membership in `cert_chain_sha256`
+- Planning impact:
+  - closes a trust-evidence consistency gap between independent TLS peer pin
+    checks and cert-chain observations.
+  - improves readiness for future issuer/path verification enforcement.
+
+### Lane-State Hardening Snapshot (Iterations 713-721)
 - Delivered chain of trust for refresh-policy profile registries and their
   signer material:
   - profile-registry SHA pinning
@@ -18147,7 +18160,8 @@ ninja -C build circt-verilog
   - signer certificate anchoring + CA verification
   - signer CRL/OCSP revocation and freshness policy controls
   - signer OCSP responder identity/pinning controls
-  - refresh metadata minimum-chain-depth policy gates.
+  - refresh metadata minimum-chain-depth policy gates
+  - refresh metadata TLS peer-chain linkage policy gates.
 - Planning impact:
   - Refresh-policy profile trust now supports rotation-friendly signer identity
     and cert-based revocation controls while remaining deterministic under

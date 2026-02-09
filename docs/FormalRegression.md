@@ -276,6 +276,7 @@ Lane-state semantics:
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-uri-regex`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-sha256`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-sha256`
+    - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-tls-peer-in-cert-chain`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-cert-chain-length-min`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-age-secs`
     - `--lane-state-manifest-ed25519-crl-refresh-metadata-max-future-skew-secs`
@@ -326,9 +327,13 @@ Lane-state semantics:
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-uri-regex`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-sha256`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-sha256`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-tls-peer-in-cert-chain`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-cert-chain-length-min`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-age-secs`
   - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-max-future-skew-secs`
+  - `...require-tls-peer-in-cert-chain` is an opt-in strict linkage gate that
+    requires `https` transport and requires `tls_peer_sha256` membership in
+    `cert_chain_sha256`.
 - Refresh hooks receive
   `LANE_STATE_MANIFEST_ED25519_REFRESH_METADATA_FILE=<configured-sidecar-path>`
   so wrappers can write metadata deterministically before returning.
