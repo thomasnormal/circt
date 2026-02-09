@@ -242,6 +242,10 @@ Lane timeout/cache/gate override fields now also get native validation
 (`global_propagate_*_timeout_seconds`, `global_propagate_bmc_bound`,
 `global_propagate_bmc_ignore_asserts_until`, BMC orig-cache limits/policy, and
 `skip_baseline`/`fail_on_undetected`/`fail_on_errors`).
+Lane boolean formal fields now also get native validation with explicit
+enable/disable forms (`1|0|true|false|yes|no|-`):
+`global_propagate_assume_known_inputs`, `global_propagate_accept_xprop_only`,
+`global_propagate_bmc_run_smtlib`, `global_propagate_bmc_assume_known_inputs`.
 Matrix default numeric/cache options now also fail fast natively:
 `--default-formal-global-propagate-*_timeout-seconds`,
 `--default-formal-global-propagate-bmc-bound`,

@@ -421,6 +421,10 @@ struct MatrixLanePreflightDefaults {
   std::string globalFilterBMCZ3;
   std::string globalFilterBMCBound;
   std::string globalFilterBMCIgnoreAssertsUntil;
+  bool globalFilterAssumeKnownInputs = false;
+  bool globalFilterAcceptXpropOnly = false;
+  bool globalFilterBMCRunSMTLib = false;
+  bool globalFilterBMCAssumeKnownInputs = false;
   std::string bmcOrigCacheMaxEntries;
   std::string bmcOrigCacheMaxBytes;
   std::string bmcOrigCacheMaxAgeSeconds;
@@ -476,9 +480,13 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
     StringRef laneGlobalFilterLEC = getCol(15);
     StringRef laneGlobalFilterBMC = getCol(16);
     StringRef laneGlobalFilterBMCBound = getCol(18);
+    StringRef laneGlobalFilterBMCRunSMTLib = getCol(20);
     StringRef laneGlobalFilterBMCZ3 = getCol(21);
+    StringRef laneGlobalFilterBMCAssumeKnownInputs = getCol(22);
     StringRef laneGlobalFilterBMCIgnoreAssertsUntil = getCol(23);
     StringRef laneGlobalFilterZ3 = getCol(27);
+    StringRef laneGlobalFilterAssumeKnownInputs = getCol(28);
+    StringRef laneGlobalFilterAcceptXpropOnly = getCol(29);
     StringRef laneGlobalFilterChain = getCol(34);
     StringRef laneBMCOrigCacheMaxEntries = getCol(35);
     StringRef laneBMCOrigCacheMaxBytes = getCol(36);
@@ -543,6 +551,22 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
            " (lane " + laneLabel + "): " + value +
            " (expected 1|0|true|false|yes|no|-).")
               .str();
+      return false;
+    };
+    auto validateBoolOverride = [&](StringRef laneValue,
+                                    StringRef fieldName) -> bool {
+      StringRef value = normalized(laneValue);
+      if (value.empty())
+        return true;
+      if (value == "1" || value == "0" || value == "true" ||
+          value == "false" || value == "yes" || value == "no")
+        return true;
+      error = (Twine("Invalid lane ") + fieldName + " override in --lanes-tsv "
+               "at line " +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + value +
+               " (expected 1|0|true|false|yes|no|-).")
+                  .str();
       return false;
     };
 
@@ -664,6 +688,18 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
                        defaults.bmcOrigCacheEvictionPolicy,
                        Regex("^(lru|fifo|cost-lru)$"),
                        "bmc_orig_cache_eviction_policy", "lru|fifo|cost-lru"))
+      return false;
+    if (!validateBoolOverride(laneGlobalFilterAssumeKnownInputs,
+                              "global_propagate_assume_known_inputs"))
+      return false;
+    if (!validateBoolOverride(laneGlobalFilterAcceptXpropOnly,
+                              "global_propagate_accept_xprop_only"))
+      return false;
+    if (!validateBoolOverride(laneGlobalFilterBMCRunSMTLib,
+                              "global_propagate_bmc_run_smtlib"))
+      return false;
+    if (!validateBoolOverride(laneGlobalFilterBMCAssumeKnownInputs,
+                              "global_propagate_bmc_assume_known_inputs"))
       return false;
     if (!parseGateOverride(laneSkipBaseline, "skip_baseline"))
       return false;
@@ -879,6 +915,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         defaultGlobalFilterChainMode.clear();
       defaults.globalFilterCirctChain = defaultGlobalFilterChainMode;
     }
+    if (arg == "--default-formal-global-propagate-assume-known-inputs")
+      defaults.globalFilterAssumeKnownInputs = true;
+    if (arg == "--default-formal-global-propagate-accept-xprop-only")
+      defaults.globalFilterAcceptXpropOnly = true;
+    if (arg == "--default-formal-global-propagate-bmc-run-smtlib")
+      defaults.globalFilterBMCRunSMTLib = true;
+    if (arg == "--default-formal-global-propagate-bmc-assume-known-inputs")
+      defaults.globalFilterBMCAssumeKnownInputs = true;
     if (arg == "--default-formal-global-propagate-bmc-bound" ||
         arg.starts_with("--default-formal-global-propagate-bmc-bound=")) {
       defaults.globalFilterBMCBound =
