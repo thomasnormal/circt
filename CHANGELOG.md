@@ -36271,3 +36271,56 @@ CIRCT/slang correctly enforces LRM restrictions.
 
 - Integrity hashes are unauthenticated (no signature/trust chain).
 - Operation rows remain summary-only and do not provide row-level diffs.
+
+## Iteration 722 - February 9, 2026
+
+### Lane-State Refresh Metadata CA-Cert Chain Membership Policy
+
+- Added two strict metadata policy switches in `utils/run_formal_all.sh`:
+  - `--lane-state-manifest-ed25519-crl-refresh-metadata-require-ca-cert-in-cert-chain`
+  - `--lane-state-manifest-ed25519-ocsp-refresh-metadata-require-ca-cert-in-cert-chain`
+- New behavior:
+  - when enabled, the configured Ed25519 CA cert SHA256 is computed and must
+    be present in refresh metadata `cert_chain_sha256`.
+  - policy applies to CRL and OCSP refresh metadata independently.
+- Parser and policy plumbing updates:
+  - strict dependency checks now require the corresponding refresh metadata file
+    when either new switch is set.
+  - refresh metadata JSON validator now enforces CA digest membership and emits
+    field-specific policy errors.
+  - lane-state config hash now includes both CA-cert-chain policy toggles.
+
+### Test Coverage
+
+- Updated:
+  - `test/Tools/run-formal-all-strict-gate.test`
+    - dependency-failure coverage for enabling CA-cert-chain policy without
+      metadata file (CRL + OCSP)
+    - negative policy cases for CRL/OCSP metadata lacking CA digest in
+      `cert_chain_sha256`
+    - positive OCSP linked-chain case requiring both CA-cert and TLS-peer
+      membership.
+  - `docs/FormalRegression.md`
+    - documented both new switches and policy semantics.
+
+### Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- Formal lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`:
+    - 1/1 PASS
+  - `build/bin/llvm-lit -sv -j 1 $(rg --files test/Tools | rg 'run-formal-.*\\.test$')`:
+    - 5/5 PASS
+- Filtered external sweep (`run_formal_all.sh`, BMC+LEC lanes over
+  `~/yosys/tests/sva`, `~/sv-tests`, `~/verilator-verification`, with OpenTitan
+  and AVIP enabled):
+  - suite lanes: PASS
+  - OpenTitan lane: PASS
+  - AVIP lanes: 9/9 PASS
+  - logs: `/tmp/formal-all-ca-cert-chain-sweep-20260209-rerun`
+
+### Remaining Limitations
+
+- Metadata trust policy still validates sidecar evidence only; it does not yet
+  perform full live TLS chain verification in-refresh.
+- OpenTitan `aes_sbox_canright` LEC still relies on `LEC_ACCEPT_XPROP_ONLY=1`.
