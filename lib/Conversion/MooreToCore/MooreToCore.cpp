@@ -23781,8 +23781,23 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
       // Walk parent class hierarchy to inherit constraints (IEEE 1800-2017
       // §18.5.2). Child class constraints are already collected above;
-      // now collect from each ancestor class.
+      // now collect from each ancestor class.  When a derived class
+      // declares a constraint with the same name as a base class
+      // constraint, the derived version overrides the base (§18.5.2).
       {
+        // Collect constraint names already present from derived classes
+        // so we can skip overridden parent constraints.
+        DenseSet<StringRef> overriddenConstraints;
+        for (const auto &rc : rangeConstraints)
+          if (!rc.constraintName.empty())
+            overriddenConstraints.insert(rc.constraintName);
+        for (const auto &sc : softConstraints)
+          if (!sc.constraintName.empty())
+            overriddenConstraints.insert(sc.constraintName);
+        for (const auto &dc : distConstraints)
+          if (!dc.constraintName.empty())
+            overriddenConstraints.insert(dc.constraintName);
+
         ClassDeclOp parentDecl = classDecl;
         while (auto baseAttr = parentDecl.getBaseAttr()) {
           ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
@@ -23795,15 +23810,35 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
           auto parentRange =
               extractRangeConstraints(baseClassDecl, cache, classSym);
-          rangeConstraints.append(parentRange.begin(), parentRange.end());
+          for (auto &rc : parentRange) {
+            if (!rc.constraintName.empty() &&
+                overriddenConstraints.contains(rc.constraintName))
+              continue; // Derived class overrides this constraint
+            rangeConstraints.push_back(std::move(rc));
+          }
 
           auto parentSoft =
               extractSoftConstraints(baseClassDecl, cache, classSym);
-          softConstraints.append(parentSoft.begin(), parentSoft.end());
+          for (auto &sc : parentSoft) {
+            if (!sc.constraintName.empty() &&
+                overriddenConstraints.contains(sc.constraintName))
+              continue;
+            softConstraints.push_back(std::move(sc));
+          }
 
           auto parentDist =
               extractDistConstraints(baseClassDecl, cache, classSym);
-          distConstraints.append(parentDist.begin(), parentDist.end());
+          for (auto &dc : parentDist) {
+            if (!dc.constraintName.empty() &&
+                overriddenConstraints.contains(dc.constraintName))
+              continue;
+            distConstraints.push_back(std::move(dc));
+          }
+
+          // Add parent's constraint names to override set for grandparents
+          for (auto &op : baseClassDecl.getBody().getOps())
+            if (auto cb = dyn_cast<ConstraintBlockOp>(op))
+              overriddenConstraints.insert(cb.getSymName());
 
           parentDecl = baseClassDecl;
         }
@@ -23816,8 +23851,14 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       conditionalConstraints =
           extractConditionalConstraints(classDecl, cache, classSym);
 
-      // Also inherit conditional constraints from parent classes
+      // Also inherit conditional constraints from parent classes.
+      // Skip constraints overridden by derived classes (§18.5.2).
       {
+        DenseSet<StringRef> overriddenConds;
+        for (const auto &cc : conditionalConstraints)
+          if (!cc.constraintName.empty())
+            overriddenConds.insert(cc.constraintName);
+
         ClassDeclOp parentDecl = classDecl;
         while (auto baseAttr = parentDecl.getBaseAttr()) {
           ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
@@ -23830,8 +23871,16 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
           auto parentConds =
               extractConditionalConstraints(baseClassDecl, cache, classSym);
-          conditionalConstraints.append(parentConds.begin(),
-                                        parentConds.end());
+          for (auto &cc : parentConds) {
+            if (!cc.constraintName.empty() &&
+                overriddenConds.contains(cc.constraintName))
+              continue;
+            conditionalConstraints.push_back(std::move(cc));
+          }
+
+          for (auto &op : baseClassDecl.getBody().getOps())
+            if (auto cb = dyn_cast<ConstraintBlockOp>(op))
+              overriddenConds.insert(cb.getSymName());
 
           parentDecl = baseClassDecl;
         }
@@ -24512,11 +24561,24 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     // constraints per property and check if any has min > max.
     // IEEE 1800-2017 §18.6.3: randomize() returns 0 when constraints
     // are infeasible and random variables retain their previous values.
+    // Only apply this optimization when all constraints for a property come
+    // from the same constraint block (or have no name), because constraints
+    // from different blocks can be independently disabled via
+    // constraint_mode() at runtime (IEEE 1800-2017 §18.9).
     {
       DenseMap<StringRef, std::pair<int64_t, int64_t>> effectiveBounds;
+      // Track whether a property has constraints from multiple named blocks.
+      DenseMap<StringRef, StringRef> firstConstraintName;
+      DenseSet<StringRef> multiBlockProperties;
       for (const auto &hc : hardConstraints) {
         if (hc.isMultiRange)
           continue;
+        auto nameIt = firstConstraintName.find(hc.propertyName);
+        if (nameIt == firstConstraintName.end()) {
+          firstConstraintName[hc.propertyName] = hc.constraintName;
+        } else if (nameIt->second != hc.constraintName) {
+          multiBlockProperties.insert(hc.propertyName);
+        }
         auto it = effectiveBounds.find(hc.propertyName);
         if (it == effectiveBounds.end()) {
           effectiveBounds[hc.propertyName] = {hc.minValue, hc.maxValue};
@@ -24526,8 +24588,10 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         }
       }
       for (auto &[propName, bounds] : effectiveBounds) {
-        if (bounds.first > bounds.second) {
-          // Infeasible: min > max after intersection.
+        if (bounds.first > bounds.second &&
+            !multiBlockProperties.contains(propName)) {
+          // Infeasible: min > max after intersection, and all constraints
+          // come from the same block so constraint_mode can't help.
           // Don't modify random variables, return 0 (failure).
           rewriter.replaceOp(op,
               arith::ConstantOp::create(rewriter, loc, i1Ty,
@@ -25285,17 +25349,34 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       // Compute return value: 1 if any rand property is enabled, 0 if all
       // disabled. IEEE 1800-2017 §18.8: if all rand variables are deactivated,
       // randomize() shall fail and return 0.
+      // Walk the full class hierarchy to check inherited rand properties.
       Value anyRandEnabled =
           arith::ConstantOp::create(rewriter, loc, i1Ty,
                                     rewriter.getBoolAttr(false));
       if (classDecl) {
-        for (auto propDecl :
-             classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
-          if (propDecl.isRandomizable()) {
-            Value enabled = createRandEnabledCheck(propDecl.getSymName());
-            anyRandEnabled =
-                arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+        auto checkClassProps = [&](ClassDeclOp decl) {
+          for (auto propDecl :
+               decl.getBody().getOps<ClassPropertyDeclOp>()) {
+            if (propDecl.isRandomizable()) {
+              Value enabled = createRandEnabledCheck(propDecl.getSymName());
+              anyRandEnabled =
+                  arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+            }
           }
+        };
+        checkClassProps(classDecl);
+        // Also check parent classes for inherited rand properties
+        ClassDeclOp parentDecl = classDecl;
+        while (auto baseAttr = parentDecl.getBaseAttr()) {
+          ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+          auto *baseSym = mod.lookupSymbol(baseAttr);
+          if (!baseSym)
+            break;
+          auto baseClassDecl = dyn_cast<ClassDeclOp>(baseSym);
+          if (!baseClassDecl)
+            break;
+          checkClassProps(baseClassDecl);
+          parentDecl = baseClassDecl;
         }
       }
       rewriter.replaceOp(op, anyRandEnabled);
@@ -25324,18 +25405,34 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     restorePreservedFields();
 
     // AND with rand_mode check: if all rand properties are disabled, return 0.
+    // Walk the full class hierarchy to check inherited rand properties.
     Value returnVal = truncResult;
     if (classDecl) {
       Value anyRandEnabled =
           arith::ConstantOp::create(rewriter, loc, i1Ty,
                                     rewriter.getBoolAttr(false));
-      for (auto propDecl :
-           classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
-        if (propDecl.isRandomizable()) {
-          Value enabled = createRandEnabledCheck(propDecl.getSymName());
-          anyRandEnabled =
-              arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+      auto checkClassProps2 = [&](ClassDeclOp decl) {
+        for (auto propDecl :
+             decl.getBody().getOps<ClassPropertyDeclOp>()) {
+          if (propDecl.isRandomizable()) {
+            Value enabled = createRandEnabledCheck(propDecl.getSymName());
+            anyRandEnabled =
+                arith::OrIOp::create(rewriter, loc, anyRandEnabled, enabled);
+          }
         }
+      };
+      checkClassProps2(classDecl);
+      ClassDeclOp parentDecl2 = classDecl;
+      while (auto baseAttr = parentDecl2.getBaseAttr()) {
+        ModuleOp mod = parentDecl2->getParentOfType<ModuleOp>();
+        auto *baseSym = mod.lookupSymbol(baseAttr);
+        if (!baseSym)
+          break;
+        auto baseClassDecl = dyn_cast<ClassDeclOp>(baseSym);
+        if (!baseClassDecl)
+          break;
+        checkClassProps2(baseClassDecl);
+        parentDecl2 = baseClassDecl;
       }
       returnVal =
           arith::AndIOp::create(rewriter, loc, truncResult, anyRandEnabled);
