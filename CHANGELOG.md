@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 937 - February 10, 2026
+
+### BMC Syntax Closure: Mixed Top-Level + Struct Clock Inputs
+
+1. Extended `lib/Tools/circt-bmc/LowerToBMC.cpp` mixed-clock handling:
+   - removed the unconditional mixed-clock rejection
+     (`mixed top-level and struct clock inputs are not yet supported`).
+   - enabled derived-clock synthesis when struct-carried clocks are present,
+     even if explicit top-level clocks also exist.
+   - preserved explicit top-level clock paths by skipping synthesis for
+     `seq.from_clock` values rooted in top-level `!seq.clock` inputs.
+   - when mixed mode is active, unmapped `ltl.clock` operands rooted in
+     explicit top-level clocks now remain unchanged instead of failing mapping.
+   - restricted default single-derived-clock name remapping to non-explicit
+     clock mode to avoid clobbering explicit clock names in mixed designs.
+2. Added mixed-clock regression:
+   - `test/Tools/circt-bmc/lower-to-bmc-mixed-clock-inputs.mlir`
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-mixed-clock-inputs.mlir test/Tools/circt-bmc/lower-to-bmc-struct-seq-clock-input.mlir test/Tools/circt-bmc/lower-to-bmc-ltl-clock-inputs.mlir test/Tools/circt-bmc/lower-to-bmc-errors.mlir`
+     -> `4 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir`
+     -> `29 passed`, `1 xfail`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-mixed-clock-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/LEC_STRICT$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5`,
+          `yosys/tests/sva/BMC pass=7 fail=5 skip=2`,
+          `opentitan/LEC_STRICT pass=1 fail=0`
+          (existing nonzero BMC fail counts unchanged by this feature).
+
 ## Iteration 936 - February 10, 2026
 
 ### BMC Syntax Closure: Struct-Carried `seq.clock` Inputs
