@@ -178,6 +178,8 @@ See CHANGELOG.md on recent progress.
   - LEC harness rows now carry explicit structured columns:
     `status, base, path, suite, mode, diag` for sv-tests/verilator/yosys lanes,
     and `run_formal_all.sh` consumes explicit `diag` before `#DIAG` path tags.
+  - OpenTitan LEC case rows now also emit explicit `diag` as a dedicated
+    column (while retaining path-tag compatibility for downstream consumers).
   - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
     favor of fully explicit per-case diag fields for all producers/fixtures.
   - Keep optional absolute no-drop gates available for closure runs:

@@ -314,7 +314,7 @@ def main() -> int:
         keep_workdir = args.keep_workdir
 
     failures = 0
-    case_rows: list[tuple[str, str, str, str, str]] = []
+    case_rows: list[tuple[str, str, str, str, str, str]] = []
     xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
@@ -452,7 +452,14 @@ def main() -> int:
                                 flush=True,
                             )
                             case_rows.append(
-                                ("XFAIL", impl, f"{impl_dir}#XPROP_ONLY", "opentitan", lec_mode_label)
+                                (
+                                    "XFAIL",
+                                    impl,
+                                    f"{impl_dir}#XPROP_ONLY",
+                                    "opentitan",
+                                    lec_mode_label,
+                                    "XPROP_ONLY",
+                                )
                             )
                             xprop_rows.append(
                                 (
@@ -471,7 +478,9 @@ def main() -> int:
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
                 print(f"{impl:24} OK", flush=True)
-                case_rows.append(("PASS", impl, str(impl_dir), "opentitan", lec_mode_label))
+                case_rows.append(
+                    ("PASS", impl, str(impl_dir), "opentitan", lec_mode_label, "")
+                )
             except subprocess.CalledProcessError:
                 failures += 1
                 extra = ""
@@ -495,7 +504,16 @@ def main() -> int:
                 detail = str(impl_dir)
                 if diag:
                     detail = f"{detail}#{diag}"
-                case_rows.append(("FAIL", impl, detail, "opentitan", lec_mode_label))
+                case_rows.append(
+                    (
+                        "FAIL",
+                        impl,
+                        detail,
+                        "opentitan",
+                        lec_mode_label,
+                        diag or "",
+                    )
+                )
                 if diag == "XPROP_ONLY":
                     xprop_rows.append(
                         (

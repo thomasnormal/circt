@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 964 - February 10, 2026
+
+### OpenTitan LEC: Explicit `diag` Case-Row Column
+
+1. Extended `utils/run_opentitan_circt_lec.py` per-case result rows to include
+   explicit `diag` as the 6th field:
+   - `status`, `base`, `path`, `suite`, `mode`, `diag`
+2. Updated `utils/run_formal_all.sh` OpenTitan missing-result fallback row to
+   preserve the same 6-column shape (empty `diag`).
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-opentitan-lec-explicit-diag-counter.test`
+   validating strict-gate drift on `lec_diag_xprop_only_cases` from explicit
+   OpenTitan diag fields.
+
+### Tests and Validation
+
+- `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- `build/bin/llvm-lit -sv -j 8 test/Tools/run-formal-all-opentitan-lec.test test/Tools/run-formal-all-opentitan-lec-strict.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-formal-all-opentitan-lec-explicit-diag-counter.test test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test`: PASS (7/7)
+- Filtered external OpenTitan strict lane:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-explicit-diag-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --opentitan-lec-impl-filter canright --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`
+  - Result: `opentitan/LEC_STRICT` PASS (`total=1 pass=1 fail=0 error=0`, `lec_cases=1`)
+
 ## Iteration 963 - February 10, 2026
 
 ### `circt-mut report`: Built-In Lane Trend Policy Bundles
