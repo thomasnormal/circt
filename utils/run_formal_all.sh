@@ -8703,7 +8703,7 @@ run_opentitan_lec_lane() {
     utils/run_opentitan_circt_lec.py --workdir "$workdir" "${opentitan_lec_args[@]}" || true
 
   if [[ ! -s "$case_results" ]]; then
-    printf "FAIL\taes_sbox\tmissing_results\topentitan\t%s\n" "$mode_name" > "$case_results"
+    printf "FAIL\taes_sbox\tmissing_results\topentitan\t%s\t\n" "$mode_name" > "$case_results"
     local missing_summary="total=1 pass=0 fail=1 xfail=0 xpass=0 error=1 skip=0 missing_results=1"
     record_result_with_summary "opentitan" "$mode_name" 1 0 1 0 0 1 0 "$missing_summary"
     return
