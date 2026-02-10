@@ -559,16 +559,24 @@ See CHANGELOG.md on recent progress.
     - bucket counts are name/path-based classification heuristics, not direct
       solver-IR semantic tags; deep closure still requires backend-emitted
       semantic category metadata for exact attribution.
-70. Cross-suite semantic-bucket coverage limitation (February 10, 2026):
-    - `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS` emit bucket counters
-      with concrete signal (`disable_iff=1`, `local_var=2` in current
-      `sv-tests/BMC` baseline rerun).
-    - `verilator-verification/BMC` currently reports only unclassified
-      bucketed fail-like cases.
-    - `yosys/tests/sva/BMC` currently lacks bucket counters in summary output
-      on this run path because case-level rows are not always emitted;
-      next hardening target is deterministic case-row export for yosys BMC so
-      semantic-bucket drift gates can apply uniformly.
+70. Cross-suite semantic-bucket coverage hardening landed (February 10, 2026):
+    - `run_yosys_sva_circt_bmc.sh` now writes deterministic case rows to
+      `OUT` (`STATUS base path suite mode`) and no longer leaves
+      `yosys-bmc-results.txt` empty during normal runs.
+    - Result: `yosys/tests/sva/BMC` now emits
+      `bmc_semantic_bucket_*_cases` counters in `run_formal_all.sh` summaries,
+      enabling uniform strict-gate bucket telemetry across all BMC lanes.
+71. Updated cross-suite limitation snapshot after yosys row-emission fix:
+    - `sv-tests/BMC` still carries concrete semantic signal
+      (`disable_iff=1`, `local_var=2` in current rerun).
+    - `sv-tests-uvm/BMC_SEMANTICS` remains green (`6/6`) with zero fail-like
+      bucket counts.
+    - `verilator-verification/BMC` and `yosys/tests/sva/BMC` fail-like rows are
+      still mostly `unclassified` by current name/path heuristics.
+72. Next long-term closure feature from this point:
+    - add backend- or harness-emitted semantic bucket tags (instead of
+      name/path regex only) so strict-gate counters reflect true semantic
+      classes for `verilator`/`yosys` fail-like rows.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
