@@ -455,6 +455,13 @@ For generated-mutation cover runs, native preflight now also validates:
 - `--mutations-mode-counts` total against `--generate-mutations`.
 `circt-mut matrix` now applies the same preflight model for default global
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
+For matrix-wide native formal prequalification before lane dispatch, use:
+- `--native-global-filter-prequalify`
+  (runs `circt-mut cover --native-global-filter-prequalify-only` per lane,
+  rewrites lane `reuse_pair_file`, then dispatches matrix lanes).
+Current native matrix prequalify scope:
+- built-in global filters only (not `global_propagate_cmd`)
+- cannot be combined with pre-existing lane/default reuse pair input.
 It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
 fail fast if the default Yosys executable is unavailable.
 Matrix default generated-mutation seed is now configurable via
@@ -567,6 +574,7 @@ Run multiple lanes with `circt-mut matrix`:
 circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
+  --native-global-filter-prequalify \
   --default-mutations-yosys yosys \
   --default-mutations-seed 1 \
   --default-formal-global-propagate-circt-lec \
