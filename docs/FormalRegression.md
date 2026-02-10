@@ -109,7 +109,7 @@ utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opent
 Use the mutation harness to classify injected faults into:
 `not_activated`, `not_propagated`, `propagated_not_detected`, and `detected`.
 
-Preferred frontend: `circt-mut` (`init`, `run`, `cover`, `matrix`,
+Preferred frontend: `circt-mut` (`init`, `run`, `report`, `cover`, `matrix`,
 `generate`).
 Legacy `utils/run_mutation_*.sh` entrypoints remain supported.
 
@@ -132,6 +132,18 @@ circt-mut run --project-dir /path/to/mut-campaign --mode all
 
 `circt-mut run` reads `circt-mut.toml` and dispatches the native
 preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
+
+Aggregate campaign results:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --out /tmp/mutation-report.tsv
+```
+
+`circt-mut report` emits normalized key/value summary output for cover and
+matrix artifacts, with optional file output via `--out`.
 
 Basic usage:
 
@@ -290,6 +302,31 @@ Equivalent Certitude-style flow (schematic):
 for lane in lane_svtests lane_verilator; do
   certitude_run -config "/path/to/${lane}.cfg" -out "/tmp/${lane}"
 done
+```
+
+4. Aggregate/report campaign outcomes
+
+`circt-mut report`:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --out /tmp/mutation-report.tsv
+```
+
+Equivalent MCY flow (schematic):
+
+```bash
+cd /path/to/mcy_project
+mcy status
+# plus site-specific aggregation for multi-project/multi-lane campaigns.
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```bash
+certitude_report -in /tmp/certitude-run -out /tmp/certitude-report
 ```
 
 Execution controls:

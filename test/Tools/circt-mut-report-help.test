@@ -1,0 +1,9 @@
+// RUN: circt-mut report --help | FileCheck %s
+
+// CHECK: usage: circt-mut report [options]
+// CHECK: --project-dir
+// CHECK: --config
+// CHECK: --mode
+// CHECK: --cover-work-dir
+// CHECK: --matrix-out-dir
+// CHECK: --out

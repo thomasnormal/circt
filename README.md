@@ -195,8 +195,8 @@ Build the tools:
 ninja -C build circt-mut circt-bmc circt-lec circt-verilog
 ```
 
-Preferred frontend: `circt-mut` (subcommands: `init`, `run`, `cover`,
-`matrix`, `generate`).
+Preferred frontend: `circt-mut` (subcommands: `init`, `run`, `report`,
+`cover`, `matrix`, `generate`).
 Legacy script entrypoints under `utils/` remain supported for compatibility.
 `circt-mut generate` now has a native execution path for core generation
 options, including native generated-mutation caching via `--cache-dir`.
@@ -222,6 +222,18 @@ circt-mut run --project-dir mut-campaign --mode all
 
 `circt-mut run` consumes `circt-mut.toml` and dispatches native
 preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
+
+Aggregate campaign results (cover/matrix/all) into one normalized TSV summary:
+
+```sh
+circt-mut report --project-dir mut-campaign --mode all --out reports/campaign.tsv
+```
+
+`circt-mut report` automatically reads `cover`/`matrix` output roots from
+`circt-mut.toml` (or uses `<project-dir>/out/cover` and
+`<project-dir>/out/matrix` defaults), then emits key-value summaries for:
+- cover mutation buckets and coverage.
+- matrix lane pass/fail/gate status and aggregated per-lane mutant metrics.
 
 Run a single mutation campaign:
 
@@ -459,6 +471,33 @@ Equivalent Certitude-style flow (schematic):
 for lane in lane_svtests lane_verilator; do
   certitude_run -config "/path/to/${lane}.cfg" -out "/tmp/${lane}"
 done
+```
+
+4. Aggregate/report campaign outcomes
+
+`circt-mut report`:
+
+```sh
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --out /tmp/mutation-report.tsv
+```
+
+Equivalent `mcy` flow (schematic aggregation from DB/status files):
+
+```sh
+cd /path/to/mcy_project
+mcy status
+# plus site-specific scripting to merge multi-project/lane summaries
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```sh
+certitude_report \
+  -in /tmp/certitude-run \
+  -out /tmp/certitude-report
 ```
 
 Core input formats:
