@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 826 - February 10, 2026
+
+### `circt-mut report --compare` Baseline Diff Mode
+
+1. Added baseline comparison support to native reporting:
+   - `circt-mut report --compare <baseline.tsv>`
+   - baseline TSV is parsed as `key<TAB>value` (same shape as report output).
+2. Report now emits diff rows for overlapping numeric keys:
+   - `diff.<metric>.delta`
+   - `diff.<metric>.pct_change`
+3. Added comparison summary counters:
+   - `diff.overlap_keys`
+   - `diff.numeric_overlap_keys`
+   - `diff.exact_changed_keys`
+   - `diff.added_keys`
+   - `diff.missing_keys`
+4. Added explicit baseline provenance:
+   - `compare.baseline_file=<resolved path>`
+5. Report parser now ignores `key<TAB>value` header rows so exported reports can
+   be used directly as compare baselines.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-compare-basic.test`
+  - `test/Tools/circt-mut-report-compare-missing-file.test`
+- Updated:
+  - `test/Tools/circt-mut-report-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report*.test test/Tools/circt-mut-help.test`: PASS (8/8)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (103/103)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report-compare --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 825 - February 10, 2026
 
 ### `circt-mut report` Formal Telemetry Aggregation

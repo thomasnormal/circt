@@ -6,4 +6,5 @@
 // CHECK: --mode
 // CHECK: --cover-work-dir
 // CHECK: --matrix-out-dir
+// CHECK: --compare
 // CHECK: --out

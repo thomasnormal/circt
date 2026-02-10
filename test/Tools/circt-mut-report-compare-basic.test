@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t4\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t80.00\nglobal_filter_timeout_mutants\t3\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'key\tvalue\ncover.detected_mutants\t1\ncover.global_filter_timeout_mutants\t1\ncover.mutation_coverage_percent\t50.00\ncover.errors\t0\n' > %t/proj/baseline.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode cover --compare baseline.tsv > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK-DAG: compare.baseline_file{{[[:space:]]}}{{.*}}/baseline.tsv
+// CHECK-DAG: diff.cover.detected_mutants.delta{{[[:space:]]}}3.00
+// CHECK-DAG: diff.cover.detected_mutants.pct_change{{[[:space:]]}}300.00
+// CHECK-DAG: diff.cover.global_filter_timeout_mutants.delta{{[[:space:]]}}2.00
+// CHECK-DAG: diff.cover.global_filter_timeout_mutants.pct_change{{[[:space:]]}}200.00
+// CHECK-DAG: diff.cover.mutation_coverage_percent.delta{{[[:space:]]}}30.00
+// CHECK-DAG: diff.cover.mutation_coverage_percent.pct_change{{[[:space:]]}}60.00
+// CHECK-DAG: diff.numeric_overlap_keys{{[[:space:]]}}4

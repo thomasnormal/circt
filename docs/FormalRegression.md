@@ -162,6 +162,22 @@ triage and performance tracking:
 - global-filter runtime/run counters
 - BMC original-design cache counters/runtime
 
+`circt-mut report` also supports baseline comparison:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --compare /path/to/baseline-report.tsv \
+  --out /tmp/mutation-report-with-diff.tsv
+```
+
+Comparison emits per-metric numeric diffs for overlapping keys:
+- `diff.<metric>.delta`
+- `diff.<metric>.pct_change`
+and summary counts (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
+`diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
+
 Basic usage:
 
 ```bash
