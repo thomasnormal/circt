@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 828 - February 10, 2026
+
+### `circt-mut report` History Baselines and Snapshot Appends
+
+1. Extended native report workflow with history-aware baseline comparison:
+   - `--compare-history-latest <history.tsv>`
+   - reads the latest `run_id` snapshot from a long-form history TSV and uses
+     it as compare baseline.
+2. Added native history snapshot output:
+   - `--append-history <history.tsv>`
+   - appends current report rows as a new `run_id` with UTC timestamp.
+3. Added comparison telemetry for history mode:
+   - `compare.baseline_file=<history.tsv>#run_id=<n>`
+   - `compare.history_baseline_run_id=<n>`
+4. Hardened compare diff accounting:
+   - baseline-side `compare.*`/`diff.*` keys are excluded from missing-key
+     counters to avoid synthetic churn in repeated compare workflows.
+5. Updated delta-gate requirements:
+   - `--fail-if-delta-gt` / `--fail-if-delta-lt` now accept either
+     `--compare` or `--compare-history-latest`.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-compare-history-latest-basic.test`
+  - `test/Tools/circt-mut-report-compare-history-latest-missing-file.test`
+  - `test/Tools/circt-mut-report-compare-history-conflict-with-compare.test`
+  - `test/Tools/circt-mut-report-append-history-basic.test`
+  - `test/Tools/circt-mut-report-compare-history-gate-fail.test`
+- Updated:
+  - `test/Tools/circt-mut-report-help.test`
+  - `test/Tools/circt-mut-report-compare-gate-requires-compare.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report*.test test/Tools/circt-mut-help.test`: PASS (17/17)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (112/112)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report-history --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 827 - February 10, 2026
 
 ### `circt-mut report` Delta-Gate Regression Thresholds

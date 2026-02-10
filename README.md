@@ -262,6 +262,24 @@ This appends diff rows (for overlapping numeric keys):
 plus summary counters (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
 `diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
 
+Compare against the latest snapshot in a rolling history file:
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --compare-history-latest reports/history.tsv
+```
+
+Append the current report snapshot to history:
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --append-history reports/history.tsv
+```
+
 Gate regressions directly in report mode:
 
 ```sh
@@ -279,7 +297,8 @@ circt-mut report \
 - `compare.gate_failure_count`
 - `compare.gate_status` (`pass`/`fail`)
 - `compare.gate_failure_<n>` for each failing rule.
-Gate rules require `--compare` with numeric baseline values for the gated keys.
+Gate rules require `--compare` or `--compare-history-latest` with numeric
+baseline values for the gated keys.
 On gate failure, `circt-mut report` exits with code `2`.
 
 Run a single mutation campaign:
@@ -528,9 +547,10 @@ done
 circt-mut report \
   --project-dir /path/to/mut-campaign \
   --mode all \
-  --compare /path/to/baseline-report.tsv \
+  --compare-history-latest /tmp/mutation-history.tsv \
   --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
   --fail-if-delta-lt cover.detected_mutants=0 \
+  --append-history /tmp/mutation-history.tsv \
   --out /tmp/mutation-report.tsv
 ```
 
@@ -565,6 +585,8 @@ Core input formats:
   Additional optional tail overrides:
   `global_propagate_lec_timeout_seconds`,
   `global_propagate_bmc_timeout_seconds`.
+- report history file (`--compare-history-latest` / `--append-history`):
+  `run_id<TAB>timestamp_utc<TAB>key<TAB>value`.
 
 Outputs are written under `--work-dir` / `--out-dir` and include
 `summary.tsv`, `pair_qualification.tsv`, `results.tsv`, `metrics.tsv`, and
