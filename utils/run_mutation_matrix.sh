@@ -27,7 +27,8 @@ Optional:
   --default-mutations-modes CSV
                             Default --mutations-modes for generated-mutation lanes
                             (concrete: inv,const0,const1,cnot0,cnot1;
-                            families: arith,control,balanced,all)
+                            families: arith,control,balanced,all,
+                            stuck,invert,connect)
   --default-mutations-mode-counts CSV
                             Default --mutations-mode-counts for generated-mutation lanes
   --default-mutations-mode-weights CSV

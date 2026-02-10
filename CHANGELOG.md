@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 835 - February 10, 2026
+
+### Mutation Fault-Family Aliases (`stuck`/`invert`/`connect`)
+
+1. Extended mutation mode-family expansion in both script and native generators:
+   - `utils/generate_mutations_yosys.sh`
+   - `circt-mut generate` native path
+2. Added built-in fault-family aliases:
+   - `stuck` -> `const0,const1`
+   - `invert` -> `inv`
+   - `connect` -> `cnot0,cnot1`
+3. These aliases compose with existing allocation controls
+   (`--mode-count(s)`, `--mode-weight(s)`, seed-rotated remainder policy) and
+   preserve deterministic expansion behavior.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/run-mutation-generate-modes-fault-families.test`
+  - `test/Tools/circt-mut-generate-native-modes-fault-families.test`
+- Updated:
+  - `utils/run_mutation_cover.sh` help text for family aliases
+  - `utils/run_mutation_matrix.sh` help text for family aliases
+  - `test/Tools/run-mutation-generate-help.test`
+  - `test/Tools/circt-mut-generate-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/circt-mut-generate*.test`: PASS (22/22)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix-help.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test test/Tools/circt-mut-run-cover-generate-config.test test/Tools/circt-mut-run-matrix-config.test`: PASS (18/18)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-fault-families --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 834 - February 10, 2026
 
 ### Seed-Rotated Remainders Inside Family Expansion

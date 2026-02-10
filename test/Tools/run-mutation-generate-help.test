@@ -8,6 +8,7 @@
 // CHECK: --yosys
 // CHECK: --cache-dir
 // CHECK: --mode
+// CHECK: stuck,invert,connect
 // CHECK: --modes
 // CHECK: --mode-count
 // CHECK: --mode-counts

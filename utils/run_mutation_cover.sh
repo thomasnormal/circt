@@ -116,7 +116,8 @@ Optional:
   --mutations-top NAME       Top module name when auto-generating mutations
   --mutations-modes CSV      Comma-separated mutate modes for auto-generation
                              (concrete: inv,const0,const1,cnot0,cnot1;
-                             families: arith,control,balanced,all)
+                             families: arith,control,balanced,all,
+                             stuck,invert,connect)
   --mutations-mode-counts CSV
                              Comma-separated mode=count allocation for
                              auto-generation (sum must match --generate-mutations)

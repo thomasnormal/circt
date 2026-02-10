@@ -19,7 +19,9 @@ Optional:
                             lists (content-addressed by design+options)
   --mode NAME               Mutate mode (repeatable)
                             Concrete: inv,const0,const1,cnot0,cnot1
-                            Families: arith,control,balanced,all
+                            Families:
+                              arith,control,balanced,all
+                              stuck,invert,connect
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
   --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)
   --mode-counts CSV         Comma-separated NAME=COUNT mode allocations
@@ -320,6 +322,15 @@ mode_family_targets() {
       printf "%s\n" "inv" "const0" "const1"
       ;;
     control)
+      printf "%s\n" "cnot0" "cnot1"
+      ;;
+    stuck)
+      printf "%s\n" "const0" "const1"
+      ;;
+    invert)
+      printf "%s\n" "inv"
+      ;;
+    connect)
       printf "%s\n" "cnot0" "cnot1"
       ;;
     balanced|all)
