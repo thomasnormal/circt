@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 992 - February 10, 2026
+
+### `circt-mut report`: Strict Matrix Policies Gate `SKIP` Lanes
+
+1. Tightened strict matrix policy profiles in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `formal-regression-matrix-guard-strict`
+   - `formal-regression-matrix-strict`
+2. Both profiles now enforce:
+   - `matrix.lanes_skip <= 0`
+3. Motivation:
+   - native matrix stop-on-fail emits deterministic `SKIP` rows for
+     post-cut lanes;
+   - strict governance should treat skip lanes as budget failures, not
+     silently pass them.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-strict-skip-lanes-fail.test`
+   - validates both strict profiles fail with explicit
+     `matrix.lanes_skip value=1.00 > 0.00`.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-policy-matrix-strict-skip-lanes-fail.test test/Tools/circt-mut-report-policy-matrix-guard-strict-*.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (62/62)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (190/190)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-strict-skip-policy-20260210 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile for
+    `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known): AVIP compile `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 991 - February 10, 2026
 
 ### `circt-mut report`: Matrix SKIP-Lane Accounting
