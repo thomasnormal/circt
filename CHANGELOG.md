@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 862 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: Multiclock Orchestrator Control + Candidate Rebaseline
+
+1. Added first-class multiclock control to formal orchestration:
+   - file: `utils/run_formal_all.sh`
+   - new option: `--bmc-allow-multi-clock`
+   - behavior: forwards `ALLOW_MULTI_CLOCK=1` to all BMC lanes:
+     `sv-tests`, `verilator-verification`, and `yosys/tests/sva`.
+   - included in lane-state config hashing for resumable-run compatibility.
+2. Added regression coverage:
+   - new test: `test/Tools/run-formal-all-bmc-allow-multi-clock.test`
+   - verifies `--bmc-allow-multi-clock` is actually propagated to BMC suite
+     scripts.
+   - updated help coverage:
+     `test/Tools/run-formal-all-help.test`.
+3. Revalidated BMC semantic-closure candidate set under multiclock mode:
+   - command:
+     `TEST_FILTER='16\.13--sequence-multiclock-uvm|16\.15--property-iff-uvm(-fail)?|16\.10--property-local-var-uvm|16\.10--sequence-local-var-uvm|16\.11--sequence-subroutine-uvm' INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+   - current result: `total=6 pass=0 error=6`.
+   - per-case logs show a single shared blocker:
+     LLVM translation failure on `builtin.unrealized_conversion_cast`
+     (4-state `hw.struct_create` bridge path).
+   - SMTLIB retry for the reproducer still fails with explicit capability
+     guard:
+     `for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions`.
+
+### Validation
+
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-allow-multi-clock.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`: PASS
+
 ## Iteration 861 - February 10, 2026
 
 ### UVM Signal Resolution + Analysis Port Interceptor
