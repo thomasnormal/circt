@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 886 - February 10, 2026
+
+### BMC Semantic-Closure Cadence Expansion: Targeted UVM Lane
+
+1. Added a dedicated semantic-closure lane in `utils/run_formal_all.sh`:
+   - lane id: `sv-tests-uvm/BMC_SEMANTICS`
+   - enable flag: `--with-sv-tests-uvm-bmc-semantics`
+   - runner: `utils/run_sv_tests_circt_bmc.sh`
+   - fixed lane policy:
+     - `INCLUDE_UVM_TAGS=1`
+     - `ALLOW_MULTI_CLOCK=1`
+     - curated `TEST_FILTER` with 6 semantic targets:
+       - `16.10--property-local-var-uvm`
+       - `16.10--sequence-local-var-uvm`
+       - `16.11--sequence-subroutine-uvm`
+       - `16.13--sequence-multiclock-uvm`
+       - `16.15--property-iff-uvm`
+       - `16.15--property-iff-uvm-fail`
+2. Extended BMC attribution aggregation to include the new lane:
+   - `bmc-abstraction-provenance-case-map.tsv`
+   - `bmc-abstraction-provenance-token-summary.tsv`
+   - `bmc-abstraction-provenance-assertion-attribution.tsv`
+   - `bmc-abstraction-provenance-ir-check-attribution.tsv`
+3. Extended strict-gate baseline collectors so failure-case/provenance tracking
+   includes `sv-tests-uvm/BMC_SEMANTICS`.
+4. Added lit coverage:
+   - `test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`
+   - validates lane selection and forwarding of
+     `INCLUDE_UVM_TAGS`, forced `ALLOW_MULTI_CLOCK`, curated `TEST_FILTER`,
+     and attribution row propagation into case-map output.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-allow-multi-clock.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-baselines.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-uvm-semantics-lane-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^sv-tests-uvm/BMC_SEMANTICS$'`
+  - result:
+    - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=6 fail=0 xfail=0 xpass=0 error=0`
+    - generated attribution reports include `sv-tests-uvm/BMC_SEMANTICS` rows.
+
 ## Iteration 885 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: IR-Check Attribution

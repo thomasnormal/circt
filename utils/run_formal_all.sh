@@ -60,6 +60,9 @@ Options:
   --fail-on-new-opentitan-lec-strict-xprop-counter KEY
                          Fail when OpenTitan strict LEC summary counter KEY
                          increases vs baseline (repeatable)
+  --with-sv-tests-uvm-bmc-semantics
+                         Run targeted sv-tests UVM semantic-closure BMC lane
+                         (`sv-tests-uvm/BMC_SEMANTICS`)
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1835,6 +1838,7 @@ WITH_OPENTITAN=0
 WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
+WITH_SV_TESTS_UVM_BMC_SEMANTICS=0
 WITH_AVIP=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -1851,6 +1855,7 @@ BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_ACCEPT_XPROP_ONLY=0
+SV_TESTS_BMC_UVM_SEMANTICS_FILTER='^(16\.10--property-local-var-uvm|16\.10--sequence-local-var-uvm|16\.11--sequence-subroutine-uvm|16\.13--sequence-multiclock-uvm|16\.15--property-iff-uvm|16\.15--property-iff-uvm-fail)$'
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1876,8 +1881,10 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN_LEC_STRICT=1; shift ;;
     --with-opentitan-e2e)
       WITH_OPENTITAN_E2E=1; shift ;;
-    --with-opentitan-e2e-strict)
+  --with-opentitan-e2e-strict)
       WITH_OPENTITAN_E2E_STRICT=1; shift ;;
+    --with-sv-tests-uvm-bmc-semantics)
+      WITH_SV_TESTS_UVM_BMC_SEMANTICS=1; shift ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -5725,6 +5732,7 @@ compute_lane_state_config_hash() {
     printf "with_opentitan_lec_strict=%s\n" "$WITH_OPENTITAN_LEC_STRICT"
     printf "with_opentitan_e2e=%s\n" "$WITH_OPENTITAN_E2E"
     printf "with_opentitan_e2e_strict=%s\n" "$WITH_OPENTITAN_E2E_STRICT"
+    printf "with_sv_tests_uvm_bmc_semantics=%s\n" "$WITH_SV_TESTS_UVM_BMC_SEMANTICS"
     printf "with_avip=%s\n" "$WITH_AVIP"
     printf "opentitan_e2e_sim_targets=%s\n" "$OPENTITAN_E2E_SIM_TARGETS"
     printf "opentitan_e2e_verilog_targets=%s\n" "$OPENTITAN_E2E_VERILOG_TARGETS"
@@ -6743,6 +6751,13 @@ sources = [
         out_dir / "sv-tests-bmc-check-attribution.tsv",
     ),
     (
+        "sv-tests-uvm",
+        "BMC_SEMANTICS",
+        out_dir / "sv-tests-bmc-uvm-semantics-results.txt",
+        out_dir / "sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv",
+        out_dir / "sv-tests-bmc-uvm-semantics-check-attribution.tsv",
+    ),
+    (
         "verilator-verification",
         "BMC",
         out_dir / "verilator-bmc-results.txt",
@@ -7159,6 +7174,51 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
         summary="${summary} ${bmc_provenance_summary}"
       fi
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+    fi
+  fi
+fi
+
+# sv-tests UVM semantic-closure BMC
+if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
+   [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests-uvm/BMC_SEMANTICS"; then
+  if lane_resume_from_state "sv-tests-uvm/BMC_SEMANTICS"; then
+    :
+  else
+    sv_bmc_uvm_semantics_results_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-results.txt"
+    sv_bmc_uvm_semantics_provenance_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv"
+    sv_bmc_uvm_semantics_check_attribution_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-check-attribution.tsv"
+    : > "$sv_bmc_uvm_semantics_provenance_file"
+    : > "$sv_bmc_uvm_semantics_check_attribution_file"
+    run_suite sv-tests-bmc-uvm-semantics \
+      env OUT="$sv_bmc_uvm_semantics_results_file" \
+      BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_uvm_semantics_provenance_file" \
+      BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
+      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      ALLOW_MULTI_CLOCK=1 \
+      BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+      INCLUDE_UVM_TAGS=1 \
+      TEST_FILTER="$SV_TESTS_BMC_UVM_SEMANTICS_FILTER" \
+      Z3_BIN="$Z3_BIN" \
+      utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
+    line=$(grep -E "sv-tests SVA summary:" "$OUT_DIR/sv-tests-bmc-uvm-semantics.log" | tail -1 || true)
+    if [[ -n "$line" ]]; then
+      total=$(extract_kv "$line" total)
+      pass=$(extract_kv "$line" pass)
+      fail=$(extract_kv "$line" fail)
+      xfail=$(extract_kv "$line" xfail)
+      xpass=$(extract_kv "$line" xpass)
+      error=$(extract_kv "$line" error)
+      skip=$(extract_kv "$line" skip)
+      summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        summary="${summary} ${bmc_case_summary}"
+      fi
+      bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_uvm_semantics_provenance_file")"
+      if [[ -n "$bmc_provenance_summary" ]]; then
+        summary="${summary} ${bmc_provenance_summary}"
+      fi
+      record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -9167,6 +9227,7 @@ def compose_case_id(base: str, path: str) -> str:
 def collect_failure_cases(out_dir: Path, summary_rows):
     result_sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-results.txt"),
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
         ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
@@ -9233,6 +9294,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
 def collect_bmc_abstraction_provenance(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-abstraction-provenance.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv"),
         ("verilator-verification", "BMC", out_dir / "verilator-bmc-abstraction-provenance.tsv"),
         ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-abstraction-provenance.tsv"),
     ]

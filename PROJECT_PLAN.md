@@ -484,6 +484,25 @@ See CHANGELOG.md on recent progress.
     - Next long-term feature target is stable lowered-check IDs propagated into
       BMC diagnostics so SAT witnesses/provenance can reference exact backend
       check IDs across pipeline stages.
+57. BMC semantic-closure cadence expansion landed (February 10, 2026):
+    - `utils/run_formal_all.sh` now supports a dedicated
+      `sv-tests-uvm/BMC_SEMANTICS` lane (targeted 6-case set for local-var,
+      `disable iff`, and multiclock semantics), enabled via
+      `--with-sv-tests-uvm-bmc-semantics`.
+    - Lane policy is fixed to semantic-closure intent:
+      `INCLUDE_UVM_TAGS=1`, `ALLOW_MULTI_CLOCK=1`, and a curated
+      `TEST_FILTER` containing:
+      `16.10--property-local-var-uvm`,
+      `16.10--sequence-local-var-uvm`,
+      `16.11--sequence-subroutine-uvm`,
+      `16.13--sequence-multiclock-uvm`,
+      `16.15--property-iff-uvm`,
+      `16.15--property-iff-uvm-fail`.
+58. Current near-term limitations after this expansion:
+    - This lane is intentionally curated (6 tests), not yet broad UVM-assertion
+      corpus closure.
+    - LEC long-term closure remains focused on strict no-waiver X-prop policy
+      and deeper 4-state diagnostic precision.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
