@@ -175,9 +175,11 @@ See CHANGELOG.md on recent progress.
   - Keep generic LEC counter drift gates available across all `LEC*` lanes via
     `--fail-on-new-lec-counter` / `--fail-on-new-lec-counter-prefix`
     (`lec_status_*`, `lec_diag_*` from case rows).
-  - Remaining diagnostics gap: generic `lec_diag_*` coverage is currently based
-    on `#DIAG` case-path tags; continue migrating toward explicit structured
-    per-case diagnostic fields in runner outputs.
+  - LEC harness rows now carry explicit structured columns:
+    `status, base, path, suite, mode, diag` for sv-tests/verilator/yosys lanes,
+    and `run_formal_all.sh` consumes explicit `diag` before `#DIAG` path tags.
+  - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
+    favor of fully explicit per-case diag fields for all producers/fixtures.
   - Keep optional absolute no-drop gates available for closure runs:
     `--fail-on-any-bmc-drop-remarks`, `--fail-on-any-lec-drop-remarks`.
   - Syntax-tree completeness gaps to close next:
