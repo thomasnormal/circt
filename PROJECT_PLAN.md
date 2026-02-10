@@ -177,8 +177,9 @@ See CHANGELOG.md on recent progress.
   - Syntax-tree completeness gaps to close next:
     - LLHD signal/ref lowering still has unsupported probe/drive/cast patterns
       that currently fail with explicit diagnostics (`StripLLHDInterfaceSignals.cpp`).
-    - LLVM struct conversion still has unsupported lowering edges in some paths
-      (`LowerLECLLVM.cpp`).
+    - LLVM struct conversion now supports `llvm.mlir.zero` defaults for
+      4-state struct casts/extracts; remaining unsupported edges are more
+      complex aggregate reconstruction paths (`LowerLECLLVM.cpp`).
 - DevEx/CI:
   - Promote lane-state inspector to required pre-resume CI gate.
   - Add per-lane historical trend dashboards and automatic anomaly detection.
