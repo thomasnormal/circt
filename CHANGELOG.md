@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 873 - February 10, 2026
+
+### LEC Hardening: Explicit Assume-Known Recheck Result
+
+1. Extended x-prop diagnostics output in `circt-lec`:
+   - file:
+     - `tools/circt-lec/circt-lec.cpp`
+   - when `--diagnose-xprop` / `--accept-xprop-only` triggers an
+     assume-known-inputs recheck, output now includes:
+     - `LEC_DIAG_ASSUME_KNOWN_RESULT=<UNSAT|SAT|UNKNOWN>`
+   - this keeps `LEC_DIAG=XPROP_ONLY` behavior unchanged while making strict
+     gate triage machine-readable.
+2. Updated lit expectations for x-prop flows:
+   - `test/Tools/circt-lec/lec-run-smtlib-diagnose-xprop.mlir`
+   - `test/Tools/circt-lec/lec-run-smtlib-accept-xprop-only.mlir`
+3. Stabilized an order-sensitive unknown-slice lit check:
+   - `test/Tools/circt-lec/lec-dump-unknown-sources.mlir`
+   - switched `hw.constant` / `hw.struct_create` checks to DAG form.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-lec`: PASS
+- Targeted lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-run-smtlib-diagnose-xprop.mlir test/Tools/circt-lec/lec-run-smtlib-accept-xprop-only.mlir`: PASS
+- Full LEC lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec`: PASS (`129` discovered, `107` passed, `3` XFAIL, `19` unsupported).
+- Cross-suite formal cadence snapshots:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-20260210-2 ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/(BMC|LEC)$|^opentitan/(LEC|LEC_STRICT)$'`
+    - BMC baselines unchanged (`sv-tests`: 23/26, `verilator`: 12/17, `yosys`: 7/14).
+    - selected LEC lanes pass in this mixed BMC+LEC run.
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-20260210-3 ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/LEC$|^opentitan/(LEC|LEC_STRICT)$'`
+    - `sv-tests`, `verilator-verification`, `yosys/tests/sva` LEC lanes: PASS.
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: FAIL on
+      `aes_sbox_canright` with:
+      `operand #0 does not dominate this use` in generated
+      `aes_sbox_lec.mlir` (`llvm.alloca` / `aes_pkg::aes_mvm` path).
+
 ## Iteration 872 - February 10, 2026
 
 ### BMC LLHD Abstraction Observability Hardening
