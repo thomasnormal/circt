@@ -140,7 +140,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
-  os << "                           formal-regression-basic|formal-regression-trend\n";
+  os << "                           formal-regression-basic|formal-regression-trend|\n";
+  os << "                           formal-regression-matrix-basic|\n";
+  os << "                           formal-regression-matrix-trend\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5450,8 +5452,33 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-basic") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-trend") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
-           " (expected formal-regression-basic|formal-regression-trend)")
+           " (expected formal-regression-basic|formal-regression-trend|"
+           "formal-regression-matrix-basic|formal-regression-matrix-trend)")
               .str();
   return false;
 }
