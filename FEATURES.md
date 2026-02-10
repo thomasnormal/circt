@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 912 | 856 | 0 | **99.9%** | 912 total, 0 xfail, 7 xpass; 0 fail, 0 timeout |
+| Simulation (full) | 912 | 856 | 0 | **99.9%** | 912 total, 0 xfail, 7 xpass; 0 fail, 0 timeout; 1 compile-only (event sequence) |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -29,15 +29,16 @@ repository (1,036 tests across 15 IEEE chapters).
 | Tagged union | 1 | `11.9--tagged_union_*` | Crash/timeout (empty log) |
 | SVA negative tests | 4 | `16.10--*`, `16.15--*` | Crash/timeout (empty log) |
 
-### Simulation: 0 Failures, 1 Unexpected Pass, 0 Timeouts
+### Simulation: 0 Failures, 7 Unexpected Passes, 0 Timeouts
 
-912 tests found, 856 pass, 0 fail, 54 xfail, 7 xpass.
+912 tests found, 856 pass, 0 fail, 0 xfail, 7 xpass.
 All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
-- 7 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
-- 46 `compile-only` (class-only definitions, SVA UVM tests, event sequence controls)
+- 9 `skip` (8 should-fail tests circt-verilog doesn't detect + 1 utility file)
+- 1 `compile-only` (event sequence control — needs `wait(condition)` support)
 - 0 `xfail` (all UVM testbench tests now pass)
 - 7 `xpass` (4 agent/monitor + 3 scoreboard — fixed by resolveSignalId + analysis port interceptor)
-- 117 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction, rand_mode, resource_db, all UVM agent/monitor/scoreboard/driver-sequencer tests)
+- 92 `pass` (Ch18 constraints/random stability/UVM phases + 26 SVA UVM tests now fully simulated)
+- ~44 class-only Ch18 tests now fully simulated via auto-generated wrapper modules (no expect entry needed)
 
 ### What's Needed for True 100%
 
@@ -91,7 +92,9 @@ to commercial simulators like Cadence Xcelium.
 | `$fopen` / `$fwrite` | WORKS | Basic file operations |
 | Malloc / free | WORKS | Heap allocation with unaligned struct layout |
 | **Simulation Infrastructure** | | |
-| Combined HdlTop+HvlTop | WORKS | Multi-top simulation with BFMs |
+| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top boots full UVM topology with BFM registration via config_db (no UVM_FATAL); agents, drivers, monitors, sequencers, scoreboards all constructed |
+| VIF task/function calls | MISSING | Virtual interface method dispatch to BFM interface tasks (e.g., `bfm_h.wait_for_preset_n()`) — current blocker for AVIP transaction flow |
+| seq_item_port connection | MISSING | Driver proxy `seq_item_port` not connected to sequencer during `connect_phase`; prevents driver from obtaining sequences |
 | Shutdown cleanup | WORKS | `_exit(0)` skips expensive destructors for large designs |
 | Signal driving (`llhd.drv`) | WORKS | Blocking assignments via epsilon delay |
 | Signal probing (`llhd.prb`) | WORKS | Read signal values |
@@ -112,7 +115,7 @@ to commercial simulators like Cadence Xcelium.
 | SystemVerilog Assertions (SVA) | MISSING | Runtime assertion checking |
 | `$finish` exit code | WORKS | Propagates exit code from `sim.terminate`; checks error count for UVM `die()` |
 | DPI-C imports | PARTIAL | Some intercepted, most stubbed; UVM regex DPI (`uvm_re_comp/exec/free`) uses `std::regex` for full POSIX extended regex support |
-| `config_db` | WORKS | `config_db_implementation_t::set/get/exists` intercepted with in-memory key-value store |
+| `config_db` | WORKS | Dual-path interceptor: both `func.call` and `call_indirect` (VTable dispatch) for `config_db_default_implementation_t::set/get/exists`; in-memory key-value store; fuzzy `_x` suffix matching; `findMemoryBlockByAddress` for process-local write-back |
 | `process::suspend/resume` | WORKS | Lowered in ImportVerilog; interpreter suspends process execution and resumes on `resume()` call |
 | Semaphores | WORKS | `__moore_semaphore_create/get/put/try_get` interceptors; blocking get with process suspension |
 | Wand/wor nets | WORKS | IEEE 1800-2017 §6.7 wired-AND/wired-OR resolution for multi-driver nets; `circt.resolution` attribute on signals |
@@ -124,33 +127,35 @@ to commercial simulators like Cadence Xcelium.
 
 All 9 AVIPs use a proxy-BFM split architecture where `hvl_top` (UVM test/env/agents)
 communicates with `hdl_top` (clock/reset/BFM interfaces) via `uvm_config_db` virtual
-interface handles. Currently, **no real bus transactions flow** because driver proxies
-cannot obtain BFM handles without `hdl_top` being simulated alongside `hvl_top`.
+interface handles. APB has been recompiled for dual-top simulation and **boots fully
+without UVM_FATAL** — config_db handles flow correctly from hdl_top to hvl_top.
+**No real bus transactions flow yet** because driver proxy's `seq_item_port` is not
+connected to the sequencer and VIF task dispatch to BFM interfaces is not implemented.
 
 Xcelium reference: APB `apb_8b_write_test` achieves 21-30% coverage with real SETUP/ACCESS
-bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, 0ns sim time,
-UVM_FATAL at BFM lookup.
-
-Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared config_db).
-**Blocker**: Need to compile both tops together and validate BFM handle exchange works.
+bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, 42ps sim time,
+no UVM_FATAL but no transactions.
 
 | AVIP | HvlTop | HdlTop | Combined | Status | Notes |
 |------|--------|--------|----------|--------|-------|
-| APB | Full phase lifecycle | Compiles | Not tested | BFM Gap | All phases run (build→run→report); no transactions without hdl_top |
-| AHB | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| UART | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| I2S | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| I3C | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| SPI | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| AXI4 | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| AXI4Lite | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
-| JTAG | Full phase lifecycle | Compiles | Not tested | BFM Gap | Same |
+| APB | Full topology | ✅ Dual-top | ✅ Boots | seq_item_port gap | config_db works; all agents/monitors/scoreboards constructed; 0% coverage |
+| AHB | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | No MLIR file available |
+| UART | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
+| I2S | UVM_FATAL (stale) | Needs compile | Not tested | Stale MLIR | Pre-compiled MLIR has parse errors |
+| I3C | UVM_FATAL (stale) | Needs compile | Not tested | Stale MLIR | Pre-compiled MLIR has parse errors |
+| SPI | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
+| AXI4 | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
+| AXI4Lite | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
+| JTAG | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0, 0% coverage |
 
 **Road to full AVIP parity**:
-1. Compile both `hdl_top.sv` + `hvl_top.sv` together via `circt-verilog`
-2. Simulate with `circt-sim combined.mlir --top hvl_top --top hdl_top`
-3. Validate BFM handles flow through config_db (hdl_top sets, hvl_top gets)
-4. Compare coverage numbers vs Xcelium reference outputs
+1. ~~Compile both `hdl_top.sv` + `hvl_top.sv` together via `circt-verilog`~~ ✅ APB done
+2. ~~Simulate with `circt-sim combined.mlir --top hvl_top --top hdl_top`~~ ✅ APB boots
+3. ~~Validate BFM handles flow through config_db (hdl_top sets, hvl_top gets)~~ ✅ APB works
+4. **Fix seq_item_port connection** — driver needs sequencer wiring
+5. **Implement VIF task dispatch** — BFM interface method calls
+6. **Recompile all 9 AVIPs** with dual-top support
+7. Compare coverage numbers vs Xcelium reference outputs
 
 ## Key Fixes History
 
@@ -181,7 +186,7 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 | Interface path threading | Improved hierarchical interface path threading in ImportVerilog for nested module instances |
 | Dynamic array allocation | MooreToCore now passes byte count (elemCount * elemSize) to `__moore_dyn_array_new`; interpreter registers native blocks |
 | String array initializer | `ArrayCreateOpConversion` handles LLVM array types; `VariableOpConversion` stores initial values for LLVM arrays |
-| config_db runtime | `config_db_implementation_t::set/get/exists` intercepted with key-value store |
+| config_db runtime | Dual-path interceptor for `config_db_default_implementation_t::set/get/exists` — both `func.call` and `call_indirect` (VTable dispatch); fuzzy `_x` suffix matching; `findMemoryBlockByAddress` for alloca write-back |
 | process suspend/resume | ImportVerilog lowering + interpreter `__moore_process_suspend/resume` handlers |
 | Generic interface ports | Resolve `InterfacePortSymbol::interfaceDef` via `getConnection()` for generic `interface` port declarations |
 | Cumulative `__moore_delay` | Save `CallStackFrame` for LLVM function bodies on suspend; enables sequential delays in class methods/fork branches |
@@ -196,7 +201,7 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 | `uvm_wait_for_nba_region` | Intercepted as single delta cycle delay (scheduleProcess to Reactive region) |
 | Queue/array ops on fixed arrays | Added `UnpackedArrayType` handling to 5 MooreToCore patterns (unique_index, reduce, rsort, shuffle, reverse) |
 | Array reduce/min/unique_index interceptors | 7 new interpreter interceptors: `reduce_sum/product/and/or/xor`, `array_min`, `unique_index` |
-| `get_adjacent_successor_nodes` | Interceptor for UVM phase graph traversal via `__moore_get_adjacent_successor_nodes` |
+| `get_adjacent_successor_nodes` | Interceptor for UVM phase graph traversal; layout-safe offsets via `getLLVMStructFieldOffset()` from MLIR struct type (was broken by hardcoded aligned offsets) |
 | StreamUnpackOp 4-state fix | Extract 4-state `{value, unknown}` struct before i64 widening in MooreToCore |
 | Queue ops on fixed arrays | Add `UnpackedArrayType` to 5 MooreToCore patterns with `llhd::ProbeOp`/`llhd::DriveOp` for `!llhd.ref<!hw.array>` |
 | Parameterized interface dedup | Use `hasSameType()` for deduplication; different parameterizations get separate MLIR declarations |

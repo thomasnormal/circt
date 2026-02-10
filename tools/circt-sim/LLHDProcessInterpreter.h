@@ -506,6 +506,12 @@ public:
   /// including those in child module instances.
   mlir::LogicalResult initialize(hw::HWModuleOp hwModule);
 
+  /// Finalize initialization by executing global constructors (UVM init).
+  /// Must be called AFTER all top modules have been initialized via
+  /// initialize(), so that all modules' executeModuleLevelLLVMOps() have
+  /// completed (including hdl_top initial blocks that call config_db::set).
+  mlir::LogicalResult finalizeInit();
+
   /// Initialize child module instances using pre-discovered operations.
   /// This uses the pre-discovered hw.instance operations and registers
   /// signals/processes from the referenced modules iteratively.
@@ -1240,6 +1246,34 @@ private:
   /// pointer signal, its field shadow signals are added to the sensitivity.
   llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 4>> interfacePtrToFieldSignals;
 
+  /// Interface field signal propagation links. When a child BFM interface
+  /// field is initialized by copying from a parent interface field, this maps
+  /// parentFieldSignalId → [childFieldSignalIds...] so that when the parent
+  /// field shadow signal changes, all child copies are also driven.
+  llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 2>>
+      interfaceFieldPropagation;
+
+  /// Reverse map: childFieldAddr → parentFieldAddr, for setting up propagation.
+  llvm::DenseMap<uint64_t, uint64_t> childToParentFieldAddr;
+
+  /// Records (srcAddr, destAddr) pairs from child module-level stores that
+  /// copy parent interface fields to child interface fields during init.
+  /// Populated in executeChildModuleLevelOps(), consumed after
+  /// createInterfaceFieldShadowSignals() to create propagation links.
+  llvm::SmallVector<std::pair<uint64_t, uint64_t>> childModuleCopyPairs;
+
+  /// Deferred child module-level ops: saved during initializeChildInstances(),
+  /// executed after executeModuleLevelLLVMOps() so parent signal values are
+  /// available when child modules probe them.
+  struct DeferredChildModuleOps {
+    hw::HWModuleOp childModule;
+    InstanceId instanceId;
+    InstanceInputMapping inputMap;
+    DiscoveredOps childOps;
+    hw::InstanceOp instOp;
+  };
+  llvm::SmallVector<DeferredChildModuleOps, 0> deferredChildModuleOps;
+
   /// Native analysis port connection map. Maps port object address to
   /// list of connected imp/export object addresses. Used to bypass UVM's
   /// "Late Connection" phase check that incorrectly rejects connect() calls
@@ -1429,10 +1463,19 @@ private:
   mlir::LogicalResult
   executeGlobalConstructors(const DiscoveredGlobalOps &globalOps);
 
+  /// Cached global ops discovered during first initialize() call, reused by
+  /// finalizeInit() to execute global constructors.
+  DiscoveredGlobalOps cachedGlobalOps;
+
   /// Execute module-level LLVM operations (alloca, call, store) that are
   /// defined in the hw.module body but outside of llhd.process blocks.
   /// This initializes module-level string variables and other dynamic state.
   mlir::LogicalResult executeModuleLevelLLVMOps(hw::HWModuleOp hwModule);
+
+  /// Execute deferred child module-level LLVM ops. Called after
+  /// executeModuleLevelLLVMOps() so parent signal values (from malloc etc.)
+  /// are available when child modules probe parent signals.
+  void executeChildModuleLevelOps();
 
   /// Interpret an llvm.mlir.addressof operation.
   mlir::LogicalResult interpretLLVMAddressOf(ProcessId procId,
