@@ -355,10 +355,12 @@ See CHANGELOG.md on recent progress.
     - `yosys/tests/sva/BMC`: `12/14` pass with `2` skip, `0` fail.
     - `opentitan/LEC` + `opentitan/LEC_STRICT`: both `1/1` pass.
 - Remaining near-term hardening limitation:
-    - `circt-bmc --print-counterexample` still fails on stateful SVA designs
-      with a dominance verifier error in the counterexample emission path; this
-      is tooling/diagnostic debt (not proof-result correctness) and should be
-      closed to keep debug workflows first-class.
+    - `circt-bmc --print-counterexample` dominance verifier failure is now
+      closed in `LowerSMTToZ3LLVM` by filtering model-print declarations to
+      values that dominate the `smt.check` site.
+    - Remaining debug limitation is completeness (not correctness): declarations
+      that do not dominate the check site are currently omitted from printed
+      model-value lists until we land explicit rematerialization for them.
 - Full-syntax-tree closure policy target:
     - keep reducing `llhd_process_result*` and
       `signal_requires_abstraction` fallback usage so semantic closure is
