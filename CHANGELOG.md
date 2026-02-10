@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 838 - February 10, 2026
+
+### Matrix Default Allocation Preflight Hardening (`circt-mut`)
+
+1. Extended native `circt-mut matrix` preflight with default allocation
+   validation:
+   - `--default-mutations-mode-counts`
+   - `--default-mutations-mode-weights`
+2. Native diagnostics now fail fast for:
+   - invalid `NAME=VALUE` syntax
+   - non-positive numeric values
+   - conflicting simultaneous default count/weight configuration
+3. This closes a gap where malformed default generation allocation settings
+   could otherwise be deferred to downstream script execution.
+
+### Tests and Documentation
+
+- Added native regression tests:
+  - `test/Tools/circt-mut-matrix-default-mode-counts-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-default-mode-weights-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-default-mode-allocation-conflict-native.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-default-mode-*-native.test test/Tools/circt-mut-matrix-default-timeout-invalid-native.test test/Tools/circt-mut-matrix-lane-*.test`: PASS (18/18)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (43/43)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-default-alloc-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 837 - February 10, 2026
 
 ### Native `circt-mut` Preflight for Generated-Mutation Allocation

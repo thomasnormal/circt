@@ -420,6 +420,9 @@ Matrix default numeric/cache options now also fail fast natively:
 `--default-formal-global-propagate-bmc-ignore-asserts-until`,
 `--default-bmc-orig-cache-max-*`, and
 `--default-bmc-orig-cache-eviction-policy`.
+Matrix default mutation allocation options now also fail fast natively:
+`--default-mutations-mode-counts` and `--default-mutations-mode-weights`
+(syntax/value checks plus mutual-exclusion conflict checks).
 When effective matrix global-filter mode + timeout settings are non-zero
 (defaults or lane overrides), `circt-mut matrix` now also fail-fast checks
 that `timeout` is resolvable from the current `PATH`.
