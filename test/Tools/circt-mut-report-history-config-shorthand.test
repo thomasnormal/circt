@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t8\ndetected_mutants\t3\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t3\nnot_activated_mutants\t2\nerrors\t0\nmutation_coverage_percent\t37.50\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf '[report]\nhistory = "history.tsv"\nhistory_bootstrap = true\n' > %t/proj/circt-mut.toml
+// RUN: circt-mut report --project-dir %t/proj --mode cover --fail-if-trend-delta-lt cover.detected_mutants=-1 > %t/out.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/out.txt
+// RUN: FileCheck %s --check-prefix=HIST < %t/proj/history.tsv
+//
+// OUT-DAG: history.bootstrap{{[[:space:]]}}1
+// OUT-DAG: history.bootstrap_active{{[[:space:]]}}1
+// OUT-DAG: trend.gate_status{{[[:space:]]}}bootstrap_skipped
+// OUT-DAG: history.appended_run_id{{[[:space:]]}}1
+//
+// HIST: run_id{{[[:space:]]}}timestamp_utc{{[[:space:]]}}key{{[[:space:]]}}value
+// HIST-DAG: 1{{[[:space:]]}}{{.*}}{{[[:space:]]}}cover.detected_mutants{{[[:space:]]}}3
