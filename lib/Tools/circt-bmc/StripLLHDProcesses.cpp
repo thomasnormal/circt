@@ -554,6 +554,21 @@ struct StripLLHDProcessesPass
           }
           return false;
         };
+        auto hasObservableSignalUse = [&](Value signal, DriveOp ignoredDrive) {
+          for (auto *user : signal.getUsers()) {
+            if (ignoredDrive && user == ignoredDrive.getOperation())
+              continue;
+            if (auto probe = dyn_cast<ProbeOp>(user)) {
+              if (!probe.getResult().use_empty())
+                return true;
+              continue;
+            }
+            if (isa<DriveOp>(user))
+              continue;
+            return true;
+          }
+          return false;
+        };
 
         if (!dynamicDrives.empty()) {
           auto isZeroTimeConst = [](Value time) -> bool {
@@ -604,41 +619,60 @@ struct StripLLHDProcessesPass
             if (typeIt == driveValueTypes.end())
               continue;
             auto baseName = ns.newName(getSignalName(signal));
-              auto newInput =
-                  addInputPort(StringAttr::get(hwModule.getContext(), baseName),
-                               typeIt->second);
-              signalInputs[signal] = newInput.second;
-              OpBuilder builder(hwModule.getContext());
-              builder.setInsertionPoint(
-                  hwModule.getBodyBlock()->getTerminator());
-              DriveOp::create(builder, process.getLoc(), signal,
-                              newInput.second, getZeroTime(), Value{});
-            }
-          } else {
-            OpBuilder builder(process);
-            builder.setInsertionPointAfter(process);
-            for (auto drvOp : initDrives) {
-              if (!isValueFromAbove(drvOp.getValue(), process))
-                continue;
-              if (!isValueFromAbove(drvOp.getTime(), process))
-                continue;
-              if (drvOp.getEnable() &&
-                  !isValueFromAbove(drvOp.getEnable(), process))
-                continue;
-              builder.clone(*drvOp);
-            }
+            auto newInput =
+                addInputPort(StringAttr::get(hwModule.getContext(), baseName),
+                             typeIt->second);
+            signalInputs[signal] = newInput.second;
+            OpBuilder builder(hwModule.getContext());
+            builder.setInsertionPoint(
+                hwModule.getBodyBlock()->getTerminator());
+            DriveOp::create(builder, process.getLoc(), signal, newInput.second,
+                            getZeroTime(), Value{});
           }
-
-          for (Value result : process.getResults()) {
-            auto name = ns.newName("llhd_process_result");
-            auto newInput = addInputPort(
-                StringAttr::get(hwModule.getContext(), name),
-                result.getType());
-            result.replaceAllUsesWith(newInput.second);
-            ++abstractedProcessResultCount;
+        } else {
+          OpBuilder builder(process);
+          builder.setInsertionPointAfter(process);
+          for (auto drvOp : initDrives) {
+            if (!isValueFromAbove(drvOp.getValue(), process))
+              continue;
+            if (!isValueFromAbove(drvOp.getTime(), process))
+              continue;
+            if (drvOp.getEnable() &&
+                !isValueFromAbove(drvOp.getEnable(), process))
+              continue;
+            builder.clone(*drvOp);
           }
-          process.erase();
         }
+
+        for (Value result : process.getResults()) {
+          bool needsAbstraction = false;
+          SmallVector<DriveOp> droppableResultDrives;
+          for (OpOperand &use : result.getUses()) {
+            auto drv = dyn_cast<DriveOp>(use.getOwner());
+            if (!drv) {
+              needsAbstraction = true;
+              break;
+            }
+            if (hasObservableSignalUse(drv.getSignal(), drv)) {
+              needsAbstraction = true;
+              break;
+            }
+            droppableResultDrives.push_back(drv);
+          }
+          if (!needsAbstraction) {
+            for (auto drv : droppableResultDrives)
+              drv.erase();
+            continue;
+          }
+          auto name = ns.newName("llhd_process_result");
+          auto newInput =
+              addInputPort(StringAttr::get(hwModule.getContext(), name),
+                           result.getType());
+          result.replaceAllUsesWith(newInput.second);
+          ++abstractedProcessResultCount;
+        }
+        process.erase();
+      }
 
         if (abstractedProcessResultCount > 0) {
           hwModule->setAttr(
