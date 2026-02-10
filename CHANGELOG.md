@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 911 - February 10, 2026
+
+### LEC Hardening: Strict-Gate Default Assume-Known Drift Policy
+
+1. Extended `--strict-gate` default OpenTitan strict LEC key-prefix drift
+   policy in `utils/run_formal_all.sh` to include:
+   - `xprop_assume_known_result_`
+2. Updated strict-gate help text to document the expanded default X-prop
+   key-prefix policy (`diag`, `status`, `result`, `counter`,
+   `assume_known_result`).
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-assume-known-prefix-defaults.test`
+   - verifies `--strict-gate` alone catches
+     `xprop_assume_known_result_sat` drift without manual prefix flags.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-assume-known-prefix-defaults.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-assume-known-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix-defaults.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-opentitan-lec-xprop-summary.test`: PASS
+
 ## Iteration 910 - February 10, 2026
 
 ### LEC Hardening: Assume-Known Attribution + Merged XPROP Case Map
