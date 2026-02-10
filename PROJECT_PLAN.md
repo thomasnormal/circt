@@ -624,6 +624,13 @@ See CHANGELOG.md on recent progress.
     - add analogous semantic-tag sources for `verilator-verification` and
       `yosys/tests/sva` (runner map or backend diagnostics), then optionally
       gate on `bmc_semantic_bucket_tagged_cases` floor in strict mode.
+79. BMC semantic-bucket strict-gate coverage now tracks all emitted bucket
+    counters under `--fail-on-new-bmc-semantic-bucket-cases`, including:
+    `sampled_value`, `property_named`, `implication_timing`,
+    and `hierarchical_net` (in addition to legacy
+    `disable_iff`/`local_var`/`multiclock`/`four_state`).
+    - This closes drift blind spots where non-legacy bucket regressions could
+      appear without tripping strict-gate policy.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
