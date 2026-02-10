@@ -1,5 +1,79 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 841 - February 10, 2026
+
+### Signal Resolution Fix + VIF Shadow Signals (`circt-sim`)
+
+1. **`resolveDrivers()` multi-bit fix** (ProcessScheduler.h):
+   - Fixed signal resolution for FourStateStruct `hw.struct<value, unknown>` signals
+   - Old code used `getLSB()` to classify drivers as "driving 0" or "driving 1"
+   - For FourStateStruct, the value bit is at MSB (not LSB), so both `0b00` (val=0)
+     and `0b10` (val=1) had LSB=0 → both classified as "driving 0" → signals never toggled
+   - Fix: group drivers by full APInt value, resolve by effective strength per group
+   - This was the root cause of `always @(posedge clk)` blocks never executing
+
+2. **VIF shadow signals** (LLHDProcessInterpreter.cpp/h):
+   - `createInterfaceFieldShadowSignals()`: scans `valueToSignal` for `llhd.sig` ops
+     holding `!llvm.ptr` (interface instance pattern), finds GEP users with interface
+     struct types, creates shadow signal per field
+   - Store interception: `interpretLLVMStore` checks if target address matches a known
+     interface field shadow signal, drives it with the stored value
+   - Sensitivity expansion: `interpretWait` case 1 (observed signals) and case 3
+     (derived sensitivity) expand interface pointer signals to field shadow signals
+   - Data structures: `interfaceFieldSignals` (addr → SignalId),
+     `interfacePtrToFieldSignals` (parent sig → field sigs)
+
+3. **`uvm_agent_active` now passes** (was XFAIL → XPASS):
+   - Combined resolveDrivers fix + VIF shadow signals resolved signal mismatch
+   - Updated `utils/sv-tests-sim-expect.txt` to mark as `pass`
+   - Remaining 7 UVM xfails are phase sequencing issues (not signal resolution)
+
+### Tests and Validation
+
+- circt-sim lit tests: **221/221** (100%) — no regressions
+- sv-tests simulation: **912 total, 850 pass, 0 fail, 61 xfail, 1 xpass** (99.9%)
+- Build: clean compilation of ProcessScheduler.cpp + LLHDProcessInterpreter.cpp
+- Debug output cleanup: all `[VIF-*]` traces removed from both files
+
+## Iteration 842 - February 10, 2026
+
+### Generated-Mutation Profile Name Preflight (`circt-mut`)
+
+1. Extended native generated-mutation preflight with profile-name validation:
+   - cover:
+     - `--mutations-profiles`
+   - matrix defaults/lanes:
+     - `--default-mutations-profiles`
+     - lane `mutations_profiles` column
+2. Unknown profile names now fail fast in native preflight with explicit
+   expected profile set:
+   `arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none`.
+3. This removes deferred script-stage profile failures and keeps generated
+   campaign validation centralized in `circt-mut`.
+
+### Tests and Documentation
+
+- Added native regression tests:
+  - `test/Tools/circt-mut-cover-generate-profile-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-default-profiles-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-profiles-invalid-native.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-generate-profile-invalid-native.test test/Tools/circt-mut-matrix-default-profiles-invalid-native.test test/Tools/circt-mut-matrix-lane-profiles-invalid-native.test test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (53/53)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-profile-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 840 - February 10, 2026
 
 ### Cover Mutation-Source Consistency Preflight (`circt-mut`)

@@ -370,6 +370,28 @@ static AllocationParseResult parseModeAllocationCSV(StringRef csv) {
   return result;
 }
 
+static bool isKnownMutationProfile(StringRef profile) {
+  return profile == "arith-depth" || profile == "control-depth" ||
+         profile == "balanced-depth" || profile == "fault-basic" ||
+         profile == "fault-stuck" || profile == "fault-connect" ||
+         profile == "cover" || profile == "none";
+}
+
+static std::optional<std::string> firstUnknownMutationProfile(StringRef csv) {
+  if (csv.empty())
+    return std::nullopt;
+  SmallVector<StringRef, 16> entries;
+  csv.split(entries, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef raw : entries) {
+    StringRef profile = raw.trim();
+    if (profile.empty())
+      continue;
+    if (!isKnownMutationProfile(profile))
+      return profile.str();
+  }
+  return std::nullopt;
+}
+
 struct CoverRewriteResult {
   bool ok = false;
   std::string error;
@@ -383,6 +405,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   bool hasGenerateMutations = false;
   bool wantsHelp = false;
   std::string generateMutations;
+  std::string mutationsProfiles;
   std::string mutationsModeCounts;
   std::string mutationsModeWeights;
   std::string globalFilterTimeoutSeconds;
@@ -504,6 +527,9 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     if (arg == "--mutations-mode-counts" ||
         arg.starts_with("--mutations-mode-counts="))
       mutationsModeCounts = valueFromArg().str();
+    if (arg == "--mutations-profiles" ||
+        arg.starts_with("--mutations-profiles="))
+      mutationsProfiles = valueFromArg().str();
     if (arg == "--mutations-mode-weights" ||
         arg.starts_with("--mutations-mode-weights="))
       mutationsModeWeights = valueFromArg().str();
@@ -568,6 +594,15 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     return result;
   }
   if (hasGenerateMutations) {
+    if (auto unknown = firstUnknownMutationProfile(mutationsProfiles)) {
+      result.error = (Twine("circt-mut cover: unknown --mutations-profiles "
+                            "value: ") +
+                      *unknown +
+                      " (expected arith-depth|control-depth|balanced-depth|"
+                      "fault-basic|fault-stuck|fault-connect|cover|none).")
+                         .str();
+      return result;
+    }
     if (generateMutations.empty()) {
       result.error = "circt-mut cover: missing value for --generate-mutations.";
       return result;
@@ -762,6 +797,7 @@ struct MatrixRewriteResult {
 
 struct MatrixLanePreflightDefaults {
   std::string mutationsYosys;
+  std::string mutationsProfiles;
   std::string mutationsModeCounts;
   std::string mutationsModeWeights;
   std::string globalFilterCmd;
@@ -831,6 +867,7 @@ static bool preflightMatrixLaneTools(
     StringRef mutationsFile = getCol(2);
     StringRef generateCount = getCol(7);
     StringRef laneMutationsYosys = getCol(10);
+    StringRef laneMutationsProfiles = getCol(32);
     StringRef laneMutationsModeCounts = getCol(33);
     StringRef laneGlobalFilterCmd = getCol(14);
     StringRef laneGlobalFilterLEC = getCol(15);
@@ -1117,6 +1154,19 @@ static bool preflightMatrixLaneTools(
       return false;
     }
 
+    StringRef effectiveProfiles =
+        withDefault(laneMutationsProfiles, defaults.mutationsProfiles);
+    if (auto unknown = firstUnknownMutationProfile(effectiveProfiles)) {
+      error = (Twine("Unknown lane mutations_profiles value in --lanes-tsv at "
+                     "line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + *unknown +
+               " (expected arith-depth|control-depth|balanced-depth|"
+               "fault-basic|fault-stuck|fault-connect|cover|none).")
+                  .str();
+      return false;
+    }
+
     StringRef effectiveModeCounts =
         withDefault(laneMutationsModeCounts, defaults.mutationsModeCounts);
     StringRef effectiveModeWeights =
@@ -1351,6 +1401,10 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         arg.starts_with("--default-mutations-mode-weights=")) {
       defaults.mutationsModeWeights = valueFromArg().str();
     }
+    if (arg == "--default-mutations-profiles" ||
+        arg.starts_with("--default-mutations-profiles=")) {
+      defaults.mutationsProfiles = valueFromArg().str();
+    }
     if (arg == "--lanes-tsv") {
       if (i + 1 >= args.size()) {
         result.error = "circt-mut matrix: missing value for --lanes-tsv";
@@ -1489,6 +1543,15 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     result.error =
         "circt-mut matrix: use either --default-mutations-mode-counts or "
         "--default-mutations-mode-weights, not both.";
+    return result;
+  }
+  if (auto unknown = firstUnknownMutationProfile(defaults.mutationsProfiles)) {
+    result.error =
+        (Twine("circt-mut matrix: unknown --default-mutations-profiles value: ") +
+         *unknown +
+         " (expected arith-depth|control-depth|balanced-depth|"
+         "fault-basic|fault-stuck|fault-connect|cover|none).")
+            .str();
     return result;
   }
 
