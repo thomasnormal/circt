@@ -26,6 +26,7 @@
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -68,6 +69,65 @@ static bool isConstantInt(Value value, bool wantAllOnes) {
 static bool isZeroTime(llhd::TimeAttr time) {
   return time.getTime() == 0 && time.getDelta() == 0 &&
          time.getEpsilon() == 0;
+}
+
+static FailureOr<Attribute>
+foldValueToConstantAttr(Value value, DenseMap<Value, Attribute> &cache,
+                        DenseSet<Value> &active) {
+  if (auto it = cache.find(value); it != cache.end())
+    return it->second;
+
+  if (!active.insert(value).second)
+    return failure();
+
+  auto clearActive = [&]() { active.erase(value); };
+
+  Attribute attr;
+  if (matchPattern(value, m_Constant(&attr))) {
+    clearActive();
+    cache[value] = attr;
+    return attr;
+  }
+
+  auto result = dyn_cast<OpResult>(value);
+  if (!result) {
+    clearActive();
+    return failure();
+  }
+
+  Operation *def = result.getDefiningOp();
+  if (!def) {
+    clearActive();
+    return failure();
+  }
+
+  SmallVector<Attribute> constantOperands;
+  constantOperands.reserve(def->getNumOperands());
+  for (Value operand : def->getOperands()) {
+    auto folded = foldValueToConstantAttr(operand, cache, active);
+    if (failed(folded)) {
+      clearActive();
+      return failure();
+    }
+    constantOperands.push_back(*folded);
+  }
+
+  SmallVector<OpFoldResult> foldResults;
+  if (failed(def->fold(constantOperands, foldResults)) ||
+      result.getResultNumber() >= foldResults.size()) {
+    clearActive();
+    return failure();
+  }
+
+  auto foldedAttr = dyn_cast<Attribute>(foldResults[result.getResultNumber()]);
+  if (!foldedAttr) {
+    clearActive();
+    return failure();
+  }
+
+  clearActive();
+  cache[value] = foldedAttr;
+  return foldedAttr;
 }
 
 static bool traceClockRoot(Value value, Value &root);
@@ -547,17 +607,17 @@ void ExternalizeRegistersPass::runOnOperation() {
                               "defined by a seq.initial op not yet supported");
               return signalPassFailure();
             }
-            if (auto constantOp = circt::seq::unwrapImmutableValue(initVal)
-                                      .getDefiningOp<hw::ConstantOp>()) {
-              // Fetch value from constant op - leave removing the dead op to
-              // DCE
-              initState = constantOp.getValueAttr();
-            } else {
-              regOp.emitError("registers with initial values not directly "
-                              "defined by a hw.constant op in a seq.initial op "
-                              "not yet supported");
+            DenseMap<Value, Attribute> foldedValues;
+            DenseSet<Value> activeValues;
+            auto initConstant = foldValueToConstantAttr(
+                circt::seq::unwrapImmutableValue(initVal), foldedValues,
+                activeValues);
+            if (failed(initConstant)) {
+              regOp.emitError("registers with initial values in a seq.initial "
+                              "op must fold to constants");
               return signalPassFailure();
             }
+            initState = *initConstant;
           }
           Twine regName = regOp.getName() && !(regOp.getName().value().empty())
                               ? regOp.getName().value()

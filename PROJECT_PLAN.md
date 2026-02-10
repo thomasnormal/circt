@@ -158,8 +158,9 @@ See CHANGELOG.md on recent progress.
     - BMC SMT-LIB export: live-cone gating now ignores dead LLVM ops in
       `verif.bmc` regions; remaining closure is to lower/replace *live*
       unsupported LLVM ops instead of rejecting them.
-    - BMC: widen register-initial-value lowering beyond current typed-attr
-      constraints where feasible (`VerifToSMT.cpp`).
+    - BMC `ExternalizeRegisters`: register initial values from `seq.initial`
+      now accept foldable constant expressions (not just direct
+      `hw.constant`); remaining gap is non-foldable dynamic initial logic.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
