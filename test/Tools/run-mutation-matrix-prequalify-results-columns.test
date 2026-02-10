@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/out/lane1
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_DETECT\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp \"$design\" \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${BASELINE:-0}" == "1" ]]; then\n  echo SURVIVED > result.txt\nelse\n  echo DETECTED > result.txt\nfi\n' > %t/fake-test.sh
+// RUN: chmod +x %t/fake-test.sh
+// RUN: printf 't\tbash %t/fake-test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: printf 'prequalify_total_mutants\t12\nprequalify_not_propagated_mutants\t5\nprequalify_propagated_mutants\t7\nprequalify_create_mutated_error_mutants\t1\nprequalify_probe_error_mutants\t2\nprequalify_cmd_token_not_propagated_mutants\t3\nprequalify_cmd_token_propagated_mutants\t4\nprequalify_cmd_rc_not_propagated_mutants\t6\nprequalify_cmd_rc_propagated_mutants\t8\nprequalify_cmd_timeout_propagated_mutants\t9\nprequalify_cmd_error_mutants\t10\n' > %t/out/lane1/native_global_filter_prequalify.log
+// RUN: %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+//
+// LOG: Mutation matrix summary: pass=1 fail=0
+// RESULTS: lane_id{{.*}}config_error_reason{{.*}}prequalify_summary_present{{.*}}prequalify_total_mutants{{.*}}prequalify_cmd_error_mutants
+// RESULTS: lane1{{.*}}PASS{{.*}}0{{.*}}1{{.*}}12{{.*}}5{{.*}}7{{.*}}1{{.*}}2{{.*}}3{{.*}}4{{.*}}6{{.*}}8{{.*}}9{{.*}}10
