@@ -408,7 +408,9 @@ Options:
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
                          Skip lanes whose lane-id matches REGEX
-  --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
+  --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
+                         non-sv-tests BMC suite runs (sv-tests BMC lanes
+                         already force SMT-LIB mode for semantic parity)
   --bmc-allow-multi-clock Add --allow-multi-clock to BMC runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
@@ -7737,12 +7739,14 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_check_attribution_file="$OUT_DIR/sv-tests-bmc-check-attribution.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
+    # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
+    # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
-      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       Z3_BIN="$Z3_BIN" \
@@ -7789,12 +7793,13 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_check_attribution_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-check-attribution.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
+    # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env OUT="$sv_bmc_uvm_semantics_results_file" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_uvm_semantics_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
-      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       INCLUDE_UVM_TAGS=1 \
