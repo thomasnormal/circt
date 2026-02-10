@@ -6797,17 +6797,26 @@ PY
 
 summarize_bmc_semantic_bucket_file() {
   local case_file="$1"
+  local bucket_cases_out="${2:-}"
   if [[ ! -s "$case_file" ]]; then
+    if [[ -n "$bucket_cases_out" ]]; then
+      : > "$bucket_cases_out"
+    fi
     echo ""
     return 0
   fi
-  BMC_CASE_FILE="$case_file" python3 - <<'PY'
+  BMC_CASE_FILE="$case_file" \
+  BMC_SEMANTIC_BUCKET_CASES_OUT="$bucket_cases_out" \
+  python3 - <<'PY'
 import os
 import re
 from pathlib import Path
 
 path = Path(os.environ["BMC_CASE_FILE"])
+buckets_out = os.environ.get("BMC_SEMANTIC_BUCKET_CASES_OUT", "").strip()
 if not path.exists():
+    if buckets_out:
+        Path(buckets_out).write_text("", encoding="utf-8")
     print("")
     raise SystemExit(0)
 
@@ -6825,6 +6834,8 @@ bucket_case_sets = {
 all_fail_like_cases = set()
 tagged_cases = 0
 regex_classified_cases = 0
+bucket_sources = {}
+case_info = {}
 
 disable_iff_re = re.compile(r"(disable[-_ ]iff|(^|[^a-z0-9])iff([^a-z0-9]|$))")
 local_var_re = re.compile(r"(local[-_ ]var|local[-_ ]variable|localvar)")
@@ -6871,6 +6882,14 @@ def normalize_bucket_token(token: str):
     token = token.replace(" ", "_")
     return bucket_aliases.get(token)
 
+def add_bucket(case_key, bucket, source):
+    bucket_case_sets[bucket].add(case_key)
+    existing = bucket_sources.get((case_key, bucket))
+    if existing == "tagged":
+        return
+    if source == "tagged" or existing is None:
+        bucket_sources[(case_key, bucket)] = source
+
 for line in path.open(encoding="utf-8"):
     line = line.rstrip("\n")
     if not line:
@@ -6883,6 +6902,16 @@ for line in path.open(encoding="utf-8"):
     case_path = parts[2].strip() if len(parts) > 2 else ""
     case_key = (case_id, case_path)
     all_fail_like_cases.add(case_key)
+    suite = parts[3].strip() if len(parts) > 3 else ""
+    mode = parts[4].strip() if len(parts) > 4 else ""
+    case_info.setdefault(
+        case_key,
+        {
+            "status": status,
+            "suite": suite,
+            "mode": mode,
+        },
+    )
     explicit_buckets = set()
     for raw_field in parts[5:]:
         raw_field = raw_field.strip()
@@ -6922,21 +6951,21 @@ for line in path.open(encoding="utf-8"):
     if explicit_buckets:
         tagged_cases += 1
         for bucket in explicit_buckets:
-            bucket_case_sets[bucket].add(case_key)
+            add_bucket(case_key, bucket, "tagged")
         continue
     haystack = f"{case_id} {case_path}".lower()
     matched_regex_bucket = False
     if disable_iff_re.search(haystack):
-        bucket_case_sets["disable_iff"].add(case_key)
+        add_bucket(case_key, "disable_iff", "regex")
         matched_regex_bucket = True
     if local_var_re.search(haystack):
-        bucket_case_sets["local_var"].add(case_key)
+        add_bucket(case_key, "local_var", "regex")
         matched_regex_bucket = True
     if multiclock_re.search(haystack):
-        bucket_case_sets["multiclock"].add(case_key)
+        add_bucket(case_key, "multiclock", "regex")
         matched_regex_bucket = True
     if four_state_re.search(haystack):
-        bucket_case_sets["four_state"].add(case_key)
+        add_bucket(case_key, "four_state", "regex")
         matched_regex_bucket = True
     if matched_regex_bucket:
         regex_classified_cases += 1
@@ -6946,6 +6975,46 @@ for values in bucket_case_sets.values():
     classified_cases.update(values)
 
 unclassified_cases = len(all_fail_like_cases - classified_cases)
+
+if buckets_out:
+    rows = []
+    for case_key in sorted(all_fail_like_cases):
+        info = case_info.get(case_key, {"status": "", "suite": "", "mode": ""})
+        case_id, case_path = case_key
+        wrote_bucket = False
+        for bucket in sorted(bucket_case_sets.keys()):
+            if case_key not in bucket_case_sets[bucket]:
+                continue
+            source = bucket_sources.get((case_key, bucket), "")
+            rows.append(
+                (
+                    info.get("status", ""),
+                    case_id,
+                    case_path,
+                    info.get("suite", ""),
+                    info.get("mode", ""),
+                    bucket,
+                    source,
+                )
+            )
+            wrote_bucket = True
+        if not wrote_bucket:
+            rows.append(
+                (
+                    info.get("status", ""),
+                    case_id,
+                    case_path,
+                    info.get("suite", ""),
+                    info.get("mode", ""),
+                    "unclassified",
+                    "unclassified",
+                )
+            )
+    out_path = Path(buckets_out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write("\t".join(row) + "\n")
 
 parts = [
     f"bmc_semantic_bucket_fail_like_cases={len(all_fail_like_cases)}",
@@ -7590,7 +7659,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
-      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/sv-tests-bmc-results.txt")"
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/sv-tests-bmc-results.txt" "$OUT_DIR/sv-tests-bmc-semantic-buckets.tsv")"
       if [[ -n "$bmc_semantic_summary" ]]; then
         summary="${summary} ${bmc_semantic_summary}"
       fi
@@ -7644,7 +7713,7 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
-      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$sv_bmc_uvm_semantics_results_file")"
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$sv_bmc_uvm_semantics_results_file" "$OUT_DIR/sv-tests-bmc-uvm-semantics-semantic-buckets.tsv")"
       if [[ -n "$bmc_semantic_summary" ]]; then
         summary="${summary} ${bmc_semantic_summary}"
       fi
@@ -7717,7 +7786,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
-      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/verilator-bmc-results.txt")"
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/verilator-bmc-results.txt" "$OUT_DIR/verilator-bmc-semantic-buckets.tsv")"
       if [[ -n "$bmc_semantic_summary" ]]; then
         summary="${summary} ${bmc_semantic_summary}"
       fi
@@ -7794,7 +7863,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
-      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/yosys-bmc-results.txt")"
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/yosys-bmc-results.txt" "$OUT_DIR/yosys-bmc-semantic-buckets.tsv")"
       if [[ -n "$bmc_semantic_summary" ]]; then
         summary="${summary} ${bmc_semantic_summary}"
       fi

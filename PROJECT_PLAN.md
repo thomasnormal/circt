@@ -631,6 +631,15 @@ See CHANGELOG.md on recent progress.
     `disable_iff`/`local_var`/`multiclock`/`four_state`).
     - This closes drift blind spots where non-legacy bucket regressions could
       appear without tripping strict-gate policy.
+80. BMC semantic bucket triage artifacts now export per-lane, case-level
+    bucket attribution files:
+    - `sv-tests-bmc-semantic-buckets.tsv`
+    - `verilator-bmc-semantic-buckets.tsv`
+    - `yosys-bmc-semantic-buckets.tsv`
+    Each row is `(status, case_id, path, suite, mode, semantic_bucket, source)`
+    where `source` is `tagged`, `regex`, or `unclassified`.
+    - This gives direct machine-readable bucket-to-case joins for closure
+      planning and strict-gate investigation without re-parsing logs.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

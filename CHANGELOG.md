@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 908 - February 10, 2026
+
+### BMC Hardening: Per-Case Semantic-Bucket Export Artifacts
+
+1. Extended `summarize_bmc_semantic_bucket_file` in
+   `utils/run_formal_all.sh` to optionally emit case-level bucket attribution
+   TSVs while preserving existing summary counters.
+2. `run_formal_all.sh` now writes per-lane semantic bucket case exports:
+   - `sv-tests-bmc-semantic-buckets.tsv`
+   - `verilator-bmc-semantic-buckets.tsv`
+   - `yosys-bmc-semantic-buckets.tsv`
+3. Row schema is:
+   - `status`, `case_id`, `path`, `suite`, `mode`, `semantic_bucket`, `source`
+   - `source` is one of `tagged`, `regex`, or `unclassified`.
+4. This closes a diagnostics gap: semantic bucket counters are now directly
+   traceable to concrete fail-like cases without re-parsing runner logs.
+5. Added/updated tests:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+     - now checks exported tagged bucket rows.
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-case-export-mixed-sources.test`
+     - validates mixed `tagged` / `regex` / `unclassified` export behavior.
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`
+     - baseline check updated for expanded summary layout.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-bmc-semantic-bucket-case-export-mixed-sources.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test`: PASS
+- Real lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-bucket-cases-export-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/LEC_STRICT$'`
+  - exported rows:
+    - `sv-tests-bmc-semantic-buckets.tsv`: `3`
+    - `verilator-bmc-semantic-buckets.tsv`: `5`
+    - `yosys-bmc-semantic-buckets.tsv`: `7`
+
+
 ## Iteration 907 - February 10, 2026
 
 ### LEC Hardening: Strict-Gate Default X-PROP Prefix Policy
