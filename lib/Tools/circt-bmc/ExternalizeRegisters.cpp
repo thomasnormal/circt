@@ -536,16 +536,6 @@ void ExternalizeRegistersPass::runOnOperation() {
         continue;
 
       unsigned numRegs = 0;
-      bool foundClk = false;
-      for (auto ty : module.getInputTypes()) {
-        if (isa<seq::ClockType>(ty)) {
-          if (foundClk && !allowMultiClock) {
-            module.emitError("modules with multiple clocks not yet supported");
-            return signalPassFailure();
-          }
-          foundClk = true;
-        }
-      }
       module->walk([&](Operation *op) {
         if (auto regOp = dyn_cast<seq::CompRegOp>(op)) {
           mlir::Attribute initState = {};
@@ -780,6 +770,43 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   }
 
   OpBuilder builder(op);
+  auto clockName =
+      getClockPortName(module, root ? root : clock);
+  Attribute clockSource = UnitAttr::get(builder.getContext());
+  if (auto info = getClockSourceInfo(clock, module)) {
+    clockSource = makeClockSourceAttr(builder, info->first, info->second);
+  } else if (clockKey) {
+    // If the clock isn't traceable to a single input root (e.g. it's derived
+    // from a more complex i1 expression), fall back to a stable expression key.
+    //
+    // This is primarily used to support multi-clock BMC when the clock is a
+    // derived expression not rooted in a single module input. LowerToBMC will
+    // map derived clock keys to inserted BMC clock inputs.
+    clockSource = makeClockKeySourceAttr(builder, *clockKey, keyInvert);
+  }
+
+  if (!allowMultiClock) {
+    auto &existingNames = regClockNames[module.getSymNameAttr()];
+    auto &existingSources = regClockSources[module.getSymNameAttr()];
+    for (auto [existingName, existingSource] :
+         llvm::zip_equal(existingNames, existingSources)) {
+      bool existingKnownSource = !isa<UnitAttr>(existingSource);
+      bool newKnownSource = !isa<UnitAttr>(clockSource);
+      if (existingKnownSource && newKnownSource) {
+        if (existingSource != clockSource) {
+          module.emitError("modules with multiple clocks not yet supported");
+          return failure();
+        }
+        continue;
+      }
+      if (!existingName.getValue().empty() && !clockName.getValue().empty() &&
+          existingName != clockName) {
+        module.emitError("modules with multiple clocks not yet supported");
+        return failure();
+      }
+    }
+  }
+
   auto result = op->getResult(0);
   auto regType = result.getType();
 
@@ -801,21 +828,7 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   // Replace the register with newInput and newOutput
   auto newInput = module.appendInput(newInputName, regType).second;
   result.replaceAllUsesWith(newInput);
-  auto clockName =
-      getClockPortName(module, root ? root : clock);
   regClockNames[module.getSymNameAttr()].push_back(clockName);
-  Attribute clockSource = UnitAttr::get(builder.getContext());
-  if (auto info = getClockSourceInfo(clock, module)) {
-    clockSource = makeClockSourceAttr(builder, info->first, info->second);
-  } else if (clockKey) {
-    // If the clock isn't traceable to a single input root (e.g. it's derived
-    // from a more complex i1 expression), fall back to a stable expression key.
-    //
-    // This is primarily used to support multi-clock BMC when the clock is a
-    // derived expression not rooted in a single module input. LowerToBMC will
-    // map derived clock keys to inserted BMC clock inputs.
-    clockSource = makeClockKeySourceAttr(builder, *clockKey, keyInvert);
-  }
   regClockSources[module.getSymNameAttr()].push_back(clockSource);
   if (reset) {
     auto mux = comb::MuxOp::create(builder, op->getLoc(), regType, reset,

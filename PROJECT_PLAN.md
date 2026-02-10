@@ -152,6 +152,9 @@ See CHANGELOG.md on recent progress.
     - BMC: continue the "no implicit drops" audit by ensuring clock/semantic
       matching helpers do not materialize transient IR when comparing syntax
       trees (`LowerToBMC.cpp` now side-effect-free for explicit-clock lookup).
+    - BMC `ExternalizeRegisters`: single-clock mode now rejects only true
+      *used-register* clock conflicts (not mere presence of extra clock ports);
+      follow-up remains better diagnostics for derived-clock/source conflicts.
     - BMC SMT-LIB export: live-cone gating now ignores dead LLVM ops in
       `verif.bmc` regions; remaining closure is to lower/replace *live*
       unsupported LLVM ops instead of rejecting them.
