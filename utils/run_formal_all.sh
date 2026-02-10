@@ -37,6 +37,9 @@ Options:
                          Fail when BMC timeout-case count increases vs baseline
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
+  --fail-on-new-bmc-drop-remark-cases
+                         Fail when BMC dropped-syntax remark case count
+                         (`drop_remark_cases`) increases vs baseline
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1701,6 +1704,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
+FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -1999,6 +2003,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
+    --fail-on-new-bmc-drop-remark-cases)
+      FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -3850,6 +3856,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -7890,6 +7897,13 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
       summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      drop_line=$(grep -E "sv-tests dropped-syntax summary:" "$OUT_DIR/sv-tests-bmc.log" | tail -1 || true)
+      if [[ -n "$drop_line" ]]; then
+        drop_cases=$(extract_kv "$drop_line" drop_remark_cases)
+        if [[ -n "$drop_cases" ]]; then
+          summary="${summary} bmc_drop_remark_cases=${drop_cases}"
+        fi
+      fi
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
@@ -7964,6 +7978,13 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
       summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      drop_line=$(grep -E "sv-tests dropped-syntax summary:" "$OUT_DIR/sv-tests-bmc-uvm-semantics.log" | tail -1 || true)
+      if [[ -n "$drop_line" ]]; then
+        drop_cases=$(extract_kv "$drop_line" drop_remark_cases)
+        if [[ -n "$drop_cases" ]]; then
+          summary="${summary} bmc_drop_remark_cases=${drop_cases}"
+        fi
+      fi
       bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
@@ -10279,6 +10300,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
@@ -10301,6 +10323,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
@@ -10480,6 +10503,9 @@ fail_on_new_bmc_timeout_cases = (
 )
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
+)
+fail_on_new_bmc_drop_remark_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASES", "0") == "1"
 )
 fail_on_new_bmc_backend_parity_mismatch_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
@@ -10706,6 +10732,22 @@ for key, current_row in summary.items():
                 if current_unknown > baseline_unknown:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_unknown_cases increased ({baseline_unknown} -> {current_unknown}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_drop_remark_cases:
+            baseline_drop_remark_values = []
+            for counts in parsed_counts:
+                if "bmc_drop_remark_cases" in counts:
+                    baseline_drop_remark_values.append(
+                        int(counts["bmc_drop_remark_cases"])
+                    )
+            if baseline_drop_remark_values:
+                baseline_drop_remark = min(baseline_drop_remark_values)
+                current_drop_remark = int(
+                    current_counts.get("bmc_drop_remark_cases", 0)
+                )
+                if current_drop_remark > baseline_drop_remark:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
                     )
         if fail_on_new_bmc_backend_parity_mismatch_cases:
             baseline_parity_values = []

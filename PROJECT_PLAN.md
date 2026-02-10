@@ -1073,3 +1073,7 @@ See CHANGELOG.md on recent progress.
    `drop_remark_cases` for frontend diagnostics matching
    `"will be dropped during lowering"` and supports opt-in enforcement via
    `FAIL_ON_DROP_REMARKS=1`.
+6. Formal orchestration now tracks this guardrail in strict-gate telemetry:
+   `utils/run_formal_all.sh` captures `bmc_drop_remark_cases` for
+   `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS`, and can gate regression via
+   `--fail-on-new-bmc-drop-remark-cases` (enabled by `--strict-gate`).
