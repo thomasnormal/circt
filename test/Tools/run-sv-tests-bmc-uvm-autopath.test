@@ -1,0 +1,7 @@
+// REQUIRES: uvm
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16 %t/bin
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.10--uvm-autopath.sv <<\"EOF\"\n/*\n:name: uvm_autopath\n:description: verifies BMC harness auto-resolves default UVM path\n:type: simulation\n:tags: uvm\n:unsynthesizable: 1\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/bin/circt-verilog <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nhw.module @top(out out: i1) attributes {num_regs = 0 : i32, initial_values = []} {\n  %true = hw.constant true\n  verif.assert %true : i1\n  hw.output %true : i1\n}\nMLIR\nEOF\nchmod +x %t/bin/circt-verilog\n'
+// RUN: bash -eu -c $'cat > %t/bin/circt-bmc <<\"EOF\"\n#!/usr/bin/env bash\nexit 0\nEOF\nchmod +x %t/bin/circt-bmc\n'
+// RUN: env -u UVM_PATH OUT=%t/results.tsv CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 TAG_REGEX='uvm' TEST_FILTER='uvm-autopath' %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// CHECK: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip={{[0-9]+}} unknown=0 timeout=0

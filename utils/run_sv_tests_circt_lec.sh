@@ -24,7 +24,7 @@ CIRCT_LEC="${CIRCT_LEC:-build/bin/circt-lec}"
 CIRCT_OPT_ARGS="${CIRCT_OPT_ARGS:-}"
 CIRCT_LEC_ARGS="${CIRCT_LEC_ARGS:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
-UVM_PATH="${UVM_PATH:-$(pwd)/lib/Runtime/uvm}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
 INCLUDE_UVM_TAGS="${INCLUDE_UVM_TAGS:-0}"
 TAG_REGEX_EFFECTIVE="$TAG_REGEX"
@@ -42,20 +42,52 @@ KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 LEC_ASSUME_KNOWN_INPUTS="${LEC_ASSUME_KNOWN_INPUTS:-0}"
 LEC_ACCEPT_XPROP_ONLY="${LEC_ACCEPT_XPROP_ONLY:-0}"
 
+resolve_default_uvm_path() {
+  local candidate
+  for candidate in \
+    "$SCRIPT_DIR/../lib/Runtime/uvm" \
+    "$SCRIPT_DIR/../lib/Runtime/uvm-core/src" \
+    "$SCRIPT_DIR/../lib/Runtime/uvm-core" \
+    "/home/thomas-ahle/uvm-core/src"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "$SCRIPT_DIR/../lib/Runtime/uvm"
+}
+
+UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
+
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
   exit 1
 fi
 
-if [[ -z "$Z3_BIN" ]]; then
-  if command -v z3 >/dev/null 2>&1; then
-    Z3_BIN="z3"
-  elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
-    Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
-  elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
-    Z3_BIN="/home/thomas-ahle/z3/build/z3"
+if [[ "$LEC_SMOKE_ONLY" != "1" ]]; then
+  if [[ -n "$Z3_BIN" ]]; then
+    if [[ "$Z3_BIN" == */* ]]; then
+      if [[ ! -x "$Z3_BIN" ]]; then
+        echo "z3 not found or not executable: $Z3_BIN" >&2
+        exit 1
+      fi
+    elif ! command -v "$Z3_BIN" >/dev/null 2>&1; then
+      echo "z3 not found in PATH: $Z3_BIN" >&2
+      exit 1
+    fi
   else
-    Z3_BIN="z3"
+    if command -v z3 >/dev/null 2>&1; then
+      Z3_BIN="z3"
+    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    fi
+  fi
+
+  if [[ -z "$Z3_BIN" ]]; then
+    echo "z3 not found; set Z3_BIN or enable LEC_SMOKE_ONLY" >&2
+    exit 1
   fi
 fi
 
