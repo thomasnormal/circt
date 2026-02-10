@@ -54,11 +54,14 @@ struct FieldAccess {
 static constexpr StringLiteral kLECLocalSignalAttr = "lec.local";
 static constexpr StringLiteral kBMCAbstractedLLHDInterfaceInputsAttr =
     "circt.bmc_abstracted_llhd_interface_inputs";
+static constexpr StringLiteral kBMCAbstractedLLHDInterfaceInputDetailsAttr =
+    "circt.bmc_abstracted_llhd_interface_input_details";
 
 struct ModuleState {
   Namespace ns;
   unsigned insertIndex = 0;
   unsigned abstractedInterfaceInputCount = 0;
+  SmallVector<Attribute> abstractedInterfaceInputDetails;
 
   explicit ModuleState(hw::HWModuleOp module) {
     for (auto nameAttr : module.getModuleType().getInputNames())
@@ -71,12 +74,19 @@ struct ModuleState {
   }
 
   Value addInput(hw::HWModuleOp module, StringRef baseName, Type type) {
+    Builder builder(module.getContext());
     auto name = ns.newName(baseName);
+    auto newInput =
+        module.insertInput(insertIndex++,
+                           StringAttr::get(module.getContext(), name), type);
     ++abstractedInterfaceInputCount;
-    return module
-        .insertInput(insertIndex++, StringAttr::get(module.getContext(), name),
-                     type)
-        .second;
+    abstractedInterfaceInputDetails.push_back(DictionaryAttr::get(
+        module.getContext(),
+        {builder.getNamedAttr("name", newInput.first),
+         builder.getNamedAttr("base", StringAttr::get(module.getContext(),
+                                                      baseName)),
+         builder.getNamedAttr("type", TypeAttr::get(type))}));
+    return newInput.second;
   }
 };
 
@@ -3506,8 +3516,12 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
           kBMCAbstractedLLHDInterfaceInputsAttr,
           IntegerAttr::get(IntegerType::get(module.getContext(), 32),
                            state.abstractedInterfaceInputCount));
+      hwModule->setAttr(kBMCAbstractedLLHDInterfaceInputDetailsAttr,
+                        ArrayAttr::get(module.getContext(),
+                                       state.abstractedInterfaceInputDetails));
     } else {
       hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputsAttr);
+      hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputDetailsAttr);
     }
   }
 
