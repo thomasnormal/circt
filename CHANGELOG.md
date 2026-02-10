@@ -1,5 +1,93 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 969 - February 10, 2026
+
+### `run_formal_all`: Explicit Caller Filters for Non-OpenTitan BMC/LEC Lanes
+
+1. Hardened lane preflight validation in `utils/run_formal_all.sh`:
+   selected non-OpenTitan BMC/LEC lanes now require explicit caller filters.
+2. New enforced requirements:
+   - `verilator-verification/BMC` -> `--verilator-bmc-test-filter`
+   - `verilator-verification/LEC` -> `--verilator-lec-test-filter`
+   - `yosys/tests/sva/BMC` -> `--yosys-bmc-test-filter`
+   - `yosys/tests/sva/LEC` -> `--yosys-lec-test-filter`
+3. Updated help text and strict-gate lit tests to pass explicit lane filters
+   (`.*` for intentionally unfiltered fixture coverage).
+4. Expanded missing-filter regression coverage in
+   `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test` to cover
+   verilator/yosys lanes in addition to sv-tests lanes.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-ids.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-reasons.test test/Tools/run-formal-all-strict-gate-lec-counter.test test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test test/Tools/run-formal-all-strict-gate-lec-diag-keys.test test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-any.test test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-defaults.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-any.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons.test test/Tools/run-formal-all-opentitan-lec-explicit-diag-counter.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test`: PASS (19/19)
+- Filtered external LEC smoke:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-path-fallback-smoke-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^verilator-verification/LEC$' --verilator-lec-test-filter 'assert_fell' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --fail-on-any-lec-diag-path-fallback-cases`
+  - Result: PASS (`verilator-verification/LEC`: `total=1 pass=1 fail=0`, `lec_diag_path_fallback_cases=0`)
+
+## Iteration 968 - February 10, 2026
+
+### `circt-mut report`: Bounded History Retention (`--history-max-runs`)
+
+1. Extended `circt-mut report` in `tools/circt-mut/circt-mut.cpp` with:
+   - `--history-max-runs N`
+2. Added post-append history pruning workflow:
+   - keeps only the latest `N` `run_id` groups in history TSV
+   - rewrites history atomically through the native writer path
+   - surfaces retention telemetry in report output:
+     - `history.max_runs`
+     - `history.pruned_runs`
+     - `history.pruned_rows`
+3. Added argument validation:
+   - positive integer required for `--history-max-runs`
+   - `--history-max-runs` requires `--append-history` or `--history`
+4. Added/updated regression coverage:
+   - new: `test/Tools/circt-mut-report-history-max-runs-prune.test`
+   - new: `test/Tools/circt-mut-report-history-max-runs-requires-append.test`
+   - updated: `test/Tools/circt-mut-report-help.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-history-max-runs-prune.test test/Tools/circt-mut-report-history-max-runs-requires-append.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (44/44)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (163/163)
+- Filtered external cadence attempt:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-history-max-runs-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell'`
+  - Result: run executed through AVIP lanes then aborted in summary generation with `utils/run_formal_all.sh: line 9210: syntax error near unexpected token '('`; `bash -n utils/run_formal_all.sh` still reports PASS.
+
+## Iteration 967 - February 10, 2026
+
+### `run_formal_all`: LEC Path-Fallback Strict-Gate Hardening
+
+1. Extended `utils/run_formal_all.sh` strict-gate controls for LEC diag
+   provenance drift:
+   - `--fail-on-new-lec-diag-path-fallback-cases`
+   - `--fail-on-any-lec-diag-path-fallback-cases`
+2. `--strict-gate` now enables
+   `--fail-on-new-lec-diag-path-fallback-cases` by default so baseline
+   comparison catches new fallback usage.
+3. Expanded LEC summarization counters to always emit explicit baseline-safe
+   keys:
+   - `lec_diag_explicit_cases`
+   - `lec_diag_path_fallback_cases`
+   - `lec_diag_missing_cases`
+4. Added/updated regression coverage:
+   - new: `test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-any.test`
+   - new: `test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-defaults.test`
+   - updated:
+     - `test/Tools/run-formal-all-help.test`
+     - `test/Tools/run-formal-all-strict-gate-lec-diag-keys.test`
+     - `test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-opentitan-lec-explicit-diag-counter.test test/Tools/run-formal-all-opentitan-lec-fallback-diag.test test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test test/Tools/run-formal-all-strict-gate-lec-diag-keys.test test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-any.test test/Tools/run-formal-all-strict-gate-lec-diag-path-fallback-defaults.test`: PASS (8/8)
+- Filtered external LEC smoke:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-path-fallback-smoke-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^verilator-verification/LEC$' --verilator-lec-test-filter 'assert_fell' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --fail-on-any-lec-diag-path-fallback-cases`
+  - Result: PASS (`verilator-verification/LEC`: `total=1 pass=1 fail=0`, `lec_diag_path_fallback_cases=0`)
+
 ## Iteration 966 - February 10, 2026
 
 ### `circt-mut report`: Native History Bootstrap Workflow

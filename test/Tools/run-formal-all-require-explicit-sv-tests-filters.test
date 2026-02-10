@@ -5,7 +5,15 @@
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-bmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=BMC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/LEC$"' 2>&1 | FileCheck %s --check-prefix=LEC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-uvm --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-sv-tests-uvm-bmc-semantics --include-lane-regex "^sv-tests-uvm/BMC_SEMANTICS$"' 2>&1 | FileCheck %s --check-prefix=UVM
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-vbmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^verilator-verification/BMC$"' 2>&1 | FileCheck %s --check-prefix=VBMC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-vlec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^verilator-verification/LEC$"' 2>&1 | FileCheck %s --check-prefix=VLEC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ybmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^yosys/tests/sva/BMC$"' 2>&1 | FileCheck %s --check-prefix=YBMC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ylec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^yosys/tests/sva/LEC$"' 2>&1 | FileCheck %s --check-prefix=YLEC
 //
 // BMC: sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or --sv-tests-bmc-test-filter
 // LEC: sv-tests/LEC requires explicit filter: set --sv-tests-lec-tag-regex or --sv-tests-lec-test-filter
 // UVM: sv-tests-uvm/BMC_SEMANTICS requires explicit filter: set --sv-tests-uvm-bmc-semantics-tag-regex or --sv-tests-uvm-bmc-semantics-test-filter
+// VBMC: verilator-verification/BMC requires explicit filter: set --verilator-bmc-test-filter
+// VLEC: verilator-verification/LEC requires explicit filter: set --verilator-lec-test-filter
+// YBMC: yosys/tests/sva/BMC requires explicit filter: set --yosys-bmc-test-filter
+// YLEC: yosys/tests/sva/LEC requires explicit filter: set --yosys-lec-test-filter
