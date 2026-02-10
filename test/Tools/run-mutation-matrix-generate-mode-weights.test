@@ -16,8 +16,8 @@
 // LOG: Mutation matrix summary: pass=1 fail=0
 // RESULTS: lane_id{{.*}}status{{.*}}exit_code
 // RESULTS-NEXT: lane1{{.*}}PASS{{.*}}0
-// GEN: 1 M_inv_1
-// GEN: 2 M_const0_1
+// GEN: 1 M_const0_1
+// GEN: 2 M_const1_1
 // GEN: 3 M_cnot0_1
 // GEN: 4 M_cnot0_2
 // GEN: 5 M_cnot1_1

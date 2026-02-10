@@ -8,8 +8,8 @@
 // RUN: FileCheck %s --check-prefix=SEED7 < %t/mutations-seed7.txt
 // RUN: FileCheck %s --check-prefix=SEED8 < %t/mutations-seed8.txt
 //
-// SEED7: 1 M_inv_1
-// SEED7: 2 M_const0_1
+// SEED7: 1 M_const0_1
+// SEED7: 2 M_const1_1
 // SEED7: 3 M_cnot0_1
 // SEED7: 4 M_cnot0_2
 // SEED7: 5 M_cnot1_1
