@@ -6720,14 +6720,17 @@ generate_bmc_abstraction_provenance_case_map() {
   local out_dir="$1"
   local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
   local token_summary_file="$out_dir/bmc-abstraction-provenance-token-summary.tsv"
-  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" python3 - <<'PY'
+  local assertion_summary_file="$out_dir/bmc-abstraction-provenance-assertion-attribution.tsv"
+  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" ASSERTION_SUMMARY_FILE="$assertion_summary_file" python3 - <<'PY'
 import csv
 import os
+import re
 from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
 case_map_path = Path(os.environ["CASE_MAP_FILE"])
 token_summary_path = Path(os.environ["TOKEN_SUMMARY_FILE"])
+assertion_summary_path = Path(os.environ["ASSERTION_SUMMARY_FILE"])
 
 sources = [
     (
@@ -6810,22 +6813,66 @@ def resolve_status(suite: str, mode: str, case_id: str, case_path: str) -> str:
 
 rows = []
 token_buckets = {}
+re_decl = re.compile(r"^\s*(property|sequence)\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
+re_stmt = re.compile(r"\b(assert|assume|cover|expect)\b")
+
+def compact_line(text: str) -> str:
+    return " ".join(text.strip().split())
+
+def extract_assertion_sites(case_path: str, max_sites: int = 12):
+    if not case_path:
+        return []
+    path = Path(case_path)
+    if not path.exists() or not path.is_file():
+        return []
+    sites = []
+    seen = set()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as f:
+            for lineno, raw_line in enumerate(f, start=1):
+                line = raw_line.rstrip("\n")
+                stripped = line.strip()
+                if not stripped or stripped.startswith("//"):
+                    continue
+                entry = None
+                decl = re_decl.match(line)
+                if decl:
+                    entry = f"L{lineno}:{decl.group(1)} {decl.group(2)}"
+                elif re_stmt.search(line):
+                    snippet = compact_line(line)
+                    if len(snippet) > 160:
+                        snippet = snippet[:157] + "..."
+                    entry = f"L{lineno}:{snippet}"
+                if not entry or entry in seen:
+                    continue
+                seen.add(entry)
+                sites.append(entry)
+                if len(sites) >= max_sites:
+                    break
+    except Exception:
+        return []
+    return sites
+
 for key in sorted(token_rows.keys()):
     suite, mode, case_id, case_path = key
     tokens = sorted(token_rows[key])
     status = resolve_status(suite, mode, case_id, case_path)
     fail_like = status in fail_like_statuses
+    assertion_sites = extract_assertion_sites(case_path)
+    assertion_sites_serialized = ";".join(assertion_sites)
     rows.append(
-        (
-            suite,
-            mode,
-            case_id,
-            status,
-            "1" if fail_like else "0",
-            case_path,
-            str(len(tokens)),
-            ";".join(tokens),
-        )
+        {
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "status": status,
+            "is_fail_like": "1" if fail_like else "0",
+            "case_path": case_path,
+            "provenance_token_count": str(len(tokens)),
+            "provenance_tokens": ";".join(tokens),
+            "assertion_site_count": str(len(assertion_sites)),
+            "assertion_sites": assertion_sites_serialized,
+        }
     )
     for token in tokens:
         bucket_key = (suite, mode, token)
@@ -6850,10 +6897,58 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
             "case_path",
             "provenance_token_count",
             "provenance_tokens",
+            "assertion_site_count",
+            "assertion_sites",
         ]
     )
     for row in rows:
-        writer.writerow(row)
+        writer.writerow(
+            [
+                row["suite"],
+                row["mode"],
+                row["case_id"],
+                row["status"],
+                row["is_fail_like"],
+                row["case_path"],
+                row["provenance_token_count"],
+                row["provenance_tokens"],
+                row["assertion_site_count"],
+                row["assertion_sites"],
+            ]
+        )
+
+assertion_summary_path.parent.mkdir(parents=True, exist_ok=True)
+with assertion_summary_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t")
+    writer.writerow(
+        [
+            "suite",
+            "mode",
+            "case_id",
+            "status",
+            "is_fail_like",
+            "case_path",
+            "assertion_site_count",
+            "assertion_sites",
+            "provenance_token_count",
+            "provenance_tokens",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                row["suite"],
+                row["mode"],
+                row["case_id"],
+                row["status"],
+                row["is_fail_like"],
+                row["case_path"],
+                row["assertion_site_count"],
+                row["assertion_sites"],
+                row["provenance_token_count"],
+                row["provenance_tokens"],
+            ]
+        )
 
 token_summary_path.parent.mkdir(parents=True, exist_ok=True)
 with token_summary_path.open("w", newline="", encoding="utf-8") as f:
@@ -7596,6 +7691,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-abstraction-provenance-token-summary.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-token-summary.tsv")" -gt 1 ]]; then
     echo "BMC abstraction provenance token summary: $OUT_DIR/bmc-abstraction-provenance-token-summary.tsv"
+  fi
+  if [[ -f "$OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv")" -gt 1 ]]; then
+    echo "BMC abstraction provenance assertion attribution: $OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv"
   fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"

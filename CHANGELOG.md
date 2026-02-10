@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 884 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Assertion-Level Provenance Attribution
+
+1. Added assertion/sequence attribution report to formal orchestration:
+   - file:
+     - `utils/run_formal_all.sh`
+   - new report:
+     - `bmc-abstraction-provenance-assertion-attribution.tsv`
+   - joins provenance-correlated BMC cases with source assertion sites:
+     - `assertion_site_count`
+     - `assertion_sites` (line-numbered snippets)
+2. Case-map schema extension:
+   - `bmc-abstraction-provenance-case-map.tsv` now includes:
+     - `assertion_site_count`
+     - `assertion_sites`
+3. Summary output integration:
+   - formal summary now prints assertion-attribution report path when data rows
+     are present.
+
+### Tests and Validation
+
+- Script syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- BMC lanes run with assertion attribution:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-assert-attribution-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - status unchanged:
+    - `sv-tests/BMC`: `23/26`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+  - attribution report for known failing semantic-closure cases now includes
+    direct source anchors, e.g.:
+    - `16.10--property-local-var-fail`: `L64:property prop`, `L69:assert property (prop)...`
+    - `16.10--sequence-local-var-fail`: `L64:sequence seq`, `L69:assert property (seq)...`
+    - `16.15--property-disable-iff-fail`: `L51:property prop`, `L55:assert property (prop)...`
+- OpenTitan LEC sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-assert-attribution-20260210 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 883 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Provenance Token Prioritization
