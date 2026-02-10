@@ -439,6 +439,30 @@ Options:
                          Run only lanes whose lane-id matches REGEX
   --exclude-lane-regex REGEX
                          Skip lanes whose lane-id matches REGEX
+  --sv-tests-bmc-tag-regex REGEX
+                         Tag filter passed to sv-tests BMC runner
+  --sv-tests-bmc-test-filter REGEX
+                         Base-name regex filter passed to sv-tests BMC runner
+  --sv-tests-lec-tag-regex REGEX
+                         Tag filter passed to sv-tests LEC runner
+  --sv-tests-lec-test-filter REGEX
+                         Base-name regex filter passed to sv-tests LEC runner
+  --sv-tests-uvm-bmc-semantics-tag-regex REGEX
+                         Tag filter passed to sv-tests UVM semantics BMC lane
+  --sv-tests-uvm-bmc-semantics-test-filter REGEX
+                         Base-name regex filter passed to sv-tests UVM
+                         semantics BMC lane
+  --verilator-bmc-test-filter REGEX
+                         Base-name regex filter passed to verilator BMC runner
+  --verilator-lec-test-filter REGEX
+                         Base-name regex filter passed to verilator LEC runner
+  --yosys-bmc-test-filter REGEX
+                         Base-name regex filter passed to yosys SVA BMC runner
+  --yosys-lec-test-filter REGEX
+                         Base-name regex filter passed to yosys SVA LEC runner
+  --require-explicit-sv-tests-filters
+                         Deprecated no-op (explicit sv-tests filters are now
+                         always required for selected sv-tests lanes)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
                          non-sv-tests BMC suite runs (sv-tests BMC lanes
                          already force SMT-LIB mode for semantic parity)
@@ -1937,7 +1961,16 @@ BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_ACCEPT_XPROP_ONLY=0
-SV_TESTS_BMC_UVM_SEMANTICS_FILTER='^(16\.10--property-local-var-uvm|16\.10--sequence-local-var-uvm|16\.11--sequence-subroutine-uvm|16\.13--sequence-multiclock-uvm|16\.15--property-iff-uvm|16\.15--property-iff-uvm-fail)$'
+SV_TESTS_BMC_TAG_REGEX="${SV_TESTS_BMC_TAG_REGEX:-}"
+SV_TESTS_BMC_TEST_FILTER="${SV_TESTS_BMC_TEST_FILTER:-}"
+SV_TESTS_LEC_TAG_REGEX="${SV_TESTS_LEC_TAG_REGEX:-}"
+SV_TESTS_LEC_TEST_FILTER="${SV_TESTS_LEC_TEST_FILTER:-}"
+SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX="${SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX:-}"
+SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER="${SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER:-}"
+VERILATOR_BMC_TEST_FILTER="${VERILATOR_BMC_TEST_FILTER:-}"
+VERILATOR_LEC_TEST_FILTER="${VERILATOR_LEC_TEST_FILTER:-}"
+YOSYS_BMC_TEST_FILTER="${YOSYS_BMC_TEST_FILTER:-}"
+YOSYS_LEC_TEST_FILTER="${YOSYS_LEC_TEST_FILTER:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -2319,6 +2352,28 @@ while [[ $# -gt 0 ]]; do
       INCLUDE_LANE_REGEX="$2"; shift 2 ;;
     --exclude-lane-regex)
       EXCLUDE_LANE_REGEX="$2"; shift 2 ;;
+    --sv-tests-bmc-tag-regex)
+      SV_TESTS_BMC_TAG_REGEX="$2"; shift 2 ;;
+    --sv-tests-bmc-test-filter)
+      SV_TESTS_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --sv-tests-lec-tag-regex)
+      SV_TESTS_LEC_TAG_REGEX="$2"; shift 2 ;;
+    --sv-tests-lec-test-filter)
+      SV_TESTS_LEC_TEST_FILTER="$2"; shift 2 ;;
+    --sv-tests-uvm-bmc-semantics-tag-regex)
+      SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX="$2"; shift 2 ;;
+    --sv-tests-uvm-bmc-semantics-test-filter)
+      SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER="$2"; shift 2 ;;
+    --verilator-bmc-test-filter)
+      VERILATOR_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --verilator-lec-test-filter)
+      VERILATOR_LEC_TEST_FILTER="$2"; shift 2 ;;
+    --yosys-bmc-test-filter)
+      YOSYS_BMC_TEST_FILTER="$2"; shift 2 ;;
+    --yosys-lec-test-filter)
+      YOSYS_LEC_TEST_FILTER="$2"; shift 2 ;;
+    --require-explicit-sv-tests-filters)
+      shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -2361,6 +2416,106 @@ if [[ -n "$EXCLUDE_LANE_REGEX" ]]; then
   set -e
   if [[ "$lane_regex_ec" == "2" ]]; then
     echo "invalid --exclude-lane-regex: $EXCLUDE_LANE_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_BMC_TAG_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_BMC_TAG_REGEX" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-bmc-tag-regex: $SV_TESTS_BMC_TAG_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_BMC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_BMC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-bmc-test-filter: $SV_TESTS_BMC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_LEC_TAG_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_LEC_TAG_REGEX" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-lec-tag-regex: $SV_TESTS_LEC_TAG_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_LEC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_LEC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-lec-test-filter: $SV_TESTS_LEC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-uvm-bmc-semantics-tag-regex: $SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --sv-tests-uvm-bmc-semantics-test-filter: $SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$VERILATOR_BMC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$VERILATOR_BMC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --verilator-bmc-test-filter: $VERILATOR_BMC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$VERILATOR_LEC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$VERILATOR_LEC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --verilator-lec-test-filter: $VERILATOR_LEC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$YOSYS_BMC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$YOSYS_BMC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --yosys-bmc-test-filter: $YOSYS_BMC_TEST_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$YOSYS_LEC_TEST_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$YOSYS_LEC_TEST_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --yosys-lec-test-filter: $YOSYS_LEC_TEST_FILTER" >&2
     exit 1
   fi
 fi
@@ -6018,6 +6173,16 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_ocsp_responder_id_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_OCSP_RESPONDER_ID_REGEX"
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
+    printf "sv_tests_bmc_tag_regex=%s\n" "$SV_TESTS_BMC_TAG_REGEX"
+    printf "sv_tests_bmc_test_filter=%s\n" "$SV_TESTS_BMC_TEST_FILTER"
+    printf "sv_tests_lec_tag_regex=%s\n" "$SV_TESTS_LEC_TAG_REGEX"
+    printf "sv_tests_lec_test_filter=%s\n" "$SV_TESTS_LEC_TEST_FILTER"
+    printf "sv_tests_uvm_bmc_semantics_tag_regex=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX"
+    printf "sv_tests_uvm_bmc_semantics_test_filter=%s\n" "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER"
+    printf "verilator_bmc_test_filter=%s\n" "$VERILATOR_BMC_TEST_FILTER"
+    printf "verilator_lec_test_filter=%s\n" "$VERILATOR_LEC_TEST_FILTER"
+    printf "yosys_bmc_test_filter=%s\n" "$YOSYS_BMC_TEST_FILTER"
+    printf "yosys_lec_test_filter=%s\n" "$YOSYS_LEC_TEST_FILTER"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -6747,6 +6912,16 @@ run_suite() {
   return $ec
 }
 
+suite_exit_code() {
+  local name="$1"
+  local exit_file="$OUT_DIR/${name}.exit"
+  if [[ -f "$exit_file" ]]; then
+    cat "$exit_file"
+  else
+    echo "unknown"
+  fi
+}
+
 lane_enabled() {
   local lane_id="$1"
   if [[ -n "$INCLUDE_LANE_REGEX" ]]; then
@@ -6761,6 +6936,26 @@ lane_enabled() {
   fi
   return 0
 }
+
+if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
+  if [[ -z "$SV_TESTS_BMC_TAG_REGEX" && -z "$SV_TESTS_BMC_TEST_FILTER" ]]; then
+    echo "sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or --sv-tests-bmc-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
+  if [[ -z "$SV_TESTS_LEC_TAG_REGEX" && -z "$SV_TESTS_LEC_TEST_FILTER" ]]; then
+    echo "sv-tests/LEC requires explicit filter: set --sv-tests-lec-tag-regex or --sv-tests-lec-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
+   [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests-uvm/BMC_SEMANTICS"; then
+  if [[ -z "$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX" && -z "$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER" ]]; then
+    echo "sv-tests-uvm/BMC_SEMANTICS requires explicit filter: set --sv-tests-uvm-bmc-semantics-tag-regex or --sv-tests-uvm-bmc-semantics-test-filter" >&2
+    exit 1
+  fi
+fi
 
 extract_kv() {
   local line="$1"
@@ -7982,6 +8177,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+      TAG_REGEX="$SV_TESTS_BMC_TAG_REGEX" \
+      TEST_FILTER="$SV_TESTS_BMC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
     line=$(grep -E "sv-tests SVA summary:" "$OUT_DIR/sv-tests-bmc.log" | tail -1 || true)
@@ -8021,6 +8218,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
           BMC_RUN_SMTLIB=0 \
           ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
           BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+          TAG_REGEX="$SV_TESTS_BMC_TAG_REGEX" \
+          TEST_FILTER="$SV_TESTS_BMC_TEST_FILTER" \
           Z3_BIN="$Z3_BIN" \
           utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
         bmc_backend_parity_summary="$(
@@ -8034,6 +8233,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
         fi
       fi
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+    else
+      suite_ec="$(suite_exit_code sv-tests-bmc)"
+      summary="total=0 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_summary=1 runner_exit=${suite_ec}"
+      record_result_with_summary "sv-tests" "BMC" 0 0 0 0 0 1 0 "$summary"
     fi
   fi
 fi
@@ -8065,7 +8268,8 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       ALLOW_MULTI_CLOCK=1 \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       INCLUDE_UVM_TAGS=1 \
-      TEST_FILTER="$SV_TESTS_BMC_UVM_SEMANTICS_FILTER" \
+      TAG_REGEX="$SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX" \
+      TEST_FILTER="$SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
     line=$(grep -E "sv-tests SVA summary:" "$OUT_DIR/sv-tests-bmc-uvm-semantics.log" | tail -1 || true)
@@ -8099,6 +8303,10 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
         summary="${summary} ${bmc_check_summary}"
       fi
       record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
+    else
+      suite_ec="$(suite_exit_code sv-tests-bmc-uvm-semantics)"
+      summary="total=0 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_summary=1 runner_exit=${suite_ec}"
+      record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" 0 0 0 0 0 1 0 "$summary"
     fi
   fi
 fi
@@ -8118,6 +8326,8 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       LEC_DROP_REMARK_REASONS_OUT="$sv_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      TAG_REGEX="$SV_TESTS_LEC_TAG_REGEX" \
+      TEST_FILTER="$SV_TESTS_LEC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_sv_tests_circt_lec.sh "$SV_TESTS_DIR" || true
     line=$(grep -E "sv-tests LEC summary:" "$OUT_DIR/sv-tests-lec.log" | tail -1 || true)
@@ -8133,6 +8343,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
         summary="${summary} ${lec_drop_summary}"
       fi
       record_result_with_summary "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
+    else
+      suite_ec="$(suite_exit_code sv-tests-lec)"
+      summary="total=0 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_summary=1 runner_exit=${suite_ec}"
+      record_result_with_summary "sv-tests" "LEC" 0 0 0 0 0 1 0 "$summary"
     fi
   fi
 fi
@@ -8160,6 +8374,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+      TEST_FILTER="$VERILATOR_BMC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_verilator_verification_circt_bmc.sh "$VERILATOR_DIR" || true
     line=$(grep -E "verilator-verification summary:" "$OUT_DIR/verilator-bmc.log" | tail -1 || true)
@@ -8212,6 +8427,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       LEC_DROP_REMARK_REASONS_OUT="$verilator_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      TEST_FILTER="$VERILATOR_LEC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_verilator_verification_circt_lec.sh "$VERILATOR_DIR" || true
     line=$(grep -E "verilator-verification LEC summary:" "$OUT_DIR/verilator-lec.log" | tail -1 || true)
@@ -8256,6 +8472,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_DROP_REMARK_CASES_OUT="$yosys_bmc_drop_remark_cases_file"
       BMC_DROP_REMARK_REASONS_OUT="$yosys_bmc_drop_remark_reasons_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
+      TEST_FILTER="$YOSYS_BMC_TEST_FILTER"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
       yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
@@ -8310,6 +8527,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       LEC_DROP_REMARK_REASONS_OUT="$yosys_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
+      TEST_FILTER="$YOSYS_LEC_TEST_FILTER" \
       Z3_BIN="$Z3_BIN" \
       utils/run_yosys_sva_circt_lec.sh "$YOSYS_DIR" || true
     line=$(grep -E "yosys LEC summary:" "$OUT_DIR/yosys-lec.log" | tail -1 || true)
