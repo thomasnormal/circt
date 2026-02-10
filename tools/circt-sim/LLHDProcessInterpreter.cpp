@@ -1956,7 +1956,19 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
   // as function arguments.
   if (auto castOp = value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
     if (castOp.getInputs().size() == 1) {
-      return resolveSignalId(castOp.getInputs()[0]);
+      Value castInput = castOp.getInputs()[0];
+      // If the cast converts a probe result (VALUE) to !llhd.ref (SIGNAL REF),
+      // trace through the probe to find the underlying signal. This pattern
+      // occurs when interface pointer signals are passed through module ports:
+      //   %sig = llhd.sig %ptr : !llvm.ptr
+      //   %val = llhd.prb %sig : !llvm.ptr
+      //   %ref = unrealized_conversion_cast %val : !llvm.ptr to !llhd.ref<!llvm.ptr>
+      if (auto probeOp = castInput.getDefiningOp<llhd::ProbeOp>()) {
+        if (SignalId sigId = getSignalId(probeOp.getSignal()))
+          return sigId;
+        return resolveSignalId(probeOp.getSignal());
+      }
+      return resolveSignalId(castInput);
     }
   }
   // Note: arith.select on ref types is handled dynamically in interpretProbe
@@ -4420,6 +4432,21 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   notifyProcessAwaiters(procId);
 }
 
+void LLHDProcessInterpreter::killProcessTree(ProcessId procId) {
+  // First, recursively kill all fork children of this process.
+  for (ForkId forkId : forkJoinManager.getForksForParent(procId)) {
+    if (auto *group = forkJoinManager.getForkGroup(forkId)) {
+      for (ProcessId childId : group->childProcesses) {
+        auto childIt = processStates.find(childId);
+        if (childIt != processStates.end() && !childIt->second.halted)
+          killProcessTree(childId); // Recurse into grandchildren
+      }
+    }
+  }
+  // Then kill this process itself.
+  finalizeProcess(procId, /*killed=*/true);
+}
+
 //===----------------------------------------------------------------------===//
 // Time Conversion
 //===----------------------------------------------------------------------===//
@@ -5810,6 +5837,7 @@ arith_dispatch:
     Value calleeValue = callIndirectOp.getCallee();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
 
+
     // Throttle vtable dispatch warnings to prevent flooding stderr during
     // UVM initialization. Both X function pointers and unmapped addresses
     // share a single counter.
@@ -6183,6 +6211,150 @@ arith_dispatch:
           break;
         }
 
+        // Intercept resource_db in static fallback path.
+        if (resolvedName.contains("resource_db") &&
+            resolvedName.contains("implementation") &&
+            (resolvedName.contains("::set") ||
+             resolvedName.contains("::read_by_name"))) {
+
+          auto readStr2 = [&](unsigned argIdx) -> std::string {
+            if (argIdx >= sArgs.size())
+              return "";
+            InterpretedValue val = sArgs[argIdx];
+            if (val.isX() || val.getWidth() < 128)
+              return "";
+            llvm::APInt bits = val.getAPInt();
+            uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+            int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+            if (strPtr == 0 || strLen <= 0)
+              return "";
+            auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+            if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+                dynIt->second.second > 0)
+              return std::string(
+                  dynIt->second.first,
+                  std::min(static_cast<size_t>(strLen),
+                           static_cast<size_t>(dynIt->second.second)));
+            uint64_t off2 = 0;
+            MemoryBlock *gBlock2 = findBlockByAddress(strPtr, off2);
+            if (gBlock2 && gBlock2->initialized) {
+              size_t avail = std::min(
+                  static_cast<size_t>(strLen),
+                  gBlock2->data.size() - static_cast<size_t>(off2));
+              if (avail > 0)
+                return std::string(
+                    reinterpret_cast<const char *>(gBlock2->data.data() + off2),
+                    avail);
+            }
+            if (strPtr >= 0x10000) {
+              const char *p = reinterpret_cast<const char *>(strPtr);
+              return std::string(p, static_cast<size_t>(strLen));
+            }
+            return "";
+          };
+
+          if (resolvedName.contains("::set") &&
+              !resolvedName.contains("set_default") &&
+              !resolvedName.contains("set_override") &&
+              !resolvedName.contains("set_anonymous")) {
+            if (sArgs.size() >= 4) {
+              std::string scope = readStr2(1);
+              std::string fieldName = readStr2(2);
+              std::string key = scope + "." + fieldName;
+              InterpretedValue &valueArg = sArgs[3];
+              unsigned valueBits = valueArg.getWidth();
+              unsigned valueBytes = (valueBits + 7) / 8;
+              std::vector<uint8_t> valueData(valueBytes, 0);
+              if (!valueArg.isX()) {
+                llvm::APInt valBits = valueArg.getAPInt();
+                for (unsigned i = 0; i < valueBytes; ++i)
+                  valueData[i] = static_cast<uint8_t>(
+                      valBits.extractBits(8, i * 8).getZExtValue());
+              }
+              configDbEntries[key] = std::move(valueData);
+            }
+            staticResolved = true;
+            break;
+          }
+
+          if (resolvedName.contains("::read_by_name") &&
+              sArgs.size() >= 4 &&
+              callIndirectOp.getNumResults() >= 1) {
+            std::string scope = readStr2(1);
+            std::string fieldName = readStr2(2);
+            std::string key = scope + "." + fieldName;
+
+            auto entryIt = configDbEntries.find(key);
+            if (entryIt == configDbEntries.end()) {
+              for (auto &[k, v] : configDbEntries) {
+                size_t dotPos = k.rfind('.');
+                if (dotPos != std::string::npos &&
+                    k.substr(dotPos + 1) == fieldName) {
+                  entryIt = configDbEntries.find(k);
+                  break;
+                }
+              }
+            }
+
+            if (entryIt != configDbEntries.end()) {
+              Value outputRef = callIndirectOp.getArgOperands()[3];
+              const std::vector<uint8_t> &valueData = entryIt->second;
+              Type refType = outputRef.getType();
+
+              if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+                Type innerType = refT.getNestedType();
+                unsigned innerBits = getTypeWidth(innerType);
+                unsigned innerBytes = (innerBits + 7) / 8;
+                llvm::APInt valueBits2(innerBits, 0);
+                for (unsigned i = 0;
+                     i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+                  valueBits2.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+                SignalId sigId3 = resolveSignalId(outputRef);
+                if (sigId3 != 0)
+                  pendingEpsilonDrives[sigId3] = InterpretedValue(valueBits2);
+                // Also write to memory (same as direct-resolution path).
+                InterpretedValue refAddr3 = getValue(procId, outputRef);
+                if (!refAddr3.isX()) {
+                  uint64_t addr3 = refAddr3.getUInt64();
+                  uint64_t off4 = 0;
+                  MemoryBlock *blk3 = findBlockByAddress(addr3, off4);
+                  if (blk3 && blk3->initialized) {
+                    unsigned wb3 = std::min(
+                        innerBytes,
+                        (unsigned)(blk3->data.size() - off4));
+                    for (unsigned i = 0; i < wb3; ++i)
+                      blk3->data[off4 + i] = valueData[i];
+                  }
+                }
+              } else if (isa<LLVM::LLVMPointerType>(refType)) {
+                if (!sArgs[3].isX()) {
+                  uint64_t outputAddr = sArgs[3].getUInt64();
+                  uint64_t outOff2 = 0;
+                  MemoryBlock *outBlock =
+                      findBlockByAddress(outputAddr, outOff2);
+                  if (outBlock && outBlock->initialized) {
+                    unsigned writeBytes =
+                        std::min((unsigned)valueData.size(),
+                                 (unsigned)(outBlock->data.size() - outOff2));
+                    for (unsigned i = 0; i < writeBytes; ++i)
+                      outBlock->data[outOff2 + i] = valueData[i];
+                  }
+                }
+              }
+
+              setValue(procId, callIndirectOp.getResult(0),
+                      InterpretedValue(llvm::APInt(1, 1)));
+              staticResolved = true;
+              break;
+            }
+
+            setValue(procId, callIndirectOp.getResult(0),
+                    InterpretedValue(llvm::APInt(1, 0)));
+            staticResolved = true;
+            break;
+          }
+        }
+
         auto &cs2 = processStates[procId];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
@@ -6320,14 +6492,152 @@ arith_dispatch:
       return success();
     }
 
-    // Phase lifecycle debug traces (disabled for performance)
-    // Uncomment for debugging UVM phase progression:
-    // if (calleeName.contains("phase_hopper")) { ... }
 
     // Gather argument values (use getArgOperands to get just the arguments, not callee)
     SmallVector<InterpretedValue, 4> args;
     for (Value arg : callIndirectOp.getArgOperands()) {
       args.push_back(getValue(procId, arg));
+    }
+
+    // Intercept resource_db_implementation via call_indirect (vtable dispatch).
+    // resource_db#(T) is parametric, so each specialization has its own vtable
+    // and calls go through call_indirect, not func.call.
+    if (calleeName.contains("resource_db") && calleeName.contains("implementation") &&
+        (calleeName.contains("::set") || calleeName.contains("::read_by_name"))) {
+
+      auto readStr = [&](unsigned argIdx) -> std::string {
+        if (argIdx >= args.size())
+          return "";
+        InterpretedValue val = args[argIdx];
+        if (val.isX() || val.getWidth() < 128)
+          return "";
+        llvm::APInt bits = val.getAPInt();
+        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+        if (strPtr == 0 || strLen <= 0)
+          return "";
+        auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+        if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+            dynIt->second.second > 0)
+          return std::string(dynIt->second.first,
+                             std::min(static_cast<size_t>(strLen),
+                                      static_cast<size_t>(dynIt->second.second)));
+        uint64_t off = 0;
+        MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+        if (gBlock && gBlock->initialized) {
+          size_t avail = std::min(static_cast<size_t>(strLen),
+                                  gBlock->data.size() - static_cast<size_t>(off));
+          if (avail > 0)
+            return std::string(
+                reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+        }
+        if (strPtr >= 0x10000) {
+          const char *p = reinterpret_cast<const char *>(strPtr);
+          return std::string(p, static_cast<size_t>(strLen));
+        }
+        return "";
+      };
+
+      if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
+          !calleeName.contains("set_override") &&
+          !calleeName.contains("set_anonymous")) {
+        // set(self, scope, field_name, value, ...)
+        if (args.size() >= 4) {
+          std::string scope = readStr(1);
+          std::string fieldName = readStr(2);
+          std::string key = scope + "." + fieldName;
+          InterpretedValue &valueArg = args[3];
+          unsigned valueBits = valueArg.getWidth();
+          unsigned valueBytes = (valueBits + 7) / 8;
+          std::vector<uint8_t> valueData(valueBytes, 0);
+          if (!valueArg.isX()) {
+            llvm::APInt valBits = valueArg.getAPInt();
+            for (unsigned i = 0; i < valueBytes; ++i)
+              valueData[i] = static_cast<uint8_t>(
+                  valBits.extractBits(8, i * 8).getZExtValue());
+          }
+          configDbEntries[key] = std::move(valueData);
+        }
+        return success();
+      }
+
+      if (calleeName.contains("::read_by_name")) {
+        // read_by_name(self, scope, field_name, output_ref, ...) -> i1
+        if (args.size() >= 4 && callIndirectOp.getNumResults() >= 1) {
+          std::string scope = readStr(1);
+          std::string fieldName = readStr(2);
+          std::string key = scope + "." + fieldName;
+
+          auto it = configDbEntries.find(key);
+          if (it == configDbEntries.end()) {
+            for (auto &[k, v] : configDbEntries) {
+              size_t dotPos = k.rfind('.');
+              if (dotPos != std::string::npos &&
+                  k.substr(dotPos + 1) == fieldName) {
+                it = configDbEntries.find(k);
+                break;
+              }
+            }
+          }
+
+          if (it != configDbEntries.end()) {
+            // Write value to output_ref (arg 3)
+            Value outputRef = callIndirectOp.getArgOperands()[3];
+            const std::vector<uint8_t> &valueData = it->second;
+            Type refType = outputRef.getType();
+
+            if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+              Type innerType = refT.getNestedType();
+              unsigned innerBits = getTypeWidth(innerType);
+              unsigned innerBytes = (innerBits + 7) / 8;
+              llvm::APInt valueBits(innerBits, 0);
+              for (unsigned i = 0;
+                   i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+                valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+              SignalId sigId2 = resolveSignalId(outputRef);
+              if (sigId2 != 0)
+                pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
+              // Also write directly to memory so that llvm.load can read it.
+              // The ref value holds the address of the backing memory.
+              InterpretedValue refAddr = getValue(procId, outputRef);
+              if (!refAddr.isX()) {
+                uint64_t addr = refAddr.getUInt64();
+                uint64_t off3 = 0;
+                MemoryBlock *blk = findBlockByAddress(addr, off3);
+                if (blk && blk->initialized) {
+                  unsigned wb = std::min(
+                      innerBytes,
+                      (unsigned)(blk->data.size() - off3));
+                  for (unsigned i = 0; i < wb; ++i)
+                    blk->data[off3 + i] = valueData[i];
+                }
+              }
+            } else if (isa<LLVM::LLVMPointerType>(refType)) {
+              // Pointer output: write directly to memory
+              if (!args[3].isX()) {
+                uint64_t outputAddr = args[3].getUInt64();
+                uint64_t outOff = 0;
+                MemoryBlock *outBlock = findBlockByAddress(outputAddr, outOff);
+                if (outBlock && outBlock->initialized) {
+                  unsigned writeBytes =
+                      std::min((unsigned)valueData.size(),
+                               (unsigned)(outBlock->data.size() - outOff));
+                  for (unsigned i = 0; i < writeBytes; ++i)
+                    outBlock->data[outOff + i] = valueData[i];
+                }
+              }
+            }
+
+            setValue(procId, callIndirectOp.getResult(0),
+                    InterpretedValue(llvm::APInt(1, 1)));
+            return success();
+          }
+
+          setValue(procId, callIndirectOp.getResult(0),
+                  InterpretedValue(llvm::APInt(1, 0)));
+          return success();
+        }
+      }
     }
 
     // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
@@ -7728,11 +8038,29 @@ llvm_dispatch:
   // In simulation, halt the enclosing process since it has no useful work.
   // These typically appear in processes like: ^bb1: verif.cover ... / cf.br ^bb1
   // which would spin forever if we just returned success().
-  if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp,
-          verif::ClockedAssertOp, verif::ClockedAssumeOp,
+  // Handle immediate (procedural) assertions: check the condition but
+  // continue execution. Only clocked/concurrent assertions are unsupported.
+  if (auto assertOp = dyn_cast<verif::AssertOp>(op)) {
+    InterpretedValue cond = getValue(procId, assertOp.getProperty());
+    if (!cond.isX() && cond.getAPInt().isZero()) {
+      std::string label;
+      if (auto labelAttr = assertOp->getAttrOfType<StringAttr>("label"))
+        label = labelAttr.getValue().str();
+      llvm::errs() << "[circt-sim] Assertion failed";
+      if (!label.empty())
+        llvm::errs() << ": " << label;
+      llvm::errs() << " at " << assertOp.getLoc() << "\n";
+    }
+    return success();
+  }
+  if (isa<verif::AssumeOp, verif::CoverOp>(op)) {
+    // Assume/cover: skip in simulation
+    return success();
+  }
+  if (isa<verif::ClockedAssertOp, verif::ClockedAssumeOp,
           verif::ClockedCoverOp>(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "  Formal verification op in simulation - "
-                            << "halting process\n");
+    LLVM_DEBUG(llvm::dbgs() << "  Clocked formal verification op in simulation"
+                            << " - halting process\n");
     finalizeProcess(procId, /*killed=*/false);
     return success();
   }
@@ -10490,6 +10818,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // the m_inst != uvm_top comparison that fails during construction.
   StringRef calleeName = callOp.getCallee();
 
+
   // Handle process::self() - both the old stub (@self) and the runtime function.
   // Old compilations of circt-verilog generated a stub @self() that returns null.
   // Intercept it here to return the actual process handle, fixing UVM's
@@ -11422,6 +11751,154 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs()
                    << "  config_db::exists(\"" << key << "\") -> "
                    << (found ? "true" : "false") << "\n");
+        return success();
+      }
+    }
+  }
+
+  // Intercept UVM resource_db_implementation_t::set/read_by_name methods.
+  // Like config_db_implementation, these are stub functions that need real
+  // key-value store behavior. resource_db is used by the sv-tests UVM
+  // testbenches to pass virtual interfaces from the module to UVM components.
+  if (calleeName.contains("resource_db") && calleeName.contains("implementation") &&
+      (calleeName.contains("::set") || calleeName.contains("::read_by_name"))) {
+
+    // Reuse the config_db string helper
+    auto readStringFromStructVal2 = [&](Value operand) -> std::string {
+      InterpretedValue val = getValue(procId, operand);
+      if (val.isX() || val.getWidth() < 128)
+        return "";
+      llvm::APInt bits = val.getAPInt();
+      uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
+      int64_t strLen = bits.extractBits(64, 64).getSExtValue();
+      if (strPtr == 0 || strLen <= 0)
+        return "";
+      auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
+      if (dynIt != dynamicStrings.end() && dynIt->second.first &&
+          dynIt->second.second > 0) {
+        return std::string(dynIt->second.first,
+                           std::min(static_cast<size_t>(strLen),
+                                    static_cast<size_t>(dynIt->second.second)));
+      }
+      uint64_t off = 0;
+      MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
+      if (gBlock && gBlock->initialized) {
+        size_t avail = std::min(static_cast<size_t>(strLen),
+                                gBlock->data.size() - static_cast<size_t>(off));
+        if (avail > 0)
+          return std::string(
+              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+      }
+      for (auto &entry : nativeMemoryBlocks) {
+        if (strPtr >= entry.first && strPtr < entry.first + entry.second) {
+          const char *p = reinterpret_cast<const char *>(strPtr);
+          return std::string(p, static_cast<size_t>(strLen));
+        }
+      }
+      if (strPtr >= 0x10000) {
+        const char *p = reinterpret_cast<const char *>(strPtr);
+        return std::string(p, static_cast<size_t>(strLen));
+      }
+      return "";
+    };
+
+    if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
+        !calleeName.contains("set_override") &&
+        !calleeName.contains("set_anonymous")) {
+      // Signature: (self, scope, field_name, value, accessor)
+      if (callOp.getNumOperands() >= 4) {
+        std::string scope = readStringFromStructVal2(callOp.getOperand(1));
+        std::string fieldName = readStringFromStructVal2(callOp.getOperand(2));
+        std::string key = scope + "." + fieldName;
+
+        InterpretedValue valueArg = getValue(procId, callOp.getOperand(3));
+        unsigned valueBits = valueArg.getWidth();
+        unsigned valueBytes = (valueBits + 7) / 8;
+        std::vector<uint8_t> valueData(valueBytes, 0);
+        if (!valueArg.isX()) {
+          llvm::APInt valBits = valueArg.getAPInt();
+          for (unsigned i = 0; i < valueBytes; ++i)
+            valueData[i] = static_cast<uint8_t>(
+                valBits.extractBits(8, i * 8).getZExtValue());
+        }
+
+        configDbEntries[key] = std::move(valueData);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  resource_db::set(\"" << key << "\", "
+                   << valueBits << " bits)\n");
+      }
+      return success();
+    }
+
+    if (calleeName.contains("::read_by_name")) {
+      // Signature: (self, scope, field_name, output_ref, accessor) -> i1
+      if (callOp.getNumOperands() >= 4 && callOp.getNumResults() >= 1) {
+        std::string scope = readStringFromStructVal2(callOp.getOperand(1));
+        std::string fieldName = readStringFromStructVal2(callOp.getOperand(2));
+        std::string key = scope + "." + fieldName;
+
+        auto it = configDbEntries.find(key);
+        if (it == configDbEntries.end()) {
+          for (auto &[k, v] : configDbEntries) {
+            size_t dotPos = k.rfind('.');
+            if (dotPos != std::string::npos &&
+                k.substr(dotPos + 1) == fieldName) {
+              it = configDbEntries.find(k);
+              break;
+            }
+          }
+        }
+
+        if (it != configDbEntries.end()) {
+          Value outputRef = callOp.getOperand(3);
+          const std::vector<uint8_t> &valueData = it->second;
+          InterpretedValue refVal = getValue(procId, outputRef);
+          Type refType = outputRef.getType();
+
+          if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+            // llhd.ref output: write via signal drive
+            Type innerType = refT.getNestedType();
+            unsigned innerBits = getTypeWidth(innerType);
+            unsigned innerBytes = (innerBits + 7) / 8;
+            llvm::APInt valueBits(innerBits, 0);
+            for (unsigned i = 0;
+                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i) {
+              valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+            }
+            SignalId sigId2 = resolveSignalId(outputRef);
+            if (sigId2 != 0) {
+              InterpretedValue driveVal(valueBits);
+              pendingEpsilonDrives[sigId2] = driveVal;
+            }
+          } else if (isa<LLVM::LLVMPointerType>(refType)) {
+            // Pointer output: write directly to memory
+            if (!refVal.isX()) {
+              uint64_t outputAddr = refVal.getUInt64();
+              uint64_t outOff = 0;
+              MemoryBlock *outBlock =
+                  findBlockByAddress(outputAddr, outOff);
+              if (outBlock && outBlock->initialized) {
+                unsigned writeBytes =
+                    std::min((unsigned)valueData.size(),
+                             (unsigned)(outBlock->data.size() - outOff));
+                for (unsigned i = 0; i < writeBytes; ++i)
+                  outBlock->data[outOff + i] = valueData[i];
+              }
+            }
+          }
+
+          setValue(procId, callOp.getResult(0),
+                  InterpretedValue(llvm::APInt(1, 1))); // true = success
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  resource_db::read_by_name(\"" << key
+                     << "\") -> found\n");
+          return success();
+        }
+
+        setValue(procId, callOp.getResult(0),
+                InterpretedValue(llvm::APInt(1, 0))); // false = not found
+        LLVM_DEBUG(llvm::dbgs() << "  resource_db::read_by_name(\"" << key
+                                << "\") -> not found\n");
         return success();
       }
     }
@@ -12985,8 +13462,17 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         return success();
       }
 
-      // Objections are at 0 and master child is done — phase is complete
+      // Objections are at 0 and master child is done — phase is complete.
+      // Kill all processes spawned during this phase (monitors with forever
+      // loops, scoreboards waiting on events, etc.). Without this cleanup,
+      // these tasks would run indefinitely and block subsequent phases.
       yieldCount = 0;
+      auto childIt2 = masterPhaseProcessChild.find(phaseAddr);
+      if (childIt2 != masterPhaseProcessChild.end()) {
+        ProcessId masterChildId = childIt2->second;
+        killProcessTree(masterChildId);
+        masterPhaseProcessChild.erase(childIt2);
+      }
       // Skip the fork entirely — continue to next op after the fork
       return success();
     }
@@ -13343,6 +13829,71 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     };
 
     SignalId sigId = traceToSignal(input, 0);
+
+    // Runtime VIF fallback: when SSA tracing fails (e.g., VIF pointer stored
+    // in a class field obtained via resource_db), try to resolve the VIF field
+    // address at runtime using pre-executed values and interfaceFieldSignals.
+    if (sigId == 0 && !interfaceFieldSignals.empty()) {
+      // Walk backwards from detect_event input to find the llvm.load that
+      // reads the VIF field value. The address of that load is the VIF field
+      // address, which should be in interfaceFieldSignals.
+      std::function<SignalId(Value, int)> traceViaRuntime =
+          [&](Value value, int depth) -> SignalId {
+        if (depth > 16)
+          return 0;
+        Operation *defOp = value.getDefiningOp();
+        if (!defOp)
+          return 0;
+
+        // For llvm.load: get the runtime address of what we're loading from
+        if (auto loadOp = dyn_cast<LLVM::LoadOp>(defOp)) {
+          InterpretedValue addrVal = getValue(procId, loadOp.getAddr());
+          if (!addrVal.isX()) {
+            uint64_t addr = addrVal.getUInt64();
+            auto fieldIt = interfaceFieldSignals.find(addr);
+            if (fieldIt != interfaceFieldSignals.end())
+              return fieldIt->second;
+          }
+          return traceViaRuntime(loadOp.getAddr(), depth + 1);
+        }
+
+        // Trace through casts, struct_create, extractvalue, GEP
+        if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+          if (!castOp.getInputs().empty())
+            return traceViaRuntime(castOp.getInputs()[0], depth + 1);
+        }
+        if (auto structCreate = dyn_cast<hw::StructCreateOp>(defOp)) {
+          for (Value operand : structCreate.getOperands()) {
+            SignalId s = traceViaRuntime(operand, depth + 1);
+            if (s != 0) return s;
+          }
+        }
+        if (auto extractOp = dyn_cast<LLVM::ExtractValueOp>(defOp)) {
+          return traceViaRuntime(extractOp.getContainer(), depth + 1);
+        }
+        if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp)) {
+          InterpretedValue gepVal = getValue(procId, gepOp.getResult());
+          if (!gepVal.isX()) {
+            uint64_t addr = gepVal.getUInt64();
+            auto fieldIt = interfaceFieldSignals.find(addr);
+            if (fieldIt != interfaceFieldSignals.end())
+              return fieldIt->second;
+          }
+          return traceViaRuntime(gepOp.getBase(), depth + 1);
+        }
+        return 0;
+      };
+
+      sigId = traceViaRuntime(input, 0);
+      LLVM_DEBUG({
+        if (sigId != 0)
+          llvm::dbgs() << "    Runtime VIF fallback found signal " << sigId
+                       << "\n";
+        else
+          llvm::dbgs() << "    Runtime VIF fallback: no match\n";
+      });
+    }
+
     if (sigId != 0) {
       waitList.addLevel(sigId);
       LLVM_DEBUG(llvm::dbgs() << "    Waiting on signal " << sigId
