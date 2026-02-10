@@ -3644,6 +3644,9 @@ enum MatrixLaneColumn : size_t {
   ColMutationsProfiles = 32,
   ColMutationsModeCounts = 33,
   ColGlobalPropagateCirctChain = 34,
+  ColSkipBaseline = 39,
+  ColFailOnUndetected = 40,
+  ColFailOnErrors = 41,
   ColGlobalPropagateTimeoutSeconds = 42,
   ColGlobalPropagateLECTimeoutSeconds = 43,
   ColGlobalPropagateBMCTimeoutSeconds = 44,
@@ -3686,6 +3689,9 @@ struct MatrixNativePrequalifyConfig {
   bool defaultGlobalFilterAcceptXpropOnly = false;
   bool defaultGlobalFilterBMCRunSMTLib = false;
   bool defaultGlobalFilterBMCAssumeKnownInputs = false;
+  bool defaultSkipBaseline = false;
+  bool defaultFailOnUndetected = false;
+  bool defaultFailOnErrors = false;
 };
 } // namespace
 
@@ -3774,6 +3780,9 @@ static bool parseMatrixNativePrequalifyConfig(ArrayRef<std::string> args,
       args, "--default-formal-global-propagate-bmc-run-smtlib");
   cfg.defaultGlobalFilterBMCAssumeKnownInputs = hasOptionFlag(
       args, "--default-formal-global-propagate-bmc-assume-known-inputs");
+  cfg.defaultSkipBaseline = hasOptionFlag(args, "--skip-baseline");
+  cfg.defaultFailOnUndetected = hasOptionFlag(args, "--fail-on-undetected");
+  cfg.defaultFailOnErrors = hasOptionFlag(args, "--fail-on-errors");
 
   if (cfg.lanesTSVPath.empty()) {
     error = "circt-mut matrix: missing --lanes-tsv for native prequalification.";
@@ -4950,6 +4959,9 @@ static int runNativeMatrixDispatch(const char *argv0,
     bool acceptXpropOnly = false;
     bool bmcRunSMTLib = false;
     bool bmcAssumeKnown = false;
+    bool skipBaseline = false;
+    bool failOnUndetected = false;
+    bool failOnErrors = false;
     if (!parseLaneBoolWithDefault(
             trimmedColumn(cols, ColGlobalPropagateAssumeKnownInputs),
             cfg.defaultGlobalFilterAssumeKnownInputs, assumeKnown, error,
@@ -4965,7 +4977,17 @@ static int runNativeMatrixDispatch(const char *argv0,
         !parseLaneBoolWithDefault(
             trimmedColumn(cols, ColGlobalPropagateBMCAssumeKnownInputs),
             cfg.defaultGlobalFilterBMCAssumeKnownInputs, bmcAssumeKnown, error,
-            "global_propagate_bmc_assume_known_inputs", laneID)) {
+            "global_propagate_bmc_assume_known_inputs", laneID) ||
+        !parseLaneBoolWithDefault(trimmedColumn(cols, ColSkipBaseline),
+                                  cfg.defaultSkipBaseline, skipBaseline, error,
+                                  "skip_baseline", laneID) ||
+        !parseLaneBoolWithDefault(trimmedColumn(cols, ColFailOnUndetected),
+                                  cfg.defaultFailOnUndetected,
+                                  failOnUndetected, error,
+                                  "fail_on_undetected", laneID) ||
+        !parseLaneBoolWithDefault(trimmedColumn(cols, ColFailOnErrors),
+                                  cfg.defaultFailOnErrors, failOnErrors, error,
+                                  "fail_on_errors", laneID)) {
       writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                    "CONFIG_ERROR", "invalid_lane_boolean_override");
       ++laneFail;
@@ -4982,6 +5004,12 @@ static int runNativeMatrixDispatch(const char *argv0,
       coverCmd.push_back("--formal-global-propagate-bmc-run-smtlib");
     if (bmcAssumeKnown)
       coverCmd.push_back("--formal-global-propagate-bmc-assume-known-inputs");
+    if (skipBaseline)
+      coverCmd.push_back("--skip-baseline");
+    if (failOnUndetected)
+      coverCmd.push_back("--fail-on-undetected");
+    if (failOnErrors)
+      coverCmd.push_back("--fail-on-errors");
 
     int coverRC = -1;
     std::string runError;
