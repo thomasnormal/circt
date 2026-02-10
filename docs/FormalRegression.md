@@ -593,6 +593,9 @@ Execution controls:
     execution and cache-key generation.
   - native generate now also validates `--mode`, `--mode-count(s)`, and
     `--mode-weight(s)` names against built-in mode/family names.
+  - `utils/generate_mutations_yosys.sh` now applies the same mode-name
+    validation for `--mode` / `--modes`, `--mode-count(s)`, and
+    `--mode-weight(s)`.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache

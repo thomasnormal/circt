@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+//
+// RUN: not %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 5 --modes arith,bogus 2> %t/log-mode.txt
+// RUN: FileCheck %s --check-prefix=ERR_MODE < %t/log-mode.txt
+//
+// RUN: not %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 5 --mode-counts bogus=5 2> %t/log-count.txt
+// RUN: FileCheck %s --check-prefix=ERR_COUNT_MODE < %t/log-count.txt
+//
+// RUN: not %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 5 --mode-weights bogus=1 2> %t/log-weight.txt
+// RUN: FileCheck %s --check-prefix=ERR_WEIGHT_MODE < %t/log-weight.txt
+//
+// ERR_MODE: Unknown --mode value: bogus (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect).
+// ERR_COUNT_MODE: Unknown --mode-count mode: bogus (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect).
+// ERR_WEIGHT_MODE: Unknown --mode-weight mode: bogus (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect).

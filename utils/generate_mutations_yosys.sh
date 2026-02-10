@@ -315,6 +315,18 @@ declare -a PROFILE_MODE_LIST=()
 declare -a PROFILE_CFG_LIST=()
 declare -a PROFILE_SELECT_LIST=()
 
+is_known_mode() {
+  local mode_name="$1"
+  case "$mode_name" in
+    inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 mode_family_targets() {
   local mode_name="$1"
   case "$mode_name" in
@@ -414,6 +426,16 @@ for profile in "${PROFILE_LIST[@]}"; do
   append_profile "$profile"
 done
 
+for mode in "${MODE_LIST[@]}"; do
+  mode="${mode#"${mode%%[![:space:]]*}"}"
+  mode="${mode%"${mode##*[![:space:]]}"}"
+  [[ -z "$mode" ]] && continue
+  if ! is_known_mode "$mode"; then
+    echo "Unknown --mode value: $mode (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)." >&2
+    exit 1
+  fi
+done
+
 declare -a COMBINED_MODE_LIST=()
 declare -A MODE_SEEN=()
 declare -a FINAL_MODE_LIST=()
@@ -439,6 +461,10 @@ for mode_count in "${MODE_COUNT_LIST[@]}"; do
   mode_value="${mode_value%"${mode_value##*[![:space:]]}"}"
   if [[ -z "$mode_name" ]]; then
     echo "Invalid --mode-count entry: $mode_count (empty mode name)." >&2
+    exit 1
+  fi
+  if ! is_known_mode "$mode_name"; then
+    echo "Unknown --mode-count mode: $mode_name (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)." >&2
     exit 1
   fi
   if [[ ! "$mode_value" =~ ^[1-9][0-9]*$ ]]; then
@@ -471,6 +497,10 @@ for mode_weight in "${MODE_WEIGHT_LIST[@]}"; do
   mode_value="${mode_value%"${mode_value##*[![:space:]]}"}"
   if [[ -z "$mode_name" ]]; then
     echo "Invalid --mode-weight entry: $mode_weight (empty mode name)." >&2
+    exit 1
+  fi
+  if ! is_known_mode "$mode_name"; then
+    echo "Unknown --mode-weight mode: $mode_name (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)." >&2
     exit 1
   fi
   if [[ ! "$mode_value" =~ ^[1-9][0-9]*$ ]]; then

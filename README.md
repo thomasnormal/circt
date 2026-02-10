@@ -497,6 +497,8 @@ extra allocations are distributed with deterministic seed-rotated assignment
 (`--mutations-seed`) instead of always favoring the first listed operator.
 Native `circt-mut generate` and `utils/generate_mutations_yosys.sh` use the
 same policy.
+Both now also fail-fast validate mode names for `--mode` / `--modes` and mode
+keys in `--mode-count(s)` / `--mode-weight(s)`.
 
 Additional fault-model aliases:
 - `stuck` -> `const0,const1`
