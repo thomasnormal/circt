@@ -11,5 +11,5 @@
 //
 // LOG: Mutation matrix summary: pass=0 fail=1
 //
-// RESULTS: lane_id{{.*}}status{{.*}}exit_code{{.*}}gate_status{{.*}}config_error_reason
-// RESULTS-NEXT: lane_bad{{.*}}FAIL{{.*}}1{{.*}}CONFIG_ERROR{{.*}}Invalid lane mutations_modes mode: bogus
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code{{.*}}gate_status{{.*}}config_error_code{{.*}}config_error_reason
+// RESULTS-NEXT: lane_bad{{.*}}FAIL{{.*}}1{{.*}}CONFIG_ERROR{{.*}}INVALID_MUTATIONS_MODES{{.*}}Invalid lane mutations_modes mode: bogus
