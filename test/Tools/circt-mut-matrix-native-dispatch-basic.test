@@ -8,12 +8,14 @@
 // RUN: printf '1 M1\n' > %t/mutations.txt
 // RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
 // RUN: printf 'lane_ok\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\nlane_fail\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
-// RUN: not env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --lanes-tsv %t/lanes.tsv --out-dir %t/out > %t/log.txt
+// RUN: not env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --lanes-tsv %t/lanes.tsv --out-dir %t/out --gate-summary-file %t/out/gates.tsv > %t/log.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: FileCheck %s --check-prefix=GATES < %t/out/gates.tsv
 // RUN: test ! -e %t/matrix_invoked
 //
 // LOG-DAG: native_matrix_dispatch_results_tsv{{[[:space:]]+}}{{.*}}/out/results.tsv
+// LOG-DAG: native_matrix_dispatch_gate_summary_tsv{{[[:space:]]+}}{{.*}}/out/gates.tsv
 // LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}2
 // LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}1
@@ -21,3 +23,7 @@
 // RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status
 // RESULTS: lane_ok{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}75.00{{[[:space:]]}}PASS
 // RESULTS: lane_fail{{[[:space:]]}}FAIL{{[[:space:]]}}2{{[[:space:]]}}12.50{{[[:space:]]}}FAIL
+
+// GATES: gate_status{{[[:space:]]}}count
+// GATES-DAG: FAIL{{[[:space:]]}}1
+// GATES-DAG: PASS{{[[:space:]]}}1
