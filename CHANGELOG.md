@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 896 - February 10, 2026
+
+### BMC Semantic-Closure Coverage Expansion: Yosys Four-State Seed
+
+1. Seeded default yosys BMC semantic-tag map with a high-confidence 4-state
+   case:
+   - `utils/yosys-sva-bmc-semantic-tags.tsv`
+   - entry: `sva_value_change_sim  four_state`
+   - rationale: test explicitly exercises `X` transitions in sampled-value
+     checks (`$fell/$rose/$stable`) and is part of active fail-like rows.
+2. Added `run_formal_all` integration coverage for default map forwarding:
+   - `test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test`
+   - verifies:
+     - default `BMC_SEMANTIC_TAG_MAP_FILE` path wiring into yosys lane
+     - tagged classification in lane summary:
+       `bmc_semantic_bucket_tagged_cases=1`,
+       `bmc_semantic_bucket_four_state_cases=1`,
+       `bmc_semantic_bucket_unclassified_cases=0`.
+
+### Tests and Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test test/Tools/run-yosys-sva-bmc-semantic-tag-map.test test/Tools/run-yosys-sva-bmc-out-file.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-regression.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-no-regression-on-fail-drop.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-yosys-mapseed-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key result deltas:
+    - `yosys/tests/sva/BMC`: `classified_cases=1`, `tagged_cases=1`,
+      `four_state_cases=1`, `unclassified_cases=5`
+    - `sv-tests/BMC`: unchanged (`tagged_cases=3`)
+    - `verilator-verification/BMC`: still `tagged_cases=0` (next map-seeding
+      target)
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 895 - February 10, 2026
 
 ### BMC Semantic-Closure Hardening: Cross-Suite Tag Maps + Safer Strict Gate
