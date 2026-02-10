@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/semantic_case.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "verif.assert %0 : i1"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh && echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'semantic_case\tfour_state\n' > %t/semantic-tags.tsv
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 BMC_SEMANTIC_TAG_MAP_FILE=%t/semantic-tags.tsv OUT=%t/out.tsv \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
+// RUN: FileCheck %s --check-prefix=RUNOUT < %t/run.out
+// RUN: cat %t/out.tsv | FileCheck %s --check-prefix=OUTTSV
+//
+// RUNOUT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+// OUTTSV: PASS{{[[:space:]]+}}semantic_case{{[[:space:]]+}}{{.*}}semantic_case.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}BMC{{[[:space:]]+}}semantic_buckets=four_state
+

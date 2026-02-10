@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 895 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: Cross-Suite Tag Maps + Safer Strict Gate
+
+1. Extended semantic-tag map plumbing to all core BMC lanes:
+   - `utils/run_formal_all.sh` now forwards
+     `BMC_SEMANTIC_TAG_MAP_FILE` defaults for:
+     - `sv-tests/BMC` (existing map)
+     - `verilator-verification/BMC`
+     - `yosys/tests/sva/BMC`.
+   - Added default map files:
+     - `utils/verilator-bmc-semantic-tags.tsv`
+     - `utils/yosys-sva-bmc-semantic-tags.tsv`.
+2. Added map-driven semantic tag emission to runner outputs:
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - mapped cases now emit:
+     `STATUS case_id path <suite> BMC semantic_buckets=<...>`.
+3. Added strict-gate control:
+   - `--fail-on-bmc-semantic-tagged-cases-regression`
+   - enabled by default under `--strict-gate`.
+4. Fixed strict-gate false-positive behavior for closure wins:
+   - tagged-case regression now respects current fail-like volume
+     (`required_tagged = min(current_fail_like, baseline_tagged)`),
+     so reducing fail-like rows no longer fails the gate spuriously.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-regression.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-no-regression-on-fail-drop.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-uvm-semantics-failure-cases.test test/Tools/run-sv-tests-circt-bmc-semantic-tag-map.test test/Tools/run-verilator-verification-circt-bmc-semantic-tag-map.test test/Tools/run-verilator-verification-circt-bmc-unknown-timeout.test test/Tools/run-yosys-sva-bmc-out-file.test test/Tools/run-yosys-sva-bmc-semantic-tag-map.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-tag-regression-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - result:
+    - `sv-tests/BMC`: `total=26 pass=23 fail=3`, `tagged_cases=3`
+    - `verilator-verification/BMC`: `total=17 pass=12 fail=5`, `tagged_cases=0`
+    - `yosys/tests/sva/BMC`: `total=14 pass=7 fail=5 skip=2`, `tagged_cases=0`
+    - `opentitan/LEC` + `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 894 - February 10, 2026
 
 ### sv-tests Runner Semantic-Tag Emission (BMC Closure)

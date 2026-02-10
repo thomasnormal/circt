@@ -39,6 +39,9 @@ Options:
                          Fail when BMC semantic-bucket fail-like case counts
                          increase vs baseline (disable_iff/local_var/
                          multiclock/four_state)
+  --fail-on-bmc-semantic-tagged-cases-regression
+                         Fail when BMC semantic tagged-case count regresses
+                         vs baseline
   --fail-on-new-bmc-abstraction-provenance
                          Fail when BMC abstraction provenance tokens increase
                          vs baseline
@@ -1673,6 +1676,7 @@ FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
+FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
 BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE=""
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
@@ -1710,6 +1714,8 @@ REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_STATUS_REGEX=""
 REFRESH_EXPECTED_FAILURE_CASES_INCLUDE_ID_REGEX=""
 JSON_SUMMARY_FILE=""
 SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE="${SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE:-$SCRIPT_DIR/sv-tests-bmc-semantic-tags.tsv}"
+VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE="${VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE:-$SCRIPT_DIR/verilator-bmc-semantic-tags.tsv}"
+YOSYS_BMC_SEMANTIC_TAG_MAP_FILE="${YOSYS_BMC_SEMANTIC_TAG_MAP_FILE:-$SCRIPT_DIR/yosys-sva-bmc-semantic-tags.tsv}"
 LANE_STATE_TSV=""
 RESUME_FROM_LANE_STATE=0
 RESET_LANE_STATE=0
@@ -1963,6 +1969,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-cases)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1; shift ;;
+    --fail-on-bmc-semantic-tagged-cases-regression)
+      FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=1; shift ;;
     --fail-on-new-bmc-abstraction-provenance)
       FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=1; shift ;;
     --bmc-abstraction-provenance-allowlist-file)
@@ -3802,6 +3810,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
+  FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
@@ -7587,6 +7596,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
+      BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
@@ -7664,6 +7674,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
       BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
+      BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
       yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
@@ -9831,6 +9842,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
+      "$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
@@ -9848,6 +9860,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
+  FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION="$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
   BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
@@ -10026,6 +10039,9 @@ fail_on_new_bmc_ir_check_fingerprint_cases = (
 )
 fail_on_new_bmc_semantic_bucket_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES", "0") == "1"
+)
+fail_on_bmc_semantic_tagged_cases_regression = (
+    os.environ.get("FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION", "0") == "1"
 )
 fail_on_new_bmc_abstraction_provenance = (
     os.environ.get("FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE", "0") == "1"
@@ -10258,6 +10274,37 @@ for key, current_row in summary.items():
                 if current_semantic > baseline_semantic:
                     gate_errors.append(
                         f"{suite} {mode}: {semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})"
+                    )
+        if fail_on_bmc_semantic_tagged_cases_regression:
+            baseline_tagged_values = []
+            baseline_fail_like_values = []
+            for counts in parsed_counts:
+                if "bmc_semantic_bucket_tagged_cases" in counts:
+                    baseline_tagged_values.append(
+                        int(counts["bmc_semantic_bucket_tagged_cases"])
+                    )
+                if "bmc_semantic_bucket_fail_like_cases" in counts:
+                    baseline_fail_like_values.append(
+                        int(counts["bmc_semantic_bucket_fail_like_cases"])
+                    )
+            if baseline_tagged_values:
+                baseline_tagged = max(baseline_tagged_values)
+                baseline_fail_like = (
+                    max(baseline_fail_like_values) if baseline_fail_like_values else 0
+                )
+                current_tagged = int(
+                    current_counts.get("bmc_semantic_bucket_tagged_cases", 0)
+                )
+                current_fail_like = int(
+                    current_counts.get("bmc_semantic_bucket_fail_like_cases", 0)
+                )
+                required_tagged = min(current_fail_like, baseline_tagged)
+                if current_tagged < required_tagged:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_semantic_bucket_tagged_cases regressed "
+                        f"(baseline_tagged={baseline_tagged}, baseline_fail_like={baseline_fail_like}, "
+                        f"current_fail_like={current_fail_like}, current_tagged={current_tagged}, "
+                        f"required_tagged={required_tagged}, window={baseline_window})"
                     )
         if fail_on_new_bmc_abstraction_provenance:
             baseline_provenance_raw = [

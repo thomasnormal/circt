@@ -132,6 +132,12 @@ See CHANGELOG.md on recent progress.
   - Close remaining local-variable and `disable iff` semantic mismatches.
   - Reduce multi-clock edge-case divergence.
   - Expand full (not filtered) regular closure cadence on core suites.
+  - Keep strict-gate semantic-tag coverage checks active without blocking
+    legitimate closure wins (tagged-case regression is now fail-like-budget
+    aware when fail-like rows decrease).
+  - Remaining harness limitation:
+    `verilator-verification/BMC` and `yosys/tests/sva/BMC` semantic tag maps are
+    currently wired but mostly unseeded, so tagged-case signal remains sparse.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
