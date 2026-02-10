@@ -1234,6 +1234,12 @@ private:
   /// pointer signal, its field shadow signals are added to the sensitivity.
   llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 4>> interfacePtrToFieldSignals;
 
+  /// Native analysis port connection map. Maps port object address to
+  /// list of connected imp/export object addresses. Used to bypass UVM's
+  /// "Late Connection" phase check that incorrectly rejects connect() calls
+  /// during connect_phase.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 2>> analysisPortConnections;
+
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
   llvm::DenseSet<uint64_t> validAssocArrayAddresses;
