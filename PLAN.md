@@ -19,16 +19,15 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 ### Recent Fixes (This Session)
 
-1. **`resolveSignalId` cast+probe tracing** (LLHDProcessInterpreter.cpp): Fixed signal resolution for interface pointer signals passed through module ports. The pattern `unrealized_conversion_cast(llhd.prb(sig))` was not traced — `resolveSignalId` now follows through the cast to the probe to find the underlying signal. This unblocked DUT processes from delta overflow when using `always @(posedge in_if.clk)`.
+1. **`resolveSignalId` cast+probe tracing** — Fixed signal resolution for interface pointer signals passed through module ports via `unrealized_conversion_cast(llhd.prb(sig))`. Unblocked DUT `always @(posedge in_if.clk)` from delta overflow.
 
-2. **`resolveDrivers()` multi-bit fix** (ProcessScheduler.h): Fixed signal resolution for FourStateStruct signals. Old code used `getLSB()` to classify drivers — broken for `hw.struct<value, unknown>` where the value bit is at MSB. Fix: group drivers by full APInt value, resolve by effective strength.
+2. **`resolveDrivers()` multi-bit fix** — Fixed FourStateStruct signal resolution. Old `getLSB()` broken for MSB-value structs. Fix: group by full APInt value.
 
-3. **VIF shadow signals** (LLHDProcessInterpreter.cpp/h): Created per-field runtime signals for interface struct fields. Three components:
-   - `createInterfaceFieldShadowSignals()`: scans `valueToSignal` for `llhd.sig` holding `!llvm.ptr`, finds GEP users of interface structs, creates shadow signals per field
-   - Store interception in `interpretLLVMStore`: drives shadow signal when interface field written
-   - Sensitivity expansion in `interpretWait` (case 1 + case 3): expands interface ptr signals to field shadow signals
+3. **VIF shadow signals** — Per-field runtime signals for interface struct fields: `createInterfaceFieldShadowSignals()`, store interception, sensitivity expansion.
 
-4. **4 UVM tests now pass**: `uvm_agent_active` (resolveDrivers + VIF shadows), `uvm_agent_env`, `uvm_agent_passive`, `uvm_monitor_env` (resolveSignalId fix).
+4. **Analysis port connect/write interceptor** — Native interceptor bypasses UVM "Late Connection" phase check. Chain-following BFS dispatch: port → port/export → terminal imp via vtable slot 11.
+
+5. **7 UVM tests fixed**: `uvm_agent_active/env/passive`, `uvm_monitor_env`, `uvm_scoreboard_env/monitor_env/monitor_agent_env`. Only 1 xfail remains.
 
 ### xfail Breakdown (1 UVM test remaining)
 
@@ -78,7 +77,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 4. **Default bins** - `bins others = default` catch-all
 5. **Verify coverage vs Xcelium reference** - Compare APB 21-30% baseline
 
-### Track 4: UVM Testbench Fixes (**7 xfail remaining**)
+### Track 4: UVM Testbench Fixes (**1 xfail remaining**)
 **Goal**: Fix remaining 7 UVM testbench xfail tests.
 
 **Completed**:
