@@ -37,6 +37,7 @@ SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
+BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE:-}"
@@ -177,6 +178,7 @@ declare -A expected_cases
 declare -A observed_cases
 declare -A regen_override_cases
 declare -A suite_tests
+declare -A semantic_tags_by_case
 declare -a addrow_filter_source_patterns=()
 declare -a addrow_filter_key_patterns=()
 declare -a addrow_filter_row_patterns=()
@@ -8063,11 +8065,36 @@ emit_case_result_row() {
   local status="$1"
   local base="$2"
   local case_path="$3"
+  local tags="${semantic_tags_by_case[$base]-}"
   if [[ -z "$OUT" ]]; then
     return
   fi
-  printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\n" \
-    "$status" "$base" "$case_path" >> "$OUT"
+  if [[ -n "$tags" ]]; then
+    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\tsemantic_buckets=%s\n" \
+      "$status" "$base" "$case_path" "$tags" >> "$OUT"
+  else
+    printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\n" \
+      "$status" "$base" "$case_path" >> "$OUT"
+  fi
+}
+
+load_semantic_tag_map() {
+  if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r case_name tags extra; do
+    if [[ -z "$case_name" || "$case_name" =~ ^# ]]; then
+      continue
+    fi
+    if [[ -n "${extra:-}" ]]; then
+      continue
+    fi
+    tags="${tags// /}"
+    if [[ -z "$tags" ]]; then
+      continue
+    fi
+    semantic_tags_by_case["$case_name"]="$tags"
+  done < "$BMC_SEMANTIC_TAG_MAP_FILE"
 }
 
 report_case_outcome() {
@@ -8321,6 +8348,8 @@ run_case() {
     cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}_${mode}.mlir" 2>/dev/null || true
   fi
 }
+
+load_semantic_tag_map
 
 for sv in "$YOSYS_SVA_DIR"/*.sv; do
   if [[ ! -f "$sv" ]]; then

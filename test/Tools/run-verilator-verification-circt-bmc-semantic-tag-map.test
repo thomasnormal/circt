@@ -1,0 +1,16 @@
+// RUN: rm -rf %t/verilator %t/bin
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/verilator/tests/asserts/semantic_case.sv
+// RUN: printf '#!/bin/sh\necho "module @top {"\necho "  verif.assert %c0_i1"\necho "}"\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: printf 'semantic_case\tlocal_var,multiclock\n' > %t/semantic-tags.tsv
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_SMOKE_ONLY=1 \
+// RUN:   BMC_SEMANTIC_TAG_MAP_FILE=%t/semantic-tags.tsv OUT=%t/results.tsv \
+// RUN:   %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator %t/verilator/tests/asserts | FileCheck %s --check-prefix=RUNOUT
+// RUN: FileCheck %s --check-prefix=OUTTSV < %t/results.tsv
+//
+// RUNOUT: verilator-verification summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// OUTTSV: PASS{{[[:space:]]+}}semantic_case{{[[:space:]]+}}{{.*}}semantic_case.sv{{[[:space:]]+}}verilator-verification{{[[:space:]]+}}BMC{{[[:space:]]+}}semantic_buckets=local_var,multiclock
+
