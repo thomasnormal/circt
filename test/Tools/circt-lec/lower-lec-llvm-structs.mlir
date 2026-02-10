@@ -34,6 +34,31 @@ hw.module @lower_lec_llvm_structs_undef_unknown_zero(
 // CHECK: hw.output %[[OUT]] : !hw.struct<value: i1, unknown: i1>
 // CHECK-NOT: llvm.
 
+hw.module @lower_lec_llvm_structs_zero(
+    out out : !hw.struct<value: i1, unknown: i1>) {
+  %zero = llvm.mlir.zero : !llvm.struct<(i1, i1)>
+  %cast = builtin.unrealized_conversion_cast %zero : !llvm.struct<(i1, i1)> to !hw.struct<value: i1, unknown: i1>
+  hw.output %cast : !hw.struct<value: i1, unknown: i1>
+}
+
+// CHECK-LABEL: hw.module @lower_lec_llvm_structs_zero
+// CHECK: %[[ZERO:.*]] = hw.constant false
+// CHECK: %[[ZERO2:.*]] = hw.constant false
+// CHECK: %[[OUT:.*]] = hw.struct_create (%[[ZERO]], %[[ZERO2]]) : !hw.struct<value: i1, unknown: i1>
+// CHECK: hw.output %[[OUT]] : !hw.struct<value: i1, unknown: i1>
+// CHECK-NOT: llvm.
+
+hw.module @lower_lec_llvm_struct_extract_zero(out out : i1) {
+  %zero = llvm.mlir.zero : !llvm.struct<(i1, i1)>
+  %unknown = llvm.extractvalue %zero[1] : !llvm.struct<(i1, i1)>
+  hw.output %unknown : i1
+}
+
+// CHECK-LABEL: hw.module @lower_lec_llvm_struct_extract_zero
+// CHECK: %[[ZERO:.*]] = hw.constant false
+// CHECK: hw.output %[[ZERO]] : i1
+// CHECK-NOT: llvm.
+
 hw.module @lower_lec_llvm_structs_multi_store(
     in %in : !hw.struct<value: i1, unknown: i1>,
     out out : !hw.struct<value: i1, unknown: i1>) {

@@ -201,6 +201,18 @@ static hw::StructType getNestedStructType(hw::StructType hwType,
   return current;
 }
 
+enum class AggregateDefaultKind { none, undef, zero };
+
+static AggregateDefaultKind getAggregateDefaultKind(Value value) {
+  while (auto insert = value.getDefiningOp<LLVM::InsertValueOp>())
+    value = insert.getContainer();
+  if (value.getDefiningOp<LLVM::UndefOp>())
+    return AggregateDefaultKind::undef;
+  if (value.getDefiningOp<LLVM::ZeroOp>())
+    return AggregateDefaultKind::zero;
+  return AggregateDefaultKind::none;
+}
+
 static hw::StructType getFourStateStructForLLVM(LLVM::LLVMStructType llvmType) {
   if (llvmType.isOpaque())
     return {};
@@ -317,11 +329,7 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
                                    ArrayRef<int64_t> prefix,
                                    DominanceInfo *domInfo,
                                    DenseMap<Value, Value> *allocaSignals) {
-  auto isUndefContainer = [](Value value) -> bool {
-    while (auto insert = value.getDefiningOp<LLVM::InsertValueOp>())
-      value = insert.getContainer();
-    return value.getDefiningOp<LLVM::UndefOp>() != nullptr;
-  };
+  AggregateDefaultKind defaultKind = getAggregateDefaultKind(llvmStruct);
   if (auto cast = llvmStruct.getDefiningOp<UnrealizedConversionCastOp>()) {
     if (cast->getNumOperands() == 1 &&
         cast->getOperand(0).getType() == hwType)
@@ -395,7 +403,7 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
     Value leaf = findInsertedValue(llvmStruct, hwType, path, domInfo, builder,
                                    loc, allocaSignals);
     if (!leaf || leaf.getType() != field.type) {
-      if (!isUndefContainer(llvmStruct))
+      if (defaultKind == AggregateDefaultKind::none)
         return {};
       auto fieldInt = dyn_cast<IntegerType>(field.type);
       if (!fieldInt)
@@ -403,7 +411,8 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
       bool isUnknownField =
           field.name && field.name.getValue() == "unknown";
       bool useZeroUnknown = false;
-      if (isUnknownField && isFourStateStructType(hwType)) {
+      if (defaultKind == AggregateDefaultKind::undef && isUnknownField &&
+          isFourStateStructType(hwType)) {
         SmallVector<int64_t, 4> valuePath(prefix.begin(), prefix.end());
         valuePath.push_back(0);
         Value valueLeaf = findInsertedValue(
@@ -411,9 +420,10 @@ static Value buildHWStructFromLLVM(Value llvmStruct, hw::StructType hwType,
         if (valueLeaf && isa<IntegerType>(valueLeaf.getType()))
           useZeroUnknown = true;
       }
-      APInt value = isUnknownField && !useZeroUnknown
-                        ? APInt::getAllOnes(fieldInt.getWidth())
-                        : APInt(fieldInt.getWidth(), 0);
+      APInt value(fieldInt.getWidth(), 0);
+      if (defaultKind == AggregateDefaultKind::undef && isUnknownField &&
+          !useZeroUnknown)
+        value = APInt::getAllOnes(fieldInt.getWidth());
       leaf = hw::ConstantOp::create(
           builder, loc, builder.getIntegerAttr(fieldInt, value));
     }
@@ -1413,11 +1423,6 @@ void LowerLECLLVMPass::runOnOperation() {
     extracts.push_back(op);
   });
   if (!extracts.empty()) {
-    auto isUndefContainer = [](Value value) -> bool {
-      while (auto insert = value.getDefiningOp<LLVM::InsertValueOp>())
-        value = insert.getContainer();
-      return value.getDefiningOp<LLVM::UndefOp>() != nullptr;
-    };
     DominanceInfo domInfo(module);
     for (auto extract : extracts) {
       auto llvmStructType =
@@ -1430,14 +1435,17 @@ void LowerLECLLVMPass::runOnOperation() {
       Value replacement = findInsertedValue(extract.getContainer(), hwType,
                                             path, &domInfo, builder,
                                             extract.getLoc(), &allocaSignals);
-      if (!replacement && isUndefContainer(extract.getContainer())) {
-        // When extracting from an undef container, provide a default value.
-        // For 4-state structs: value=0, unknown=1 (all bits unknown).
+      auto defaultKind = getAggregateDefaultKind(extract.getContainer());
+      if (!replacement && defaultKind != AggregateDefaultKind::none) {
+        // When extracting from undef/zero containers, provide default values.
+        // For undef 4-state structs: value=0, unknown=1 (all bits unknown).
+        // For zero containers: value=0, unknown=0.
         auto resultType = dyn_cast<IntegerType>(extract.getType());
         if (resultType) {
           bool isUnknownField = path.size() == 1 && path[0] == 1;
-          APInt value = isUnknownField ? APInt::getAllOnes(resultType.getWidth())
-                                       : APInt(resultType.getWidth(), 0);
+          APInt value(resultType.getWidth(), 0);
+          if (defaultKind == AggregateDefaultKind::undef && isUnknownField)
+            value = APInt::getAllOnes(resultType.getWidth());
           replacement = hw::ConstantOp::create(
               builder, extract.getLoc(),
               builder.getIntegerAttr(resultType, value));
@@ -1490,7 +1498,7 @@ void LowerLECLLVMPass::runOnOperation() {
         if (!op->use_empty())
           return;
         if (isa<LLVM::UndefOp, LLVM::InsertValueOp, LLVM::AllocaOp,
-                LLVM::LoadOp, LLVM::ConstantOp,
+                LLVM::LoadOp, LLVM::ConstantOp, LLVM::ZeroOp,
                 UnrealizedConversionCastOp>(op))
           eraseList.push_back(op);
       });

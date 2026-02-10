@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 946 - February 10, 2026
+
+### LEC LowerLECLLVM Hardening: Support `llvm.mlir.zero` 4-State Struct Conversion
+
+1. Expanded LLVM-struct-to-HW-struct lowering in
+   `lib/Tools/circt-lec/LowerLECLLVM.cpp`:
+   - added aggregate default-kind detection for LLVM struct containers:
+     `undef` vs `zero`.
+   - `buildHWStructFromLLVM` now handles `llvm.mlir.zero` containers when
+     reconstructing 4-state structs (including nested field defaults).
+   - leftover `llvm.extractvalue` lowering now handles `llvm.mlir.zero`
+     containers (default extracted field is zero).
+   - cleanup now removes dead `LLVM::ZeroOp`.
+2. Added regression coverage in
+   `test/Tools/circt-lec/lower-lec-llvm-structs.mlir`:
+   - `@lower_lec_llvm_structs_zero` (cast from zeroed LLVM struct)
+   - `@lower_lec_llvm_struct_extract_zero` (extract from zeroed LLVM struct)
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-lec/lower-lec-llvm-structs.mlir test/Tools/circt-lec/lec-strip-llhd-local-init-4state.mlir test/Tools/circt-lec/lec-strip-llhd-signal-ptr-cast.mlir`
+     -> `3 passed`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-zero-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/BMC|verilator-verification/LEC|yosys/tests/sva/BMC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5` (known baseline),
+          `verilator-verification/LEC pass=17 fail=0`,
+          `yosys/tests/sva/BMC pass=7 fail=5 skip=2` (known baseline).
+
 ## Iteration 945 - February 10, 2026
 
 ### BMC LowerToBMC Hardening: Actionable Multi-Clock Reject Diagnostics
