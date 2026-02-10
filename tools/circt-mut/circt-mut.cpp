@@ -2315,6 +2315,49 @@ static bool collectCoverReport(StringRef coverWorkDir,
   appendMetricRow(rows, "cover", metrics, "errors");
   appendMetricRow(rows, "cover", metrics, "mutation_coverage_percent");
   appendMetricRow(rows, "cover", metrics, "global_filtered_not_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_lec_unknown_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_bmc_unknown_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_timeout_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_lec_timeout_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_bmc_timeout_mutants");
+  appendMetricRow(rows, "cover", metrics, "global_filter_lec_runtime_ns");
+  appendMetricRow(rows, "cover", metrics, "global_filter_bmc_runtime_ns");
+  appendMetricRow(rows, "cover", metrics, "global_filter_cmd_runtime_ns");
+  appendMetricRow(rows, "cover", metrics, "global_filter_lec_runs");
+  appendMetricRow(rows, "cover", metrics, "global_filter_bmc_runs");
+  appendMetricRow(rows, "cover", metrics, "global_filter_cmd_runs");
+  appendMetricRow(rows, "cover", metrics, "chain_lec_unknown_fallbacks");
+  appendMetricRow(rows, "cover", metrics,
+                  "chain_bmc_resolved_not_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_bmc_resolved_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_bmc_unknown_fallbacks");
+  appendMetricRow(rows, "cover", metrics,
+                  "chain_lec_resolved_not_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_lec_resolved_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_lec_error_fallbacks");
+  appendMetricRow(rows, "cover", metrics, "chain_bmc_error_fallbacks");
+  appendMetricRow(rows, "cover", metrics, "chain_consensus_not_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_consensus_disagreement_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_consensus_error_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_auto_parallel_mutants");
+  appendMetricRow(rows, "cover", metrics, "chain_auto_short_circuit_mutants");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_hit_mutants");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_miss_mutants");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_saved_runtime_ns");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_miss_runtime_ns");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_entries");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_pruned_entries");
+  appendMetricRow(rows, "cover", metrics, "bmc_orig_cache_pruned_age_entries");
+  appendMetricRow(rows, "cover", metrics, "generated_mutations_cache_status");
+  appendMetricRow(rows, "cover", metrics, "generated_mutations_cache_hit");
+  appendMetricRow(rows, "cover", metrics, "generated_mutations_cache_miss");
+  appendMetricRow(rows, "cover", metrics, "generated_mutations_runtime_ns");
+  appendMetricRow(rows, "cover", metrics,
+                  "generated_mutations_cache_saved_runtime_ns");
+  appendMetricRow(rows, "cover", metrics,
+                  "generated_mutations_cache_lock_wait_ns");
+  appendMetricRow(rows, "cover", metrics,
+                  "generated_mutations_cache_lock_contended");
   return true;
 }
 
@@ -2391,6 +2434,49 @@ static bool collectMatrixReport(
   uint64_t errorsSum = 0;
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
+  StringMap<uint64_t> extraMetricSums;
+  static constexpr const char *kExtraMetricKeys[] = {
+      "global_filtered_not_propagated_mutants",
+      "global_filter_lec_unknown_mutants",
+      "global_filter_bmc_unknown_mutants",
+      "global_filter_timeout_mutants",
+      "global_filter_lec_timeout_mutants",
+      "global_filter_bmc_timeout_mutants",
+      "global_filter_lec_runtime_ns",
+      "global_filter_bmc_runtime_ns",
+      "global_filter_cmd_runtime_ns",
+      "global_filter_lec_runs",
+      "global_filter_bmc_runs",
+      "global_filter_cmd_runs",
+      "chain_lec_unknown_fallbacks",
+      "chain_bmc_resolved_not_propagated_mutants",
+      "chain_bmc_resolved_propagated_mutants",
+      "chain_bmc_unknown_fallbacks",
+      "chain_lec_resolved_not_propagated_mutants",
+      "chain_lec_resolved_propagated_mutants",
+      "chain_lec_error_fallbacks",
+      "chain_bmc_error_fallbacks",
+      "chain_consensus_not_propagated_mutants",
+      "chain_consensus_disagreement_mutants",
+      "chain_consensus_error_mutants",
+      "chain_auto_parallel_mutants",
+      "chain_auto_short_circuit_mutants",
+      "bmc_orig_cache_hit_mutants",
+      "bmc_orig_cache_miss_mutants",
+      "bmc_orig_cache_saved_runtime_ns",
+      "bmc_orig_cache_miss_runtime_ns",
+      "bmc_orig_cache_entries",
+      "bmc_orig_cache_pruned_entries",
+      "bmc_orig_cache_pruned_age_entries",
+      "generated_mutations_cache_hit",
+      "generated_mutations_cache_miss",
+      "generated_mutations_runtime_ns",
+      "generated_mutations_cache_saved_runtime_ns",
+      "generated_mutations_cache_lock_wait_ns",
+      "generated_mutations_cache_lock_contended",
+  };
+  for (const char *key : kExtraMetricKeys)
+    extraMetricSums[key] = 0;
 
   auto addMetric = [&](const StringMap<std::string> &metrics, StringRef key,
                        uint64_t &accumulator) {
@@ -2463,6 +2549,8 @@ static bool collectMatrixReport(
     addMetric(metrics, "not_propagated_mutants", notPropagatedMutantsSum);
     addMetric(metrics, "not_activated_mutants", notActivatedMutantsSum);
     addMetric(metrics, "errors", errorsSum);
+    for (const char *key : kExtraMetricKeys)
+      addMetric(metrics, key, extraMetricSums[key]);
   }
 
   rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
@@ -2494,6 +2582,15 @@ static bool collectMatrixReport(
       "matrix.coverage_percent_avg",
       coverageCount ? formatDouble2(coverageSum / static_cast<double>(coverageCount))
                     : std::string("-"));
+  rows.emplace_back(
+      "matrix.coverage_percent_from_sums",
+      relevantMutantsSum
+          ? formatDouble2((100.0 * static_cast<double>(detectedMutantsSum)) /
+                          static_cast<double>(relevantMutantsSum))
+          : std::string("-"));
+  for (const char *key : kExtraMetricKeys)
+    rows.emplace_back((Twine("matrix.") + key + "_sum").str(),
+                      std::to_string(extraMetricSums[key]));
   return true;
 }
 

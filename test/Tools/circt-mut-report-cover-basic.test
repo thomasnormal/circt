@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t/proj/out/cover
-// RUN: printf 'total_mutants\t10\nrelevant_mutants\t6\ndetected_mutants\t4\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t3\nnot_activated_mutants\t1\nerrors\t0\nmutation_coverage_percent\t66.67\nglobal_filtered_not_propagated_mutants\t3\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t6\ndetected_mutants\t4\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t3\nnot_activated_mutants\t1\nerrors\t0\nmutation_coverage_percent\t66.67\nglobal_filtered_not_propagated_mutants\t3\nglobal_filter_timeout_mutants\t2\nchain_lec_unknown_fallbacks\t1\nbmc_orig_cache_hit_mutants\t5\ngenerated_mutations_cache_status\thit\n' > %t/proj/out/cover/metrics.tsv
 // RUN: circt-mut report --project-dir %t/proj --mode cover > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 
@@ -15,3 +15,7 @@
 // CHECK: cover.errors{{[[:space:]]}}0
 // CHECK: cover.mutation_coverage_percent{{[[:space:]]}}66.67
 // CHECK: cover.global_filtered_not_propagated_mutants{{[[:space:]]}}3
+// CHECK: cover.global_filter_timeout_mutants{{[[:space:]]}}2
+// CHECK: cover.chain_lec_unknown_fallbacks{{[[:space:]]}}1
+// CHECK: cover.bmc_orig_cache_hit_mutants{{[[:space:]]}}5
+// CHECK: cover.generated_mutations_cache_status{{[[:space:]]}}hit

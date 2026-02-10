@@ -155,6 +155,12 @@ circt-mut report \
 
 `circt-mut report` emits normalized key/value summary output for cover and
 matrix artifacts, with optional file output via `--out`.
+It now includes aggregated formal-global-filter telemetry useful for BMC/LEC
+triage and performance tracking:
+- global-filter timeout/unknown counters
+- chained filter fallback/disagreement counters
+- global-filter runtime/run counters
+- BMC original-design cache counters/runtime
 
 Basic usage:
 
