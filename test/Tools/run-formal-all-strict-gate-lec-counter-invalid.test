@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --fail-on-new-lec-counter "Bad-Key"' 2>&1 | FileCheck %s --check-prefix=KEY
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out2 --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^$" --fail-on-new-lec-counter-prefix "Bad-Prefix"' 2>&1 | FileCheck %s --check-prefix=PREFIX
+//
+// KEY: invalid --fail-on-new-lec-counter: expected [a-z][a-z0-9_]*, got 'Bad-Key'
+// PREFIX: invalid --fail-on-new-lec-counter-prefix: expected [a-z][a-z0-9_]*, got 'Bad-Prefix'
