@@ -6,11 +6,11 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 | Metric | Count | Rate |
 |--------|-------|------|
-| circt-sim unit tests | 221/221 | 100% |
+| circt-sim unit tests | 223/223 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
-| sv-tests simulation | 912 total, 850 pass, 0 fail | 99.9% |
-| sv-tests xfail | 7 UVM phase sequencing + 54 compile-only/negative | |
-| sv-tests xpass | 1 (uvm_agent_active) | NEW: resolveDrivers fix |
+| sv-tests simulation | 912 total, 853 pass, 0 fail | 99.9% |
+| sv-tests xfail | 4 UVM + 54 compile-only/negative | |
+| sv-tests xpass | 4 (agent_active/env/passive, monitor_env) | resolveSignalId fix |
 | AVIPs (hvl_top only) | 9/9 pass | Full phase lifecycle; no transactions without hdl_top |
 | AVIPs with transactions | 0/9 | **Blocked**: BFM gap — no hdl_top simulated |
 | sv-tests BMC | 26/26 | 100% (Codex) |
@@ -19,24 +19,27 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 ### Recent Fixes (This Session)
 
-1. **`resolveDrivers()` multi-bit fix** (ProcessScheduler.h): Fixed signal resolution for FourStateStruct signals. Old code used `getLSB()` to classify drivers — broken for `hw.struct<value, unknown>` where the value bit is at MSB. Both `0b00` (val=0) and `0b10` (val=1) had LSB=0, so signals never changed value. Fix: group drivers by full APInt value, resolve by effective strength.
+1. **`resolveSignalId` cast+probe tracing** (LLHDProcessInterpreter.cpp): Fixed signal resolution for interface pointer signals passed through module ports. The pattern `unrealized_conversion_cast(llhd.prb(sig))` was not traced — `resolveSignalId` now follows through the cast to the probe to find the underlying signal. This unblocked DUT processes from delta overflow when using `always @(posedge in_if.clk)`.
 
-2. **VIF shadow signals** (LLHDProcessInterpreter.cpp/h): Created per-field runtime signals for interface struct fields. Three components:
+2. **`resolveDrivers()` multi-bit fix** (ProcessScheduler.h): Fixed signal resolution for FourStateStruct signals. Old code used `getLSB()` to classify drivers — broken for `hw.struct<value, unknown>` where the value bit is at MSB. Fix: group drivers by full APInt value, resolve by effective strength.
+
+3. **VIF shadow signals** (LLHDProcessInterpreter.cpp/h): Created per-field runtime signals for interface struct fields. Three components:
    - `createInterfaceFieldShadowSignals()`: scans `valueToSignal` for `llhd.sig` holding `!llvm.ptr`, finds GEP users of interface structs, creates shadow signals per field
    - Store interception in `interpretLLVMStore`: drives shadow signal when interface field written
    - Sensitivity expansion in `interpretWait` (case 1 + case 3): expands interface ptr signals to field shadow signals
 
-3. **`uvm_agent_active` now passes**: Was XFAIL due to VIF signal mismatch. The resolveDrivers fix + VIF shadow signals resolved it.
+4. **4 UVM tests now pass**: `uvm_agent_active` (resolveDrivers + VIF shadows), `uvm_agent_env`, `uvm_agent_passive`, `uvm_monitor_env` (resolveSignalId fix).
 
-### xfail Breakdown (7 UVM tests remaining)
+### xfail Breakdown (4 UVM tests remaining)
 
 | Category | Count | Tests | Root Cause |
 |----------|-------|-------|------------|
-| UVM phase sequencing | 4 | uvm_agent_env, uvm_agent_passive, uvm_monitor_env, uvm_scoreboard_env | Processes stuck at time 0 — deeper UVM infra issue |
-| UVM phase sequencing | 2 | uvm_scoreboard_monitor_agent_env, uvm_scoreboard_monitor_env | Same |
-| UVM sequencer interface | 1 | uvm_driver_sequencer_env | Needs resource_db + sequencer interface |
+| Analysis port | 3 | uvm_scoreboard_env, uvm_scoreboard_monitor_agent_env, uvm_scoreboard_monitor_env | UVM analysis_port "Late Connection" not intercepted — data writes work but monitor/scoreboard don't receive |
+| Sequencer interface | 1 | uvm_driver_sequencer_env | Needs sequencer interface implementation |
 
-**Root cause (all 7)**: Signal resolution is fixed, but these tests have deeper UVM phase sequencing issues. Processes spawn but never advance past time 0 — likely missing `exec_task` dispatch for specific UVM component types or incomplete phase-to-process mapping.
+**Root cause (scoreboard 3)**: DUT and driver work correctly (data propagates through interface), but the UVM analysis port `connect()` call at end_of_elaboration is not intercepted, so monitor→scoreboard TLM connections are never established.
+
+**Root cause (sequencer 1)**: Missing `get_next_item()`/`item_done()` sequencer interface implementation.
 
 ### Tests Now Passing (previously xfail)
 
@@ -91,14 +94,14 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 - ✅ resource_db read_by_name
 - ✅ resolveDrivers() multi-bit fix for FourStateStruct signals
 - ✅ VIF shadow signals (interface field → signal bridging)
-- ✅ uvm_agent_active test now passes
+- ✅ uvm_agent_active, uvm_agent_env, uvm_agent_passive, uvm_monitor_env now pass
+- ✅ resolveSignalId cast+probe tracing for interface module ports
 
-**Remaining 7 xfail**: Processes stuck at time 0 — UVM phase sequencing/dispatch issue.
+**Remaining 4 xfail**: 3 scoreboard (analysis port Late Connection), 1 driver_sequencer (sequencer interface).
 
 **Investigation needed**:
-- Compare process creation/suspension patterns between uvm_agent_active (passes) and uvm_agent_env (fails)
-- Check if `exec_task` dispatch correctly handles all UVM component types
-- Verify phase-to-process mapping for multi-agent environments
+- Intercept UVM analysis_port `connect()` to establish TLM connections
+- Implement sequencer interface (`get_next_item()`, `item_done()`)
 
 **Also pending**:
 - **SVA concurrent assertions** - Runtime eval for `assert property` (26 compile-only tests)
@@ -129,7 +132,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 | Priority | Track | Next Task | Impact |
 |----------|-------|-----------|--------|
 | P0 | Track 5 | Recompile AVIPs + dual-top simulation | ALL AVIP coverage testing blocked |
-| P0 | Track 4 | Investigate 7 UVM xfail root causes | Last 7 xfail tests |
+| P0 | Track 4 | Fix 4 UVM xfail (analysis port + sequencer) | Last 4 xfail tests |
 | P1 | Track 3 | Coverage verification after Track 5 | End-to-end coverage numbers |
 | P2 | Track 4 | SVA concurrent assertions | 26 compile-only tests |
 | P3 | Track 6 | Performance optimization | Faster simulation |
@@ -138,9 +141,9 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 
 | Suite | Command | Expected |
 |-------|---------|----------|
-| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 221 pass |
+| circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 223 pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
-| sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh` | 0 fail, 1 xpass, 7 UVM xfail |
+| sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh` | 0 fail, 4 xpass, 4 UVM xfail |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |
 | sv-tests BMC | `BMC_SMOKE_ONLY=1 bash utils/run_sv_tests_circt_bmc.sh` | 26/26 |
 | sv-tests LEC | `LEC_SMOKE_ONLY=1 bash utils/run_sv_tests_circt_lec.sh` | 23/23 |

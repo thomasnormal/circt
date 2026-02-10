@@ -962,6 +962,10 @@ private:
   /// Finalize a process (finished or killed) and wake awaiters.
   void finalizeProcess(ProcessId procId, bool killed);
 
+  /// Recursively kill a process and all its fork descendants.
+  /// Used when a UVM phase ends to clean up forever-loop monitors, etc.
+  void killProcessTree(ProcessId procId);
+
   //===--------------------------------------------------------------------===//
   // Signal Registry Bridge
   //===--------------------------------------------------------------------===//
