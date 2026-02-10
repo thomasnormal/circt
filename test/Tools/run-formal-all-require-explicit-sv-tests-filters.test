@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-bmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-lec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/LEC$"' 2>&1 | FileCheck %s --check-prefix=LEC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-uvm --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-sv-tests-uvm-bmc-semantics --include-lane-regex "^sv-tests-uvm/BMC_SEMANTICS$"' 2>&1 | FileCheck %s --check-prefix=UVM
+//
+// BMC: sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or --sv-tests-bmc-test-filter
+// LEC: sv-tests/LEC requires explicit filter: set --sv-tests-lec-tag-regex or --sv-tests-lec-test-filter
+// UVM: sv-tests-uvm/BMC_SEMANTICS requires explicit filter: set --sv-tests-uvm-bmc-semantics-tag-regex or --sv-tests-uvm-bmc-semantics-test-filter

@@ -1,5 +1,194 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 958 - February 10, 2026
+
+### run_formal_all: Lane-Scoped Non-sv Test Filters (verilator/yosys)
+
+1. Extended `utils/run_formal_all.sh` with lane-local filter knobs for
+   non-sv formal suites:
+   - `--verilator-bmc-test-filter`
+   - `--verilator-lec-test-filter`
+   - `--yosys-bmc-test-filter`
+   - `--yosys-lec-test-filter`
+2. Updated lane invocation wiring so orchestration passes explicit lane-local
+   `TEST_FILTER` values to:
+   - `verilator-verification/BMC`
+   - `verilator-verification/LEC`
+   - `yosys/tests/sva/BMC`
+   - `yosys/tests/sva/LEC`
+3. Added regex validation for the new knobs with fail-fast diagnostics.
+4. Added regression tests:
+   - `test/Tools/run-formal-all-non-sv-test-filter-forwarding.test`
+   - `test/Tools/run-formal-all-non-sv-test-filter-invalid.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test test/Tools/run-formal-all-sv-tests-bmc-missing-summary.test test/Tools/run-formal-all-sv-tests-lec-missing-summary.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test test/Tools/run-formal-all-non-sv-test-filter-forwarding.test test/Tools/run-formal-all-non-sv-test-filter-invalid.test test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test`: PASS (10/10)
+
+## Iteration 957 - February 10, 2026
+
+### run_formal_all: Always-On Explicit sv-tests Filters + Lane-Specific Test Filters
+
+1. Hardened `utils/run_formal_all.sh` sv-tests filter policy to be always-on:
+   - selected sv-tests lanes now fail fast unless caller provides an explicit
+     lane filter.
+   - preflight requirement no longer depends on
+     `--require-explicit-sv-tests-filters` (the flag is now a deprecated no-op
+     for compatibility).
+2. Added caller-owned lane-specific base-name filter options:
+   - `--sv-tests-bmc-test-filter`
+   - `--sv-tests-lec-test-filter`
+   - `--sv-tests-uvm-bmc-semantics-test-filter`
+3. Removed implicit UVM semantic-lane case-name fallback in
+   `run_formal_all.sh`:
+   - deleted built-in `SV_TESTS_BMC_UVM_SEMANTICS_FILTER` default, so lane
+     selection is now entirely caller-defined.
+4. Updated sv-tests lane invocation wiring:
+   - `sv-tests/BMC`, `sv-tests/LEC`, and `sv-tests-uvm/BMC_SEMANTICS` now pass
+     per-lane `TEST_FILTER` and `TAG_REGEX` values from explicit CLI knobs.
+5. Added/updated regression coverage:
+   - `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test`
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test`
+   - `test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test test/Tools/run-formal-all-sv-tests-bmc-missing-summary.test test/Tools/run-formal-all-sv-tests-lec-missing-summary.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test`: PASS (8/8)
+
+## Iteration 956 - February 10, 2026
+
+### `circt-mut report`: Tiered Matrix Guard Policy Packs
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with tiered matrix governance
+   policy profiles:
+   - `formal-regression-matrix-guard-smoke`
+   - `formal-regression-matrix-guard-nightly`
+   - `formal-regression-matrix-guard-strict`
+2. Policy behavior:
+   - all three profiles enable `--fail-on-prequalify-drift`.
+   - `smoke` allows bounded timeout/unknown budgets
+     (`matrix.global_filter_*_mutants_sum <= 5`) while still requiring
+     `matrix.errors_sum == 0` and `matrix.detected_mutants_sum >= 1`.
+   - `nightly` tightens timeout/unknown budgets to zero and keeps
+     `errors_sum == 0` + `detected_mutants_sum >= 1`.
+   - `strict` adds all nightly constraints plus requires
+     `matrix.prequalify_drift_comparable >= 1` to enforce native
+     prequalification summary coverage in matrix reports.
+3. Updated policy help/validation surfaces:
+   - `circt-mut report --help` now lists the three new policy names.
+   - invalid `--policy-profile` diagnostics now include the expanded profile
+     set.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-guard-smoke-pass.test`
+   - `test/Tools/circt-mut-report-policy-matrix-guard-nightly-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-guard-strict-requires-prequalify-summary.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-guard-smoke-pass.test test/Tools/circt-mut-report-policy-matrix-guard-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-guard-strict-requires-prequalify-summary.test`: PASS (5/5)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (34/34)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (153/153)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-guard-tiers-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `yosys/tests/sva` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
+## Iteration 955 - February 10, 2026
+
+### run_formal_all: Strict Preflight Gate for Explicit sv-tests Filters
+
+1. Added optional policy gate:
+   - `--require-explicit-sv-tests-filters`
+2. With the gate enabled, `run_formal_all.sh` now fails fast when selected
+   sv-tests lanes do not have caller-provided filters:
+   - `sv-tests/BMC`: requires `--sv-tests-bmc-tag-regex` or `TEST_FILTER`
+   - `sv-tests/LEC`: requires `--sv-tests-lec-tag-regex` or `TEST_FILTER`
+   - `sv-tests-uvm/BMC_SEMANTICS`: requires
+     `--sv-tests-uvm-bmc-semantics-tag-regex` or `TEST_FILTER`
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`
+   - updated:
+     - `test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test`
+     - `test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test test/Tools/run-formal-all-sv-tests-bmc-missing-summary.test test/Tools/run-formal-all-sv-tests-lec-missing-summary.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`: PASS (6/6)
+- External positive smoke:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='16\\.12--property|basic02|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-require-explicit-filters-pass-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/(BMC|LEC)$' --sv-tests-bmc-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --sv-tests-lec-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --require-explicit-sv-tests-filters --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - result: all selected lanes PASS.
+- External negative smoke:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-require-explicit-filters-fail-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --require-explicit-sv-tests-filters`
+  - result: exits with `1` and emits:
+    `sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or TEST_FILTER`
+
+## Iteration 954 - February 10, 2026
+
+### run_formal_all: sv-tests Missing-Summary Error Accounting
+
+1. Hardened `utils/run_formal_all.sh` sv-tests lane accounting:
+   - added `suite_exit_code()` helper.
+   - when `sv-tests/BMC`, `sv-tests/LEC`, or
+     `sv-tests-uvm/BMC_SEMANTICS` runners exit without a parseable summary
+     line, `summary.tsv` now gets an explicit error row:
+     - `missing_summary=1`
+     - `runner_exit=<exit-code>`
+2. This removes a silent-failure path where lane runner errors could be
+   swallowed with no row in `summary.tsv`.
+3. Added regression tests:
+   - `test/Tools/run-formal-all-sv-tests-bmc-missing-summary.test`
+   - `test/Tools/run-formal-all-sv-tests-lec-missing-summary.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-formal-all-sv-tests-bmc-missing-summary.test test/Tools/run-formal-all-sv-tests-lec-missing-summary.test test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test test/Tools/run-formal-all-bmc-allow-multi-clock.test test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`: PASS (7/7)
+- Filtered external smoke:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='16\\.12--property|basic02|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-filter-cli-smoke-all-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/(BMC|LEC)$' --sv-tests-bmc-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --sv-tests-lec-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - result: all selected lanes PASS.
+
+## Iteration 953 - February 10, 2026
+
+### run_formal_all: Caller-Owned sv-tests Tag Filters
+
+1. Added top-level sv-tests filter options to `utils/run_formal_all.sh`:
+   - `--sv-tests-bmc-tag-regex`
+   - `--sv-tests-lec-tag-regex`
+   - `--sv-tests-uvm-bmc-semantics-tag-regex`
+2. Removed implicit sv-tests tag-regex defaults in `run_formal_all.sh` for:
+   - `sv-tests/BMC`
+   - `sv-tests/LEC`
+   - `sv-tests-uvm/BMC_SEMANTICS`
+   so lane scope is now explicitly caller-configured.
+3. Added regex validation for the new options with fail-fast diagnostics on
+   malformed expressions.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test`
+   - `test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-formal-all-sv-tests-tag-regex-forwarding.test test/Tools/run-formal-all-sv-tests-tag-regex-invalid.test test/Tools/run-formal-all-bmc-allow-multi-clock.test test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test`: PASS (7/7)
+- Targeted external smoke:
+  - `BMC_SMOKE_ONLY=1 TEST_FILTER='^16\\.12--property$' utils/run_formal_all.sh --out-dir /tmp/formal-explicit-tag-cli-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-tag-regex '(^| )16\\.' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - result: `sv-tests/BMC total=1 pass=1 fail=0 error=0`
+- Filtered multi-suite smoke:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 TEST_FILTER='16\\.12--property|basic02|assert_fell' utils/run_formal_all.sh --out-dir /tmp/formal-filter-cli-smoke-all-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/(BMC|LEC)$' --sv-tests-bmc-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --sv-tests-lec-tag-regex '(^| )16\\.|(^| )9\\.4\\.4' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - result: all selected lanes PASS (`sv-tests`, `verilator-verification`, `yosys/tests/sva`; BMC+LEC)
+
 ## Iteration 952 - February 10, 2026
 
 ### `circt-mut report` Matrix Governance Policy Profiles
