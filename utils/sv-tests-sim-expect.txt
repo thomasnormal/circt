@@ -2,15 +2,15 @@
 # Format: test_name<TAB>mode<TAB>reason
 # mode: compile-only | xfail | skip
 
-# UVM testbench tests: virtual interface signal propagation issue
-uvm_agent_active	xfail	UVM testbench: VIF signal mismatch + resource_db
-uvm_agent_env	xfail	UVM testbench: VIF signal mismatch (0 != 2)
-uvm_agent_passive	xfail	UVM testbench: VIF signal mismatch (0 != 2)
+# UVM testbench tests: signal resolution + VIF shadow signals partially fixed
+uvm_agent_active	pass	UVM testbench: resolved with resolveDrivers fix + VIF shadow signals
+uvm_agent_env	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
+uvm_agent_passive	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
 uvm_driver_sequencer_env	xfail	UVM testbench: needs resource_db + sequencer interface
-uvm_monitor_env	xfail	UVM testbench: VIF signal mismatch (0 != 2)
-uvm_scoreboard_env	xfail	UVM testbench: VIF delta overflow
-uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: VIF delta overflow
-uvm_scoreboard_monitor_env	xfail	UVM testbench: VIF delta overflow
+uvm_monitor_env	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
+uvm_scoreboard_env	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
+uvm_scoreboard_monitor_agent_env	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
+uvm_scoreboard_monitor_env	xfail	UVM testbench: UVM phase sequencing issue (processes stuck at time 0)
 
 # Ch18: Constraint tests that fail at runtime (advanced constraint features)
 18.5.2--constraint-inheritance_1	pass	Constraint inheritance with override

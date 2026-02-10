@@ -691,54 +691,60 @@ public:
     }
 
     // Default (wire/tri): strength-based resolution.
-    // Separate drivers by their driven value (0 or 1)
-    DriveStrength strongestFor0 = DriveStrength::HighZ;
-    DriveStrength strongestFor1 = DriveStrength::HighZ;
-    bool has0Driver = false;
-    bool has1Driver = false;
+    // Group drivers by their full value (not just LSB) to correctly handle
+    // multi-bit signals like FourStateStruct (hw.struct<value, unknown>).
+    // Track the strongest driver for each distinct value.
+    struct DriverGroup {
+      SignalValue value;
+      DriveStrength strength;
+    };
+    llvm::SmallVector<DriverGroup, 4> groups;
 
     for (const auto *d : activeDrivers) {
       if (d->value.isUnknown())
         continue; // Skip X drivers
 
-      if (d->value.getLSB()) {
-        // Driving 1
-        has1Driver = true;
-        if (d->strength1 < strongestFor1)
-          strongestFor1 = d->strength1;
-      } else {
-        // Driving 0
-        has0Driver = true;
-        if (d->strength0 < strongestFor0)
-          strongestFor0 = d->strength0;
+      // Use the stronger of the two strengths for comparison.
+      DriveStrength effectiveStrength =
+          d->strength0 < d->strength1 ? d->strength0 : d->strength1;
+
+      // Find existing group with same value.
+      bool found = false;
+      for (auto &g : groups) {
+        if (!g.value.isUnknown() && !d->value.isUnknown() &&
+            g.value.getAPInt() == d->value.getAPInt()) {
+          // Same value — keep the stronger driver.
+          if (effectiveStrength < g.strength)
+            g.strength = effectiveStrength;
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+        groups.push_back({d->value, effectiveStrength});
+    }
+
+    if (groups.empty())
+      return SignalValue::makeX(current.getWidth());
+
+    if (groups.size() == 1)
+      return groups[0].value;
+
+    // Multiple different values — strongest wins, equal = X.
+    size_t bestIdx = 0;
+    bool tied = false;
+    for (size_t i = 1; i < groups.size(); ++i) {
+      if (groups[i].strength < groups[bestIdx].strength) {
+        bestIdx = i;
+        tied = false;
+      } else if (groups[i].strength == groups[bestIdx].strength) {
+        tied = true;
       }
     }
 
-    // Resolution rules:
-    // 1. If only one value is being driven, use that value
-    // 2. If both 0 and 1 are driven, stronger one wins
-    // 3. If equal strength, result is X (unknown)
-    if (has0Driver && !has1Driver) {
-      return SignalValue(0, current.getWidth());
-    }
-    if (has1Driver && !has0Driver) {
-      return SignalValue(1, current.getWidth());
-    }
-    if (has0Driver && has1Driver) {
-      if (strongestFor0 < strongestFor1) {
-        // 0 driver is stronger
-        return SignalValue(0, current.getWidth());
-      } else if (strongestFor1 < strongestFor0) {
-        // 1 driver is stronger
-        return SignalValue(1, current.getWidth());
-      } else {
-        // Equal strength - result is X
-        return SignalValue::makeX(current.getWidth());
-      }
-    }
-
-    // No active non-X drivers
-    return SignalValue::makeX(current.getWidth());
+    if (tied)
+      return SignalValue::makeX(current.getWidth());
+    return groups[bestIdx].value;
   }
 
   /// Check if this signal has multiple drivers.
