@@ -987,17 +987,21 @@ See CHANGELOG.md on recent progress.
    `bmc_backend_parity_mismatch_cases=0`,
    `bmc_backend_parity_status_diff_cases=0`
    (`/tmp/formal-bmc-no-drop-svtests-fix-20260210-133224`).
-4. With dropping removed, `sv-tests/BMC` now reports real semantic outcomes
-   (no crashes/errors): `total=26 pass=23 fail=3 error=0`.
-   Remaining fail-like rows are:
-   `16.10--property-local-var-fail`,
-   `16.10--sequence-local-var-fail`,
-   `16.15--property-disable-iff-fail`.
-5. Broader BMC/LEC snapshot on this branch:
+4. Local-var/`disable iff` semantic closure update (February 10, 2026):
+   `sv-tests/BMC` now reports `total=26 pass=26 fail=0 error=0`
+   (`/tmp/sv-bmc-full-after-disableiff-fix.tsv`).
+5. The previously failing semantic-closure trio now passes in both backends:
+   - `16.10--property-local-var-fail`
+   - `16.10--sequence-local-var-fail`
+   - `16.15--property-disable-iff-fail`
+   via JIT and SMT-LIB (`/tmp/sv-bmc-3cases-after-fix2.tsv`,
+   `/tmp/sv-bmc-3cases-after-fix2-smt.tsv`).
+6. Broader BMC/LEC snapshot after this closure/hardening:
+   - `sv-tests/BMC`: `pass=26 fail=0`
    - `verilator-verification/BMC`: `pass=12 fail=5`
    - `yosys/tests/sva/BMC`: `pass=7 fail=5 skip=2`
    - `opentitan/LEC`: `pass=1 fail=0`
    - `opentitan/LEC_STRICT`: `pass=1 fail=0`
-6. Next execution target:
-   close semantic correctness on local-var/`disable iff` fail-like rows without
-   reintroducing any semantic suppression paths.
+7. Next execution target:
+   continue capability closure/hardening on non-sv-tests BMC fail-like rows
+   while preserving strict no-drop semantics.

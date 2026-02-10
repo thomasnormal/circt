@@ -1,5 +1,109 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 919 - February 10, 2026
+
+### BMC Semantic Closure: Ordered LLHD Drive Semantics for Local-Var/Disable-Iff
+
+1. Hardened `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp` to avoid
+   concurrent-resolution semantics on procedural default+override drive patterns
+   (including abstracted `llhd_process_result*` drive values).
+   - Added ordered-lookahead drive resolution in the probe-dominance fast-path
+     so probe-before-drive layouts can still materialize the semantically
+     correct source-order final value.
+   - This prevents impossible known-high edge encodings on 4-state clock paths
+     that were causing vacuous `UNSAT` outcomes.
+
+2. Added regression:
+   - `test/Tools/circt-bmc/sva-disable-iff-clockgen-fail-sat-e2e.sv`
+   - Covers internal clock generation + `disable iff` fail polarity case that
+     must remain `SAT` (assertion violation reachable).
+
+3. Revalidated targeted closure cases:
+   - JIT:
+     `OUT=/tmp/sv-bmc-3cases-after-fix2.tsv ... TEST_FILTER='^(16\.10--property-local-var-fail|16\.10--sequence-local-var-fail|16\.15--property-disable-iff-fail)$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+     -> `total=3 pass=3 fail=0`
+   - SMT-LIB:
+     `OUT=/tmp/sv-bmc-3cases-after-fix2-smt.tsv BMC_RUN_SMTLIB=1 Z3_BIN=/home/thomas-ahle/z3-install/bin/z3 ...`
+     -> `total=3 pass=3 fail=0`
+
+4. Revalidated full default `sv-tests/BMC` lane:
+   - JIT:
+     `OUT=/tmp/sv-bmc-full-after-disableiff-fix.tsv ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+     -> `total=26 pass=26 fail=0 error=0`
+   - SMT-LIB:
+     `OUT=/tmp/sv-bmc-full-after-disableiff-fix-smt.tsv BMC_RUN_SMTLIB=1 Z3_BIN=/home/thomas-ahle/z3-install/bin/z3 ...`
+     -> `total=26 pass=26 fail=0 error=0`
+
+5. Cross-suite regression snapshot:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-disableiff-fix-20260210 ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+   - Results:
+     - `sv-tests/BMC`: `pass=26 fail=0`
+     - `verilator-verification/BMC`: `pass=12 fail=5`
+     - `yosys/tests/sva/BMC`: `pass=7 fail=5 skip=2`
+     - `opentitan/LEC`: `pass=1 fail=0`
+     - `opentitan/LEC_STRICT`: `pass=1 fail=0`
+
+## Iteration 918 - February 10, 2026
+
+### Config DB Race Condition Fix: Deferred Global Constructors for Dual-Top
+
+1. **Root cause**: In dual-top mode (`--top hdl_top --top hvl_top`), the
+   `initialize()` method ran `executeGlobalConstructors()` per-module. This
+   triggered UVM's `run_test()` → `build_phase` → `config_db::get()` during
+   hvl_top initialization, BEFORE hdl_top's `executeModuleLevelLLVMOps()`
+   could run the initial blocks that call `config_db::set()`.
+
+2. **Impact**: `UVM_FATAL [FATAL_MDP_CANNOT_GET_APB_MASTER_DRIVER_BFM]` -
+   driver proxy couldn't find BFM handle because config_db was empty when
+   build_phase ran.
+
+3. **Fix**: Split `initialize()` into two phases:
+   - `initialize()`: registers signals, processes, module-level ops (all modules)
+   - `finalizeInit()`: runs global constructors once (UVM init) after ALL
+     modules' `executeModuleLevelLLVMOps()` have completed
+   - `circt-sim.cpp` calls `finalizeInit()` after all `buildSimulationModel()`
+
+4. **Results after fix**:
+   - 223/223 circt-sim lit tests pass (100%)
+   - APB dual-top: 0 UVM_FATAL, 0 UVM_ERROR
+   - Full UVM testbench topology constructed with all components
+   - BFM handles successfully retrieved via config_db wildcard matching
+   - Simulation runs for 60+ seconds without errors
+
+## Iteration 917 - February 10, 2026
+
+### Phase Ordering Fix: Layout-Safe Struct Offsets in `get_adjacent_successor_nodes`
+
+1. **Root cause**: The `get_adjacent_successor_nodes` native interceptor in
+   `LLHDProcessInterpreter.cpp:11875` used hardcoded **aligned** byte offsets for
+   `uvm_phase` struct fields:
+   - `phase_type` (field [1]): hardcoded **40** → correct unaligned **32**
+   - `m_successors` (field [11]): hardcoded **104** → correct unaligned **96**
+
+2. **Impact**: This caused the phase DAG traversal to read garbage data from wrong
+   memory locations, breaking successor chain resolution. Phases executed out of order
+   (end_of_elaboration before build_phase), which meant `m_children` was empty during
+   topology traversal → only root/test_top got function phases dispatched.
+
+3. **Fix**: Replaced hardcoded offsets with dynamic computation:
+   - Walk `funcOp.getBody()` to find GEP operations referencing the `uvm_phase` struct type
+   - Use `getLLVMStructFieldOffset()` for layout-safe offset computation
+   - Fallback to correct unaligned offsets (32, 96) if no GEP found
+
+4. **Results after fix**:
+   - 223/223 circt-sim lit tests pass (100%)
+   - APB dual-top: full UVM topology traversal during all phases
+   - Both monitor proxies fire `end_of_elaboration_phase`
+   - Simulation advances to 23152 fs (was stuck at 0 fs)
+   - `uvm_traversal` check_phase visits ALL components (slave agents, monitors, coverage, sequencers)
+
+5. **Key lesson**: Never use hardcoded byte offsets for struct field access in the
+   interpreter. MooreToCore uses UNALIGNED layout (`sizeof = sum of field sizes`),
+   so aligned offsets (with padding) will always be wrong.
+
+6. **Credit**: Codex identified `get_adjacent_successor_nodes` as prime suspect and
+   recommended deriving offsets from MLIR type info instead of constants.
+
 ## Iteration 916 - February 10, 2026
 
 ### BMC Hardening: Remove Assume-Drop + Fix SMTLIB Inline-Assume Crash
