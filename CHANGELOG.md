@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 975 - February 10, 2026
+
+### OpenTitan LEC Producer Hardening: Explicit Fallback `diag` Coverage
+
+1. Hardened `utils/run_opentitan_circt_lec.py` so case rows always carry an
+   explicit `diag` value, even when `circt-lec` omits structured tags:
+   - result fallback: textual `c1 == c2` / `c1 != c2` -> `EQ` / `NEQ`
+   - pass fallback: `EQ`/`NEQ`/`UNKNOWN`/`PASS`/`SMOKE_ONLY`
+   - fail fallback: stage-aware diagnostics
+     (`CIRCT_VERILOG_ERROR`, `CIRCT_OPT_ERROR`, `CIRCT_LEC_ERROR`,
+     `SMOKE_ONLY_ERROR`, `ERROR`)
+2. Added regression coverage:
+   - `test/Tools/run-opentitan-lec-diag-fallback.test`
+   - `test/Tools/run-opentitan-lec-error-diag.test`
+3. Updated OpenTitan LEC lit expectations to assert the explicit `diag`
+   column in pass/fail/xfail rows.
+
+### Tests and Validation
+
+- `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-*.test test/Tools/run-formal-all-opentitan-lec-*.test`: PASS (16/16)
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test`: PASS (3/3)
+
 ## Iteration 974 - February 10, 2026
 
 ### `circt-mut report`: Dedicated Matrix Lane-Drift Policy Bundles

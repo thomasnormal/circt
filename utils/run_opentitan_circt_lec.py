@@ -44,9 +44,13 @@ def write_log(path: Path, stdout: str, stderr: str) -> None:
 
 def parse_lec_result(text: str) -> str | None:
     match = re.search(r"LEC_RESULT=(EQ|NEQ|UNKNOWN)", text)
-    if not match:
-        return None
-    return match.group(1)
+    if match:
+        return match.group(1)
+    if re.search(r"\bc1 == c2\b", text):
+        return "EQ"
+    if re.search(r"\bc1 != c2\b", text):
+        return "NEQ"
+    return None
 
 def parse_lec_diag(text: str) -> str | None:
     match = re.search(r"LEC_DIAG=([A-Z0-9_]+)", text)
@@ -413,7 +417,9 @@ def main() -> int:
             diag: str | None = None
             assume_known_result: str | None = None
             summary_counts: dict[str, int] = {}
+            stage = "verilog"
             try:
+                stage = "verilog"
                 run_and_log(verilog_cmd, verilog_log_path)
                 if verilog_log_path.exists():
                     reasons = extract_drop_reasons(
@@ -431,7 +437,9 @@ def main() -> int:
                             drop_remark_reason_rows.append(
                                 (impl, str(impl_dir), reason)
                             )
+                stage = "opt"
                 run_and_log(opt_cmd, impl_dir / "circt-opt.log")
+                stage = "lec"
                 lec_stdout = run_and_log(
                     lec_cmd,
                     impl_dir / "circt-lec.log",
@@ -477,9 +485,16 @@ def main() -> int:
                         raise subprocess.CalledProcessError(
                             1, lec_cmd, output=lec_stdout, stderr=lec_log_text
                         )
+                if not diag:
+                    if result in ("EQ", "NEQ", "UNKNOWN"):
+                        diag = result
+                    elif lec_smoke_only:
+                        diag = "SMOKE_ONLY"
+                    else:
+                        diag = "PASS"
                 print(f"{impl:24} OK", flush=True)
                 case_rows.append(
-                    ("PASS", impl, str(impl_dir), "opentitan", lec_mode_label, "")
+                    ("PASS", impl, str(impl_dir), "opentitan", lec_mode_label, diag)
                 )
             except subprocess.CalledProcessError:
                 failures += 1
@@ -500,6 +515,21 @@ def main() -> int:
                         extra = f" ({diag})"
                 except Exception:
                     pass
+                if not diag:
+                    if result in ("NEQ", "UNKNOWN", "EQ"):
+                        diag = result
+                    elif stage == "verilog":
+                        diag = "CIRCT_VERILOG_ERROR"
+                    elif stage == "opt":
+                        diag = "CIRCT_OPT_ERROR"
+                    elif stage == "lec" and lec_smoke_only:
+                        diag = "SMOKE_ONLY_ERROR"
+                    elif stage == "lec":
+                        diag = "CIRCT_LEC_ERROR"
+                    else:
+                        diag = "ERROR"
+                if diag and not extra:
+                    extra = f" ({diag})"
                 print(f"{impl:24} FAIL{extra} (logs in {impl_dir})", flush=True)
                 detail = str(impl_dir)
                 if diag:

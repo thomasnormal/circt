@@ -7,13 +7,13 @@
 // RUN: chmod +x %t/bin/circt-verilog
 // RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-opt
 // RUN: chmod +x %t/bin/circt-opt
-// RUN: printf '#!/bin/sh\necho \"c1 != c2\"\necho \"LEC_RESULT=NEQ\"\necho \"LEC_DIAG=XPROP_ONLY\"\nexit 0\n' > %t/bin/circt-lec
+// RUN: printf '#!/bin/sh\necho \"c1 == c2\"\nexit 0\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/bin/circt-lec
 // RUN: : > %t/bin/z3
-// RUN: not env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_SMOKE_ONLY=0 LEC_RUN_SMTLIB=1 LEC_DIAGNOSE_XPROP=1 LEC_ACCEPT_XPROP_ONLY=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir 2>&1 | FileCheck %s
-// RUN: FileCheck %s --check-prefix=RESULTFAIL < %t/results.tsv
-
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_SMOKE_ONLY=0 LEC_RUN_SMTLIB=1 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: FileCheck %s --check-prefix=RESULTPASS < %t/results.tsv
+//
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
-// CHECK: aes_sbox_canright FAIL (XPROP_ONLY)
-// CHECK: LEC failures: 1
-// RESULTFAIL: FAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY
+// CHECK: aes_sbox_canright OK
+// CHECK: LEC completed successfully.
+// RESULTPASS: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}EQ

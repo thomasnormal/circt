@@ -16,4 +16,4 @@
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
 // CHECK: aes_sbox_canright XPROP_ONLY (accepted)
 // CHECK: LEC completed successfully.
-// RESULTXPROP: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// RESULTXPROP: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright#XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY
