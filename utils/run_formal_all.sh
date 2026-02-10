@@ -39,6 +39,9 @@ Options:
                          Fail when BMC semantic-bucket fail-like case counts
                          increase vs baseline (disable_iff/local_var/
                          multiclock/four_state)
+  --fail-on-new-bmc-semantic-bucket-unclassified-cases
+                         Fail when BMC semantic-bucket unclassified fail-like
+                         case count increases vs baseline
   --fail-on-bmc-semantic-tagged-cases-regression
                          Fail when BMC semantic tagged-case count regresses
                          vs baseline
@@ -1676,6 +1679,7 @@ FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
+FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=0
 FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
 BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE=""
@@ -1969,6 +1973,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-cases)
       FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1; shift ;;
+    --fail-on-new-bmc-semantic-bucket-unclassified-cases)
+      FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1; shift ;;
     --fail-on-bmc-semantic-tagged-cases-regression)
       FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=1; shift ;;
     --fail-on-new-bmc-abstraction-provenance)
@@ -3810,6 +3816,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1
   FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
@@ -9842,6 +9849,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" == "1" || \
       "$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
@@ -9860,6 +9868,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" \
   FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION="$FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
   BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" \
@@ -10039,6 +10048,10 @@ fail_on_new_bmc_ir_check_fingerprint_cases = (
 )
 fail_on_new_bmc_semantic_bucket_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES", "0") == "1"
+)
+fail_on_new_bmc_semantic_bucket_unclassified_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES", "0")
+    == "1"
 )
 fail_on_bmc_semantic_tagged_cases_regression = (
     os.environ.get("FAIL_ON_BMC_SEMANTIC_TAGGED_CASES_REGRESSION", "0") == "1"
@@ -10274,6 +10287,22 @@ for key, current_row in summary.items():
                 if current_semantic > baseline_semantic:
                     gate_errors.append(
                         f"{suite} {mode}: {semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_semantic_bucket_unclassified_cases:
+            baseline_unclassified_values = []
+            for counts in parsed_counts:
+                if "bmc_semantic_bucket_unclassified_cases" in counts:
+                    baseline_unclassified_values.append(
+                        int(counts["bmc_semantic_bucket_unclassified_cases"])
+                    )
+            if baseline_unclassified_values:
+                baseline_unclassified = min(baseline_unclassified_values)
+                current_unclassified = int(
+                    current_counts.get("bmc_semantic_bucket_unclassified_cases", 0)
+                )
+                if current_unclassified > baseline_unclassified:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_semantic_bucket_unclassified_cases increased ({baseline_unclassified} -> {current_unclassified}, window={baseline_window})"
                     )
         if fail_on_bmc_semantic_tagged_cases_regression:
             baseline_tagged_values = []

@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 897 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: Unclassified-Bucket Strict Gate
+
+1. Added new strict-gate control in `utils/run_formal_all.sh`:
+   - `--fail-on-new-bmc-semantic-bucket-unclassified-cases`
+   - fails when `bmc_semantic_bucket_unclassified_cases` increases vs baseline.
+2. Enabled this check under `--strict-gate` by default.
+3. Purpose:
+   - prevent semantic-classification coverage regressions where fail-like rows
+     stay flat but shift into unclassified space.
+4. Added regression test:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`
+   - verifies strict-gate failure on `unclassified_cases` increase (`0 -> 1`).
+5. Updated CLI help coverage:
+   - `test/Tools/run-formal-all-help.test` now checks the new flag.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-regression.test test/Tools/run-formal-all-strict-gate-bmc-semantic-tagged-cases-no-regression-on-fail-drop.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-unclassified-gate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key counters:
+    - `sv-tests/BMC`: `unclassified_cases=0`
+    - `verilator-verification/BMC`: `unclassified_cases=5`
+    - `yosys/tests/sva/BMC`: `classified_cases=1`, `tagged_cases=1`,
+      `four_state_cases=1`, `unclassified_cases=5`
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 896 - February 10, 2026
 
 ### BMC Semantic-Closure Coverage Expansion: Yosys Four-State Seed
