@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 916 - February 10, 2026
+
+### BMC Hardening: Remove Assume-Drop + Fix SMTLIB Inline-Assume Crash
+
+1. Updated `lib/Conversion/VerifToSMT/VerifToSMT.cpp` in BMC lowering:
+   - removed intentional `verif.assume` suppression path
+     (no semantic dropping in SMTLIB export path).
+   - refactored inline `verif.bmc` assume lowering to use mapped operands
+     directly instead of cloning+erasing temporary assume ops.
+2. This resolved an SMTLIB conversion crash in `ConvertVerifToSMT` on
+   local-var/`disable iff` sv-tests repros while preserving backend parity.
+3. Focused reproducer command:
+   - `OUT=/tmp/sv-bmc-failing-smtlib-results.txt KEEP_LOGS_DIR=/tmp/sv-bmc-failing-smtlib-logs BMC_RUN_SMTLIB=1 TEST_FILTER='^(16\.10--property-local-var-fail|16\.10--sequence-local-var-fail|16\.12--property-disable-iff|16\.12--property-iff|16\.12--property-prec|16\.15--property-disable-iff-fail)$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+   - Result: `total=6 pass=3 fail=3 error=0` (no crash/error rows).
+4. Lane-level validation:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-no-drop-svtests-fix-20260210-133224 --sv-tests /home/thomas-ahle/sv-tests --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-backend-parity --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+   - Result: `sv-tests/BMC total=26 pass=23 fail=3 error=0`
+     with `bmc_backend_parity_mismatch_cases=0`.
+5. Cross-lane sanity snapshots:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-no-drop-vy-20260210-133358 --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+     - `verilator-verification/BMC`: `pass=12 fail=5 error=0`
+     - `yosys/tests/sva/BMC`: `pass=7 fail=5 error=0 skip=2`
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-sanity-20260210-133426 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog`
+     - `opentitan/LEC`: `pass=1 fail=0`
+     - `opentitan/LEC_STRICT`: `pass=1 fail=0`
+6. Regression coverage run:
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/circt-bmc-equivalent-derived-clocks.mlir test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+   - Result: `Passed: 3`.
+
 ## Iteration 915 - February 10, 2026
 
 ### `circt-mut` Matrix Prequalification Telemetry Aggregation

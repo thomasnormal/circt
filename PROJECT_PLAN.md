@@ -976,20 +976,28 @@ See CHANGELOG.md on recent progress.
    roadmap intent in `PROJECT_PLAN.md`; command-level evidence and results in
    `CHANGELOG.md`.
 
-### Latest BMC Backend-Parity Status (February 10, 2026)
-1. `sv-tests/BMC` backend parity closure is currently clean:
-   `bmc_backend_parity_mismatch_cases=0` and `bmc_backend_parity_status_diff_cases=0`
-   in `/tmp/formal-bmc-parity-after-stripfix`.
-2. Focused semantic repros now agree across backends (`JIT` and `SMTLIB`) and
-   classify as `PASS` for:
+### Latest BMC Backend-Parity + No-Drop Status (February 10, 2026)
+1. Removed intentional semantic dropping in `VerifToSMT` BMC lowering:
+   `verif.assume` is now always lowered to SMT assertions (or conversion fails),
+   never silently discarded.
+2. Fixed SMTLIB crash introduced by inline-assume lowering by avoiding
+   clone-and-erase of temporary `verif.assume` ops in inline `verif.bmc`
+   regions; lowering now uses mapped operands directly.
+3. Current `sv-tests/BMC` parity remains clean after no-drop hardening:
+   `bmc_backend_parity_mismatch_cases=0`,
+   `bmc_backend_parity_status_diff_cases=0`
+   (`/tmp/formal-bmc-no-drop-svtests-fix-20260210-133224`).
+4. With dropping removed, `sv-tests/BMC` now reports real semantic outcomes
+   (no crashes/errors): `total=26 pass=23 fail=3 error=0`.
+   Remaining fail-like rows are:
    `16.10--property-local-var-fail`,
    `16.10--sequence-local-var-fail`,
    `16.15--property-disable-iff-fail`.
-3. Remaining near-term closure gaps on the current branch are outside this
-   specific parity mismatch and still require semantic hardening:
+5. Broader BMC/LEC snapshot on this branch:
    - `verilator-verification/BMC`: `pass=12 fail=5`
-   - `yosys/tests/sva/BMC`: `pass=0 fail=12 skip=2`
-   - `opentitan/E2E` and `opentitan/E2E_STRICT`: `pass=11 fail=1`
-4. Next execution target:
-   reduce fail-like rows in `verilator-verification/BMC` and
-   `yosys/tests/sva/BMC` while preserving `sv-tests/BMC` backend parity.
+   - `yosys/tests/sva/BMC`: `pass=7 fail=5 skip=2`
+   - `opentitan/LEC`: `pass=1 fail=0`
+   - `opentitan/LEC_STRICT`: `pass=1 fail=0`
+6. Next execution target:
+   close semantic correctness on local-var/`disable iff` fail-like rows without
+   reintroducing any semantic suppression paths.

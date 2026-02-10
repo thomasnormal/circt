@@ -1,4 +1,5 @@
 // RUN: circt-bmc --emit-mlir -b 2 --module top %s | FileCheck %s
+// RUN: circt-bmc --run-smtlib --z3-path=%S/Inputs/fake-z3-unsat.sh -b 2 --module top %s | FileCheck %s --check-prefix=SMTLIB
 
 // This uses an equivalent derived clock expression before its definition.
 // Graph regions permit use-before-def, which blocks CSE from merging the
@@ -24,3 +25,4 @@ module {
 }
 
 // CHECK: func.func @top
+// SMTLIB: BMC_RESULT=UNSAT
