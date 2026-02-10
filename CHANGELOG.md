@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 894 - February 10, 2026
+
+### sv-tests Runner Semantic-Tag Emission (BMC Closure)
+
+1. Added semantic-tag map support to `utils/run_sv_tests_circt_bmc.sh`:
+   - new env input: `BMC_SEMANTIC_TAG_MAP_FILE`
+   - mapped cases now emit enriched rows:
+     - `STATUS  case_id  path  sv-tests  BMC  semantic_buckets=<...>`
+   - unmapped cases preserve legacy 3-column row format.
+2. Added shared map file:
+   - `utils/sv-tests-bmc-semantic-tags.tsv`
+   - seeds known closure categories:
+     - local-var (`16.10*`, `16.11*`)
+     - disable-iff (`16.12/16.15*`)
+     - multiclock (`16.13--sequence-multiclock-uvm`).
+3. `utils/run_formal_all.sh` now forwards this map (via
+   `SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE`) into:
+   - `sv-tests/BMC`
+   - `sv-tests-uvm/BMC_SEMANTICS`
+4. Added regression test:
+   - `test/Tools/run-sv-tests-circt-bmc-semantic-tag-map.test`
+   - verifies map-driven tagged row emission in `OUT`.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_sv_tests_circt_bmc.sh utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-semantic-tag-map.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-help.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-tagmap-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^(sv-tests|sv-tests-uvm|verilator-verification|yosys/tests/sva)/BMC'`
+  - key result:
+    - `sv-tests/BMC`: `bmc_semantic_bucket_tagged_cases=3`
+      (`classified_cases=3`, `regex_cases=0`)
+    - `verilator`/`yosys`: still `tagged_cases=0` (next target).
+
 ## Iteration 893 - February 10, 2026
 
 ### BMC Semantic-Bucket Classifier: Explicit Tag Support + Source Counters

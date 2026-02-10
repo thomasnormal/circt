@@ -30,6 +30,7 @@ Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
+BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
 # run, which convert verif.clocked_assert (!ltl.property type) to verif.assert (i1 type).
@@ -162,6 +163,41 @@ skip=0
 total=0
 
 declare -A expect_mode
+declare -A semantic_tags_by_case
+
+load_semantic_tag_map() {
+  if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r case_name tags extra; do
+    if [[ -z "$case_name" || "$case_name" =~ ^# ]]; then
+      continue
+    fi
+    if [[ -n "${extra:-}" ]]; then
+      continue
+    fi
+    tags="${tags// /}"
+    if [[ -z "$tags" ]]; then
+      continue
+    fi
+    semantic_tags_by_case["$case_name"]="$tags"
+  done < "$BMC_SEMANTIC_TAG_MAP_FILE"
+}
+
+emit_result_row() {
+  local status="$1"
+  local base="$2"
+  local sv="$3"
+  local tags="${semantic_tags_by_case[$base]-}"
+  if [[ -n "$tags" ]]; then
+    printf "%s\t%s\t%s\tsv-tests\tBMC\tsemantic_buckets=%s\n" \
+      "$status" "$base" "$sv" "$tags" >> "$results_tmp"
+  else
+    printf "%s\t%s\t%s\n" "$status" "$base" "$sv" >> "$results_tmp"
+  fi
+}
+
+load_semantic_tag_map
 if [[ -f "$EXPECT_FILE" ]]; then
   while IFS=$'\t' read -r name mode reason; do
     if [[ -z "$name" || "$name" =~ ^# ]]; then
@@ -344,7 +380,7 @@ while IFS= read -r -d '' sv; do
       result="ERROR"
       error=$((error + 1))
     fi
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    emit_result_row "$result" "$base" "$sv"
     continue
   fi
 
@@ -356,7 +392,7 @@ while IFS= read -r -d '' sv; do
       result="PASS"
       pass=$((pass + 1))
     fi
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    emit_result_row "$result" "$base" "$sv"
     if [[ -n "$KEEP_LOGS_DIR" ]]; then
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
@@ -413,7 +449,7 @@ while IFS= read -r -d '' sv; do
       grep -q "no property provided to check in module" "$bmc_log"; then
     result="SKIP"
     skip=$((skip + 1))
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    emit_result_row "$result" "$base" "$sv"
     if [[ -n "$KEEP_LOGS_DIR" ]]; then
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
@@ -468,7 +504,7 @@ while IFS= read -r -d '' sv; do
   if [[ "$BMC_SMOKE_ONLY" == "1" && "$should_fail" == "1" && "$expect_bmc_violation" != "1" ]]; then
     result="XFAIL"
     xfail=$((xfail + 1))
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    emit_result_row "$result" "$base" "$sv"
     if [[ -n "$KEEP_LOGS_DIR" ]]; then
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
@@ -518,7 +554,7 @@ while IFS= read -r -d '' sv; do
     esac
   fi
 
-  printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+  emit_result_row "$result" "$base" "$sv"
   if [[ -n "$KEEP_LOGS_DIR" ]]; then
     mkdir -p "$KEEP_LOGS_DIR"
     cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true

@@ -1,0 +1,17 @@
+// RUN: rm -rf %t && mkdir -p %t/tests/chapter-16
+// RUN: printf '/*\n:name: semantic_case\n:description: semantic tag map test\n:type: simulation\n:tags: 16.10\n*/\nmodule top(input logic clk);\n  assert property (@(posedge clk) 1'\''b1);\nendmodule\n' > %t/tests/chapter-16/semantic_case.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh
+// RUN: echo 'echo "verif.assert %0 : i1"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh
+// RUN: echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: printf 'semantic_case\tlocal_var,multiclock\n' > %t/semantic-tags.tsv
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 TEST_FILTER='^semantic_case$' \
+// RUN:   BMC_SEMANTIC_TAG_MAP_FILE=%t/semantic-tags.tsv OUT=%t/out.tsv \
+// RUN:   %S/../../utils/run_sv_tests_circt_bmc.sh %t > %t/run.out
+// RUN: FileCheck %s --check-prefix=RUNOUT < %t/run.out
+// RUN: FileCheck %s --check-prefix=OUTTSV < %t/out.tsv
+//
+// RUNOUT: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// OUTTSV: PASS{{[[:space:]]+}}semantic_case{{[[:space:]]+}}{{.*}}semantic_case.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}semantic_buckets=local_var,multiclock

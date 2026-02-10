@@ -1,0 +1,14 @@
+# case_id	semantic_buckets
+16.10--property-local-var	local_var
+16.10--property-local-var-fail	local_var
+16.10--sequence-local-var	local_var
+16.10--sequence-local-var-fail	local_var
+16.10--property-local-var-uvm	local_var
+16.10--sequence-local-var-uvm	local_var
+16.11--sequence-subroutine-uvm	local_var
+16.12--property-disable-iff	disable_iff
+16.15--property-disable-iff	disable_iff
+16.15--property-disable-iff-fail	disable_iff
+16.15--property-iff-uvm	disable_iff
+16.15--property-iff-uvm-fail	disable_iff
+16.13--sequence-multiclock-uvm	multiclock
