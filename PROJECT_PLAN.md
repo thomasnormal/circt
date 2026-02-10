@@ -593,9 +593,26 @@ See CHANGELOG.md on recent progress.
       explicit semantic tags.
 75. Next concrete implementation target:
     - add first-class semantic-tag emission in BMC runners (or backend
-      diagnostics) for known closure categories (`disable iff`, local-var,
-      multiclock, 4-state) so strict-gate can track semantic drift without
-      relying on filename heuristics.
+    diagnostics) for known closure categories (`disable iff`, local-var,
+    multiclock, 4-state) so strict-gate can track semantic drift without
+    relying on filename heuristics.
+76. sv-tests runner semantic-tag emission landed (February 10, 2026):
+    - `run_sv_tests_circt_bmc.sh` now supports
+      `BMC_SEMANTIC_TAG_MAP_FILE` and emits tagged case rows
+      (`suite=sv-tests`, `mode=BMC`, `semantic_buckets=...`) for mapped cases.
+    - `run_formal_all.sh` now forwards
+      `SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE` to both `sv-tests/BMC` and
+      `sv-tests-uvm/BMC_SEMANTICS` lanes.
+77. Initial map rollout status:
+    - new map file `utils/sv-tests-bmc-semantic-tags.tsv` tags known
+      local-var/disable-iff/multiclock closure cases.
+    - current real run signal:
+      `sv-tests/BMC` moved to `tagged_cases=3 regex_cases=0` for fail-like
+      rows, while `verilator` and `yosys` remain untagged.
+78. Next long-term step after sv-tests map rollout:
+    - add analogous semantic-tag sources for `verilator-verification` and
+      `yosys/tests/sva` (runner map or backend diagnostics), then optionally
+      gate on `bmc_semantic_bucket_tagged_cases` floor in strict mode.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
