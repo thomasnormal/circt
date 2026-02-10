@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 959 - February 10, 2026
+
+### `circt-mut report`: Lane Budget Artifact Export for Matrix Governance
+
+1. Extended `tools/circt-mut/circt-mut.cpp` report CLI with:
+   - `--lane-budget-out FILE`
+2. `circt-mut report` now writes a first-class per-lane matrix governance TSV
+   artifact (when requested) with columns:
+   - `lane_id`, `status`, `gate_status`, `has_metrics`
+   - `detected_mutants`, `errors`
+   - `global_filter_timeout_mutants`
+   - `global_filter_lec_unknown_mutants`
+   - `global_filter_bmc_unknown_mutants`
+3. Added matrix summary keys for emitted artifact bookkeeping:
+   - `matrix.lane_budget_file`
+   - `matrix.lane_budget_file_rows`
+4. Added lane-level worst-offender summary keys:
+   - timeout/unknown/error worst lane id + value
+   - lowest detected-mutants lane id + value
+5. Added strict mode validation:
+   - `--lane-budget-out` now fails fast unless `--mode matrix|all`.
+6. Added/updated regression tests:
+   - new: `test/Tools/circt-mut-report-lane-budget-out.test`
+   - new: `test/Tools/circt-mut-report-lane-budget-out-mode-error.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-matrix-basic.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-lane-budget-out.test test/Tools/circt-mut-report-lane-budget-out-mode-error.test test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-policy-matrix-guard-strict-zero-detected-lane-fail.test`: PASS (5/5)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (37/37)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (156/156)
+- Filtered external cadence:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-budget-out-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --sv-tests-uvm-bmc-semantics-tag-regex '.*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filters)
+    - `verilator-verification` BMC/LEC: PASS (`17/17`)
+    - `yosys/tests/sva` BMC: FAIL (`2` fail), LEC: PASS (`14/14`)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 958 - February 10, 2026
 
 ### run_formal_all: Lane-Scoped Non-sv Test Filters (verilator/yosys)

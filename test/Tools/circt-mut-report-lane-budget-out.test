@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix/lane1 %t/proj/out/matrix/lane2
+// RUN: printf 'total_mutants\t4\nrelevant_mutants\t4\ndetected_mutants\t1\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\nglobal_filter_timeout_mutants\t1\nglobal_filter_lec_unknown_mutants\t0\nglobal_filter_bmc_unknown_mutants\t0\n' > %t/proj/out/matrix/lane1/metrics.tsv
+// RUN: printf 'total_mutants\t4\nrelevant_mutants\t4\ndetected_mutants\t2\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t1\nglobal_filter_timeout_mutants\t0\nglobal_filter_lec_unknown_mutants\t2\nglobal_filter_bmc_unknown_mutants\t1\n' > %t/proj/out/matrix/lane2/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\nlane1\tPASS\t0\t25.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\nlane2\tFAIL\t2\t50.00\tFAIL\t%t/proj/out/matrix/lane2\t%t/proj/out/matrix/lane2/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\n' > %t/proj/out/matrix/results.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode matrix --lane-budget-out lane_budget.tsv > %t/out.txt
+// RUN: FileCheck %s --check-prefix=REPORT < %t/out.txt
+// RUN: FileCheck %s --check-prefix=BUDGET < %t/proj/lane_budget.tsv
+//
+// REPORT: matrix.lane_budget_file{{[[:space:]]}}{{.*}}/lane_budget.tsv
+// REPORT: matrix.lane_budget_file_rows{{[[:space:]]}}2
+//
+// BUDGET: lane_id{{[[:space:]]}}status{{[[:space:]]}}gate_status{{[[:space:]]}}has_metrics{{[[:space:]]}}detected_mutants{{[[:space:]]}}errors{{[[:space:]]}}global_filter_timeout_mutants{{[[:space:]]}}global_filter_lec_unknown_mutants{{[[:space:]]}}global_filter_bmc_unknown_mutants
+// BUDGET-DAG: lane1{{[[:space:]]}}PASS{{[[:space:]]}}PASS{{[[:space:]]}}1{{[[:space:]]}}1{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}0{{[[:space:]]}}0
+// BUDGET-DAG: lane2{{[[:space:]]}}FAIL{{[[:space:]]}}FAIL{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}1{{[[:space:]]}}0{{[[:space:]]}}2{{[[:space:]]}}1
