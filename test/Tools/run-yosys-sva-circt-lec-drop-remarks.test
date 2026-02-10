@@ -6,7 +6,7 @@
 // RUN: chmod +x %t/fake-verilog.sh %t/fake-opt.sh %t/fake-lec.sh
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_OPT=%t/fake-opt.sh CIRCT_LEC=%t/fake-lec.sh \
 // RUN:   Z3_LIB=/dev/null LEC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
-// RUN:   OUT=%t/results.tsv \
+// RUN:   OUT=%t/results.tsv TEST_FILTER='simple' \
 // RUN:   LEC_DROP_REMARK_CASES_OUT=%t/drop.tsv LEC_DROP_REMARK_REASONS_OUT=%t/reasons.tsv \
 // RUN:   %S/../../utils/run_yosys_sva_circt_lec.sh %t > %t/out.log
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log

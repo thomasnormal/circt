@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 977 - February 10, 2026
+
+### Runner Filter-Contract Hardening (Caller Must Pass Explicit Filter)
+
+1. Enforced explicit `TEST_FILTER` in direct formal runner scripts:
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+2. Added dedicated regression tests:
+   - `test/Tools/run-verilator-verification-circt-bmc-require-filter.test`
+   - `test/Tools/run-verilator-verification-circt-lec-require-filter.test`
+   - `test/Tools/run-yosys-sva-circt-lec-require-filter.test`
+3. Updated direct callsite tests to pass explicit filters:
+   - `test/Tools/run-verilator-verification-circt-bmc-semantic-tag-map.test`
+   - `test/Tools/run-yosys-sva-circt-lec-drop-remarks.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_verilator_verification_circt_bmc.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-verilator-verification-circt-bmc-*.test test/Tools/run-verilator-verification-circt-lec-*.test test/Tools/run-yosys-sva-circt-lec-*.test`: PASS (12/12)
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-non-sv-test-filter-forwarding.test`: PASS (2/2)
+
 ## Iteration 976 - February 10, 2026
 
 ### `circt-mut report`: Composite Matrix Nightly/Strict Policy Bundles

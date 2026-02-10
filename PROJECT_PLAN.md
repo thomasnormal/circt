@@ -140,6 +140,13 @@ See CHANGELOG.md on recent progress.
     validation evidence).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
+  - Caller-owned filter policy hardening:
+    - `verilator-verification` BMC/LEC and `yosys/tests/sva` LEC direct runner
+      scripts now require explicit `TEST_FILTER` (no implicit full-suite
+      fallback).
+    - remaining migration step: align `yosys/tests/sva` BMC direct runner to
+      the same explicit-filter contract after its larger lit-suite callsite
+      update.
   - Close remaining local-variable and `disable iff` semantic mismatches.
   - Reduce multi-clock edge-case divergence.
   - Expand full (not filtered) regular closure cadence on core suites.

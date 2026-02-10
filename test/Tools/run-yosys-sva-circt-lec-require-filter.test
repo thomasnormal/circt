@@ -1,0 +1,4 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: not env CIRCT_VERILOG=/bin/true CIRCT_OPT=/bin/true CIRCT_LEC=/bin/true %S/../../utils/run_yosys_sva_circt_lec.sh %t 2>&1 | FileCheck %s
+//
+// CHECK: must set TEST_FILTER explicitly (no default filter)
