@@ -3651,6 +3651,7 @@ struct MatrixNativePrequalifyConfig {
   std::string outDir = "mutation-matrix-results";
   std::string createMutatedScript;
   std::string jobsPerLane = "1";
+  std::string matrixJobs = "1";
   std::string reuseCacheDir;
   std::string reuseCacheMode;
   std::string defaultReusePairFile;
@@ -3723,6 +3724,7 @@ static bool parseMatrixNativePrequalifyConfig(ArrayRef<std::string> args,
   readValue("--out-dir", cfg.outDir);
   readValue("--create-mutated-script", cfg.createMutatedScript);
   readValue("--jobs-per-lane", cfg.jobsPerLane);
+  readValue("--jobs", cfg.matrixJobs);
   readValue("--reuse-cache-dir", cfg.reuseCacheDir);
   readValue("--reuse-cache-mode", cfg.reuseCacheMode);
   readValue("--default-reuse-pair-file", cfg.defaultReusePairFile);
@@ -4753,6 +4755,16 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t lanePass = 0;
   uint64_t laneFail = 0;
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
+  uint64_t matrixJobs = 1;
+  if (!cfg.matrixJobs.empty()) {
+    if (StringRef(cfg.matrixJobs).getAsInteger(10, matrixJobs) ||
+        matrixJobs == 0) {
+      errs() << "circt-mut matrix: invalid --jobs for native dispatch: "
+             << cfg.matrixJobs << " (expected positive integer)\n";
+      return 1;
+    }
+  }
+  bool bufferedMode = !stopOnFail && matrixJobs > 1;
   std::optional<Regex> includeLaneRegex;
   std::optional<Regex> excludeLaneRegex;
   if (auto v = getLastOptionValue(args, "--include-lane-regex")) {
@@ -4776,6 +4788,47 @@ static int runNativeMatrixDispatch(const char *argv0,
     excludeLaneRegex = std::move(r);
   }
   StringMap<uint64_t> gateCounts;
+  std::vector<std::string> bufferedRows;
+  bufferedRows.reserve(rawLines.size());
+  struct PendingLaneJob {
+    size_t rowIndex = 0;
+    std::string laneID;
+    std::string laneWorkDir;
+    std::string laneLog;
+    SmallVector<std::string, 96> coverCmd;
+  };
+  std::vector<PendingLaneJob> pendingJobs;
+  auto formatLaneRow = [](StringRef laneID, StringRef status, int exitCode,
+                          StringRef coveragePercent, StringRef gateStatus,
+                          StringRef laneDir, StringRef metricsFile,
+                          StringRef summaryJSON, StringRef configErrorCode,
+                          StringRef configErrorReason) {
+    std::string row;
+    raw_string_ostream os(row);
+    os << laneID << '\t' << status << '\t' << exitCode << '\t'
+       << coveragePercent << '\t' << gateStatus << '\t' << laneDir << '\t'
+       << metricsFile << '\t' << summaryJSON << '\t' << configErrorCode << '\t'
+       << configErrorReason;
+    os.flush();
+    return row;
+  };
+  auto emitLaneRow = [&](StringRef laneID, StringRef status, int exitCode,
+                         StringRef coveragePercent, StringRef gateStatus,
+                         StringRef laneDir, StringRef metricsFile,
+                         StringRef summaryJSON, StringRef configErrorCode,
+                         StringRef configErrorReason) {
+    if (bufferedMode) {
+      bufferedRows.push_back(
+          formatLaneRow(laneID, status, exitCode, coveragePercent, gateStatus,
+                        laneDir, metricsFile, summaryJSON, configErrorCode,
+                        configErrorReason));
+      return;
+    }
+    out << laneID << '\t' << status << '\t' << exitCode << '\t'
+        << coveragePercent << '\t' << gateStatus << '\t' << laneDir << '\t'
+        << metricsFile << '\t' << summaryJSON << '\t' << configErrorCode << '\t'
+        << configErrorReason << '\n';
+  };
 
   auto maybeAddArg = [](SmallVectorImpl<std::string> &cmd, StringRef flag,
                         const std::string &value) {
@@ -4784,17 +4837,6 @@ static int runNativeMatrixDispatch(const char *argv0,
     cmd.push_back(flag.str());
     cmd.push_back(value);
   };
-  auto writeLaneRow = [&](StringRef laneID, StringRef status, int exitCode,
-                          StringRef coveragePercent, StringRef gateStatus,
-                          StringRef laneDir, StringRef metricsFile,
-                          StringRef summaryJSON, StringRef configErrorCode,
-                          StringRef configErrorReason) {
-    out << laneID << '\t' << status << '\t' << exitCode << '\t'
-        << coveragePercent << '\t' << gateStatus << '\t' << laneDir << '\t'
-        << metricsFile << '\t' << summaryJSON << '\t' << configErrorCode << '\t'
-        << configErrorReason << '\n';
-  };
-
   for (size_t lineNo = 0; lineNo < rawLines.size(); ++lineNo) {
     StringRef rawLine = rawLines[lineNo];
     StringRef line = rawLine;
@@ -4834,9 +4876,10 @@ static int runNativeMatrixDispatch(const char *argv0,
     std::string laneWorkDir = joinPath2(cfg.outDir, laneID);
     std::error_code laneDirEC = sys::fs::create_directories(laneWorkDir);
     if (laneDirEC) {
-      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
-                   "DIR_ERROR", "lane_work_dir_create_failed");
+      emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                  "DIR_ERROR", "lane_work_dir_create_failed");
       ++laneFail;
+      gateCounts["FAIL"]++;
       if (stopOnFail)
         break;
       continue;
@@ -4846,8 +4889,8 @@ static int runNativeMatrixDispatch(const char *argv0,
     if (laneDesign.empty() || laneTestsManifest.empty() ||
         ((laneMutationsFile.empty() || laneMutationsFile == "-") &&
          laneGenerateCount.empty())) {
-      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
-                   "CONFIG_ERROR", "missing_required_lane_fields");
+      emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                  "CONFIG_ERROR", "missing_required_lane_fields");
       ++laneFail;
       gateCounts["FAIL"]++;
       if (stopOnFail)
@@ -5007,8 +5050,8 @@ static int runNativeMatrixDispatch(const char *argv0,
         !parseLaneBoolWithDefault(trimmedColumn(cols, ColFailOnErrors),
                                   cfg.defaultFailOnErrors, failOnErrors, error,
                                   "fail_on_errors", laneID)) {
-      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
-                   "CONFIG_ERROR", "invalid_lane_boolean_override");
+      emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                  "CONFIG_ERROR", "invalid_lane_boolean_override");
       ++laneFail;
       gateCounts["FAIL"]++;
       if (stopOnFail)
@@ -5030,12 +5073,24 @@ static int runNativeMatrixDispatch(const char *argv0,
     if (failOnErrors)
       coverCmd.push_back("--fail-on-errors");
 
+    if (bufferedMode) {
+      PendingLaneJob job;
+      job.rowIndex = bufferedRows.size();
+      job.laneID = laneID;
+      job.laneWorkDir = laneWorkDir;
+      job.laneLog = joinPath2(laneWorkDir, "native_matrix_lane.log");
+      job.coverCmd = std::move(coverCmd);
+      pendingJobs.push_back(std::move(job));
+      bufferedRows.emplace_back();
+      continue;
+    }
+
     int coverRC = -1;
     std::string runError;
     if (!runArgvToLog(coverCmd, laneLog, /*timeoutSeconds=*/0, coverRC,
                       runError)) {
-      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
-                   "DISPATCH_ERROR", "cover_invocation_failed");
+      emitLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                  "DISPATCH_ERROR", "cover_invocation_failed");
       ++laneFail;
       gateCounts["FAIL"]++;
       if (stopOnFail)
@@ -5068,10 +5123,10 @@ static int runNativeMatrixDispatch(const char *argv0,
     }
 
     bool pass = coverRC == 0;
-    writeLaneRow(laneID, pass ? "PASS" : "FAIL", coverRC, coveragePercent,
-                 pass ? "PASS" : "FAIL", laneWorkDir,
-                 sys::fs::exists(metricsPath) ? metricsPath : "-",
-                 sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
+    emitLaneRow(laneID, pass ? "PASS" : "FAIL", coverRC, coveragePercent,
+                pass ? "PASS" : "FAIL", laneWorkDir,
+                sys::fs::exists(metricsPath) ? metricsPath : "-",
+                sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
     gateCounts[pass ? "PASS" : "FAIL"]++;
     if (pass)
       ++lanePass;
@@ -5079,6 +5134,89 @@ static int runNativeMatrixDispatch(const char *argv0,
       ++laneFail;
     if (!pass && stopOnFail)
       break;
+  }
+
+  if (bufferedMode) {
+    struct LaneJobOutcome {
+      std::string row;
+      bool pass = false;
+    };
+    std::vector<LaneJobOutcome> outcomes(pendingJobs.size());
+    std::atomic<size_t> nextJob{0};
+    uint64_t workerCount = std::min<uint64_t>(matrixJobs, pendingJobs.size());
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    auto runOneJob = [&](size_t idx) {
+      const auto &job = pendingJobs[idx];
+      int coverRC = -1;
+      std::string runError;
+      if (!runArgvToLog(job.coverCmd, job.laneLog, /*timeoutSeconds=*/0, coverRC,
+                        runError)) {
+        outcomes[idx].row =
+            formatLaneRow(job.laneID, "FAIL", 1, "-", "FAIL", job.laneWorkDir,
+                          "-", "-", "DISPATCH_ERROR",
+                          "cover_invocation_failed");
+        outcomes[idx].pass = false;
+        return;
+      }
+      std::string metricsPath = joinPath2(job.laneWorkDir, "metrics.tsv");
+      std::string summaryPath = joinPath2(job.laneWorkDir, "summary.json");
+      std::string coveragePercent = "-";
+      if (sys::fs::exists(metricsPath)) {
+        std::string metricsText = readTextFileOrEmpty(metricsPath);
+        SmallVector<StringRef, 128> metricLines;
+        StringRef(metricsText).split(metricLines, '\n', /*MaxSplit=*/-1,
+                                     /*KeepEmpty=*/false);
+        for (StringRef metricLine : metricLines) {
+          metricLine = metricLine.trim();
+          if (metricLine.empty() || metricLine.starts_with("#"))
+            continue;
+          size_t tabPos = metricLine.find('\t');
+          if (tabPos == StringRef::npos)
+            continue;
+          StringRef key = metricLine.take_front(tabPos).trim();
+          StringRef value = metricLine.drop_front(tabPos + 1).trim();
+          if (key == "mutation_coverage_percent" && !value.empty()) {
+            coveragePercent = value.str();
+            break;
+          }
+        }
+      }
+      bool pass = coverRC == 0;
+      outcomes[idx].row = formatLaneRow(
+          job.laneID, pass ? "PASS" : "FAIL", coverRC, coveragePercent,
+          pass ? "PASS" : "FAIL", job.laneWorkDir,
+          sys::fs::exists(metricsPath) ? metricsPath : "-",
+          sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
+      outcomes[idx].pass = pass;
+    };
+    auto workerFn = [&]() {
+      while (true) {
+        size_t idx = nextJob.fetch_add(1);
+        if (idx >= pendingJobs.size())
+          return;
+        runOneJob(idx);
+      }
+    };
+    if (workerCount > 0) {
+      for (uint64_t w = 0; w < workerCount; ++w)
+        workers.emplace_back(workerFn);
+      for (auto &w : workers)
+        w.join();
+    }
+    for (size_t i = 0; i < pendingJobs.size(); ++i) {
+      const auto &job = pendingJobs[i];
+      bufferedRows[job.rowIndex] = outcomes[i].row;
+      if (outcomes[i].pass) {
+        ++lanePass;
+        gateCounts["PASS"]++;
+      } else {
+        ++laneFail;
+        gateCounts["FAIL"]++;
+      }
+    }
+    for (const auto &row : bufferedRows)
+      out << row << '\n';
   }
 
   out.close();
@@ -5103,6 +5241,7 @@ static int runNativeMatrixDispatch(const char *argv0,
   outs() << "native_matrix_dispatch_gate_summary_tsv\t" << gateSummaryPath
          << "\n";
   outs() << "native_matrix_dispatch_lanes\t" << laneTotal << "\n";
+  outs() << "native_matrix_dispatch_lane_jobs\t" << matrixJobs << "\n";
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
   return laneFail == 0 ? 0 : 1;
