@@ -4020,6 +4020,20 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
   }
 
+  // Handle sequencer get retry: if the seq_item_pull_port::get interceptor
+  // found an empty FIFO, the innermost call stack frame was saved pointing
+  // AFTER the call_indirect. Override it to point TO the call_indirect so
+  // the get is re-executed (allowing the interceptor to check the FIFO again).
+  if (state.sequencerGetRetryCallOp && !state.callStack.empty()) {
+    auto &innermostFrame = state.callStack.front();
+    innermostFrame.resumeOp =
+        state.sequencerGetRetryCallOp->getIterator();
+    innermostFrame.resumeBlock = state.sequencerGetRetryCallOp->getBlock();
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Overriding innermost frame for sequencer get retry\n");
+    state.sequencerGetRetryCallOp = nullptr;
+  }
+
   // Handle call stack frames: if we have saved call frames from a wait inside
   // a function, we need to resume execution inside those functions instead of
   // continuing at the process level.
@@ -6772,6 +6786,183 @@ arith_dispatch:
       }
       // If no native connections, fall through to normal execution
       // (which will iterate the UVM m_imp_list -- may be empty).
+    }
+
+    // Intercept UVM sequencer interface: start_item, finish_item, and
+    // seq_item_pull_port::get to implement a native rendezvous between
+    // sequence producer and driver consumer. This bypasses the complex
+    // UVM sequencer arbitration/FIFO machinery (m_safe_select_item,
+    // wait_for_grant, send_request, wait_for_item_done) that requires
+    // fully functional TLM FIFOs and process synchronization.
+
+    // start_item: Record item→sequencer mapping and return immediately
+    // (grants arbitration instantly). Args: (self, item, priority, sequencer).
+    if (calleeName.contains("::start_item") && args.size() >= 4) {
+      uint64_t seqAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
+      uint64_t sqrAddr = args[3].isX() ? 0 : args[3].getUInt64();
+      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: start_item intercepted: "
+                              << "item=0x" << llvm::format_hex(itemAddr, 16)
+                              << " sqr=0x" << llvm::format_hex(sqrAddr, 16)
+                              << "\n");
+      // If sequencer arg is null, get it from the sequence's get_sequencer().
+      // The sequence's sequencer is set by seq.start(sqr).
+      // For now, look up in our port connection map.
+      if (sqrAddr == 0 && seqAddr != 0) {
+        // The sequence object has a m_sequencer field. Try to read it.
+        // In the struct layout, get_sequencer reads field from the
+        // uvm_sequence_item base: property_ref @m_sequencer.
+        // For simplicity, we'll store a global last-used sequencer.
+        // The connect interceptor already stored port→export connections.
+      }
+      if (itemAddr != 0 && sqrAddr != 0) {
+        itemToSequencer[itemAddr] = sqrAddr;
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: start_item intercepted: item 0x"
+                   << llvm::format_hex(itemAddr, 16) << " → sequencer 0x"
+                   << llvm::format_hex(sqrAddr, 16) << "\n");
+      }
+      // Call set_item_context to set up the item's parent sequence and
+      // sequencer references, then return (skip wait_for_grant).
+      auto setContextFunc =
+          moduleOp.lookupSymbol<func::FuncOp>(
+              "uvm_pkg::uvm_sequence_item::set_item_context");
+      if (setContextFunc && itemAddr != 0 && seqAddr != 0) {
+        SmallVector<InterpretedValue, 3> ctxArgs;
+        ctxArgs.push_back(args[1]); // item
+        ctxArgs.push_back(args[0]); // parent sequence
+        // For the sequencer arg, use sqrAddr if available, else null.
+        ctxArgs.push_back(args[3]); // sequencer (may be null)
+        SmallVector<InterpretedValue, 1> ctxResults;
+        auto &cState = processStates[procId];
+        ++cState.callDepth;
+        interpretFuncBody(procId, setContextFunc, ctxArgs, ctxResults,
+                          callIndirectOp);
+        --cState.callDepth;
+      }
+      return success();
+    }
+
+    // finish_item: Push item to sequencer FIFO and return immediately.
+    // Args: (self, item, priority).
+    if (calleeName.contains("::finish_item") && args.size() >= 2) {
+      uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
+      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: finish_item intercepted: "
+                              << "item=0x" << llvm::format_hex(itemAddr, 16)
+                              << "\n");
+      if (itemAddr != 0) {
+        auto sqrIt = itemToSequencer.find(itemAddr);
+        uint64_t sqrAddr = 0;
+        if (sqrIt != itemToSequencer.end()) {
+          sqrAddr = sqrIt->second;
+        } else {
+          // Fallback: use a global default FIFO (key=0).
+          sqrAddr = 0;
+        }
+        sequencerItemFifo[sqrAddr].push_back(itemAddr);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: finish_item intercepted: item 0x"
+                   << llvm::format_hex(itemAddr, 16) << " pushed to "
+                   << "sequencer FIFO 0x"
+                   << llvm::format_hex(sqrAddr, 16) << " (depth "
+                   << sequencerItemFifo[sqrAddr].size() << ")\n");
+      }
+      return success();
+    }
+
+    // seq_item_pull_port::get: Pull item from sequencer FIFO.
+    // The port is connected to sequencer's seq_item_export via our
+    // analysisPortConnections map. We follow the connection chain to
+    // find the sequencer, then pull from its FIFO.
+    // Args: (self_port, output_ref).
+    if (calleeName.contains("seq_item_pull_port") &&
+        calleeName.contains("::get") && args.size() >= 2) {
+      uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      LLVM_DEBUG(llvm::dbgs() << "  call_indirect: seq_item_pull_port::get "
+                              << "intercepted: port=0x"
+                              << llvm::format_hex(portAddr, 16)
+                              << " fifo_count=" << sequencerItemFifo.size()
+                              << "\n");
+      // Find connected sequencer via connection map.
+      uint64_t seqrAddr = 0;
+      auto connIt = analysisPortConnections.find(portAddr);
+      if (connIt != analysisPortConnections.end() &&
+          !connIt->second.empty()) {
+        // The export address may have further connections, follow chain.
+        uint64_t exportAddr = connIt->second[0];
+        // The export is on the sequencer object. We need the sequencer
+        // address. Check if the export appears as a sequencer FIFO key.
+        // If not, check all FIFOs for items.
+        seqrAddr = exportAddr;
+      }
+      // Try to find an item in any FIFO (prioritize matched sequencer).
+      uint64_t itemAddr = 0;
+      bool found = false;
+      if (seqrAddr != 0) {
+        auto fifoIt = sequencerItemFifo.find(seqrAddr);
+        if (fifoIt != sequencerItemFifo.end() && !fifoIt->second.empty()) {
+          itemAddr = fifoIt->second.front();
+          fifoIt->second.pop_front();
+          found = true;
+        }
+      }
+      if (!found) {
+        // Search all FIFOs for any available item.
+        for (auto &[key, fifo] : sequencerItemFifo) {
+          if (!fifo.empty()) {
+            itemAddr = fifo.front();
+            fifo.pop_front();
+            found = true;
+            break;
+          }
+        }
+      }
+      if (found && itemAddr != 0) {
+        // Write item address to output ref (args[1]).
+        // The output ref is an llhd.ref or alloca-backed ptr.
+        uint64_t refAddr = args[1].isX() ? 0 : args[1].getUInt64();
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  seq_item_pull_port::get: item found 0x"
+                   << llvm::format_hex(itemAddr, 16) << " → ref 0x"
+                   << llvm::format_hex(refAddr, 16) << "\n");
+        if (refAddr != 0) {
+          uint64_t offset = 0;
+          MemoryBlock *refBlock = findBlockByAddress(refAddr, offset);
+          if (refBlock && offset + 8 <= refBlock->size) {
+            for (unsigned i = 0; i < 8; ++i)
+              refBlock->data[offset + i] =
+                  static_cast<uint8_t>((itemAddr >> (i * 8)) & 0xFF);
+          }
+        }
+        return success();
+      }
+      // If no item available, suspend the process and schedule a poll
+      // to retry on the next delta. Return success() so the halt check
+      // in interpretFuncBody saves call stack frames. Store the call op
+      // in sequencerGetRetryCallOp so that on resume, the innermost
+      // frame's resumeOp is overridden to re-execute this call_indirect
+      // (instead of skipping past it).
+      LLVM_DEBUG(llvm::dbgs() << "  seq_item_pull_port::get: FIFO empty, "
+                              << "suspending for delta poll\n");
+      auto &pState = processStates[procId];
+      pState.waiting = true;
+      pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
+      SimTime currentTime = scheduler.getCurrentTime();
+      constexpr uint32_t kMaxDeltaPolls = 1000;
+      constexpr int64_t kFallbackPollDelayFs = 1000000; // 1 ps
+      SimTime targetTime;
+      if (currentTime.deltaStep < kMaxDeltaPolls)
+        targetTime = currentTime.nextDelta();
+      else
+        targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+      scheduler.getEventScheduler().schedule(
+          targetTime, SchedulingRegion::Active,
+          Event([this, procId]() {
+            auto &st = processStates[procId];
+            st.waiting = false;
+            scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+          }));
+      return success();
     }
 
     // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
