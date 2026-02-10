@@ -161,6 +161,10 @@ See CHANGELOG.md on recent progress.
     - BMC `ExternalizeRegisters`: register initial values from `seq.initial`
       now accept foldable constant expressions (not just direct
       `hw.constant`); remaining gap is non-foldable dynamic initial logic.
+    - BMC `LowerToBMC`: single-clock mode now rejects multiple explicit clock
+      ports only when multiple explicit domains are actually used; remaining
+      gap is full semantics for intentionally used independent multi-clock
+      domains without `allow-multi-clock`.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
