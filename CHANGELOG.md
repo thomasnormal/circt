@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 861 - February 10, 2026
+
+### UVM Signal Resolution + Analysis Port Interceptor
+
+Reduced UVM xfails from 7 to 1 with three major fixes:
+
+1. **resolveSignalId cast+probe tracing** (LLHDProcessInterpreter.cpp):
+   - Fixed signal resolution for interface pointer signals passed through
+     module ports via `unrealized_conversion_cast(llhd.prb(sig))`.
+   - DUT processes with `always @(posedge in_if.clk)` no longer delta overflow.
+   - Fixes: `uvm_agent_env`, `uvm_agent_passive`, `uvm_monitor_env`
+
+2. **Analysis port connect/write interceptor** (LLHDProcessInterpreter.cpp/h):
+   - Native `uvm_port_base::connect()` interceptor stores port->imp connections,
+     bypassing UVM "Late Connection" phase check that incorrectly rejects
+     connections during connect_phase.
+   - Native `analysis_port::write()` interceptor broadcasts to connected
+     subscribers via chain-following BFS dispatch (port -> port/export -> imp).
+   - Resolves write function via vtable slot 11 dispatch.
+   - Supports multi-hop chains (monitor -> agent -> env -> comparator).
+   - Fixes: `uvm_scoreboard_env`, `uvm_scoreboard_monitor_env`,
+     `uvm_scoreboard_monitor_agent_env`
+
+3. **resolveDrivers() multi-bit fix** (ProcessScheduler.h):
+   - Fixed FourStateStruct signal resolution; old `getLSB()` broken for
+     MSB-value structs. Fix: group drivers by full APInt value.
+   - Fixes: `uvm_agent_active`
+
+4. **VIF shadow signals** (LLHDProcessInterpreter.cpp/h):
+   - Per-field runtime signals for interface struct fields.
+   - Store interception + sensitivity expansion.
+
+### New Tests
+- `test/Tools/circt-sim/interface-module-port.sv`
+- `test/Tools/circt-sim/procedural-assert.sv`
+
+### Validation
+- circt-sim lit tests: 223/223 (100%)
+- ImportVerilog tests: 268/268 (100%)
+- sv-tests xfails: 7 -> 1 (only `uvm_driver_sequencer_env` remaining)
+
 ## Iteration 860 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: SMTLIB LLVM-Op Guard + Post-Lowering Cast Reconcile
