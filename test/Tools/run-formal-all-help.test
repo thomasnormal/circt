@@ -11,6 +11,8 @@
 // CHECK: --fail-on-new-lec-diag-keys
 // CHECK: --fail-on-new-lec-diag-path-fallback-cases
 // CHECK: --fail-on-any-lec-diag-path-fallback-cases
+// CHECK: --fail-on-new-lec-diag-missing-cases
+// CHECK: --fail-on-any-lec-diag-missing-cases
 // CHECK: --fail-on-new-bmc-backend-parity-mismatch-cases
 // CHECK: --fail-on-new-bmc-semantic-bucket-cases
 // CHECK: --fail-on-new-bmc-semantic-bucket-unclassified-cases

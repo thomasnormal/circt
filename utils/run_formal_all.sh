@@ -78,6 +78,12 @@ Options:
   --fail-on-any-lec-diag-path-fallback-cases
                          Fail when any `LEC*` lane reports
                          `lec_diag_path_fallback_cases > 0`
+  --fail-on-new-lec-diag-missing-cases
+                         Fail when `lec_diag_missing_cases` increases
+                         vs baseline for any `LEC*` lane
+  --fail-on-any-lec-diag-missing-cases
+                         Fail when any `LEC*` lane reports
+                         `lec_diag_missing_cases > 0`
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1785,6 +1791,8 @@ declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
 FAIL_ON_NEW_LEC_DIAG_KEYS=0
 FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=0
 FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES=0
+FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=0
+FAIL_ON_ANY_LEC_DIAG_MISSING_CASES=0
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -2118,6 +2126,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1; shift ;;
     --fail-on-any-lec-diag-path-fallback-cases)
       FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES=1; shift ;;
+    --fail-on-new-lec-diag-missing-cases)
+      FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=1; shift ;;
+    --fail-on-any-lec-diag-missing-cases)
+      FAIL_ON_ANY_LEC_DIAG_MISSING_CASES=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -4099,6 +4111,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1
   FAIL_ON_NEW_LEC_DIAG_KEYS=1
   FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES=1
+  FAIL_ON_NEW_LEC_DIAG_MISSING_CASES=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -10999,6 +11012,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_KEYS" == "1" || \
       "$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" == "1" || \
+      "$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" == "1" || \
+      "$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
@@ -11034,6 +11049,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DIAG_KEYS="$FAIL_ON_NEW_LEC_DIAG_KEYS" \
   FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_NEW_LEC_DIAG_PATH_FALLBACK_CASES" \
   FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES="$FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES" \
+  FAIL_ON_NEW_LEC_DIAG_MISSING_CASES="$FAIL_ON_NEW_LEC_DIAG_MISSING_CASES" \
+  FAIL_ON_ANY_LEC_DIAG_MISSING_CASES="$FAIL_ON_ANY_LEC_DIAG_MISSING_CASES" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
@@ -11372,6 +11389,12 @@ fail_on_new_lec_diag_path_fallback_cases = (
 )
 fail_on_any_lec_diag_path_fallback_cases = (
     os.environ.get("FAIL_ON_ANY_LEC_DIAG_PATH_FALLBACK_CASES", "0") == "1"
+)
+fail_on_new_lec_diag_missing_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_DIAG_MISSING_CASES", "0") == "1"
+)
+fail_on_any_lec_diag_missing_cases = (
+    os.environ.get("FAIL_ON_ANY_LEC_DIAG_MISSING_CASES", "0") == "1"
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
@@ -11900,6 +11923,7 @@ for key, current_row in summary.items():
         current_diag_path_fallback = int(
             current_counts.get("lec_diag_path_fallback_cases", 0)
         )
+        current_diag_missing = int(current_counts.get("lec_diag_missing_cases", 0))
         if fail_on_any_lec_drop_remarks and current_drop_remark > 0:
             gate_errors.append(
                 f"{suite} {mode}: lec_drop_remark_cases must be zero (current={current_drop_remark})"
@@ -11910,6 +11934,10 @@ for key, current_row in summary.items():
         ):
             gate_errors.append(
                 f"{suite} {mode}: lec_diag_path_fallback_cases must be zero (current={current_diag_path_fallback})"
+            )
+        if fail_on_any_lec_diag_missing_cases and current_diag_missing > 0:
+            gate_errors.append(
+                f"{suite} {mode}: lec_diag_missing_cases must be zero (current={current_diag_missing})"
             )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
@@ -11938,6 +11966,19 @@ for key, current_row in summary.items():
                 if current_diag_path_fallback > baseline_diag_path_fallback:
                     gate_errors.append(
                         f"{suite} {mode}: lec_diag_path_fallback_cases increased ({baseline_diag_path_fallback} -> {current_diag_path_fallback}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_diag_missing_cases:
+            baseline_diag_missing_values = []
+            for counts in parsed_counts:
+                if "lec_diag_missing_cases" in counts:
+                    baseline_diag_missing_values.append(
+                        int(counts["lec_diag_missing_cases"])
+                    )
+            if baseline_diag_missing_values:
+                baseline_diag_missing = min(baseline_diag_missing_values)
+                if current_diag_missing > baseline_diag_missing:
+                    gate_errors.append(
+                        f"{suite} {mode}: lec_diag_missing_cases increased ({baseline_diag_missing} -> {current_diag_missing}, window={baseline_window})"
                     )
         if fail_on_new_lec_diag_keys:
             baseline_diag_keys = set()
