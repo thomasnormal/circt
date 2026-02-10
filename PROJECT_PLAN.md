@@ -137,6 +137,8 @@ See CHANGELOG.md on recent progress.
     aware when fail-like rows decrease).
   - Keep strict-gate unclassified semantic-bucket growth checks active so
     new fail-like rows cannot silently bypass bucket tracking.
+  - Keep strict-gate BMC abstraction provenance checks active for both:
+    token-set growth and provenance-record volume growth.
   - Remaining harness limitation:
     semantic-bucket coverage is now complete on active fail-like rows across
     `sv-tests/BMC`, `verilator-verification/BMC`, and `yosys/tests/sva/BMC`

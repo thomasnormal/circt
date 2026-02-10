@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 922 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: Provenance Volume Drift Gate
+
+1. Updated `utils/run_formal_all.sh` BMC abstraction provenance summarization:
+   - `summarize_bmc_abstraction_provenance_file` now emits:
+     - `bmc_abstraction_provenance_tokens=<distinct-token-count>`
+     - `bmc_abstraction_provenance_records=<row-count>`
+2. Updated strict-gate behavior for
+   `--fail-on-new-bmc-abstraction-provenance`:
+   - now fails on provenance record-count growth vs baseline window,
+     in addition to existing new-token detection.
+   - this closes a prior blind spot where fallback volume could increase while
+     token names stayed unchanged.
+3. Added regression:
+   - `test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-records.test`
+   - reproduces same-token/same-suite provenance growth (`1 -> 2` records) and
+     checks strict-gate failure.
+4. Validation:
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-records.test`
+     -> passed.
+   - `llvm-lit -sv` reruns for nearby strict-gate BMC tests
+     (`...bmc-timeout-unknown`, `...bmc-ir-check-fingerprint-cases`,
+      `...bmc-semantic-bucket-cases`, `...bmc-backend-parity-mismatch-cases`)
+     -> all passed.
+
 ## Iteration 921 - February 10, 2026
 
 ### BMC Tooling Hardening: Fix `--print-counterexample` Dominance Failure
