@@ -440,9 +440,8 @@ void UnrollLoopsPass::runOnOperation(CombinationalOp op) {
     Block &entry = op.getBody().front();
     for (auto alloca :
          llvm::make_early_inc_range(op.getBody().getOps<LLVM::AllocaOp>())) {
-      if (alloca->getBlock() == &entry)
-        continue;
       bool canHoist = true;
+      Operation *insertAfter = nullptr;
       for (Value operand : alloca->getOperands()) {
         if (auto def = operand.getDefiningOp()) {
           if (def->getParentRegion() != &op.getBody())
@@ -455,6 +454,8 @@ void UnrollLoopsPass::runOnOperation(CombinationalOp op) {
               break;
             }
           }
+          if (!insertAfter || insertAfter->isBeforeInBlock(def))
+            insertAfter = def;
         } else if (auto arg = dyn_cast<BlockArgument>(operand)) {
           if (arg.getOwner()->getParent() != &op.getBody())
             continue;
@@ -464,8 +465,17 @@ void UnrollLoopsPass::runOnOperation(CombinationalOp op) {
           }
         }
       }
-      if (canHoist)
-        alloca->moveBefore(&entry, entry.begin());
+      if (!canHoist)
+        continue;
+      if (alloca->getBlock() != &entry) {
+        if (insertAfter)
+          alloca->moveAfter(insertAfter);
+        else
+          alloca->moveBefore(&entry, entry.begin());
+        continue;
+      }
+      if (insertAfter && alloca->isBeforeInBlock(insertAfter))
+        alloca->moveAfter(insertAfter);
     }
     op.walk([&](PromotableAllocationOpInterface allocator) {
       allocators.push_back(allocator);

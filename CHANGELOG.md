@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 874 - February 10, 2026
+
+### LEC/BMC Hardening: LLHD Unroll Alloca Dominance Fix
+
+1. Fixed OpenTitan LEC dominance failure rooted in LLHD loop-unroll hoisting:
+   - file:
+     - `lib/Dialect/LLHD/Transforms/UnrollLoops.cpp`
+   - root cause:
+     - alloca hoisting to combinational entry blocks could place
+       `llvm.alloca` before its hoisted count operand constant.
+     - this produced invalid SSA ordering (`operand #0 does not dominate this
+       use`) in `aes_sbox_canright` (`aes_pkg::aes_mvm` path).
+   - fix:
+     - track the latest entry-block defining op of each alloca operand and move
+       hoisted allocas after that definition.
+     - if an alloca is already in entry and still before one of its operand
+       defs, reorder it after the latest def.
+2. Added a focused LLHD regression test:
+   - `test/Dialect/LLHD/Transforms/unroll-loops-alloca-dominance.mlir`
+   - runs with `--verify-each` and checks count-constant dominance over
+     `llvm.alloca`.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-lec`: PASS
+- LLHD lit:
+  - `build/bin/llvm-lit -sv test/Dialect/LLHD/Transforms/unroll-loops-alloca-dominance.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Dialect/LLHD/Transforms/unroll-loops.mlir`: PASS
+- OpenTitan LEC focused rerun:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-ot-20260210-dominance-fix ... --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - `opentitan/LEC`: PASS (`1/1`)
+  - `opentitan/LEC_STRICT`: PASS (`1/1`)
+- Full LEC-lane rerun:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-20260210-dominance-fix ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/LEC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - `sv-tests/LEC`: PASS (`23/23`)
+  - `verilator-verification/LEC`: PASS (`17/17`)
+  - `yosys/tests/sva/LEC`: PASS (`14/14`)
+  - `opentitan/LEC`: PASS (`1/1`)
+  - `opentitan/LEC_STRICT`: PASS (`1/1`)
+- BMC regression guardrail:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-20260210-dominance-fix ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - aggregate counts unchanged from prior baseline snapshots:
+    - `sv-tests`: `23/26`
+    - `verilator-verification`: `12/17`
+    - `yosys/tests/sva`: `7/14`
+  - representative fail-case IDs unchanged for `sv-tests` and
+    `verilator-verification` lanes.
+
 ## Iteration 873 - February 10, 2026
 
 ### LEC Hardening: Explicit Assume-Known Recheck Result

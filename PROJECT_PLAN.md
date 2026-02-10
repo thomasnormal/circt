@@ -290,13 +290,21 @@ See CHANGELOG.md on recent progress.
     - This improves strict/no-waiver triage by distinguishing true XPROP_ONLY
       mismatches (`UNSAT` under assume-known-inputs) from persistent
       mismatches (`SAT`/`UNKNOWN`).
-31. Current LEC blocker surfaced in OpenTitan rerun (February 10, 2026):
-    - `opentitan/LEC` and `opentitan/LEC_STRICT` currently fail in a fresh
-      LEC-only cadence with:
-      `operand #0 does not dominate this use` in generated
-      `aes_sbox_lec.mlir` (`llvm.alloca`/`aes_pkg::aes_mvm` path).
-    - `sv-tests`, `verilator-verification`, and `yosys/tests/sva` LEC lanes
-      remain green; investigation needed for OpenTitan-specific IR shape.
+31. OpenTitan LEC dominance blocker closure (February 10, 2026):
+    - Root cause: `llhd-unroll-loops` alloca hoisting could place
+      `llvm.alloca` before its hoisted count operand constant in entry blocks,
+      triggering `operand #0 does not dominate this use` on
+      `aes_sbox_canright` (`aes_pkg::aes_mvm` path).
+    - Fix landed in `lib/Dialect/LLHD/Transforms/UnrollLoops.cpp`:
+      hoisted allocas are now placed after their entry-block operand defs.
+    - Result: `opentitan/LEC` and `opentitan/LEC_STRICT` are both green again
+      in focused and full LEC-lane reruns.
+32. Remaining formal closure priorities after this fix:
+    - BMC semantic closure: close positive-test SAT mismatches for local-var,
+      sequence-subroutine, multiclock, and `disable iff` UVM semantics.
+    - LEC hardening: continue strict no-waiver `XPROP_ONLY` gating and deepen
+      4-state mismatch diagnostics (unknown-source provenance and reduction
+      paths).
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
