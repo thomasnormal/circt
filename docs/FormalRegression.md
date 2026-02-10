@@ -556,10 +556,15 @@ Execution controls:
   (`generate_mutations_yosys.sh --modes`), useful for arithmetic/control
   operator-family mixes. Supports concrete Yosys modes
   (`inv,const0,const1,cnot0,cnot1`) and family aliases
-  (`arith,control,balanced,all`), where family counts are deterministically
-  split across their concrete modes. When total count is not divisible across
-  top-level mode groups or within family-mode concrete expansion, remainder
-  assignments are deterministic but seed-rotated by `--mutations-seed`.
+  (`arith,control,balanced,all,stuck,invert,connect`), where family counts are
+  deterministically split across their concrete modes. Built-in fault-model
+  alias mapping:
+  - `stuck` -> `const0,const1`
+  - `invert` -> `inv`
+  - `connect` -> `cnot0,cnot1`
+  When total count is not divisible across top-level mode groups or within
+  family-mode concrete expansion, remainder assignments are deterministic but
+  seed-rotated by `--mutations-seed`.
 - `--mutations-mode-counts <csv>`: explicit mode allocation for
   auto-generation (`generate_mutations_yosys.sh --mode-counts`), e.g.
   `arith=700,control=300` (sum must match `--generate-mutations`).

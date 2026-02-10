@@ -451,11 +451,17 @@ circt-mut cover \
 
 When `--generate-mutations` is not evenly divisible:
 - across selected top-level mode groups, and
-- across concrete operators inside family aliases (`arith/control/balanced/all`)
+- across concrete operators inside family aliases
+  (`arith/control/balanced/all/stuck/invert/connect`)
 extra allocations are distributed with deterministic seed-rotated assignment
 (`--mutations-seed`) instead of always favoring the first listed operator.
 Native `circt-mut generate` and `utils/generate_mutations_yosys.sh` use the
 same policy.
+
+Additional fault-model aliases:
+- `stuck` -> `const0,const1`
+- `invert` -> `inv`
+- `connect` -> `cnot0,cnot1`
 
 Run multiple lanes with `circt-mut matrix`:
 

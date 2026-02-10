@@ -78,6 +78,8 @@ static void printGenerateHelp(raw_ostream &os) {
   os << "  --seed N                  Random seed for mutate (default: 1)\n";
   os << "  --yosys PATH              Yosys executable (default: yosys)\n";
   os << "  --mode NAME               Mutate mode (repeatable)\n";
+  os << "                            Families: arith,control,balanced,all,\n";
+  os << "                                      stuck,invert,connect\n";
   os << "  --modes CSV               Comma-separated mutate modes\n";
   os << "  --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)\n";
   os << "  --mode-counts CSV         Comma-separated NAME=COUNT mode allocations\n";
@@ -3843,6 +3845,20 @@ static void modeFamilyTargets(StringRef modeName,
     return;
   }
   if (modeName == "control") {
+    out.push_back("cnot0");
+    out.push_back("cnot1");
+    return;
+  }
+  if (modeName == "stuck") {
+    out.push_back("const0");
+    out.push_back("const1");
+    return;
+  }
+  if (modeName == "invert") {
+    out.push_back("inv");
+    return;
+  }
+  if (modeName == "connect") {
     out.push_back("cnot0");
     out.push_back("cnot1");
     return;

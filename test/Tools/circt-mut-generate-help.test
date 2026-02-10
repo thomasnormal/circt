@@ -4,6 +4,7 @@
 // CHECK: --design
 // CHECK: --out
 // CHECK: --mode
+// CHECK: stuck,invert,connect
 // CHECK: --mode-count
 // CHECK: --mode-weight
 // CHECK: --mode-weights
