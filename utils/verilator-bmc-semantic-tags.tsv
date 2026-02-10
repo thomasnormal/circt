@@ -1,2 +1,5 @@
 # case_id	semantic_buckets
 assert_named_without_parenthesis	disable_iff
+assert_changed	sampled_value
+assert_fell	sampled_value
+assert_stable	sampled_value
