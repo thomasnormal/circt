@@ -659,6 +659,18 @@ See CHANGELOG.md on recent progress.
     `xprop_assume_known_result_` (in addition to diag/status/result/counter).
     - This closes a governance gap where assume-known semantic drift could
       bypass strict mode unless users manually provided extra prefix flags.
+84. Latest cross-suite BMC/LEC closure snapshot (February 10, 2026):
+    - `sv-tests/BMC`: `pass=23 fail=3` (all fail-like rows remain tagged and
+      classified; `disable_iff=1`, `local_var=2`, `unclassified=0`).
+    - `verilator-verification/BMC`: `pass=12 fail=5`
+      (`sampled_value=3`, `property_named=2`, `unclassified=0`).
+    - `yosys/tests/sva/BMC`: `pass=7 fail=5 skip=2`
+      (`disable_iff=2`, `four_state=1`, `sampled_value=1`,
+      `implication_timing=2`, `hierarchical_net=1`, `unclassified=0`).
+    - `opentitan/LEC_STRICT`: `pass=1 fail=0`.
+    - Near-term semantic closure remains focused on reducing those fail-like
+      rows (not coverage attribution, which remains complete on active
+      fail-like cases).
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
