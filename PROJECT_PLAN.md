@@ -356,6 +356,22 @@ See CHANGELOG.md on recent progress.
     - add optional fail-on-drift checks for provenance deltas in BMC/LEC lanes;
     - mirror the same structured provenance model for process-result
       abstractions to unify SAT risk diagnostics.
+40. Source-path provenance extension landed (February 10, 2026):
+    - `strip-llhd-interface-signals` now records per-input abstraction metadata:
+      `reason`, `signal`, `field`, and `loc` in
+      `circt.bmc_abstracted_llhd_interface_input_details` alongside
+      `name`/`base`/`type`.
+    - This upgrades interface abstraction diagnostics from count-only to
+      machine-readable path context for BMC/LEC triage.
+41. Updated limitations after this landing:
+    - provenance drift is observable but not yet policy-gated in
+      `run_formal_all.sh` (no fail-on-new-provenance mode yet).
+    - process-result abstraction still lacks matching structured provenance
+      fields (`reason`, source path, location).
+42. Next highest-ROI build target:
+    - add formal-lane drift gates for abstraction provenance
+      (`count + details`) with allowlist controls, then mirror this format for
+      process-result abstractions.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

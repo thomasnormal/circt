@@ -8,7 +8,10 @@ module {
   // CHECK-SAME: in %c1 : i1
   // CHECK-SAME: in %sig_field0_unknown : i1
   // CHECK: circt.bmc_abstracted_llhd_interface_input_details =
-  // CHECK: sig_field0_unknown
+  // CHECK-DAG: sig_field0_unknown
+  // CHECK-DAG: interface_enable_resolution_unknown
+  // CHECK-DAG: signal = "sig"
+  // CHECK-DAG: field = 0
   // CHECK: circt.bmc_abstracted_llhd_interface_inputs = 1 : i32
   hw.module @top(in %c0 : i1, in %c1 : i1) {
     %ptr = llvm.mlir.addressof @iface_storage : !llvm.ptr
