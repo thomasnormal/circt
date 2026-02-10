@@ -152,6 +152,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --fail-if-trend-delta-lt RULE\n";
   os << "                           Fail if trend delta is below threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
+  os << "  --fail-on-prequalify-drift\n";
+  os << "                           Fail if matrix prequalify results.tsv counters\n";
+  os << "                           drift from native prequalify summary counters\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
@@ -5268,6 +5271,7 @@ struct ReportOptions {
   SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaLtRules;
+  bool failOnPrequalifyDrift = false;
   std::string outFile;
 };
 
@@ -5883,7 +5887,8 @@ static bool collectCoverReport(StringRef coverWorkDir,
 
 static bool collectMatrixReport(
     StringRef matrixOutDir, std::vector<std::pair<std::string, std::string>> &rows,
-    std::string &error) {
+    std::string &error, uint64_t *prequalifyDriftNonZeroOut = nullptr,
+    bool *prequalifyDriftComparableOut = nullptr) {
   SmallString<256> resultsPath(matrixOutDir);
   sys::path::append(resultsPath, "results.tsv");
   if (!sys::fs::exists(resultsPath)) {
@@ -5936,6 +5941,56 @@ static bool collectMatrixReport(
   size_t metricsCol = static_cast<size_t>(-1);
   if (auto it = colIndex.find("metrics_file"); it != colIndex.end())
     metricsCol = it->second;
+  size_t prequalifySummaryPresentCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_summary_present");
+      it != colIndex.end())
+    prequalifySummaryPresentCol = it->second;
+  size_t prequalifyTotalMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_total_mutants"); it != colIndex.end())
+    prequalifyTotalMutantsCol = it->second;
+  size_t prequalifyNotPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_not_propagated_mutants");
+      it != colIndex.end())
+    prequalifyNotPropagatedMutantsCol = it->second;
+  size_t prequalifyPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_propagated_mutants");
+      it != colIndex.end())
+    prequalifyPropagatedMutantsCol = it->second;
+  size_t prequalifyCreateMutatedErrorMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_create_mutated_error_mutants");
+      it != colIndex.end())
+    prequalifyCreateMutatedErrorMutantsCol = it->second;
+  size_t prequalifyProbeErrorMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_probe_error_mutants");
+      it != colIndex.end())
+    prequalifyProbeErrorMutantsCol = it->second;
+  size_t prequalifyCmdTokenNotPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_token_not_propagated_mutants");
+      it != colIndex.end())
+    prequalifyCmdTokenNotPropagatedMutantsCol = it->second;
+  size_t prequalifyCmdTokenPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_token_propagated_mutants");
+      it != colIndex.end())
+    prequalifyCmdTokenPropagatedMutantsCol = it->second;
+  size_t prequalifyCmdRCNotPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_rc_not_propagated_mutants");
+      it != colIndex.end())
+    prequalifyCmdRCNotPropagatedMutantsCol = it->second;
+  size_t prequalifyCmdRCPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_rc_propagated_mutants");
+      it != colIndex.end())
+    prequalifyCmdRCPropagatedMutantsCol = it->second;
+  size_t prequalifyCmdTimeoutPropagatedMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_timeout_propagated_mutants");
+      it != colIndex.end())
+    prequalifyCmdTimeoutPropagatedMutantsCol = it->second;
+  size_t prequalifyCmdErrorMutantsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("prequalify_cmd_error_mutants");
+      it != colIndex.end())
+    prequalifyCmdErrorMutantsCol = it->second;
+  bool hasResultsPrequalifyColumns =
+      prequalifySummaryPresentCol != static_cast<size_t>(-1) ||
+      prequalifyTotalMutantsCol != static_cast<size_t>(-1);
 
   uint64_t lanesTotal = 0;
   uint64_t lanesPass = 0;
@@ -5952,6 +6007,21 @@ static bool collectMatrixReport(
   uint64_t notPropagatedMutantsSum = 0;
   uint64_t notActivatedMutantsSum = 0;
   uint64_t errorsSum = 0;
+  uint64_t prequalifyResultsLanes = 0;
+  uint64_t prequalifyResultsSummaryPresentLanes = 0;
+  uint64_t prequalifyResultsSummaryMissingLanes = 0;
+  uint64_t prequalifyResultsInvalidMetricValues = 0;
+  uint64_t prequalifyResultsTotalMutantsSum = 0;
+  uint64_t prequalifyResultsNotPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCreateMutatedErrorMutantsSum = 0;
+  uint64_t prequalifyResultsProbeErrorMutantsSum = 0;
+  uint64_t prequalifyResultsCmdTokenNotPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCmdTokenPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCmdRCNotPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCmdRCPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCmdTimeoutPropagatedMutantsSum = 0;
+  uint64_t prequalifyResultsCmdErrorMutantsSum = 0;
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
   StringMap<uint64_t> extraMetricSums;
@@ -6010,6 +6080,23 @@ static bool collectMatrixReport(
     }
     accumulator += parsed;
   };
+  auto addOptionalResultMetric = [&](ArrayRef<StringRef> rowFields, size_t col,
+                                     uint64_t &accumulator,
+                                     bool allowDash = false) {
+    if (col == static_cast<size_t>(-1) || col >= rowFields.size())
+      return;
+    StringRef value = rowFields[col].trim();
+    if (value.empty())
+      return;
+    if (allowDash && value == "-")
+      return;
+    uint64_t parsed = 0;
+    if (value.getAsInteger(10, parsed)) {
+      ++prequalifyResultsInvalidMetricValues;
+      return;
+    }
+    accumulator += parsed;
+  };
 
   for (size_t lineNo = 1; lineNo < lines.size(); ++lineNo) {
     StringRef line = lines[lineNo].rtrim("\r");
@@ -6039,6 +6126,51 @@ static bool collectMatrixReport(
     if (auto coverage = parseOptionalDouble(getField(coverageCol))) {
       coverageSum += *coverage;
       ++coverageCount;
+    }
+    if (hasResultsPrequalifyColumns) {
+      ++prequalifyResultsLanes;
+      bool rowSummaryPresent = false;
+      if (prequalifySummaryPresentCol != static_cast<size_t>(-1)) {
+        StringRef presentValue = getField(prequalifySummaryPresentCol);
+        if (!presentValue.empty() && presentValue != "-") {
+          if (presentValue == "1")
+            rowSummaryPresent = true;
+          else if (presentValue != "0")
+            ++prequalifyResultsInvalidMetricValues;
+        }
+      }
+      if (rowSummaryPresent)
+        ++prequalifyResultsSummaryPresentLanes;
+      if (prequalifyTotalMutantsCol != static_cast<size_t>(-1)) {
+        StringRef totalValue = getField(prequalifyTotalMutantsCol);
+        if (rowSummaryPresent && (totalValue.empty() || totalValue == "-"))
+          ++prequalifyResultsSummaryMissingLanes;
+      } else if (rowSummaryPresent) {
+        ++prequalifyResultsSummaryMissingLanes;
+      }
+      addOptionalResultMetric(fields, prequalifyTotalMutantsCol,
+                              prequalifyResultsTotalMutantsSum,
+                              /*allowDash=*/true);
+      addOptionalResultMetric(fields, prequalifyNotPropagatedMutantsCol,
+                              prequalifyResultsNotPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyPropagatedMutantsCol,
+                              prequalifyResultsPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCreateMutatedErrorMutantsCol,
+                              prequalifyResultsCreateMutatedErrorMutantsSum);
+      addOptionalResultMetric(fields, prequalifyProbeErrorMutantsCol,
+                              prequalifyResultsProbeErrorMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdTokenNotPropagatedMutantsCol,
+                              prequalifyResultsCmdTokenNotPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdTokenPropagatedMutantsCol,
+                              prequalifyResultsCmdTokenPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdRCNotPropagatedMutantsCol,
+                              prequalifyResultsCmdRCNotPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdRCPropagatedMutantsCol,
+                              prequalifyResultsCmdRCPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdTimeoutPropagatedMutantsCol,
+                              prequalifyResultsCmdTimeoutPropagatedMutantsSum);
+      addOptionalResultMetric(fields, prequalifyCmdErrorMutantsCol,
+                              prequalifyResultsCmdErrorMutantsSum);
     }
 
     std::string metricsPath;
@@ -6111,6 +6243,41 @@ static bool collectMatrixReport(
   for (const char *key : kExtraMetricKeys)
     rows.emplace_back((Twine("matrix.") + key + "_sum").str(),
                       std::to_string(extraMetricSums[key]));
+  rows.emplace_back("matrix.prequalify_results_columns_present",
+                    hasResultsPrequalifyColumns ? "1" : "0");
+  rows.emplace_back("matrix.prequalify_results_lanes",
+                    std::to_string(prequalifyResultsLanes));
+  rows.emplace_back("matrix.prequalify_results_summary_present_lanes",
+                    std::to_string(prequalifyResultsSummaryPresentLanes));
+  rows.emplace_back("matrix.prequalify_results_summary_missing_lanes",
+                    std::to_string(prequalifyResultsSummaryMissingLanes));
+  rows.emplace_back("matrix.prequalify_results_invalid_metric_values",
+                    std::to_string(prequalifyResultsInvalidMetricValues));
+  rows.emplace_back("matrix.prequalify_results_total_mutants_sum",
+                    std::to_string(prequalifyResultsTotalMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_not_propagated_mutants_sum",
+                    std::to_string(prequalifyResultsNotPropagatedMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_propagated_mutants_sum",
+                    std::to_string(prequalifyResultsPropagatedMutantsSum));
+  rows.emplace_back(
+      "matrix.prequalify_results_create_mutated_error_mutants_sum",
+      std::to_string(prequalifyResultsCreateMutatedErrorMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_probe_error_mutants_sum",
+                    std::to_string(prequalifyResultsProbeErrorMutantsSum));
+  rows.emplace_back(
+      "matrix.prequalify_results_cmd_token_not_propagated_mutants_sum",
+      std::to_string(prequalifyResultsCmdTokenNotPropagatedMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_cmd_token_propagated_mutants_sum",
+                    std::to_string(prequalifyResultsCmdTokenPropagatedMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_cmd_rc_not_propagated_mutants_sum",
+                    std::to_string(prequalifyResultsCmdRCNotPropagatedMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_cmd_rc_propagated_mutants_sum",
+                    std::to_string(prequalifyResultsCmdRCPropagatedMutantsSum));
+  rows.emplace_back(
+      "matrix.prequalify_results_cmd_timeout_propagated_mutants_sum",
+      std::to_string(prequalifyResultsCmdTimeoutPropagatedMutantsSum));
+  rows.emplace_back("matrix.prequalify_results_cmd_error_mutants_sum",
+                    std::to_string(prequalifyResultsCmdErrorMutantsSum));
 
   SmallString<256> nativeSummaryPath(matrixOutDir);
   sys::path::append(nativeSummaryPath, "native_matrix_prequalify_summary.tsv");
@@ -6260,6 +6427,70 @@ static bool collectMatrixReport(
       std::to_string(nativeCmdTimeoutPropagatedMutants));
   rows.emplace_back("matrix.native_prequalify_cmd_error_mutants_sum",
                     std::to_string(nativeCmdErrorMutants));
+  uint64_t prequalifyDriftNonZeroMetrics = 0;
+  auto appendDriftMetric = [&](StringRef name, uint64_t resultsValue,
+                               uint64_t nativeValue) {
+    int64_t delta = static_cast<int64_t>(resultsValue) -
+                    static_cast<int64_t>(nativeValue);
+    uint64_t absDelta =
+        delta >= 0 ? static_cast<uint64_t>(delta)
+                   : static_cast<uint64_t>(-delta);
+    rows.emplace_back((Twine("matrix.prequalify_drift.") + name + ".delta").str(),
+                      std::to_string(delta));
+    rows.emplace_back(
+        (Twine("matrix.prequalify_drift.") + name + ".abs_delta").str(),
+        std::to_string(absDelta));
+    if (absDelta != 0)
+      ++prequalifyDriftNonZeroMetrics;
+  };
+  bool prequalifyDriftComparable =
+      hasResultsPrequalifyColumns && nativeSummaryFileExists != 0;
+  rows.emplace_back("matrix.prequalify_drift_comparable",
+                    prequalifyDriftComparable ? "1" : "0");
+  if (prequalifyDriftComparable) {
+    appendDriftMetric("summary_present_lanes",
+                      prequalifyResultsSummaryPresentLanes, nativeSummaryLanes);
+    appendDriftMetric("summary_missing_lanes",
+                      prequalifyResultsSummaryMissingLanes,
+                      nativeSummaryMissingLanes);
+    appendDriftMetric("total_mutants", prequalifyResultsTotalMutantsSum,
+                      nativeTotalMutants);
+    appendDriftMetric("not_propagated_mutants",
+                      prequalifyResultsNotPropagatedMutantsSum,
+                      nativeNotPropagatedMutants);
+    appendDriftMetric("propagated_mutants",
+                      prequalifyResultsPropagatedMutantsSum,
+                      nativePropagatedMutants);
+    appendDriftMetric("create_mutated_error_mutants",
+                      prequalifyResultsCreateMutatedErrorMutantsSum,
+                      nativeCreateMutatedErrorMutants);
+    appendDriftMetric("probe_error_mutants",
+                      prequalifyResultsProbeErrorMutantsSum,
+                      nativeProbeErrorMutants);
+    appendDriftMetric("cmd_token_not_propagated_mutants",
+                      prequalifyResultsCmdTokenNotPropagatedMutantsSum,
+                      nativeCmdTokenNotPropagatedMutants);
+    appendDriftMetric("cmd_token_propagated_mutants",
+                      prequalifyResultsCmdTokenPropagatedMutantsSum,
+                      nativeCmdTokenPropagatedMutants);
+    appendDriftMetric("cmd_rc_not_propagated_mutants",
+                      prequalifyResultsCmdRCNotPropagatedMutantsSum,
+                      nativeCmdRCNotPropagatedMutants);
+    appendDriftMetric("cmd_rc_propagated_mutants",
+                      prequalifyResultsCmdRCPropagatedMutantsSum,
+                      nativeCmdRCPropagatedMutants);
+    appendDriftMetric("cmd_timeout_propagated_mutants",
+                      prequalifyResultsCmdTimeoutPropagatedMutantsSum,
+                      nativeCmdTimeoutPropagatedMutants);
+    appendDriftMetric("cmd_error_mutants", prequalifyResultsCmdErrorMutantsSum,
+                      nativeCmdErrorMutants);
+  }
+  rows.emplace_back("matrix.prequalify_drift_nonzero_metrics",
+                    std::to_string(prequalifyDriftNonZeroMetrics));
+  if (prequalifyDriftNonZeroOut)
+    *prequalifyDriftNonZeroOut = prequalifyDriftNonZeroMetrics;
+  if (prequalifyDriftComparableOut)
+    *prequalifyDriftComparableOut = prequalifyDriftComparable;
   return true;
 }
 
@@ -6460,6 +6691,10 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.outFile = v->str();
       continue;
     }
+    if (arg == "--fail-on-prequalify-drift") {
+      result.opts.failOnPrequalifyDrift = true;
+      continue;
+    }
 
     if (arg.starts_with("-")) {
       result.error = (Twine("circt-mut report: unknown option: ") + arg).str();
@@ -6560,6 +6795,8 @@ static int runNativeReport(const ReportOptions &opts) {
   }
   int finalRC = 0;
   std::string error;
+  uint64_t prequalifyDriftNonZero = 0;
+  bool prequalifyDriftComparable = false;
   if (opts.mode == "cover" || opts.mode == "all") {
     if (!collectCoverReport(coverWorkDir, rows, error)) {
       errs() << error << "\n";
@@ -6567,7 +6804,8 @@ static int runNativeReport(const ReportOptions &opts) {
     }
   }
   if (opts.mode == "matrix" || opts.mode == "all") {
-    if (!collectMatrixReport(matrixOutDir, rows, error)) {
+    if (!collectMatrixReport(matrixOutDir, rows, error, &prequalifyDriftNonZero,
+                             &prequalifyDriftComparable)) {
       errs() << error << "\n";
       return 1;
     }
@@ -6721,6 +6959,33 @@ static int runNativeReport(const ReportOptions &opts) {
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;
+  }
+  if (opts.failOnPrequalifyDrift) {
+    if (!(opts.mode == "matrix" || opts.mode == "all")) {
+      errs() << "circt-mut report: --fail-on-prequalify-drift requires "
+                "--mode matrix or --mode all\n";
+      return 1;
+    }
+    rows.emplace_back("matrix.prequalify_drift_gate_enabled", "1");
+    rows.emplace_back("matrix.prequalify_drift_gate_comparable",
+                      prequalifyDriftComparable ? "1" : "0");
+    if (!prequalifyDriftComparable) {
+      rows.emplace_back("matrix.prequalify_drift_gate_status", "error");
+      rows.emplace_back("matrix.prequalify_drift_gate_reason",
+                        "matrix results prequalify columns or native summary "
+                        "artifact missing");
+      finalRC = std::max(finalRC, 2);
+    } else if (prequalifyDriftNonZero == 0) {
+      rows.emplace_back("matrix.prequalify_drift_gate_status", "pass");
+      rows.emplace_back("matrix.prequalify_drift_gate_reason", "-");
+    } else {
+      rows.emplace_back("matrix.prequalify_drift_gate_status", "fail");
+      rows.emplace_back("matrix.prequalify_drift_gate_reason",
+                        (Twine("nonzero_drift_metrics=") +
+                         Twine(prequalifyDriftNonZero))
+                            .str());
+      finalRC = std::max(finalRC, 2);
+    }
   }
 
   if (!opts.appendHistoryFile.empty()) {
