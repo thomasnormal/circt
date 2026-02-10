@@ -33,6 +33,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cctype>
 #include <optional>
 
@@ -737,7 +738,33 @@ void LowerToBMCPass::runOnOperation() {
     auto usedExplicitClocks = collectUsedExplicitClockDomains();
     if (usedExplicitClocks.indices.size() > 1 ||
         usedExplicitClocks.hasUnresolvedUse) {
-      hwModule.emitError("designs with multiple clocks not yet supported");
+      auto inputNames = hwModule.getInputNames();
+      SmallVector<unsigned> usedIndices(usedExplicitClocks.indices.begin(),
+                                        usedExplicitClocks.indices.end());
+      llvm::sort(usedIndices);
+      std::string diag;
+      llvm::raw_string_ostream os(diag);
+      os << "designs with multiple clocks not yet supported";
+      if (!usedIndices.empty()) {
+        os << " (used explicit clocks: ";
+        for (auto [idx, argIndex] : llvm::enumerate(usedIndices)) {
+          if (idx)
+            os << ", ";
+          StringRef name;
+          if (argIndex < inputNames.size())
+            if (auto nameAttr =
+                    dyn_cast_or_null<StringAttr>(inputNames[argIndex]))
+              name = nameAttr.getValue();
+          if (!name.empty())
+            os << name;
+          else
+            os << "arg#" << argIndex;
+        }
+        os << ")";
+      }
+      if (usedExplicitClocks.hasUnresolvedUse)
+        os << " (plus unresolved clock expressions)";
+      hwModule.emitError(os.str());
       return signalPassFailure();
     }
   }

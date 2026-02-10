@@ -165,6 +165,9 @@ See CHANGELOG.md on recent progress.
       ports only when multiple explicit domains are actually used; remaining
       gap is full semantics for intentionally used independent multi-clock
       domains without `allow-multi-clock`.
+    - BMC `LowerToBMC`: multi-clock reject diagnostics now report the used
+      explicit clock names (and unresolved clock-expression presence) to speed
+      semantic triage on remaining closure failures.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.

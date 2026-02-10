@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 945 - February 10, 2026
+
+### BMC LowerToBMC Hardening: Actionable Multi-Clock Reject Diagnostics
+
+1. Improved single-clock rejection diagnostics in
+   `lib/Tools/circt-bmc/LowerToBMC.cpp` for explicit multi-clock conflicts:
+   - error now includes the set of used explicit clock names (or arg indices).
+   - error now indicates when unresolved clock expressions also participate in
+     the conflict.
+2. This keeps behavior unchanged while making remaining multi-clock closure
+   failures directly actionable in logs and CI artifacts.
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-errors.mlir test/Tools/circt-bmc/lower-to-bmc-multiple-explicit-clocks-unused.mlir test/Tools/circt-bmc/lower-to-bmc-mixed-clock-unused-struct.mlir`
+     -> `3 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir`
+     -> `31 passed`, `1 xfail`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-l2bmc-multiclock-diag-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/BMC|verilator-verification/LEC|yosys/tests/sva/BMC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5` (known baseline),
+          `verilator-verification/LEC pass=17 fail=0`,
+          `yosys/tests/sva/BMC pass=7 fail=5 skip=2` (known baseline).
+
 ## Iteration 944 - February 10, 2026
 
 ### BMC LowerToBMC Hardening: Explicit Multi-Clock Rejects Only on Used Domains
