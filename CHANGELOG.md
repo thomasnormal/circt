@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 891 - February 10, 2026
+
+### BMC Semantic-Closure Strict-Gate: Bucket Drift Controls
+
+1. Extended `utils/run_formal_all.sh` BMC lane summaries with fail-like
+   semantic bucket counters:
+   - `bmc_semantic_bucket_fail_like_cases`
+   - `bmc_semantic_bucket_disable_iff_cases`
+   - `bmc_semantic_bucket_local_var_cases`
+   - `bmc_semantic_bucket_multiclock_cases`
+   - `bmc_semantic_bucket_four_state_cases`
+   - `bmc_semantic_bucket_unclassified_cases`
+2. Added strict-gate control:
+   - `--fail-on-new-bmc-semantic-bucket-cases`
+   - enabled by default under `--strict-gate`.
+   - comparator enforces no increase in:
+     - `bmc_semantic_bucket_disable_iff_cases`
+     - `bmc_semantic_bucket_local_var_cases`
+     - `bmc_semantic_bucket_multiclock_cases`
+     - `bmc_semantic_bucket_four_state_cases`
+3. Fixed strict-gate telemetry parity for semantic closure lane:
+   - strict-gate `collect_failure_cases()` and
+     `collect_bmc_abstraction_provenance()` now include
+     `sv-tests-uvm/BMC_SEMANTICS` result/provenance files (previously baseline
+     update had this lane, comparator collector did not).
+4. Added lit regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`
+   - `test/Tools/run-formal-all-strict-gate-bmc-uvm-semantics-failure-cases.test`
+   - updated `test/Tools/run-formal-all-help.test` for the new CLI flag.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-uvm-semantics-failure-cases.test test/Tools/run-formal-all-strict-gate-bmc-ir-check-fingerprint-cases.test test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-baselines.test test/Tools/run-formal-all-help.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-bucket-gate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^sv-tests/BMC$'`
+  - result:
+    - `sv-tests/BMC`: `total=26 pass=23 fail=3 xfail=0 xpass=0 error=0 skip=1002`
+    - summary includes bucket counters:
+      `bmc_semantic_bucket_fail_like_cases=3`
+      `bmc_semantic_bucket_disable_iff_cases=1`
+      `bmc_semantic_bucket_local_var_cases=2`
+      `bmc_semantic_bucket_multiclock_cases=0`
+      `bmc_semantic_bucket_four_state_cases=0`
+      `bmc_semantic_bucket_unclassified_cases=0`.
+
 ## Iteration 890 - February 10, 2026
 
 ### BMC Strict-Gate Hardening: Fingerprint-Fallback Case Drift

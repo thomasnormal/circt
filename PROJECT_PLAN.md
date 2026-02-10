@@ -544,6 +544,21 @@ See CHANGELOG.md on recent progress.
       per-check witness semantics.
     - Next long-term closure target remains native stable backend check IDs
       that eliminate heuristic fallback identity in strict-gate policy.
+67. BMC semantic-bucket strict-gate hardening landed (February 10, 2026):
+    - `run_formal_all.sh` now emits BMC fail-like semantic bucket counters in
+      lane summaries:
+      `bmc_semantic_bucket_{fail_like,disable_iff,local_var,multiclock,four_state,unclassified}_cases`.
+    - Added strict-gate option
+      `--fail-on-new-bmc-semantic-bucket-cases` and enabled it under
+      `--strict-gate` defaults.
+68. BMC semantic-lane strict-gate collector parity fix:
+    - strict-gate failure-case and abstraction-provenance collectors now
+      include `sv-tests-uvm/BMC_SEMANTICS` files, matching baseline-update
+      telemetry coverage.
+69. Remaining near-term BMC closure limitation after this hardening:
+    - bucket counts are name/path-based classification heuristics, not direct
+      solver-IR semantic tags; deep closure still requires backend-emitted
+      semantic category metadata for exact attribution.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
