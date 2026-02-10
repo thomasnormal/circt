@@ -37,6 +37,9 @@ Options:
                          Fail when BMC timeout-case count increases vs baseline
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
+  --fail-on-new-bmc-backend-parity-mismatch-cases
+                         Fail when BMC backend-parity mismatch case count
+                         increases vs baseline
   --fail-on-new-bmc-ir-check-fingerprint-cases
                          Fail when BMC fingerprint-fallback IR-check case count
                          increases vs baseline
@@ -91,6 +94,10 @@ Options:
   --with-sv-tests-uvm-bmc-semantics
                          Run targeted sv-tests UVM semantic-closure BMC lane
                          (`sv-tests-uvm/BMC_SEMANTICS`)
+  --sv-tests-bmc-backend-parity
+                         Run sv-tests BMC backend parity shadow pass
+                         (SMT-LIB primary vs JIT shadow) and export
+                         `sv-tests-bmc-backend-parity.tsv`
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -1694,6 +1701,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
+FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=0
@@ -1878,6 +1886,7 @@ WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
 WITH_SV_TESTS_UVM_BMC_SEMANTICS=0
+SV_TESTS_BMC_BACKEND_PARITY=0
 WITH_AVIP=0
 OPENTITAN_LEC_IMPL_FILTER=""
 OPENTITAN_LEC_INCLUDE_MASKED=0
@@ -1924,6 +1933,8 @@ while [[ $# -gt 0 ]]; do
       WITH_OPENTITAN_E2E_STRICT=1; shift ;;
     --with-sv-tests-uvm-bmc-semantics)
       WITH_SV_TESTS_UVM_BMC_SEMANTICS=1; shift ;;
+    --sv-tests-bmc-backend-parity)
+      SV_TESTS_BMC_BACKEND_PARITY=1; shift ;;
     --opentitan-lec-impl-filter)
       OPENTITAN_LEC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-lec-include-masked)
@@ -1988,6 +1999,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
+    --fail-on-new-bmc-backend-parity-mismatch-cases)
+      FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-cases)
@@ -3837,6 +3850,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
+  FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES=1
@@ -5831,6 +5845,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_compat_policy_version=%s\n" "$LANE_STATE_COMPAT_POLICY_VERSION"
     printf "script_sha256=%s\n" "$script_sha"
     printf "bmc_run_smtlib=%s\n" "$BMC_RUN_SMTLIB"
+    printf "sv_tests_bmc_backend_parity=%s\n" "$SV_TESTS_BMC_BACKEND_PARITY"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
     printf "lec_assume_known_inputs=%s\n" "$LEC_ASSUME_KNOWN_INPUTS"
@@ -7152,6 +7167,111 @@ print(" ".join(parts))
 PY
 }
 
+summarize_bmc_backend_parity_file() {
+  local smtlib_case_file="$1"
+  local jit_case_file="$2"
+  local parity_cases_out="$3"
+  if [[ ! -s "$smtlib_case_file" ]] || [[ ! -s "$jit_case_file" ]]; then
+    if [[ -n "$parity_cases_out" ]]; then
+      printf "case_id\tpath\tstatus_smtlib\tstatus_jit\tclassification\n" > "$parity_cases_out"
+    fi
+    echo ""
+    return 0
+  fi
+  BMC_SMTLIB_CASE_FILE="$smtlib_case_file" \
+  BMC_JIT_CASE_FILE="$jit_case_file" \
+  BMC_BACKEND_PARITY_CASES_OUT="$parity_cases_out" \
+  python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+smtlib_path = Path(os.environ["BMC_SMTLIB_CASE_FILE"])
+jit_path = Path(os.environ["BMC_JIT_CASE_FILE"])
+parity_out = Path(os.environ["BMC_BACKEND_PARITY_CASES_OUT"])
+
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
+
+def load_case_status(path: Path):
+    rows = {}
+    if not path.exists():
+        return rows
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            status = parts[0].strip().upper() if parts else ""
+            case_id = parts[1].strip() if len(parts) > 1 else ""
+            case_path = parts[2].strip() if len(parts) > 2 else ""
+            if not case_id and not case_path:
+                continue
+            rows[(case_id, case_path)] = status
+    return rows
+
+smtlib_rows = load_case_status(smtlib_path)
+jit_rows = load_case_status(jit_path)
+all_keys = sorted(set(smtlib_rows) | set(jit_rows), key=lambda key: (key[0], key[1]))
+
+mismatch_cases = 0
+status_diff_cases = 0
+smtlib_only_fail_cases = 0
+jit_only_fail_cases = 0
+
+parity_rows = []
+for case_key in all_keys:
+    smtlib_status = smtlib_rows.get(case_key, "MISSING")
+    jit_status = jit_rows.get(case_key, "MISSING")
+    if smtlib_status == jit_status:
+        continue
+    mismatch_cases += 1
+    smtlib_is_fail_like = smtlib_status in fail_like_statuses
+    jit_is_fail_like = jit_status in fail_like_statuses
+    classification = "status_diff"
+    if smtlib_is_fail_like and not jit_is_fail_like:
+        classification = "smtlib_only_fail"
+        smtlib_only_fail_cases += 1
+    elif jit_is_fail_like and not smtlib_is_fail_like:
+        classification = "jit_only_fail"
+        jit_only_fail_cases += 1
+    else:
+        status_diff_cases += 1
+    parity_rows.append(
+        (
+            case_key[0],
+            case_key[1],
+            smtlib_status,
+            jit_status,
+            classification,
+        )
+    )
+
+parity_out.parent.mkdir(parents=True, exist_ok=True)
+with parity_out.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+    writer.writerow(
+        [
+            "case_id",
+            "path",
+            "status_smtlib",
+            "status_jit",
+            "classification",
+        ]
+    )
+    writer.writerows(parity_rows)
+
+parts = [
+    f"bmc_backend_parity_total_cases={len(all_keys)}",
+    f"bmc_backend_parity_mismatch_cases={mismatch_cases}",
+    f"bmc_backend_parity_status_diff_cases={status_diff_cases}",
+    f"bmc_backend_parity_smtlib_only_fail_cases={smtlib_only_fail_cases}",
+    f"bmc_backend_parity_jit_only_fail_cases={jit_only_fail_cases}",
+]
+print(" ".join(parts))
+PY
+}
+
 generate_bmc_abstraction_provenance_case_map() {
   local out_dir="$1"
   local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
@@ -7776,6 +7896,25 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_check_attribution_file")"
       if [[ -n "$bmc_check_summary" ]]; then
         summary="${summary} ${bmc_check_summary}"
+      fi
+      if [[ "$SV_TESTS_BMC_BACKEND_PARITY" == "1" ]]; then
+        run_suite sv-tests-bmc-backend-parity-jit \
+          env OUT="$OUT_DIR/sv-tests-bmc-jit-results.txt" \
+          BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
+          BMC_RUN_SMTLIB=0 \
+          ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
+          BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
+          Z3_BIN="$Z3_BIN" \
+          utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
+        bmc_backend_parity_summary="$(
+          summarize_bmc_backend_parity_file \
+            "$OUT_DIR/sv-tests-bmc-results.txt" \
+            "$OUT_DIR/sv-tests-bmc-jit-results.txt" \
+            "$OUT_DIR/sv-tests-bmc-backend-parity.tsv"
+        )"
+        if [[ -n "$bmc_backend_parity_summary" ]]; then
+          summary="${summary} ${bmc_backend_parity_summary}"
+        fi
       fi
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
@@ -8512,6 +8651,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-semantic-bucket-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-semantic-bucket-case-map.tsv")" -gt 1 ]]; then
     echo "BMC semantic bucket case map: $OUT_DIR/bmc-semantic-bucket-case-map.tsv"
+  fi
+  if [[ -f "$OUT_DIR/sv-tests-bmc-backend-parity.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/sv-tests-bmc-backend-parity.tsv")" -gt 1 ]]; then
+    echo "sv-tests BMC backend parity case map: $OUT_DIR/sv-tests-bmc-backend-parity.tsv"
   fi
   if [[ -f "$OUT_DIR/opentitan-lec-xprop-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/opentitan-lec-xprop-case-map.tsv")" -gt 1 ]]; then
@@ -10127,6 +10270,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" == "1" || \
@@ -10148,6 +10292,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
+  FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_UNCLASSIFIED_CASES" \
@@ -10326,6 +10471,9 @@ fail_on_new_bmc_timeout_cases = (
 )
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
+)
+fail_on_new_bmc_backend_parity_mismatch_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
 )
 fail_on_new_bmc_ir_check_fingerprint_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES", "0") == "1"
@@ -10549,6 +10697,22 @@ for key, current_row in summary.items():
                 if current_unknown > baseline_unknown:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_unknown_cases increased ({baseline_unknown} -> {current_unknown}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_backend_parity_mismatch_cases:
+            baseline_parity_values = []
+            for counts in parsed_counts:
+                if "bmc_backend_parity_mismatch_cases" in counts:
+                    baseline_parity_values.append(
+                        int(counts["bmc_backend_parity_mismatch_cases"])
+                    )
+            if baseline_parity_values:
+                baseline_parity = min(baseline_parity_values)
+                current_parity = int(
+                    current_counts.get("bmc_backend_parity_mismatch_cases", 0)
+                )
+                if current_parity > baseline_parity:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_backend_parity_mismatch_cases increased ({baseline_parity} -> {current_parity}, window={baseline_window})"
                     )
         if fail_on_new_bmc_ir_check_fingerprint_cases:
             baseline_fingerprint_case_values = []

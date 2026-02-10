@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 914 - February 10, 2026
+
+### BMC Hardening: sv-tests Backend Parity Drift Instrumentation
+
+1. Added optional sv-tests BMC backend parity shadow mode in
+   `utils/run_formal_all.sh`:
+   - `--sv-tests-bmc-backend-parity`
+   - primary lane remains SMT-LIB, shadow lane runs JIT backend for parity
+     drift detection.
+2. Added parity artifact export:
+   - `sv-tests-bmc-backend-parity.tsv`
+   - columns: `case_id`, `path`, `status_smtlib`, `status_jit`,
+     `classification`.
+3. Added strict-gate drift option:
+   - `--fail-on-new-bmc-backend-parity-mismatch-cases`
+   - compares `bmc_backend_parity_mismatch_cases` vs baseline window.
+4. Real-lane snapshot (`/tmp/formal-bmc-lec-backend-parity-20260210`):
+   - `sv-tests/BMC`: `bmc_backend_parity_mismatch_cases=3`
+   - all three are `jit_only_fail`: local-var/`disable iff` fail variants
+     (`16.10--property-local-var-fail`,
+      `16.10--sequence-local-var-fail`,
+      `16.15--property-disable-iff-fail`).
+
 ## Iteration 912 - February 10, 2026
 
 ### BMC/LEC Closure Snapshot Revalidation
