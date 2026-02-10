@@ -77,6 +77,10 @@ Options:
                          Fail when any OpenTitan strict LEC summary counter
                          starting with PREFIX increases vs baseline
                          (repeatable)
+  --fail-on-new-opentitan-lec-strict-xprop-key-prefix PREFIX
+                         Fail when any OpenTitan strict LEC summary key
+                         starting with PREFIX increases vs baseline
+                         (repeatable)
   --with-sv-tests-uvm-bmc-semantics
                          Run targeted sv-tests UVM semantic-closure BMC lane
                          (`sv-tests-uvm/BMC_SEMANTICS`)
@@ -1694,6 +1698,7 @@ FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=0
 FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=0
 declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES=()
+declare -a FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES=()
 EXPECTED_FAILURES_FILE=""
 EXPECTATIONS_DRY_RUN=0
 EXPECTATIONS_DRY_RUN_REPORT_JSONL=""
@@ -2000,6 +2005,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-opentitan-lec-strict-xprop-counter-prefix)
       FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES+=("$2"); shift 2 ;;
+    --fail-on-new-opentitan-lec-strict-xprop-key-prefix)
+      FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES+=("$2"); shift 2 ;;
     --expected-failures-file)
       EXPECTED_FAILURES_FILE="$2"; shift 2 ;;
     --expectations-dry-run)
@@ -3843,6 +3850,12 @@ for xprop_prefix in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES[@
     exit 1
   fi
 done
+for xprop_key_prefix in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@]}"; do
+  if [[ ! "$xprop_key_prefix" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-opentitan-lec-strict-xprop-key-prefix: expected [a-z][a-z0-9_]*, got '$xprop_key_prefix'" >&2
+    exit 1
+  fi
+done
 OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[*]}")"
@@ -3850,6 +3863,10 @@ fi
 OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES[*]}")"
+fi
+OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV=""
+if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@]}" -gt 0 ]]; then
+  OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[*]}")"
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -9898,7 +9915,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" == "1" || \
       -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" || \
-      -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" ]]; then
+      -n "$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" || \
+      -n "$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" ]]; then
   OUT_DIR="$OUT_DIR" BASELINE_FILE="$BASELINE_FILE" \
   BASELINE_WINDOW="$BASELINE_WINDOW" \
   BASELINE_WINDOW_DAYS="$BASELINE_WINDOW_DAYS" \
@@ -9920,6 +9938,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT="$FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT" \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV" \
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES_CSV" \
+  OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES="$OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV" \
   STRICT_GATE="$STRICT_GATE" python3 - <<'PY'
 import csv
 import datetime as dt
@@ -10125,6 +10144,13 @@ opentitan_lec_strict_xprop_counter_prefixes = [
     token.strip()
     for token in os.environ.get(
         "OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES", ""
+    ).split(",")
+    if token.strip()
+]
+opentitan_lec_strict_xprop_key_prefixes = [
+    token.strip()
+    for token in os.environ.get(
+        "OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES", ""
     ).split(",")
     if token.strip()
 ]
@@ -10531,6 +10557,23 @@ for key, current_row in summary.items():
                 if current_counter > baseline_counter:
                     gate_errors.append(
                         f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})"
+                    )
+    if suite == "opentitan" and mode == "LEC_STRICT" and opentitan_lec_strict_xprop_key_prefixes:
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        for key_prefix in opentitan_lec_strict_xprop_key_prefixes:
+            candidate_keys = {
+                key for key in current_counts.keys() if key.startswith(key_prefix)
+            }
+            for counts in parsed_counts:
+                for key in counts.keys():
+                    if key.startswith(key_prefix):
+                        candidate_keys.add(key)
+            for counter_key in sorted(candidate_keys):
+                baseline_counter = min(int(counts.get(counter_key, 0)) for counts in parsed_counts)
+                current_counter = int(current_counts.get(counter_key, 0))
+                if current_counter > baseline_counter:
+                    gate_errors.append(
+                        f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={key_prefix})"
                     )
     if fail_on_passrate_regression:
         baseline_rate = max(
