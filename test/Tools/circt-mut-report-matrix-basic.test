@@ -23,6 +23,13 @@
 // CHECK: matrix.not_propagated_mutants_sum{{[[:space:]]}}2
 // CHECK: matrix.not_activated_mutants_sum{{[[:space:]]}}2
 // CHECK: matrix.errors_sum{{[[:space:]]}}1
+// CHECK: matrix.lane_budget.max_global_filter_timeout_mutants{{[[:space:]]}}3
+// CHECK: matrix.lane_budget.max_global_filter_lec_unknown_mutants{{[[:space:]]}}0
+// CHECK: matrix.lane_budget.max_global_filter_bmc_unknown_mutants{{[[:space:]]}}0
+// CHECK: matrix.lane_budget.max_errors{{[[:space:]]}}1
+// CHECK: matrix.lane_budget.min_detected_mutants{{[[:space:]]}}1
+// CHECK: matrix.lane_budget.lanes_zero_detected_mutants{{[[:space:]]}}0
+// CHECK: matrix.lane_budget.lanes_nonzero_global_filter_timeout_mutants{{[[:space:]]}}2
 // CHECK: matrix.coverage_percent_avg{{[[:space:]]}}62.50
 // CHECK: matrix.coverage_percent_from_sums{{[[:space:]]}}63.64
 // CHECK: matrix.global_filter_timeout_mutants_sum{{[[:space:]]}}5
