@@ -122,13 +122,14 @@ See CHANGELOG.md on recent progress.
 
 ### Active Formal Gaps (Near-Term)
 - Mutation/report governance closure (next long-term mutation tranche):
-  - Dedicated lane-drift policy bundles are now available
-    (`formal-regression-matrix-lane-drift-nightly|strict`), but native matrix
-    lane scheduling is still script-dispatched; migrate lane
+  - Composite matrix policy bundles are now available
+    (`formal-regression-matrix-nightly|strict`) with dedicated lane-drift
+    bundles (`formal-regression-matrix-lane-drift-nightly|strict`), but
+    native matrix lane scheduling is still script-dispatched; migrate lane
     execution/retry/status loops into native `circt-mut matrix` to remove
     script coupling.
-  - Wire the lane-drift policy bundles into CI defaults for nightly/strict
-    matrix report jobs.
+  - Wire the composite matrix policy bundles into CI defaults for
+    nightly/strict matrix report jobs.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring
     (`--history --history-bootstrap --history-max-runs`) for stable trend data.
 - Lane-state:

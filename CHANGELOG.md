@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 976 - February 10, 2026
+
+### `circt-mut report`: Composite Matrix Nightly/Strict Policy Bundles
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with two composite matrix policy
+   bundles for long-run CI governance:
+   - `formal-regression-matrix-nightly`
+   - `formal-regression-matrix-strict`
+2. Bundle behavior:
+   - nightly combines matrix guard-nightly checks with lane-drift integrity:
+     - timeouts/unknowns/errors/detected thresholds
+     - `matrix.prequalify_drift_comparable >= 1`
+     - zero drift metrics/mismatches/missing-lane counters
+   - strict adds stricter lane expectations:
+     - `matrix.lane_budget.lanes_zero_detected_mutants <= 0`
+     - `matrix.prequalify_drift_lane_rows_compared >= 1`
+3. Updated report help and invalid-profile diagnostics with the new profile
+   names.
+4. Added regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-nightly-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-strict-requires-prequalify-and-lane-coverage.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-strict-requires-prequalify-and-lane-coverage.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (60/60)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (180/180)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-bundles-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --lec-accept-xprop-only`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator/yosys BMC FAIL, verilator/yosys/opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 975 - February 10, 2026
 
 ### OpenTitan LEC Producer Hardening: Explicit Fallback `diag` Coverage
