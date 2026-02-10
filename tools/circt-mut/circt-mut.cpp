@@ -2555,6 +2555,7 @@ struct MatrixRewriteResult {
   std::string error;
   SmallVector<std::string, 32> rewrittenArgs;
   bool nativeGlobalFilterPrequalify = false;
+  bool nativeMatrixDispatch = false;
 };
 
 struct MatrixLanePreflightDefaults {
@@ -3089,6 +3090,10 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.nativeGlobalFilterPrequalify = true;
       continue;
     }
+    if (arg == "--native-matrix-dispatch") {
+      result.nativeMatrixDispatch = true;
+      continue;
+    }
     auto valueFromArg = [&]() -> StringRef {
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos)
@@ -3567,6 +3572,13 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     result.error = "circt-mut matrix: unable to resolve timeout executable "
                    "required by non-zero global formal timeout settings; "
                    "install coreutils timeout or set PATH.";
+    return result;
+  }
+
+  if (result.nativeGlobalFilterPrequalify && result.nativeMatrixDispatch) {
+    result.error =
+        "circt-mut matrix: --native-matrix-dispatch cannot be combined with "
+        "--native-global-filter-prequalify yet.";
     return result;
   }
 
@@ -4662,12 +4674,370 @@ static bool annotateMatrixResultsWithPrequalifyMetrics(
   return true;
 }
 
+static int runNativeMatrixDispatch(const char *argv0,
+                                   ArrayRef<std::string> args) {
+  MatrixNativePrequalifyConfig cfg;
+  std::string error;
+  if (!parseMatrixNativePrequalifyConfig(args, cfg, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  std::string mainExec =
+      sys::fs::getMainExecutable(argv0, reinterpret_cast<void *>(&printHelp));
+  if (mainExec.empty()) {
+    errs() << "circt-mut matrix: unable to locate circt-mut executable for "
+              "native matrix dispatch.\n";
+    return 1;
+  }
+
+  auto lanesBufferOrErr = MemoryBuffer::getFile(cfg.lanesTSVPath);
+  if (!lanesBufferOrErr) {
+    errs() << "circt-mut matrix: unable to read --lanes-tsv: "
+           << cfg.lanesTSVPath << "\n";
+    return 1;
+  }
+
+  std::error_code mkdirEC = sys::fs::create_directories(cfg.outDir);
+  if (mkdirEC) {
+    errs() << "circt-mut matrix: failed to create --out-dir: " << cfg.outDir
+           << ": " << mkdirEC.message() << "\n";
+    return 1;
+  }
+
+  std::string resultsPath = joinPath2(cfg.outDir, "results.tsv");
+  if (auto v = getLastOptionValue(args, "--results-file"))
+    resultsPath = *v;
+  if (!ensureParentDirForFile(resultsPath, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  auto trimmedColumn = [](const std::vector<std::string> &cols,
+                          size_t index) -> StringRef {
+    if (index >= cols.size())
+      return StringRef();
+    return StringRef(cols[index]).trim();
+  };
+  auto effectiveColumn = [&](const std::vector<std::string> &cols, size_t index,
+                             StringRef defaultValue) -> std::string {
+    StringRef v = trimmedColumn(cols, index);
+    if (!v.empty() && v != "-")
+      return v.str();
+    return defaultValue.str();
+  };
+
+  std::error_code outEC;
+  raw_fd_ostream out(resultsPath, outEC, sys::fs::OF_Text);
+  if (outEC) {
+    errs() << "circt-mut matrix: failed to open results file: " << resultsPath
+           << ": " << outEC.message() << "\n";
+    return 1;
+  }
+  out << "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\t"
+         "metrics_file\tsummary_json\tconfig_error_code\tconfig_error_reason\n";
+
+  SmallVector<StringRef, 256> rawLines;
+  lanesBufferOrErr.get()->getBuffer().split(rawLines, '\n', /*MaxSplit=*/-1,
+                                            /*KeepEmpty=*/true);
+  uint64_t laneTotal = 0;
+  uint64_t lanePass = 0;
+  uint64_t laneFail = 0;
+  bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
+
+  auto maybeAddArg = [](SmallVectorImpl<std::string> &cmd, StringRef flag,
+                        const std::string &value) {
+    if (value.empty())
+      return;
+    cmd.push_back(flag.str());
+    cmd.push_back(value);
+  };
+  auto writeLaneRow = [&](StringRef laneID, StringRef status, int exitCode,
+                          StringRef coveragePercent, StringRef gateStatus,
+                          StringRef laneDir, StringRef metricsFile,
+                          StringRef summaryJSON, StringRef configErrorCode,
+                          StringRef configErrorReason) {
+    out << laneID << '\t' << status << '\t' << exitCode << '\t'
+        << coveragePercent << '\t' << gateStatus << '\t' << laneDir << '\t'
+        << metricsFile << '\t' << summaryJSON << '\t' << configErrorCode << '\t'
+        << configErrorReason << '\n';
+  };
+
+  for (size_t lineNo = 0; lineNo < rawLines.size(); ++lineNo) {
+    StringRef rawLine = rawLines[lineNo];
+    StringRef line = rawLine;
+    if (line.ends_with("\r"))
+      line = line.drop_back();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+
+    SmallVector<StringRef, 64> splitCols;
+    line.split(splitCols, '\t', /*MaxSplit=*/-1, /*KeepEmpty=*/true);
+    std::vector<std::string> cols;
+    cols.reserve(splitCols.size());
+    for (StringRef col : splitCols)
+      cols.push_back(col.str());
+    if (cols.size() < 4) {
+      errs() << "circt-mut matrix: malformed lane in --lanes-tsv at line "
+             << (lineNo + 1) << " (expected at least 4 columns).\n";
+      return 1;
+    }
+
+    std::string laneID = trimmedColumn(cols, ColLaneID).str();
+    if (laneID.empty()) {
+      errs() << "circt-mut matrix: missing lane_id in --lanes-tsv at line "
+             << (lineNo + 1) << ".\n";
+      return 1;
+    }
+
+    ++laneTotal;
+    std::string laneDesign = trimmedColumn(cols, ColDesign).str();
+    std::string laneTestsManifest = trimmedColumn(cols, ColTestsManifest).str();
+    std::string laneMutationsFile = trimmedColumn(cols, ColMutationsFile).str();
+    std::string laneGenerateCount = effectiveColumn(cols, ColGenerateCount, "");
+    std::string laneWorkDir = joinPath2(cfg.outDir, laneID);
+    std::error_code laneDirEC = sys::fs::create_directories(laneWorkDir);
+    if (laneDirEC) {
+      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                   "DIR_ERROR", "lane_work_dir_create_failed");
+      ++laneFail;
+      if (stopOnFail)
+        break;
+      continue;
+    }
+    std::string laneLog = joinPath2(laneWorkDir, "native_matrix_lane.log");
+
+    if (laneDesign.empty() || laneTestsManifest.empty() ||
+        ((laneMutationsFile.empty() || laneMutationsFile == "-") &&
+         laneGenerateCount.empty())) {
+      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                   "CONFIG_ERROR", "missing_required_lane_fields");
+      ++laneFail;
+      if (stopOnFail)
+        break;
+      continue;
+    }
+
+    SmallVector<std::string, 96> coverCmd;
+    coverCmd.push_back(mainExec);
+    coverCmd.push_back("cover");
+    coverCmd.push_back("--design");
+    coverCmd.push_back(laneDesign);
+    coverCmd.push_back("--tests-manifest");
+    coverCmd.push_back(laneTestsManifest);
+    coverCmd.push_back("--work-dir");
+    coverCmd.push_back(laneWorkDir);
+    if (!cfg.createMutatedScript.empty()) {
+      coverCmd.push_back("--create-mutated-script");
+      coverCmd.push_back(cfg.createMutatedScript);
+    }
+    if (!cfg.jobsPerLane.empty()) {
+      coverCmd.push_back("--jobs");
+      coverCmd.push_back(cfg.jobsPerLane);
+    }
+    if (!cfg.reuseCacheDir.empty()) {
+      coverCmd.push_back("--reuse-cache-dir");
+      coverCmd.push_back(cfg.reuseCacheDir);
+      if (!cfg.reuseCacheMode.empty()) {
+        coverCmd.push_back("--reuse-cache-mode");
+        coverCmd.push_back(cfg.reuseCacheMode);
+      }
+    }
+    std::string laneReusePair =
+        effectiveColumn(cols, ColReusePairFile, cfg.defaultReusePairFile);
+    maybeAddArg(coverCmd, "--reuse-pair-file", laneReusePair);
+
+    bool generatedLane =
+        laneMutationsFile.empty() || laneMutationsFile == "-";
+    if (!generatedLane) {
+      coverCmd.push_back("--mutations-file");
+      coverCmd.push_back(laneMutationsFile);
+    } else {
+      coverCmd.push_back("--generate-mutations");
+      coverCmd.push_back(laneGenerateCount);
+      maybeAddArg(coverCmd, "--mutations-top",
+                  effectiveColumn(cols, ColMutationsTop, ""));
+      maybeAddArg(coverCmd, "--mutations-seed",
+                  effectiveColumn(cols, ColMutationsSeed,
+                                  cfg.defaultMutationsSeed));
+      maybeAddArg(coverCmd, "--mutations-yosys",
+                  effectiveColumn(cols, ColMutationsYosys,
+                                  cfg.defaultMutationsYosys));
+      maybeAddArg(coverCmd, "--mutations-modes",
+                  effectiveColumn(cols, ColMutationsModes,
+                                  cfg.defaultMutationsModes));
+      maybeAddArg(coverCmd, "--mutations-mode-counts",
+                  effectiveColumn(cols, ColMutationsModeCounts,
+                                  cfg.defaultMutationsModeCounts));
+      maybeAddArg(coverCmd, "--mutations-mode-weights",
+                  effectiveColumn(cols, ColMutationsModeWeights,
+                                  cfg.defaultMutationsModeWeights));
+      maybeAddArg(coverCmd, "--mutations-profiles",
+                  effectiveColumn(cols, ColMutationsProfiles,
+                                  cfg.defaultMutationsProfiles));
+      maybeAddArg(coverCmd, "--mutations-cfg",
+                  effectiveColumn(cols, ColMutationsCfg, cfg.defaultMutationsCfg));
+      maybeAddArg(coverCmd, "--mutations-select",
+                  effectiveColumn(cols, ColMutationsSelect,
+                                  cfg.defaultMutationsSelect));
+    }
+
+    std::string laneGlobalCmd = effectiveColumn(cols, ColGlobalPropagateCmd,
+                                                cfg.defaultGlobalFilterCmd);
+    std::string laneGlobalLEC =
+        effectiveColumn(cols, ColGlobalPropagateCirctLEC,
+                        cfg.defaultGlobalFilterCirctLEC);
+    std::string laneGlobalBMC =
+        effectiveColumn(cols, ColGlobalPropagateCirctBMC,
+                        cfg.defaultGlobalFilterCirctBMC);
+    std::string laneGlobalChain =
+        effectiveColumn(cols, ColGlobalPropagateCirctChain,
+                        cfg.defaultGlobalFilterCirctChain);
+    maybeAddArg(coverCmd, "--formal-global-propagate-cmd", laneGlobalCmd);
+    maybeAddArg(coverCmd, "--formal-global-propagate-circt-chain",
+                laneGlobalChain);
+    maybeAddArg(coverCmd, "--formal-global-propagate-circt-lec",
+                laneGlobalLEC);
+    maybeAddArg(coverCmd, "--formal-global-propagate-circt-bmc",
+                laneGlobalBMC);
+    maybeAddArg(coverCmd, "--formal-global-propagate-circt-lec-args",
+                effectiveColumn(cols, ColGlobalPropagateCirctLECArgs,
+                                cfg.defaultGlobalFilterCirctLECArgs));
+    maybeAddArg(coverCmd, "--formal-global-propagate-c1",
+                effectiveColumn(cols, ColGlobalPropagateC1,
+                                cfg.defaultGlobalFilterC1));
+    maybeAddArg(coverCmd, "--formal-global-propagate-c2",
+                effectiveColumn(cols, ColGlobalPropagateC2,
+                                cfg.defaultGlobalFilterC2));
+    maybeAddArg(coverCmd, "--formal-global-propagate-z3",
+                effectiveColumn(cols, ColGlobalPropagateZ3,
+                                cfg.defaultGlobalFilterZ3));
+    maybeAddArg(coverCmd, "--formal-global-propagate-circt-bmc-args",
+                effectiveColumn(cols, ColGlobalPropagateBMCArgs,
+                                cfg.defaultGlobalFilterBMCArgs));
+    maybeAddArg(coverCmd, "--formal-global-propagate-bmc-bound",
+                effectiveColumn(cols, ColGlobalPropagateBMCBound,
+                                cfg.defaultGlobalFilterBMCBound));
+    maybeAddArg(coverCmd, "--formal-global-propagate-bmc-module",
+                effectiveColumn(cols, ColGlobalPropagateBMCModule,
+                                cfg.defaultGlobalFilterBMCModule));
+    maybeAddArg(coverCmd, "--formal-global-propagate-bmc-z3",
+                effectiveColumn(cols, ColGlobalPropagateBMCZ3,
+                                cfg.defaultGlobalFilterBMCZ3));
+    maybeAddArg(coverCmd, "--formal-global-propagate-bmc-ignore-asserts-until",
+                effectiveColumn(cols, ColGlobalPropagateBMCIgnoreAssertsUntil,
+                                cfg.defaultGlobalFilterBMCIgnoreAssertsUntil));
+    maybeAddArg(coverCmd, "--formal-global-propagate-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateTimeoutSeconds,
+                                cfg.defaultGlobalFilterTimeoutSeconds));
+    maybeAddArg(coverCmd, "--formal-global-propagate-lec-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateLECTimeoutSeconds,
+                                cfg.defaultGlobalFilterLECTimeoutSeconds));
+    maybeAddArg(coverCmd, "--formal-global-propagate-bmc-timeout-seconds",
+                effectiveColumn(cols, ColGlobalPropagateBMCTimeoutSeconds,
+                                cfg.defaultGlobalFilterBMCTimeoutSeconds));
+
+    bool assumeKnown = false;
+    bool acceptXpropOnly = false;
+    bool bmcRunSMTLib = false;
+    bool bmcAssumeKnown = false;
+    if (!parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateAssumeKnownInputs),
+            cfg.defaultGlobalFilterAssumeKnownInputs, assumeKnown, error,
+            "global_propagate_assume_known_inputs", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateAcceptXpropOnly),
+            cfg.defaultGlobalFilterAcceptXpropOnly, acceptXpropOnly, error,
+            "global_propagate_accept_xprop_only", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateBMCRunSMTLib),
+            cfg.defaultGlobalFilterBMCRunSMTLib, bmcRunSMTLib, error,
+            "global_propagate_bmc_run_smtlib", laneID) ||
+        !parseLaneBoolWithDefault(
+            trimmedColumn(cols, ColGlobalPropagateBMCAssumeKnownInputs),
+            cfg.defaultGlobalFilterBMCAssumeKnownInputs, bmcAssumeKnown, error,
+            "global_propagate_bmc_assume_known_inputs", laneID)) {
+      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                   "CONFIG_ERROR", "invalid_lane_boolean_override");
+      ++laneFail;
+      if (stopOnFail)
+        break;
+      continue;
+    }
+    if (assumeKnown)
+      coverCmd.push_back("--formal-global-propagate-assume-known-inputs");
+    if (acceptXpropOnly)
+      coverCmd.push_back("--formal-global-propagate-accept-xprop-only");
+    if (bmcRunSMTLib)
+      coverCmd.push_back("--formal-global-propagate-bmc-run-smtlib");
+    if (bmcAssumeKnown)
+      coverCmd.push_back("--formal-global-propagate-bmc-assume-known-inputs");
+
+    int coverRC = -1;
+    std::string runError;
+    if (!runArgvToLog(coverCmd, laneLog, /*timeoutSeconds=*/0, coverRC,
+                      runError)) {
+      writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
+                   "DISPATCH_ERROR", "cover_invocation_failed");
+      ++laneFail;
+      if (stopOnFail)
+        break;
+      continue;
+    }
+
+    std::string metricsPath = joinPath2(laneWorkDir, "metrics.tsv");
+    std::string summaryPath = joinPath2(laneWorkDir, "summary.json");
+    std::string coveragePercent = "-";
+    if (sys::fs::exists(metricsPath)) {
+      std::string metricsText = readTextFileOrEmpty(metricsPath);
+      SmallVector<StringRef, 128> metricLines;
+      StringRef(metricsText).split(metricLines, '\n', /*MaxSplit=*/-1,
+                                   /*KeepEmpty=*/false);
+      for (StringRef metricLine : metricLines) {
+        metricLine = metricLine.trim();
+        if (metricLine.empty() || metricLine.starts_with("#"))
+          continue;
+        size_t tabPos = metricLine.find('\t');
+        if (tabPos == StringRef::npos)
+          continue;
+        StringRef key = metricLine.take_front(tabPos).trim();
+        StringRef value = metricLine.drop_front(tabPos + 1).trim();
+        if (key == "mutation_coverage_percent" && !value.empty()) {
+          coveragePercent = value.str();
+          break;
+        }
+      }
+    }
+
+    bool pass = coverRC == 0;
+    writeLaneRow(laneID, pass ? "PASS" : "FAIL", coverRC, coveragePercent,
+                 pass ? "PASS" : "FAIL", laneWorkDir,
+                 sys::fs::exists(metricsPath) ? metricsPath : "-",
+                 sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
+    if (pass)
+      ++lanePass;
+    else
+      ++laneFail;
+    if (!pass && stopOnFail)
+      break;
+  }
+
+  out.close();
+  outs() << "native_matrix_dispatch_results_tsv\t" << resultsPath << "\n";
+  outs() << "native_matrix_dispatch_lanes\t" << laneTotal << "\n";
+  outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
+  outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
+  return laneFail == 0 ? 0 : 1;
+}
+
 static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
   if (!rewrite.ok) {
     errs() << rewrite.error << "\n";
     return 1;
   }
+  if (rewrite.nativeMatrixDispatch)
+    return runNativeMatrixDispatch(argv0, rewrite.rewrittenArgs);
 
   SmallVector<std::string, 32> dispatchArgsStorage;
   ArrayRef<std::string> dispatchArgs = rewrite.rewrittenArgs;

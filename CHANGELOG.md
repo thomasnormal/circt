@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 978 - February 10, 2026
+
+### `circt-mut matrix`: Native Lane-Dispatch Scaffold (Opt-In)
+
+1. Added an opt-in native matrix lane scheduler path in
+   `tools/circt-mut/circt-mut.cpp`:
+   - `circt-mut matrix --native-matrix-dispatch ...`
+2. Native dispatch behavior:
+   - parses lanes from `--lanes-tsv`, invokes `circt-mut cover` per lane, and
+     emits deterministic matrix `results.tsv` directly from native code.
+   - exports native dispatch telemetry:
+     - `native_matrix_dispatch_results_tsv`
+     - `native_matrix_dispatch_lanes`
+     - `native_matrix_dispatch_pass`
+     - `native_matrix_dispatch_fail`
+3. Added explicit safety guard while migration is in progress:
+   - rejects `--native-matrix-dispatch` combined with
+     `--native-global-filter-prequalify`.
+4. Added regression tests:
+   - `test/Tools/circt-mut-matrix-native-dispatch-basic.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-conflict.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test test/Tools/circt-mut-matrix-*.test`: PASS (105/105)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (182/182)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-dispatch-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*' --lec-accept-xprop-only`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator/yosys BMC FAIL, verilator/yosys/opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 977 - February 10, 2026
 
 ### Runner Filter-Contract Hardening (Caller Must Pass Explicit Filter)
