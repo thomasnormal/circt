@@ -1096,3 +1096,17 @@ See CHANGELOG.md on recent progress.
    - `yosys/tests/sva/BMC` (`7/14` pass, `2` skip)
    confirming no new dropped-syntax remark signal while semantic fail-like
    closure continues on non-sv-tests suites.
+10. Cross-suite runner no-drop parity hardening (February 10, 2026):
+    - `utils/run_verilator_verification_circt_bmc.sh` now emits
+      `verilator-verification dropped-syntax summary: drop_remark_cases=...`
+      and supports `FAIL_ON_DROP_REMARKS=1`.
+    - `utils/run_yosys_sva_circt_bmc.sh` now emits
+      `yosys dropped-syntax summary: drop_remark_cases=...`
+      and supports `FAIL_ON_DROP_REMARKS=1`, with per-test dedup across
+      pass/fail modes.
+11. Remaining no-drop limitation after this landing:
+    strict-gate drift is still count-based (`bmc_drop_remark_cases`) and does
+    not yet gate on newly affected case identities.
+12. Next closure feature for full-syntax-tree governance:
+    add optional per-case drop-remark artifact export from all BMC runners and
+    strict-gate support for "new dropped-syntax cases" deltas.

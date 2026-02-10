@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 929 - February 10, 2026
+
+### BMC No-Drop Hardening: Structured Drop-Remark Telemetry in Verilator/Yosys Runners
+
+1. Updated `utils/run_verilator_verification_circt_bmc.sh`:
+   - added dropped-syntax summary output:
+     `verilator-verification dropped-syntax summary: drop_remark_cases=<N> ...`
+   - added optional gate:
+     `FAIL_ON_DROP_REMARKS=1` fails when `drop_remark_cases>0`.
+2. Updated `utils/run_yosys_sva_circt_bmc.sh`:
+   - added dropped-syntax summary output:
+     `yosys dropped-syntax summary: drop_remark_cases=<N> ...`
+   - added optional gate:
+     `FAIL_ON_DROP_REMARKS=1` fails when `drop_remark_cases>0`.
+   - counting is deduplicated per testcase base name across `pass`/`fail` mode
+     executions to avoid double-count inflation.
+3. Added regressions:
+   - `test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test`
+   - `test/Tools/run-yosys-sva-bmc-drop-remarks.test`
+4. Validation:
+   - `bash -n utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh utils/run_formal_all.sh`
+   - `llvm-lit -sv test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test test/Tools/run-verilator-verification-circt-bmc-unknown-timeout.test test/Tools/run-yosys-sva-bmc-drop-remarks.test test/Tools/run-yosys-sva-bmc-format.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test`
+     -> `5 passed`.
+   - real focused sweep:
+     `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-structured-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+     -> both lanes report `bmc_drop_remark_cases=0`.
+
 ## Iteration 928 - February 10, 2026
 
 ### BMC No-Drop Hardening: Cross-Suite Drop-Remark Drift Tracking

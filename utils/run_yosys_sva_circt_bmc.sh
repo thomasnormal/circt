@@ -130,6 +130,8 @@ EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY="${EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY
 # assertions may be present but not lowered yet. Setting this to 1 can cause
 # false SKIP results.
 NO_PROPERTY_AS_SKIP="${NO_PROPERTY_AS_SKIP:-0}"
+FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
+DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 
 if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   echo "yosys SVA directory not found: $YOSYS_SVA_DIR" >&2
@@ -173,12 +175,14 @@ expect_diff_removed=0
 expect_diff_changed=0
 lint_issues=0
 format_unfixable_issues=0
+drop_remark_cases=0
 
 declare -A expected_cases
 declare -A observed_cases
 declare -A regen_override_cases
 declare -A suite_tests
 declare -A semantic_tags_by_case
+declare -A drop_remark_seen_cases
 declare -a addrow_filter_source_patterns=()
 declare -a addrow_filter_key_patterns=()
 declare -a addrow_filter_row_patterns=()
@@ -8097,6 +8101,22 @@ load_semantic_tag_map() {
   done < "$BMC_SEMANTIC_TAG_MAP_FILE"
 }
 
+record_drop_remark_case() {
+  local case_id="$1"
+  local verilog_log="$2"
+  if [[ -z "$case_id" || ! -s "$verilog_log" ]]; then
+    return
+  fi
+  if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+    return
+  fi
+  if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
+    return
+  fi
+  drop_remark_seen_cases["$case_id"]=1
+  drop_remark_cases=$((drop_remark_cases + 1))
+}
+
 report_case_outcome() {
   local base="$1"
   local mode="$2"
@@ -8274,6 +8294,7 @@ run_case() {
   fi
   log_tag="${log_tag//\//__}"
   local mlir="$tmpdir/${base}_${mode}.mlir"
+  local verilog_log="$tmpdir/${base}_${mode}.circt-verilog.log"
   local bmc_log="$tmpdir/${base}_${mode}.circt-bmc.log"
 
   local verilog_args=()
@@ -8285,10 +8306,16 @@ run_case() {
     verilog_args+=("${extra_args[@]}")
   fi
   if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" \
-      "${extra_def[@]}" "$sv" > "$mlir"; then
+      "${extra_def[@]}" "$sv" > "$mlir" 2> "$verilog_log"; then
+    record_drop_remark_case "$base" "$verilog_log"
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-verilog.log" 2>/dev/null || true
+    fi
     report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
     return
   fi
+  record_drop_remark_case "$base" "$verilog_log"
   local out
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
       "--module" "$TOP" "--shared-libs=$Z3_LIB")
@@ -8346,6 +8373,8 @@ run_case() {
   if [[ -n "$KEEP_LOGS_DIR" ]]; then
     mkdir -p "$KEEP_LOGS_DIR"
     cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}_${mode}.mlir" 2>/dev/null || true
+    cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-verilog.log" 2>/dev/null || true
+    cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-bmc.log" 2>/dev/null || true
   fi
 }
 
@@ -8405,4 +8434,9 @@ fi
 
 echo "yosys SVA summary: $total tests, failures=$failures, xfail=$xfails, xpass=$xpasses, skipped=$skipped"
 echo "yosys SVA mode summary: total=$mode_total pass=$mode_out_pass fail=$mode_out_fail xfail=$mode_out_xfail xpass=$mode_out_xpass epass=$mode_out_epass efail=$mode_out_efail unskip=$mode_out_unskip skipped=$mode_skipped skip_pass=$mode_skipped_pass skip_fail=$mode_skipped_fail skip_expected=$mode_skipped_expected skip_unexpected=$mode_skipped_unexpected skip_reason_vhdl=$mode_skip_reason_vhdl skip_reason_fail-no-macro=$mode_skip_reason_fail_no_macro skip_reason_no-property=$mode_skip_reason_no_property skip_reason_other=$mode_skip_reason_other"
+echo "yosys dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
+if [[ "$FAIL_ON_DROP_REMARKS" == "1" && "$drop_remark_cases" -gt 0 ]]; then
+  echo "FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=$drop_remark_cases" >&2
+  exit 2
+fi
 exit "$failures"
