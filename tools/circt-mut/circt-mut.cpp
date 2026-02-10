@@ -7315,6 +7315,7 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
 }
 
 static int runNativeReport(const ReportOptions &opts) {
+  ReportOptions effectiveOpts = opts;
   SmallString<256> defaultCover(opts.projectDir);
   sys::path::append(defaultCover, "out", "cover");
   SmallString<256> defaultMatrix(opts.projectDir);
@@ -7322,14 +7323,15 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::string coverWorkDir = std::string(defaultCover.str());
   std::string matrixOutDir = std::string(defaultMatrix.str());
-  std::string compareFile = opts.compareFile;
-  std::string compareHistoryLatestFile = opts.compareHistoryLatestFile;
-  std::string historyFile = opts.historyFile;
-  std::string trendHistoryFile = opts.trendHistoryFile;
-  uint64_t trendWindowRuns = opts.trendWindowRuns;
-  std::string appendHistoryFile = opts.appendHistoryFile;
-  uint64_t historyMaxRuns = opts.historyMaxRuns;
-  bool historyBootstrap = opts.historyBootstrap;
+  std::string compareFile = effectiveOpts.compareFile;
+  std::string compareHistoryLatestFile = effectiveOpts.compareHistoryLatestFile;
+  std::string historyFile = effectiveOpts.historyFile;
+  std::string trendHistoryFile = effectiveOpts.trendHistoryFile;
+  uint64_t trendWindowRuns = effectiveOpts.trendWindowRuns;
+  std::string appendHistoryFile = effectiveOpts.appendHistoryFile;
+  uint64_t historyMaxRuns = effectiveOpts.historyMaxRuns;
+  bool historyBootstrap = effectiveOpts.historyBootstrap;
+  SmallVector<std::string, 4> policyProfiles = effectiveOpts.policyProfiles;
 
   SmallString<256> configPath;
   if (opts.configPath.empty()) {
@@ -7414,6 +7416,38 @@ static int runNativeReport(const ReportOptions &opts) {
         }
       }
     }
+    if (policyProfiles.empty()) {
+      auto parseProfileCSV = [&](StringRef csv) {
+        SmallVector<StringRef, 8> elems;
+        csv.split(elems, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+        for (StringRef raw : elems) {
+          StringRef p = raw.trim();
+          if (!p.empty())
+            policyProfiles.push_back(p.str());
+        }
+      };
+      if (auto it = cfg.report.find("policy_profile");
+          it != cfg.report.end() && !it->second.empty())
+        parseProfileCSV(it->second);
+      if (auto it = cfg.report.find("policy_profiles");
+          it != cfg.report.end() && !it->second.empty())
+        parseProfileCSV(it->second);
+    }
+  }
+  if (!policyProfiles.empty()) {
+    SmallVector<std::string, 4> uniqueProfiles;
+    StringSet<> seen;
+    std::string parseError;
+    for (const auto &profile : policyProfiles) {
+      if (!seen.insert(profile).second)
+        continue;
+      uniqueProfiles.push_back(profile);
+      if (!applyPolicyProfile(profile, effectiveOpts, parseError)) {
+        errs() << parseError << "\n";
+        return 1;
+      }
+    }
+    policyProfiles = std::move(uniqueProfiles);
   }
   if (!historyFile.empty()) {
     if (compareFile.empty() && compareHistoryLatestFile.empty())
@@ -7431,12 +7465,12 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::vector<std::pair<std::string, std::string>> rows;
   rows.emplace_back("report.mode", opts.mode);
-  if (!opts.policyProfiles.empty()) {
+  if (!policyProfiles.empty()) {
     rows.emplace_back("policy.profile_count",
-                      std::to_string(opts.policyProfiles.size()));
-    for (size_t i = 0; i < opts.policyProfiles.size(); ++i)
+                      std::to_string(policyProfiles.size()));
+    for (size_t i = 0; i < policyProfiles.size(); ++i)
       rows.emplace_back((Twine("policy.profile_") + Twine(i + 1)).str(),
-                        opts.policyProfiles[i]);
+                        policyProfiles[i]);
   }
   int finalRC = 0;
   std::string error;
@@ -7475,14 +7509,15 @@ static int runNativeReport(const ReportOptions &opts) {
   }
 
   if (compareFile.empty() && compareHistoryLatestFile.empty() &&
-      (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty())) {
+      (!effectiveOpts.failIfDeltaGtRules.empty() ||
+       !effectiveOpts.failIfDeltaLtRules.empty())) {
     errs() << "circt-mut report: --fail-if-delta-gt/--fail-if-delta-lt "
               "require --compare or --compare-history-latest\n";
     return 1;
   }
   if (trendHistoryFile.empty() &&
-      (!opts.failIfTrendDeltaGtRules.empty() ||
-       !opts.failIfTrendDeltaLtRules.empty())) {
+      (!effectiveOpts.failIfTrendDeltaGtRules.empty() ||
+       !effectiveOpts.failIfTrendDeltaLtRules.empty())) {
     errs() << "circt-mut report: --fail-if-trend-delta-gt/"
               "--fail-if-trend-delta-lt require --trend-history\n";
     return 1;
@@ -7563,7 +7598,8 @@ static int runNativeReport(const ReportOptions &opts) {
     }
   }
 
-  if (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty()) {
+  if (!effectiveOpts.failIfDeltaGtRules.empty() ||
+      !effectiveOpts.failIfDeltaLtRules.empty()) {
     if (skipCompareGatesForBootstrap) {
       rows.emplace_back("compare.gate_status", "bootstrap_skipped");
       rows.emplace_back("compare.gate_reason", "missing_history_bootstrap");
@@ -7588,16 +7624,16 @@ static int runNativeReport(const ReportOptions &opts) {
       return true;
     };
 
-    for (const auto &rule : opts.failIfDeltaGtRules)
+    for (const auto &rule : effectiveOpts.failIfDeltaGtRules)
       if (!evaluateRule(rule, /*isUpperBound=*/true))
         return 1;
-    for (const auto &rule : opts.failIfDeltaLtRules)
+    for (const auto &rule : effectiveOpts.failIfDeltaLtRules)
       if (!evaluateRule(rule, /*isUpperBound=*/false))
         return 1;
 
     rows.emplace_back("compare.gate_rules_total",
-                      std::to_string(opts.failIfDeltaGtRules.size() +
-                                     opts.failIfDeltaLtRules.size()));
+                      std::to_string(effectiveOpts.failIfDeltaGtRules.size() +
+                                     effectiveOpts.failIfDeltaLtRules.size()));
     rows.emplace_back("compare.gate_failure_count",
                       std::to_string(failures.size()));
     rows.emplace_back("compare.gate_status", failures.empty() ? "pass" : "fail");
@@ -7608,7 +7644,8 @@ static int runNativeReport(const ReportOptions &opts) {
       finalRC = 2;
     }
   }
-  if (!opts.failIfValueGtRules.empty() || !opts.failIfValueLtRules.empty()) {
+  if (!effectiveOpts.failIfValueGtRules.empty() ||
+      !effectiveOpts.failIfValueLtRules.empty()) {
     SmallVector<std::string, 8> failures;
     StringMap<std::string> currentValues;
     for (const auto &row : rows)
@@ -7639,16 +7676,16 @@ static int runNativeReport(const ReportOptions &opts) {
       return true;
     };
 
-    for (const auto &rule : opts.failIfValueGtRules)
+    for (const auto &rule : effectiveOpts.failIfValueGtRules)
       if (!evaluateValueRule(rule, /*isUpperBound=*/true))
         return 1;
-    for (const auto &rule : opts.failIfValueLtRules)
+    for (const auto &rule : effectiveOpts.failIfValueLtRules)
       if (!evaluateValueRule(rule, /*isUpperBound=*/false))
         return 1;
 
     rows.emplace_back("value_gate.rules_total",
-                      std::to_string(opts.failIfValueGtRules.size() +
-                                     opts.failIfValueLtRules.size()));
+                      std::to_string(effectiveOpts.failIfValueGtRules.size() +
+                                     effectiveOpts.failIfValueLtRules.size()));
     rows.emplace_back("value_gate.failure_count",
                       std::to_string(failures.size()));
     rows.emplace_back("value_gate.status", failures.empty() ? "pass" : "fail");
@@ -7658,8 +7695,8 @@ static int runNativeReport(const ReportOptions &opts) {
     if (!failures.empty())
       finalRC = std::max(finalRC, 2);
   }
-  if (!opts.failIfTrendDeltaGtRules.empty() ||
-      !opts.failIfTrendDeltaLtRules.empty()) {
+  if (!effectiveOpts.failIfTrendDeltaGtRules.empty() ||
+      !effectiveOpts.failIfTrendDeltaLtRules.empty()) {
     if (skipTrendGatesForBootstrap) {
       rows.emplace_back("trend.gate_status", "bootstrap_skipped");
       rows.emplace_back("trend.gate_reason", "missing_history_bootstrap");
@@ -7686,16 +7723,17 @@ static int runNativeReport(const ReportOptions &opts) {
       return true;
     };
 
-    for (const auto &rule : opts.failIfTrendDeltaGtRules)
+    for (const auto &rule : effectiveOpts.failIfTrendDeltaGtRules)
       if (!evaluateTrendRule(rule, /*isUpperBound=*/true))
         return 1;
-    for (const auto &rule : opts.failIfTrendDeltaLtRules)
+    for (const auto &rule : effectiveOpts.failIfTrendDeltaLtRules)
       if (!evaluateTrendRule(rule, /*isUpperBound=*/false))
         return 1;
 
     rows.emplace_back("trend.gate_rules_total",
-                      std::to_string(opts.failIfTrendDeltaGtRules.size() +
-                                     opts.failIfTrendDeltaLtRules.size()));
+                      std::to_string(
+                          effectiveOpts.failIfTrendDeltaGtRules.size() +
+                          effectiveOpts.failIfTrendDeltaLtRules.size()));
     rows.emplace_back("trend.gate_failure_count",
                       std::to_string(failures.size()));
     rows.emplace_back("trend.gate_status", failures.empty() ? "pass" : "fail");
@@ -7706,7 +7744,7 @@ static int runNativeReport(const ReportOptions &opts) {
       finalRC = 2;
     }
   }
-  if (opts.failOnPrequalifyDrift) {
+  if (effectiveOpts.failOnPrequalifyDrift) {
     if (!(opts.mode == "matrix" || opts.mode == "all")) {
       errs() << "circt-mut report: --fail-on-prequalify-drift requires "
                 "--mode matrix or --mode all\n";
