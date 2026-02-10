@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: not env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --generate-mutations 4 --mutations-mode-counts bogus=4 > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: circt-mut cover: unknown --mutations-mode-counts mode: bogus (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect).

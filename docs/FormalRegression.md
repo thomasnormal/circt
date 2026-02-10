@@ -480,6 +480,10 @@ Execution controls:
     - conflicting or missing source configuration fails fast.
   - generated-mutation allocation controls are now validated natively for
     cover dispatch:
+    - `--mutations-modes` entries must be known built-in mode/family names
+      (`inv`, `const0`, `const1`, `cnot0`, `cnot1`,
+      `arith`, `control`, `balanced`, `all`,
+      `stuck`, `invert`, `connect`).
     - `--mutations-profiles` entries must be known built-in profile names
       (`arith-depth`, `control-depth`, `balanced-depth`, `fault-basic`,
       `fault-stuck`, `fault-connect`, `cover`, `none`).
@@ -487,6 +491,8 @@ Execution controls:
     - `--mutations-seed` must be a non-negative integer.
     - `--mutations-mode-counts` / `--mutations-mode-weights` entries must be
       `NAME=VALUE` with positive integers.
+    - `--mutations-mode-counts` / `--mutations-mode-weights` mode names must
+      be known built-in mode/family names.
     - `--mutations-mode-counts` and `--mutations-mode-weights` are mutually
       exclusive.
     - when mode-counts are used, their total must match
@@ -524,8 +530,12 @@ Execution controls:
     - `generate_count` must be a positive integer.
     - `mutations_seed` must be a non-negative integer (defaults to `1` when
       unset).
+    - effective `mutations_modes` entries must be known built-in mode/family
+      names.
     - effective `mutations_mode_counts` / `mutations_mode_weights` entries
       must be `NAME=VALUE` with positive integers.
+    - effective `mutations_mode_counts` / `mutations_mode_weights` mode names
+      must be known built-in mode/family names.
     - effective count/weight controls are mutually exclusive.
     - effective `mutations_mode_counts` totals must match `generate_count`.
   - lane mutation source consistency is now validated natively:
@@ -562,8 +572,9 @@ Execution controls:
     `--default-bmc-orig-cache-max-age-seconds`,
     `--default-bmc-orig-cache-eviction-policy`.
   - matrix default mutation allocation options are now validated natively:
+    `--default-mutations-modes`,
     `--default-mutations-mode-counts`,
-    `--default-mutations-mode-weights` (syntax/value checks plus
+    `--default-mutations-mode-weights` (syntax/value/mode-name checks plus
     mutual-exclusion conflict detection).
   - matrix default/lane generated-mutation profile names are now validated
     natively:
@@ -580,6 +591,8 @@ Execution controls:
 - `circt-mut generate` migration note:
   - native generate now fail-fast resolves `--yosys` executable before
     execution and cache-key generation.
+  - native generate now also validates `--mode`, `--mode-count(s)`, and
+    `--mode-weight(s)` names against built-in mode/family names.
 - `--bmc-orig-cache-max-entries <n>`: cap differential-BMC original-design
   cache entries (`0` disables limit, default `0`).
 - `--bmc-orig-cache-max-bytes <n>`: cap differential-BMC original-design cache
