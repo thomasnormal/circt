@@ -12,5 +12,5 @@
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: PAIR:mutation_id{{.*}}propagation
-// CHECK: PAIR:1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated
-// CHECK: PAIR:2{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_propagated
+// CHECK: PAIR:1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated{{.*}}global_filter_cmd_source=token_not_propagated
+// CHECK: PAIR:2{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_propagated{{.*}}global_filter_cmd_source=token_propagated

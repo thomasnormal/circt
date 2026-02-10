@@ -13,7 +13,9 @@
 // RUN: grep -q '^MUTATION_SPEC=-$' %t/probe_eq.log
 //
 // EQ: classification{{[[:space:]]+}}not_propagated
+// EQ: global_filter_cmd_source{{[[:space:]]+}}token_not_propagated
 // EQ: global_filter_log{{[[:space:]]+}}[[LOG:.*probe_eq.log]]
 //
 // PROP: classification{{[[:space:]]+}}propagated
+// PROP: global_filter_cmd_source{{[[:space:]]+}}token_propagated
 // PROP: global_filter_log{{[[:space:]]+}}[[LOG:.*probe_prop.log]]

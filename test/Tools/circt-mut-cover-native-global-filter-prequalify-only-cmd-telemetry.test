@@ -1,0 +1,31 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_TOKEN_NP\n2 M_TOKEN_P\n3 M_RC0\n4 M_RC1\n5 M_TIMEOUT\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\n{\n  echo \"// design: $design\"\n  echo \"// spec: $spec\"\n} > \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmutant=\"$MUTANT_DESIGN\"\nif grep -q \"spec: M_TOKEN_NP\" \"$mutant\"; then\n  echo NOT_PROPAGATED\n  exit 1\nfi\nif grep -q \"spec: M_TOKEN_P\" \"$mutant\"; then\n  echo PROPAGATED\n  exit 0\nfi\nif grep -q \"spec: M_RC0\" \"$mutant\"; then\n  exit 0\nfi\nif grep -q \"spec: M_RC1\" \"$mutant\"; then\n  exit 1\nfi\nif grep -q \"spec: M_TIMEOUT\" \"$mutant\"; then\n  sleep 3\n  exit 0\nfi\nexit 2\n' > %t/fake-global-cmd.sh
+// RUN: chmod +x %t/fake-global-cmd.sh
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --design %t/design.il --mutations-file %t/mutations.txt --native-global-filter-prequalify-only --create-mutated-script %t/fake-create-mutated.sh --formal-global-propagate-cmd "bash %t/fake-global-cmd.sh" --formal-global-propagate-timeout-seconds 1 --work-dir %t/work > %t/out.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/out.txt
+// RUN: FileCheck %s --check-prefix=PAIR < %t/work/native_global_filter_prequalify.tsv
+// RUN: test ! -e %t/invoked
+//
+// OUT: prequalify_total_mutants{{[[:space:]]+}}5
+// OUT: prequalify_not_propagated_mutants{{[[:space:]]+}}2
+// OUT: prequalify_propagated_mutants{{[[:space:]]+}}3
+// OUT: prequalify_probe_error_mutants{{[[:space:]]+}}0
+// OUT: prequalify_cmd_token_not_propagated_mutants{{[[:space:]]+}}1
+// OUT: prequalify_cmd_token_propagated_mutants{{[[:space:]]+}}1
+// OUT: prequalify_cmd_rc_not_propagated_mutants{{[[:space:]]+}}1
+// OUT: prequalify_cmd_rc_propagated_mutants{{[[:space:]]+}}1
+// OUT: prequalify_cmd_timeout_propagated_mutants{{[[:space:]]+}}1
+// OUT: prequalify_cmd_error_mutants{{[[:space:]]+}}0
+//
+// PAIR: 1{{.*}}global_filter_cmd_source=token_not_propagated
+// PAIR: 2{{.*}}global_filter_cmd_source=token_propagated
+// PAIR: 3{{.*}}global_filter_cmd_source=rc0
+// PAIR: 4{{.*}}global_filter_cmd_source=rc1
+// PAIR: 5{{.*}}global_filter_cmd_source=timeout
