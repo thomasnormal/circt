@@ -656,12 +656,6 @@ void LowerToBMCPass::runOnOperation() {
     return signalPassFailure();
   }
 
-  if (structClockCount > 0 && !explicitClocks.empty()) {
-    hwModule.emitError(
-        "mixed top-level and struct clock inputs are not yet supported");
-    return signalPassFailure();
-  }
-
   if (!allowMultiClock && explicitClocks.size() > 1) {
     hwModule.emitError("designs with multiple clocks not yet supported");
     return signalPassFailure();
@@ -671,7 +665,7 @@ void LowerToBMCPass::runOnOperation() {
   bool hasClk = hasExplicitClockInput;
   SmallVector<Attribute> clockSourceAttrs;
   SmallVector<Attribute> clockKeyAttrs;
-  if (!hasExplicitClockInput) {
+  if (!hasExplicitClockInput || structClockCount > 0) {
     SmallVector<seq::ToClockOp> toClockOps;
     SmallVector<ltl::ClockOp> ltlClockOps;
     hwModule.walk([&](seq::ToClockOp toClockOp) {
@@ -714,6 +708,20 @@ void LowerToBMCPass::runOnOperation() {
       Value lowered = seq::FromClockOp::create(builder, loc, input);
       materializedClockInputs.try_emplace(input, lowered);
       return lowered;
+    };
+
+    auto isFromTopLevelClockInput = [&](Value input) -> bool {
+      if (!input)
+        return false;
+      auto fromClock = input.getDefiningOp<seq::FromClockOp>();
+      if (!fromClock)
+        return false;
+      auto blockArg = dyn_cast<BlockArgument>(fromClock.getInput());
+      if (!blockArg)
+        return false;
+      if (blockArg.getOwner() != hwModule.getBodyBlock())
+        return false;
+      return isa<seq::ClockType>(blockArg.getType());
     };
 
     // Use stable argument names when building clock keys, so they remain valid
@@ -961,6 +969,10 @@ void LowerToBMCPass::runOnOperation() {
     auto maybeAddClockInput = [&](Value input) {
       Value i1Input = materializeClockInputI1(input);
       if (!i1Input || i1Input.getType() != builder.getI1Type())
+        return;
+      // Keep existing top-level clock inputs as-is; only synthesize derived BMC
+      // clocks for non-top-level (e.g. struct-carried) sources.
+      if (hasExplicitClockInput && isFromTopLevelClockInput(i1Input))
         return;
       bool invert = false;
       Value canonical = canonicalizeClockValue(i1Input, invert);
@@ -1331,6 +1343,8 @@ void LowerToBMCPass::runOnOperation() {
           clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
+          if (hasExplicitClockInput)
+            continue;
           clockOp.emitError("failed to map clocked property input");
           return signalPassFailure();
         }
@@ -1381,7 +1395,8 @@ void LowerToBMCPass::runOnOperation() {
       // bmc.clock attributes that don't match an inserted clock name to the
       // new clock. This avoids rejecting clocked properties when the clock
       // expression cannot be traced back to a named module input.
-      if (newClocks.size() == 1 && !actualClockNames.empty()) {
+      if (!hasExplicitClockInput && newClocks.size() == 1 &&
+          !actualClockNames.empty()) {
         auto defaultClockName = actualClockNames.front();
         if (defaultClockName && !defaultClockName.getValue().empty()) {
           auto remapIfUnknown = [&](StringAttr nameAttr) -> StringAttr {
