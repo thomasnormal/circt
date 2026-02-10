@@ -29,6 +29,7 @@ BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
+BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
 # run, which convert verif.clocked_assert (!ltl.property type) to verif.assert (i1 type).
@@ -85,6 +86,39 @@ append_bmc_abstraction_provenance() {
     printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$token" \
       >> "$BMC_ABSTRACTION_PROVENANCE_OUT"
   done < "$bmc_log"
+}
+
+append_bmc_check_attribution() {
+  local case_id="$1"
+  local case_path="$2"
+  local mlir_file="$3"
+  if [[ -z "$BMC_CHECK_ATTRIBUTION_OUT" || ! -s "$mlir_file" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r idx kind snippet; do
+    if [[ -z "$idx" || -z "$kind" || -z "$snippet" ]]; then
+      continue
+    fi
+    printf "%s\t%s\t%s\t%s\t%s\n" \
+      "$case_id" "$case_path" "$idx" "$kind" "$snippet" \
+      >> "$BMC_CHECK_ATTRIBUTION_OUT"
+  done < <(
+    awk '
+      /verif\.(clocked_assert|assert|clocked_assume|assume|clocked_cover|cover)/ {
+        idx++
+        kind = "verif.unknown"
+        if (match($0, /verif\.[A-Za-z_]+/))
+          kind = substr($0, RSTART, RLENGTH)
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        if (length(line) > 200)
+          line = substr(line, 1, 197) "..."
+        printf "%d\t%s\t%s\n", idx, kind, line
+      }
+    ' "$mlir_file"
+  )
 }
 
 UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
@@ -346,6 +380,7 @@ while IFS= read -r -d '' sv; do
   if grep -Fq "verif.cover" "$mlir" && ! grep -Fq "verif.assert" "$mlir"; then
     check_mode="cover"
   fi
+  append_bmc_check_attribution "$base" "$sv" "$mlir"
 
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
     "--module" "$top_module")
@@ -499,6 +534,9 @@ done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
 sort "$results_tmp" > "$OUT"
 if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
   sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
+fi
+if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
+  sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
 fi
 
 echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"

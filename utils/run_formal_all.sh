@@ -6721,7 +6721,8 @@ generate_bmc_abstraction_provenance_case_map() {
   local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
   local token_summary_file="$out_dir/bmc-abstraction-provenance-token-summary.tsv"
   local assertion_summary_file="$out_dir/bmc-abstraction-provenance-assertion-attribution.tsv"
-  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" ASSERTION_SUMMARY_FILE="$assertion_summary_file" python3 - <<'PY'
+  local ir_check_summary_file="$out_dir/bmc-abstraction-provenance-ir-check-attribution.tsv"
+  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" ASSERTION_SUMMARY_FILE="$assertion_summary_file" IR_CHECK_SUMMARY_FILE="$ir_check_summary_file" python3 - <<'PY'
 import csv
 import os
 import re
@@ -6731,6 +6732,7 @@ out_dir = Path(os.environ["OUT_DIR"])
 case_map_path = Path(os.environ["CASE_MAP_FILE"])
 token_summary_path = Path(os.environ["TOKEN_SUMMARY_FILE"])
 assertion_summary_path = Path(os.environ["ASSERTION_SUMMARY_FILE"])
+ir_check_summary_path = Path(os.environ["IR_CHECK_SUMMARY_FILE"])
 
 sources = [
     (
@@ -6738,18 +6740,21 @@ sources = [
         "BMC",
         out_dir / "sv-tests-bmc-results.txt",
         out_dir / "sv-tests-bmc-abstraction-provenance.tsv",
+        out_dir / "sv-tests-bmc-check-attribution.tsv",
     ),
     (
         "verilator-verification",
         "BMC",
         out_dir / "verilator-bmc-results.txt",
         out_dir / "verilator-bmc-abstraction-provenance.tsv",
+        out_dir / "verilator-bmc-check-attribution.tsv",
     ),
     (
         "yosys/tests/sva",
         "BMC",
         out_dir / "yosys-bmc-results.txt",
         out_dir / "yosys-bmc-abstraction-provenance.tsv",
+        out_dir / "yosys-bmc-check-attribution.tsv",
     ),
 ]
 
@@ -6757,7 +6762,7 @@ fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UN
 
 status_by_key = {}
 status_by_path = {}
-for suite, mode, result_path, _ in sources:
+for suite, mode, result_path, _, _ in sources:
     if not result_path.exists():
         continue
     with result_path.open(encoding="utf-8") as f:
@@ -6777,7 +6782,7 @@ for suite, mode, result_path, _ in sources:
             status_by_path.setdefault(path_key, set()).add(status)
 
 token_rows = {}
-for suite, mode, _, provenance_path in sources:
+for suite, mode, _, provenance_path, _ in sources:
     if not provenance_path.exists():
         continue
     with provenance_path.open(encoding="utf-8") as f:
@@ -6795,6 +6800,28 @@ for suite, mode, _, provenance_path in sources:
                 continue
             key = (suite, mode, case_id, case_path)
             token_rows.setdefault(key, set()).add(token)
+
+check_rows = {}
+for suite, mode, _, _, check_path in sources:
+    if not check_path.exists():
+        continue
+    with check_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 5:
+                continue
+            case_id = parts[0].strip()
+            case_path = parts[1].strip()
+            idx_raw = parts[2].strip()
+            kind = parts[3].strip()
+            snippet = parts[4].strip()
+            if not case_id or not kind:
+                continue
+            key = (suite, mode, case_id, case_path)
+            check_rows.setdefault(key, set()).add((idx_raw, kind, snippet))
 
 def resolve_status(suite: str, mode: str, case_id: str, case_path: str) -> str:
     direct = status_by_key.get((suite, mode, case_id, case_path))
@@ -6853,6 +6880,28 @@ def extract_assertion_sites(case_path: str, max_sites: int = 12):
         return []
     return sites
 
+def parse_check_index(raw_idx: str) -> int:
+    try:
+        return int(raw_idx)
+    except Exception:
+        return 10**9
+
+def build_ir_check_fields(entries, max_sites: int = 16):
+    if not entries:
+        return ("0", "", "")
+    ordered = sorted(entries, key=lambda x: (parse_check_index(x[0]), x[1], x[2]))
+    kinds = sorted({kind for _, kind, _ in ordered if kind})
+    sites = []
+    for idx_raw, kind, snippet in ordered[:max_sites]:
+        idx_norm = idx_raw if idx_raw else "?"
+        site = f"C{idx_norm}:{kind}"
+        if snippet:
+            site = f"{site}:{snippet}"
+        sites.append(site)
+    if len(ordered) > max_sites:
+        sites.append(f"...(+{len(ordered) - max_sites} more)")
+    return (str(len(ordered)), ";".join(kinds), ";".join(sites))
+
 for key in sorted(token_rows.keys()):
     suite, mode, case_id, case_path = key
     tokens = sorted(token_rows[key])
@@ -6860,6 +6909,9 @@ for key in sorted(token_rows.keys()):
     fail_like = status in fail_like_statuses
     assertion_sites = extract_assertion_sites(case_path)
     assertion_sites_serialized = ";".join(assertion_sites)
+    ir_check_count, ir_check_kinds, ir_check_sites = build_ir_check_fields(
+        check_rows.get(key, set())
+    )
     rows.append(
         {
             "suite": suite,
@@ -6872,6 +6924,9 @@ for key in sorted(token_rows.keys()):
             "provenance_tokens": ";".join(tokens),
             "assertion_site_count": str(len(assertion_sites)),
             "assertion_sites": assertion_sites_serialized,
+            "ir_check_count": ir_check_count,
+            "ir_check_kinds": ir_check_kinds,
+            "ir_check_sites": ir_check_sites,
         }
     )
     for token in tokens:
@@ -6899,6 +6954,9 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
             "provenance_tokens",
             "assertion_site_count",
             "assertion_sites",
+            "ir_check_count",
+            "ir_check_kinds",
+            "ir_check_sites",
         ]
     )
     for row in rows:
@@ -6914,6 +6972,9 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
                 row["provenance_tokens"],
                 row["assertion_site_count"],
                 row["assertion_sites"],
+                row["ir_check_count"],
+                row["ir_check_kinds"],
+                row["ir_check_sites"],
             ]
         )
 
@@ -6930,6 +6991,9 @@ with assertion_summary_path.open("w", newline="", encoding="utf-8") as f:
             "case_path",
             "assertion_site_count",
             "assertion_sites",
+            "ir_check_count",
+            "ir_check_kinds",
+            "ir_check_sites",
             "provenance_token_count",
             "provenance_tokens",
         ]
@@ -6945,6 +7009,44 @@ with assertion_summary_path.open("w", newline="", encoding="utf-8") as f:
                 row["case_path"],
                 row["assertion_site_count"],
                 row["assertion_sites"],
+                row["ir_check_count"],
+                row["ir_check_kinds"],
+                row["ir_check_sites"],
+                row["provenance_token_count"],
+                row["provenance_tokens"],
+            ]
+        )
+
+ir_check_summary_path.parent.mkdir(parents=True, exist_ok=True)
+with ir_check_summary_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t")
+    writer.writerow(
+        [
+            "suite",
+            "mode",
+            "case_id",
+            "status",
+            "is_fail_like",
+            "case_path",
+            "ir_check_count",
+            "ir_check_kinds",
+            "ir_check_sites",
+            "provenance_token_count",
+            "provenance_tokens",
+        ]
+    )
+    for row in rows:
+        writer.writerow(
+            [
+                row["suite"],
+                row["mode"],
+                row["case_id"],
+                row["status"],
+                row["is_fail_like"],
+                row["case_path"],
+                row["ir_check_count"],
+                row["ir_check_kinds"],
+                row["ir_check_sites"],
                 row["provenance_token_count"],
                 row["provenance_tokens"],
             ]
@@ -7026,10 +7128,13 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     :
   else
     sv_bmc_provenance_file="$OUT_DIR/sv-tests-bmc-abstraction-provenance.tsv"
+    sv_bmc_check_attribution_file="$OUT_DIR/sv-tests-bmc-check-attribution.tsv"
     : > "$sv_bmc_provenance_file"
+    : > "$sv_bmc_check_attribution_file"
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
+      BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
@@ -7087,10 +7192,13 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     :
   else
     verilator_bmc_provenance_file="$OUT_DIR/verilator-bmc-abstraction-provenance.tsv"
+    verilator_bmc_check_attribution_file="$OUT_DIR/verilator-bmc-check-attribution.tsv"
     : > "$verilator_bmc_provenance_file"
+    : > "$verilator_bmc_check_attribution_file"
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
+      BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
@@ -7148,7 +7256,9 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     :
   else
     yosys_bmc_provenance_file="$OUT_DIR/yosys-bmc-abstraction-provenance.tsv"
+    yosys_bmc_check_attribution_file="$OUT_DIR/yosys-bmc-check-attribution.tsv"
     : > "$yosys_bmc_provenance_file"
+    : > "$yosys_bmc_check_attribution_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -7157,6 +7267,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
+      BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
       yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
@@ -7695,6 +7806,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv")" -gt 1 ]]; then
     echo "BMC abstraction provenance assertion attribution: $OUT_DIR/bmc-abstraction-provenance-assertion-attribution.tsv"
+  fi
+  if [[ -f "$OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv")" -gt 1 ]]; then
+    echo "BMC abstraction provenance IR check attribution: $OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv"
   fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"
