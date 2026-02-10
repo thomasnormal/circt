@@ -405,6 +405,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   bool hasGenerateMutations = false;
   bool wantsHelp = false;
   std::string generateMutations;
+  std::string mutationsSeed;
   std::string mutationsProfiles;
   std::string mutationsModeCounts;
   std::string mutationsModeWeights;
@@ -524,6 +525,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       hasGenerateMutations = true;
       generateMutations = valueFromArg().str();
     }
+    if (arg == "--mutations-seed" || arg.starts_with("--mutations-seed="))
+      mutationsSeed = valueFromArg().str();
     if (arg == "--mutations-mode-counts" ||
         arg.starts_with("--mutations-mode-counts="))
       mutationsModeCounts = valueFromArg().str();
@@ -600,6 +603,12 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                       *unknown +
                       " (expected arith-depth|control-depth|balanced-depth|"
                       "fault-basic|fault-stuck|fault-connect|cover|none).")
+                         .str();
+      return result;
+    }
+    if (!mutationsSeed.empty() && !Regex("^[0-9]+$").match(mutationsSeed)) {
+      result.error = (Twine("circt-mut cover: invalid --mutations-seed value: ") +
+                      mutationsSeed + " (expected 0-9 integer).")
                          .str();
       return result;
     }
@@ -866,6 +875,7 @@ static bool preflightMatrixLaneTools(
     StringRef laneID = getCol(0);
     StringRef mutationsFile = getCol(2);
     StringRef generateCount = getCol(7);
+    StringRef laneMutationsSeed = getCol(9);
     StringRef laneMutationsYosys = getCol(10);
     StringRef laneMutationsProfiles = getCol(32);
     StringRef laneMutationsModeCounts = getCol(33);
@@ -1142,6 +1152,19 @@ static bool preflightMatrixLaneTools(
     bool autoGenerateLane = !hasMutationsFile && hasGenerateCount;
     if (!autoGenerateLane)
       continue;
+
+    StringRef effectiveSeed = normalized(laneMutationsSeed);
+    if (effectiveSeed.empty())
+      effectiveSeed = "1";
+    if (!Regex("^[0-9]+$").match(effectiveSeed)) {
+      error = (Twine("Invalid lane mutations_seed value in --lanes-tsv at "
+                     "line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + effectiveSeed +
+               " (expected 0-9 integer).")
+                  .str();
+      return false;
+    }
 
     uint64_t laneGenerateCount = 0;
     if (!parsePositiveUIntPreflight(generateCount, laneGenerateCount)) {

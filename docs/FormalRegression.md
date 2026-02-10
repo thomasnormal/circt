@@ -484,6 +484,7 @@ Execution controls:
       (`arith-depth`, `control-depth`, `balanced-depth`, `fault-basic`,
       `fault-stuck`, `fault-connect`, `cover`, `none`).
     - `--generate-mutations` must be a positive integer.
+    - `--mutations-seed` must be a non-negative integer.
     - `--mutations-mode-counts` / `--mutations-mode-weights` entries must be
       `NAME=VALUE` with positive integers.
     - `--mutations-mode-counts` and `--mutations-mode-weights` are mutually
@@ -519,6 +520,8 @@ Execution controls:
   - generated lanes now also get native allocation preflight for effective
     lane/default generation controls:
     - `generate_count` must be a positive integer.
+    - `mutations_seed` must be a non-negative integer (defaults to `1` when
+      unset).
     - effective `mutations_mode_counts` / `mutations_mode_weights` entries
       must be `NAME=VALUE` with positive integers.
     - effective count/weight controls are mutually exclusive.
