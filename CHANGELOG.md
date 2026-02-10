@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 988 - February 10, 2026
+
+### `circt-mut matrix`: Native Lane-Parallel Dispatch (`--jobs`)
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` with
+   lane-level parallel execution control:
+   - `--jobs <N>` now controls concurrent native lane dispatch workers.
+2. Kept deterministic matrix artifacts under parallel execution:
+   - `results.tsv` row order remains lane-manifest order even when lanes finish
+     out of order.
+3. Added native dispatch telemetry:
+   - `native_matrix_dispatch_lane_jobs`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-jobs-order.test`
+     validates `--jobs 2` and stable row ordering.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch*.test`: PASS (7/7)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-*.test`: PASS (50/50)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (187/187)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-jobs-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*'`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator BMC/LEC PASS, yosys BMC/LEC PASS, opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 987 - February 10, 2026
 
 ### `sv-tests` Direct Runner Filter-Contract Regression Coverage

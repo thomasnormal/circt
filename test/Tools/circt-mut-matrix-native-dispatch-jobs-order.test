@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho MATRIX_SCRIPT_SHOULD_NOT_RUN\nexit 77\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwork_dir=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --work-dir) work_dir=\"$2\"; shift 2 ;;\n    --work-dir=*) work_dir=\"${1#*=}\"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$work_dir\"\nif [[ \"$work_dir\" == *lane_slow ]]; then\n  sleep 0.2\n  printf \"mutation_coverage_percent\\t11.00\\n\" > \"$work_dir/metrics.tsv\"\nelse\n  printf \"mutation_coverage_percent\\t22.00\\n\" > \"$work_dir/metrics.tsv\"\nfi\nprintf \"{}\" > \"$work_dir/summary.json\"\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M1\n' > %t/mutations.txt
+// RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_slow\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\nlane_fast\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --jobs 2 --lanes-tsv %t/lanes.tsv --out-dir %t/out > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: test ! -e %t/matrix_invoked
+//
+// LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_dispatch_lane_jobs{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_dispatch_fail{{[[:space:]]+}}0
+//
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status
+// RESULTS: lane_slow{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}11.00{{[[:space:]]}}PASS
+// RESULTS: lane_fast{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}22.00{{[[:space:]]}}PASS
