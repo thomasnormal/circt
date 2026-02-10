@@ -46,12 +46,14 @@ static void printHelp(raw_ostream &os) {
   os << "Usage:\n";
   os << "  circt-mut <subcommand> [args...]\n\n";
   os << "Subcommands:\n";
+  os << "  init      Initialize a mutation campaign project template\n";
   os << "  cover     Run mutation coverage flow (run_mutation_cover.sh)\n";
   os << "  matrix    Run mutation lane matrix flow (run_mutation_matrix.sh)\n";
   os << "  generate  Generate mutation lists (native path; script fallback)\n\n";
   os << "Environment:\n";
   os << "  CIRCT_MUT_SCRIPTS_DIR  Override script directory location\n\n";
   os << "Examples:\n";
+  os << "  circt-mut init --project-dir mut-campaign\n";
   os << "  circt-mut cover --help\n";
   os << "  circt-mut matrix --lanes-tsv lanes.tsv --out-dir out\n";
   os << "  circt-mut generate --design design.v --out mutations.txt\n";
@@ -81,6 +83,24 @@ static void printGenerateHelp(raw_ostream &os) {
   os << "  -h, --help                Show help\n\n";
   os << "Output format:\n";
   os << "  Each line in --out is \"<id> <mutation-spec>\" (MCY-compatible).\n";
+}
+
+static void printInitHelp(raw_ostream &os) {
+  os << "usage: circt-mut init [options]\n\n";
+  os << "Options:\n";
+  os << "  --project-dir DIR        Project root directory (default: .)\n";
+  os << "  --design FILE            Cover/matrix design path (default: design.il)\n";
+  os << "  --mutations-file FILE    Mutation list path (default: mutations.txt)\n";
+  os << "  --tests-manifest FILE    Tests manifest path (default: tests.tsv)\n";
+  os << "  --lanes-tsv FILE         Matrix lane manifest path (default: lanes.tsv)\n";
+  os << "  --cover-work-dir DIR     Cover output root (default: out/cover)\n";
+  os << "  --matrix-out-dir DIR     Matrix output root (default: out/matrix)\n";
+  os << "  --force                  Overwrite generated files if present\n";
+  os << "  -h, --help               Show help\n\n";
+  os << "Generated files:\n";
+  os << "  <project-dir>/circt-mut.toml\n";
+  os << "  <project-dir>/<tests-manifest>\n";
+  os << "  <project-dir>/<lanes-tsv>\n";
 }
 
 static std::optional<StringRef> mapSubcommandToScript(StringRef subcommand) {
@@ -1243,6 +1263,252 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   return result;
 }
 
+struct InitOptions {
+  std::string projectDir = ".";
+  std::string design = "design.il";
+  std::string mutationsFile = "mutations.txt";
+  std::string testsManifest = "tests.tsv";
+  std::string lanesTSV = "lanes.tsv";
+  std::string coverWorkDir = "out/cover";
+  std::string matrixOutDir = "out/matrix";
+  bool force = false;
+};
+
+struct InitParseResult {
+  bool ok = false;
+  bool showHelp = false;
+  std::string error;
+  InitOptions opts;
+};
+
+static std::string escapeTomlBasicString(StringRef value) {
+  std::string out;
+  out.reserve(value.size() + 8);
+  for (char c : value) {
+    if (c == '\\' || c == '"')
+      out.push_back('\\');
+    out.push_back(c);
+  }
+  return out;
+}
+
+static bool writeGeneratedFile(StringRef path, StringRef content, bool force,
+                               std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code mkdirEC = sys::fs::create_directories(parent);
+    if (mkdirEC) {
+      error = (Twine("circt-mut init: failed to create directory: ") + parent +
+               ": " + mkdirEC.message())
+                  .str();
+      return false;
+    }
+  }
+
+  if (!force && sys::fs::exists(path)) {
+    error = (Twine("circt-mut init: file exists: ") + path +
+             " (use --force to overwrite).")
+                .str();
+    return false;
+  }
+
+  std::error_code outEC;
+  raw_fd_ostream out(path, outEC, sys::fs::OF_Text);
+  if (outEC) {
+    error = (Twine("circt-mut init: failed to write file: ") + path + ": " +
+             outEC.message())
+                .str();
+    return false;
+  }
+  out << content;
+  out.close();
+  return true;
+}
+
+static std::string resolveProjectFilePath(StringRef projectDir, StringRef file) {
+  if (sys::path::is_absolute(file))
+    return file.str();
+  SmallString<256> fullPath(projectDir);
+  sys::path::append(fullPath, file);
+  return std::string(fullPath.str());
+}
+
+static InitParseResult parseInitArgs(ArrayRef<StringRef> args) {
+  InitParseResult result;
+
+  auto consumeValue = [&](size_t &index, StringRef arg,
+                          StringRef optName) -> std::optional<StringRef> {
+    size_t eqPos = arg.find('=');
+    if (eqPos != StringRef::npos) {
+      StringRef value = arg.substr(eqPos + 1);
+      if (value.empty()) {
+        result.error =
+            (Twine("circt-mut init: missing value for ") + optName).str();
+        return std::nullopt;
+      }
+      return value;
+    }
+    if (index + 1 >= args.size()) {
+      result.error = (Twine("circt-mut init: missing value for ") + optName).str();
+      return std::nullopt;
+    }
+    return args[++index];
+  };
+
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == "-h" || arg == "--help") {
+      result.showHelp = true;
+      result.ok = true;
+      return result;
+    }
+    if (arg == "--force") {
+      result.opts.force = true;
+      continue;
+    }
+    if (arg == "--project-dir" || arg.starts_with("--project-dir=")) {
+      auto v = consumeValue(i, arg, "--project-dir");
+      if (!v)
+        return result;
+      result.opts.projectDir = v->str();
+      continue;
+    }
+    if (arg == "--design" || arg.starts_with("--design=")) {
+      auto v = consumeValue(i, arg, "--design");
+      if (!v)
+        return result;
+      result.opts.design = v->str();
+      continue;
+    }
+    if (arg == "--mutations-file" || arg.starts_with("--mutations-file=")) {
+      auto v = consumeValue(i, arg, "--mutations-file");
+      if (!v)
+        return result;
+      result.opts.mutationsFile = v->str();
+      continue;
+    }
+    if (arg == "--tests-manifest" || arg.starts_with("--tests-manifest=")) {
+      auto v = consumeValue(i, arg, "--tests-manifest");
+      if (!v)
+        return result;
+      result.opts.testsManifest = v->str();
+      continue;
+    }
+    if (arg == "--lanes-tsv" || arg.starts_with("--lanes-tsv=")) {
+      auto v = consumeValue(i, arg, "--lanes-tsv");
+      if (!v)
+        return result;
+      result.opts.lanesTSV = v->str();
+      continue;
+    }
+    if (arg == "--cover-work-dir" || arg.starts_with("--cover-work-dir=")) {
+      auto v = consumeValue(i, arg, "--cover-work-dir");
+      if (!v)
+        return result;
+      result.opts.coverWorkDir = v->str();
+      continue;
+    }
+    if (arg == "--matrix-out-dir" || arg.starts_with("--matrix-out-dir=")) {
+      auto v = consumeValue(i, arg, "--matrix-out-dir");
+      if (!v)
+        return result;
+      result.opts.matrixOutDir = v->str();
+      continue;
+    }
+
+    if (arg.starts_with("-")) {
+      result.error = (Twine("circt-mut init: unknown option: ") + arg).str();
+      return result;
+    }
+    result.error =
+        (Twine("circt-mut init: unexpected positional argument: ") + arg).str();
+    return result;
+  }
+
+  if (result.opts.projectDir.empty()) {
+    result.error = "circt-mut init: --project-dir must not be empty";
+    return result;
+  }
+
+  result.ok = true;
+  return result;
+}
+
+static int runNativeInit(const InitOptions &opts) {
+  std::error_code mkdirEC = sys::fs::create_directories(opts.projectDir);
+  if (mkdirEC) {
+    errs() << "circt-mut init: failed to create --project-dir: "
+           << opts.projectDir << ": " << mkdirEC.message() << "\n";
+    return 1;
+  }
+
+  std::string configPath = resolveProjectFilePath(opts.projectDir, "circt-mut.toml");
+  std::string testsPath =
+      resolveProjectFilePath(opts.projectDir, opts.testsManifest);
+  std::string lanesPath = resolveProjectFilePath(opts.projectDir, opts.lanesTSV);
+
+  std::string config;
+  raw_string_ostream cfg(config);
+  cfg << "# CIRCT mutation campaign configuration\n";
+  cfg << "# Bootstrap generated by: circt-mut init\n";
+  cfg << "#\n";
+  cfg << "# MCY comparison:\n";
+  cfg << "#   mcy init && mcy run -j8\n";
+  cfg << "# Certitude comparison:\n";
+  cfg << "#   certitude_run -config <cfg> -out <dir>\n\n";
+  cfg << "[cover]\n";
+  cfg << "design = \"" << escapeTomlBasicString(opts.design) << "\"\n";
+  cfg << "mutations_file = \"" << escapeTomlBasicString(opts.mutationsFile)
+      << "\"\n";
+  cfg << "tests_manifest = \"" << escapeTomlBasicString(opts.testsManifest)
+      << "\"\n";
+  cfg << "work_dir = \"" << escapeTomlBasicString(opts.coverWorkDir) << "\"\n";
+  cfg << "formal_global_propagate_circt_chain = \"auto\"\n";
+  cfg << "formal_global_propagate_timeout_seconds = 60\n\n";
+  cfg << "[matrix]\n";
+  cfg << "lanes_tsv = \"" << escapeTomlBasicString(opts.lanesTSV) << "\"\n";
+  cfg << "out_dir = \"" << escapeTomlBasicString(opts.matrixOutDir) << "\"\n";
+  cfg << "default_formal_global_propagate_circt_chain = \"auto\"\n";
+  cfg << "default_formal_global_propagate_timeout_seconds = 60\n";
+  cfg.flush();
+
+  std::string testsTemplate;
+  raw_string_ostream testsOS(testsTemplate);
+  testsOS << "# test_id<TAB>run_cmd<TAB>result_file<TAB>detect_regex<TAB>"
+          << "survive_regex\n";
+  testsOS << "sanity\tbash run_test.sh\tresult.txt\t^DETECTED$\t^SURVIVED$\n";
+  testsOS.flush();
+
+  std::string lanesTemplate;
+  raw_string_ostream lanesOS(lanesTemplate);
+  lanesOS << "# lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>"
+          << "activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold\n";
+  lanesOS << "lane1\t" << opts.design << "\t" << opts.mutationsFile << "\t"
+          << opts.testsManifest << "\t-\t-\t-\n";
+  lanesOS.flush();
+
+  std::string error;
+  if (!writeGeneratedFile(configPath, config, opts.force, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  if (!writeGeneratedFile(testsPath, testsTemplate, opts.force, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  if (!writeGeneratedFile(lanesPath, lanesTemplate, opts.force, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  outs() << "Initialized circt-mut project: " << opts.projectDir << "\n";
+  outs() << "  Config: " << configPath << "\n";
+  outs() << "  Tests manifest template: " << testsPath << "\n";
+  outs() << "  Lanes template: " << lanesPath << "\n";
+  return 0;
+}
+
 static void splitCSV(StringRef csv, SmallVectorImpl<std::string> &out) {
   SmallVector<StringRef, 8> parts;
   csv.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -2216,6 +2482,23 @@ int main(int argc, char **argv) {
   if (firstArg == "--version") {
     outs() << "circt-mut " << circt::getCirctVersion() << "\n";
     return 0;
+  }
+
+  if (firstArg == "init") {
+    SmallVector<StringRef, 16> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+
+    InitParseResult parseResult = parseInitArgs(forwardedArgs);
+    if (!parseResult.ok) {
+      errs() << parseResult.error << "\n";
+      return 1;
+    }
+    if (parseResult.showHelp) {
+      printInitHelp(outs());
+      return 0;
+    }
+    return runNativeInit(parseResult.opts);
   }
 
   if (firstArg == "generate") {
