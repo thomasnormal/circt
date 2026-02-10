@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 869 - February 10, 2026
+
+### BMC Semantic Closure: Multiclock Register-Clock Source Index Remap
+
+1. Fixed multiclock metadata remapping in `lower-to-bmc`:
+   - when derived clock inputs are prepended, existing
+     `bmc_reg_clock_sources.arg_index` entries are now shifted by the number of
+     newly prepended clock inputs.
+   - file:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+2. Added focused regression test:
+   - `test/Tools/circt-bmc/lower-to-bmc-reg-clock-sources-shift.mlir`
+   - validates that both `bmc_clock_sources` and `bmc_reg_clock_sources`
+     reference the shifted post-prepend argument indices.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-reg-clock-sources-shift.mlir test/Tools/circt-bmc/lower-to-bmc-derived-clocks.mlir test/Tools/circt-bmc/lower-to-bmc-toclock-multiclock.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/circt-bmc-multiclock.mlir test/Tools/circt-bmc/bmc-multiclock-reg-clock-keys.mlir test/Tools/circt-bmc/externalize-registers-seq-derived-clocks.mlir`: PASS
+- 6-case semantic-candidate revalidation:
+  - `OUT=/tmp/sv-bmc-semclosure-next-batch.txt KEEP_LOGS_DIR=/tmp/sv-bmc-semclosure-next-batch-logs INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 TEST_FILTER='^(16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm|16\\.15--property-iff-uvm-fail|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm)$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - summary: `total=6 pass=1 fail=5 error=0`.
+  - `16.13--sequence-multiclock-uvm` no longer emits multiclock metadata
+    legalization failure; direct run now reaches solver outcome:
+    `BMC_RESULT=SAT`.
+- Formal BMC+LEC lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-regress-20260210 ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - summary:
+    - `sv-tests/BMC`: `total=26 pass=23 fail=3`
+    - `verilator-verification/BMC`: `total=17 pass=12 fail=5`
+    - `yosys/tests/sva/BMC`: `total=14 pass=7 fail=5 skip=2`
+    - `opentitan/LEC`: `total=1 pass=1 fail=0`
+    - `opentitan/LEC_STRICT`: `total=1 pass=1 fail=0`
+
 ## Iteration 868 - February 10, 2026
 
 ### BMC Semantic Closure: LLHD Interface-Strip Integration (Narrow)
