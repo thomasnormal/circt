@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 878 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Source-Path Interface Provenance
+
+1. Extended interface abstraction detail records with source-path context:
+   - file:
+     - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+   - changes:
+     - per abstracted LLHD interface input, detail dictionaries now include:
+       - `reason` (abstraction cause)
+       - `signal` (source LLHD signal name)
+       - `field` (field index, when applicable)
+       - `loc` (source operation location string)
+     - existing fields (`name`, `base`, `type`) are preserved.
+2. Ensured detail propagation path remains stable through BMC lowering:
+   - `bmc_abstracted_llhd_interface_input_details` is preserved on `verif.bmc`
+     and now carries richer source-path content.
+3. Added/updated focused regression expectations:
+   - `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
+   - `test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`
+   - both now check for `reason`/`signal`/`field` detail presence.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc circt-lec`: PASS
+- Targeted lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`: PASS
+- Full tool lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS (`273` discovered, `125` passed, `10` XFAIL, `138` unsupported).
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec`: PASS (`130` discovered, `108` passed, `3` XFAIL, `19` unsupported).
+- Formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-20260210-interface-provenance-v2 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - results unchanged:
+    - `sv-tests/BMC`: `23/26` (same fail IDs)
+    - `verilator-verification/BMC`: `12/17` (same fail IDs)
+    - `yosys/tests/sva/BMC`: `7/14` (`5` fail, `2` skip)
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 877 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Interface Abstraction Provenance

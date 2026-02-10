@@ -32,6 +32,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Support/raw_ostream.h"
+#include <optional>
 #include <string>
 
 using namespace mlir;
@@ -73,19 +75,43 @@ struct ModuleState {
       insertIndex = module.getNumInputPorts() - numRegsAttr.getInt();
   }
 
-  Value addInput(hw::HWModuleOp module, StringRef baseName, Type type) {
+  Value addInput(hw::HWModuleOp module, StringRef baseName, Type type,
+                 StringRef reason = {}, StringRef signalName = {},
+                 std::optional<unsigned> fieldIndex = std::nullopt,
+                 std::optional<Location> loc = std::nullopt) {
     Builder builder(module.getContext());
     auto name = ns.newName(baseName);
     auto newInput =
         module.insertInput(insertIndex++,
                            StringAttr::get(module.getContext(), name), type);
     ++abstractedInterfaceInputCount;
-    abstractedInterfaceInputDetails.push_back(DictionaryAttr::get(
-        module.getContext(),
-        {builder.getNamedAttr("name", newInput.first),
-         builder.getNamedAttr("base", StringAttr::get(module.getContext(),
-                                                      baseName)),
-         builder.getNamedAttr("type", TypeAttr::get(type))}));
+    SmallVector<NamedAttribute> attrs{
+        builder.getNamedAttr("name", newInput.first),
+        builder.getNamedAttr("base",
+                             StringAttr::get(module.getContext(), baseName)),
+        builder.getNamedAttr("type", TypeAttr::get(type)),
+    };
+    if (!reason.empty())
+      attrs.push_back(builder.getNamedAttr(
+          "reason", StringAttr::get(module.getContext(), reason)));
+    if (!signalName.empty())
+      attrs.push_back(builder.getNamedAttr(
+          "signal", StringAttr::get(module.getContext(), signalName)));
+    if (fieldIndex)
+      attrs.push_back(
+          builder.getNamedAttr("field", builder.getI64IntegerAttr(*fieldIndex)));
+    if (loc.has_value()) {
+      std::string locStr;
+      llvm::raw_string_ostream os(locStr);
+      loc->print(os);
+      os.flush();
+      if (!locStr.empty()) {
+        attrs.push_back(builder.getNamedAttr(
+            "loc", StringAttr::get(module.getContext(), locStr)));
+      }
+    }
+    abstractedInterfaceInputDetails.push_back(
+        DictionaryAttr::get(module.getContext(), attrs));
     return newInput.second;
   }
 };
@@ -1554,7 +1580,11 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
           "--strict-llhd");
     SmallVector<Value> inputs;
     for (Type resultType : combOp.getResultTypes())
-      inputs.push_back(state.addInput(module, "llhd_comb", resultType));
+      inputs.push_back(state.addInput(module, "llhd_comb", resultType,
+                                      "comb_control_flow_abstraction",
+                                      /*signalName=*/{},
+                                      /*fieldIndex=*/std::nullopt,
+                                      combOp.getLoc()));
     combOp.replaceAllUsesWith(inputs);
     combOp.erase();
     return success();
@@ -2352,7 +2382,12 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             std::string baseName = "llhd_sig_unknown";
             if (auto nameAttr = sigOp.getNameAttr())
               baseName = (nameAttr.getValue() + "_unknown").str();
-            unknownValue = state.addInput(module, baseName, valueType);
+            auto signalName = sigOp.getNameAttr()
+                                  ? sigOp.getNameAttr().getValue()
+                                  : StringRef("llhd_sig");
+            unknownValue = state.addInput(
+                module, baseName, valueType, "multi_driver_unknown_resolution",
+                signalName, /*fieldIndex=*/std::nullopt, firstProbe->getLoc());
             return unknownValue;
           };
           resolved =
@@ -2559,8 +2594,14 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                   std::string baseName = "llhd_sig_unknown";
                   if (auto nameAttr = sigOp.getNameAttr())
                     baseName = (nameAttr.getValue() + "_unknown").str();
+                  auto signalName = sigOp.getNameAttr()
+                                        ? sigOp.getNameAttr().getValue()
+                                        : StringRef("llhd_sig");
                   Value unknownValue =
-                      state.addInput(module, baseName, valueType);
+                      state.addInput(module, baseName, valueType,
+                                     "multi_driver_unknown_resolution",
+                                     signalName, /*fieldIndex=*/std::nullopt,
+                                     probe.getLoc());
                   replacement =
                       activeAnyStrength
                           ? resolveTwoStateValuesWithStrength(
@@ -2674,7 +2715,10 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     auto baseName = sigOp.getNameAttr()
                         ? sigOp.getNameAttr().getValue()
                         : StringRef("llhd_sig");
-    Value newInput = state.addInput(module, baseName, sigOp.getInit().getType());
+    Value newInput = state.addInput(module, baseName, sigOp.getInit().getType(),
+                                    "signal_requires_abstraction", baseName,
+                                    /*fieldIndex=*/std::nullopt,
+                                    sigOp.getLoc());
     for (auto probe : probes) {
       Value replacement =
           materializePath(builder, newInput, probePaths.lookup(probe),
@@ -3350,7 +3394,9 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         name += "_field";
         name += std::to_string(entry.first);
         name += "_unknown";
-        Value unknownValue = state.addInput(module, name, valueType);
+        Value unknownValue = state.addInput(
+            module, name, valueType, "interface_enable_resolution_unknown",
+            baseName, entry.first, readOp->getLoc());
         resolved = resolveTwoStateValuesWithEnable(builder, readOp->getLoc(),
                                                    values, enables,
                                                    unknownValue);
@@ -3390,8 +3436,10 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       std::string name = baseName.str();
       name += "_field";
       name += std::to_string(entry.first);
-      Value newInput =
-          state.addInput(module, name, field.reads.front().getType());
+      Value newInput = state.addInput(
+          module, name, field.reads.front().getType(),
+          "interface_field_requires_abstraction", baseName, entry.first,
+          field.reads.front().getLoc());
       for (auto read : field.reads) {
         read.getResult().replaceAllUsesWith(newInput);
       }
@@ -3413,8 +3461,10 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         std::string name = baseName.str();
         name += "_field";
         name += std::to_string(entry.first);
-        Value newInput =
-            state.addInput(module, name, field.reads.front().getType());
+        Value newInput = state.addInput(
+            module, name, field.reads.front().getType(),
+            "interface_read_before_dominating_store", baseName, entry.first,
+            read.getLoc());
         for (auto readToReplace : field.reads)
           readToReplace.getResult().replaceAllUsesWith(newInput);
         break;
