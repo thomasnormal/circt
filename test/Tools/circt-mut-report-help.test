@@ -7,6 +7,8 @@
 // CHECK: --cover-work-dir
 // CHECK: --matrix-out-dir
 // CHECK: --compare
+// CHECK: --compare-history-latest
+// CHECK: --append-history
 // CHECK: --fail-if-delta-gt
 // CHECK: --fail-if-delta-lt
 // CHECK: --out

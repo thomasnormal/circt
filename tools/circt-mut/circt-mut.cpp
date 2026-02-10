@@ -28,8 +28,10 @@
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -126,6 +128,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --cover-work-dir DIR     Override cover work directory\n";
   os << "  --matrix-out-dir DIR     Override matrix output directory\n";
   os << "  --compare FILE           Compare against baseline report TSV\n";
+  os << "  --compare-history-latest FILE\n";
+  os << "                           Compare against latest snapshot in history TSV\n";
+  os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
   os << "  --fail-if-delta-lt RULE  Fail if numeric delta is below threshold\n";
@@ -2202,6 +2207,8 @@ struct ReportOptions {
   std::string coverWorkDir;
   std::string matrixOutDir;
   std::string compareFile;
+  std::string compareHistoryLatestFile;
+  std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
   std::string outFile;
@@ -2301,6 +2308,20 @@ static std::string formatDouble2(double value) {
   return std::string(buffer);
 }
 
+static std::string formatCurrentUTCISO8601() {
+  auto now = std::chrono::system_clock::now();
+  std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+  std::tm tmBuf = {};
+#if defined(_WIN32)
+  gmtime_s(&tmBuf, &nowTime);
+#else
+  gmtime_r(&nowTime, &tmBuf);
+#endif
+  char out[32];
+  std::strftime(out, sizeof(out), "%Y-%m-%dT%H:%M:%SZ", &tmBuf);
+  return std::string(out);
+}
+
 static bool parseDeltaGateRule(StringRef value, StringRef optionName,
                                DeltaGateRule &rule, std::string &error) {
   size_t eqPos = value.find('=');
@@ -2332,14 +2353,11 @@ static bool parseDeltaGateRule(StringRef value, StringRef optionName,
   return true;
 }
 
-static bool appendReportComparison(
-    ArrayRef<std::pair<std::string, std::string>> currentRows, StringRef baselinePath,
+static void appendReportComparisonRows(
+    ArrayRef<std::pair<std::string, std::string>> currentRows,
+    const StringMap<std::string> &baselineValues, StringRef baselineLabel,
     std::vector<std::pair<std::string, std::string>> &rows,
-    StringMap<double> &numericDeltas, std::string &error) {
-  StringMap<std::string> baselineValues;
-  if (!parseKeyValueTSV(baselinePath, baselineValues, error))
-    return false;
-
+    StringMap<double> &numericDeltas) {
   StringMap<std::string> currentValues;
   for (const auto &row : currentRows)
     currentValues[row.first] = row.second;
@@ -2380,16 +2398,159 @@ static bool appendReportComparison(
   }
 
   for (const auto &it : baselineValues) {
+    StringRef key = it.getKey();
+    if (key.starts_with("compare.") || key.starts_with("diff."))
+      continue;
     if (!currentValues.count(it.getKey()))
       ++missingKeys;
   }
 
-  rows.emplace_back("compare.baseline_file", std::string(baselinePath));
+  rows.emplace_back("compare.baseline_file", std::string(baselineLabel));
   rows.emplace_back("diff.overlap_keys", std::to_string(overlapKeys));
   rows.emplace_back("diff.numeric_overlap_keys", std::to_string(numericOverlapKeys));
   rows.emplace_back("diff.exact_changed_keys", std::to_string(exactChangedKeys));
   rows.emplace_back("diff.added_keys", std::to_string(addedKeys));
   rows.emplace_back("diff.missing_keys", std::to_string(missingKeys));
+}
+
+static bool appendReportComparison(
+    ArrayRef<std::pair<std::string, std::string>> currentRows, StringRef baselinePath,
+    std::vector<std::pair<std::string, std::string>> &rows,
+    StringMap<double> &numericDeltas, std::string &error) {
+  StringMap<std::string> baselineValues;
+  if (!parseKeyValueTSV(baselinePath, baselineValues, error))
+    return false;
+
+  appendReportComparisonRows(currentRows, baselineValues, baselinePath, rows,
+                             numericDeltas);
+  return true;
+}
+
+static bool loadLatestHistorySnapshot(StringRef path, uint64_t &latestRunID,
+                                      StringMap<std::string> &values,
+                                      std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read history file: ") + path).str();
+    return false;
+  }
+
+  latestRunID = 0;
+  bool haveRows = false;
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  SmallVector<StringRef, 8> fields;
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.rtrim("\r").trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    splitTSVLine(line, fields);
+    if (fields.size() < 4)
+      continue;
+    StringRef runIDField = fields[0].trim();
+    if (runIDField.empty() || runIDField == "run_id")
+      continue;
+    uint64_t runID = 0;
+    if (runIDField.getAsInteger(10, runID)) {
+      error = (Twine("circt-mut report: invalid history run_id '") + runIDField +
+               "' in " + path)
+                  .str();
+      return false;
+    }
+    StringRef key = fields[2].trim();
+    StringRef value = fields[3].trim();
+    if (key.empty())
+      continue;
+    if (!haveRows || runID > latestRunID) {
+      latestRunID = runID;
+      values.clear();
+      haveRows = true;
+    }
+    if (runID == latestRunID)
+      values[key] = value.str();
+  }
+
+  if (!haveRows) {
+    error = (Twine("circt-mut report: no history snapshots found in: ") + path).str();
+    return false;
+  }
+  return true;
+}
+
+static bool readHistoryMaxRunID(StringRef path, uint64_t &maxRunID,
+                                std::string &error) {
+  maxRunID = 0;
+  if (!sys::fs::exists(path))
+    return true;
+
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read history file: ") + path).str();
+    return false;
+  }
+
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  SmallVector<StringRef, 8> fields;
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.rtrim("\r").trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    splitTSVLine(line, fields);
+    if (fields.size() < 1)
+      continue;
+    StringRef runIDField = fields[0].trim();
+    if (runIDField.empty() || runIDField == "run_id")
+      continue;
+    uint64_t runID = 0;
+    if (runIDField.getAsInteger(10, runID)) {
+      error = (Twine("circt-mut report: invalid history run_id '") + runIDField +
+               "' in " + path)
+                  .str();
+      return false;
+    }
+    maxRunID = std::max(maxRunID, runID);
+  }
+  return true;
+}
+
+static bool appendHistorySnapshot(
+    StringRef path, uint64_t runID, StringRef timestampUTC,
+    ArrayRef<std::pair<std::string, std::string>> rows, std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code dirEC = sys::fs::create_directories(parent);
+    if (dirEC) {
+      error = (Twine("circt-mut report: failed to create history directory: ") +
+               parent + ": " + dirEC.message())
+                  .str();
+      return false;
+    }
+  }
+
+  bool existed = sys::fs::exists(path);
+  std::error_code ec;
+  raw_fd_ostream os(path, ec, sys::fs::OF_Text | sys::fs::OF_Append);
+  if (ec) {
+    error = (Twine("circt-mut report: failed to open history file: ") + path +
+             ": " + ec.message())
+                .str();
+    return false;
+  }
+  if (!existed)
+    os << "run_id\ttimestamp_utc\tkey\tvalue\n";
+
+  for (const auto &row : rows) {
+    StringRef key = row.first;
+    if (key.starts_with("compare.") || key.starts_with("diff.") ||
+        key.starts_with("history.") || key == "report.file")
+      continue;
+    os << runID << "\t" << timestampUTC << "\t" << row.first << "\t"
+       << row.second << "\n";
+  }
   return true;
 }
 
@@ -2801,6 +2962,21 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.compareFile = v->str();
       continue;
     }
+    if (arg == "--compare-history-latest" ||
+        arg.starts_with("--compare-history-latest=")) {
+      auto v = consumeValue(i, arg, "--compare-history-latest");
+      if (!v)
+        return result;
+      result.opts.compareHistoryLatestFile = v->str();
+      continue;
+    }
+    if (arg == "--append-history" || arg.starts_with("--append-history=")) {
+      auto v = consumeValue(i, arg, "--append-history");
+      if (!v)
+        return result;
+      result.opts.appendHistoryFile = v->str();
+      continue;
+    }
     if (arg == "--fail-if-delta-gt" || arg.starts_with("--fail-if-delta-gt=")) {
       auto v = consumeValue(i, arg, "--fail-if-delta-gt");
       if (!v)
@@ -2845,6 +3021,12 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
         (Twine("circt-mut report: invalid --mode value: ") + result.opts.mode +
          " (expected cover|matrix|all)")
             .str();
+    return result;
+  }
+  if (!result.opts.compareFile.empty() &&
+      !result.opts.compareHistoryLatestFile.empty()) {
+    result.error = "circt-mut report: --compare and --compare-history-latest "
+                   "are mutually exclusive";
     return result;
   }
 
@@ -2916,10 +3098,10 @@ static int runNativeReport(const ReportOptions &opts) {
     }
   }
 
-  if (opts.compareFile.empty() &&
+  if (opts.compareFile.empty() && opts.compareHistoryLatestFile.empty() &&
       (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty())) {
     errs() << "circt-mut report: --fail-if-delta-gt/--fail-if-delta-lt "
-              "require --compare\n";
+              "require --compare or --compare-history-latest\n";
     return 1;
   }
 
@@ -2935,6 +3117,28 @@ static int runNativeReport(const ReportOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
+  }
+  if (!opts.compareHistoryLatestFile.empty()) {
+    std::string historyPath =
+        resolveRelativeTo(opts.projectDir, opts.compareHistoryLatestFile);
+    if (!sys::fs::exists(historyPath)) {
+      errs() << "circt-mut report: compare history file not found: "
+             << historyPath << "\n";
+      return 1;
+    }
+    StringMap<std::string> baselineValues;
+    uint64_t baselineRunID = 0;
+    if (!loadLatestHistorySnapshot(historyPath, baselineRunID, baselineValues,
+                                   error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    std::string baselineLabel =
+        (Twine(historyPath) + "#run_id=" + Twine(baselineRunID)).str();
+    appendReportComparisonRows(rows, baselineValues, baselineLabel, rows,
+                               numericDeltas);
+    rows.emplace_back("compare.history_baseline_run_id",
+                      std::to_string(baselineRunID));
   }
 
   if (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty()) {
@@ -2976,6 +3180,26 @@ static int runNativeReport(const ReportOptions &opts) {
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;
+  }
+
+  if (!opts.appendHistoryFile.empty()) {
+    std::string historyPath =
+        resolveRelativeTo(opts.projectDir, opts.appendHistoryFile);
+    uint64_t maxRunID = 0;
+    if (!readHistoryMaxRunID(historyPath, maxRunID, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    uint64_t nextRunID = maxRunID + 1;
+    std::string timestampUTC = formatCurrentUTCISO8601();
+    if (!appendHistorySnapshot(historyPath, nextRunID, timestampUTC, rows,
+                               error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    rows.emplace_back("history.file", historyPath);
+    rows.emplace_back("history.appended_run_id", std::to_string(nextRunID));
+    rows.emplace_back("history.appended_timestamp_utc", timestampUTC);
   }
 
   std::string outFile;

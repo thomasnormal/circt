@@ -178,15 +178,35 @@ Comparison emits per-metric numeric diffs for overlapping keys:
 and summary counts (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
 `diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
 
+It also supports history-based baseline selection and snapshot appends:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --compare-history-latest /tmp/mutation-history.tsv
+```
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --append-history /tmp/mutation-history.tsv
+```
+
+History file schema:
+- `run_id<TAB>timestamp_utc<TAB>key<TAB>value`
+
 Comparison can also enforce numeric delta gates:
 
 ```bash
 circt-mut report \
   --project-dir /path/to/mut-campaign \
   --mode all \
-  --compare /path/to/baseline-report.tsv \
+  --compare-history-latest /tmp/mutation-history.tsv \
   --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
   --fail-if-delta-lt cover.detected_mutants=0 \
+  --append-history /tmp/mutation-history.tsv \
   --out /tmp/mutation-report-with-gates.tsv
 ```
 
@@ -195,7 +215,8 @@ Gate mode emits:
 - `compare.gate_failure_count`
 - `compare.gate_status` (`pass`/`fail`)
 - `compare.gate_failure_<n>` rows for failing rules.
-Gate rules require `--compare` with numeric baseline values for the gated keys.
+Gate rules require `--compare` or `--compare-history-latest` with numeric
+baseline values for the gated keys.
 Gate failures return process exit code `2`.
 
 Basic usage:

@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t4\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t80.00\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tcover.detected_mutants\t1\n' > %t/proj/history.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode cover --compare-history-latest history.tsv --fail-if-delta-gt cover.detected_mutants=2 2>&1 | FileCheck %s
+//
+// CHECK-DAG: compare.gate_rules_total{{[[:space:]]}}1
+// CHECK-DAG: compare.gate_failure_count{{[[:space:]]}}1
+// CHECK-DAG: compare.gate_status{{[[:space:]]}}fail

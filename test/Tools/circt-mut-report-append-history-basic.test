@@ -1,0 +1,18 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t4\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t80.00\n' > %t/proj/out/cover/metrics.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode cover --append-history history.tsv > %t/out1.txt
+// RUN: FileCheck %s --check-prefix=RUN1 < %t/out1.txt
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t5\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t100.00\n' > %t/proj/out/cover/metrics.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode cover --append-history history.tsv > %t/out2.txt
+// RUN: FileCheck %s --check-prefix=RUN2 < %t/out2.txt
+// RUN: FileCheck %s --check-prefix=HISTORY < %t/proj/history.tsv
+//
+// RUN1-DAG: history.file{{[[:space:]]}}{{.*}}/history.tsv
+// RUN1-DAG: history.appended_run_id{{[[:space:]]}}1
+//
+// RUN2-DAG: history.file{{[[:space:]]}}{{.*}}/history.tsv
+// RUN2-DAG: history.appended_run_id{{[[:space:]]}}2
+//
+// HISTORY: run_id{{[[:space:]]}}timestamp_utc{{[[:space:]]}}key{{[[:space:]]}}value
+// HISTORY-DAG: 1{{[[:space:]]}}{{.*}}cover.detected_mutants{{[[:space:]]}}4
+// HISTORY-DAG: 2{{[[:space:]]}}{{.*}}cover.detected_mutants{{[[:space:]]}}5
