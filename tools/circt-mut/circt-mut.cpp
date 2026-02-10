@@ -4640,6 +4640,7 @@ struct RunParseResult {
 struct RunConfigValues {
   StringMap<std::string> cover;
   StringMap<std::string> matrix;
+  StringMap<std::string> report;
 };
 
 static bool parseTomlQuotedString(StringRef value, std::string &out,
@@ -4734,6 +4735,8 @@ static bool parseRunConfigFile(StringRef path, RunConfigValues &cfg,
       cfg.cover[key] = parsedValue;
     else if (section == "matrix")
       cfg.matrix[key] = parsedValue;
+    else if (section == "report")
+      cfg.report[key] = parsedValue;
   }
 
   return true;
@@ -7315,6 +7318,8 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::string coverWorkDir = std::string(defaultCover.str());
   std::string matrixOutDir = std::string(defaultMatrix.str());
+  std::string appendHistoryFile = opts.appendHistoryFile;
+  uint64_t historyMaxRuns = opts.historyMaxRuns;
 
   SmallString<256> configPath;
   if (opts.configPath.empty()) {
@@ -7347,6 +7352,23 @@ static int runNativeReport(const ReportOptions &opts) {
     if (auto it = cfg.matrix.find("out_dir");
         it != cfg.matrix.end() && !it->second.empty())
       matrixOutDir = resolveRelativeTo(opts.projectDir, it->second);
+    if (appendHistoryFile.empty()) {
+      if (auto it = cfg.report.find("append_history");
+          it != cfg.report.end() && !it->second.empty())
+        appendHistoryFile = it->second;
+    }
+    if (historyMaxRuns == 0) {
+      if (auto it = cfg.report.find("history_max_runs");
+          it != cfg.report.end() && !it->second.empty()) {
+        if (StringRef(it->second).trim().getAsInteger(10, historyMaxRuns) ||
+            historyMaxRuns == 0) {
+          errs() << "circt-mut report: invalid [report] key 'history_max_runs' "
+                    "value '"
+                 << it->second << "' (expected positive integer)\n";
+          return 1;
+        }
+      }
+    }
   }
 
   if (!opts.coverWorkDir.empty())
@@ -7659,9 +7681,15 @@ static int runNativeReport(const ReportOptions &opts) {
     }
   }
 
-  if (!opts.appendHistoryFile.empty()) {
+  if (historyMaxRuns > 0 && appendHistoryFile.empty()) {
+    errs() << "circt-mut report: --history-max-runs requires --append-history "
+              "or --history\n";
+    return 1;
+  }
+
+  if (!appendHistoryFile.empty()) {
     std::string historyPath =
-        resolveRelativeTo(opts.projectDir, opts.appendHistoryFile);
+        resolveRelativeTo(opts.projectDir, appendHistoryFile);
     uint64_t maxRunID = 0;
     if (!readHistoryMaxRunID(historyPath, maxRunID, error)) {
       errs() << error << "\n";
@@ -7677,15 +7705,15 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("history.file", historyPath);
     rows.emplace_back("history.appended_run_id", std::to_string(nextRunID));
     rows.emplace_back("history.appended_timestamp_utc", timestampUTC);
-    if (opts.historyMaxRuns > 0) {
+    if (historyMaxRuns > 0) {
       uint64_t prunedRuns = 0;
       uint64_t prunedRows = 0;
-      if (!pruneHistoryToMaxRuns(historyPath, opts.historyMaxRuns, prunedRuns,
+      if (!pruneHistoryToMaxRuns(historyPath, historyMaxRuns, prunedRuns,
                                  prunedRows, error)) {
         errs() << error << "\n";
         return 1;
       }
-      rows.emplace_back("history.max_runs", std::to_string(opts.historyMaxRuns));
+      rows.emplace_back("history.max_runs", std::to_string(historyMaxRuns));
       rows.emplace_back("history.pruned_runs", std::to_string(prunedRuns));
       rows.emplace_back("history.pruned_rows", std::to_string(prunedRows));
     }

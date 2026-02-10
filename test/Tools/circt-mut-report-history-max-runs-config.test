@@ -1,0 +1,17 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t8\ndetected_mutants\t3\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t3\nnot_activated_mutants\t2\nerrors\t0\nmutation_coverage_percent\t37.50\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf '[report]\nappend_history = "history.tsv"\nhistory_max_runs = 2\n' > %t/proj/circt-mut.toml
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tcover.detected_mutants\t1\n2\t2026-02-10T01:00:00Z\tcover.detected_mutants\t2\n' > %t/proj/history.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode cover > %t/out.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/out.txt
+// RUN: FileCheck %s --check-prefix=HIST < %t/proj/history.tsv
+//
+// OUT: history.appended_run_id{{[[:space:]]}}3
+// OUT: history.max_runs{{[[:space:]]}}2
+// OUT: history.pruned_runs{{[[:space:]]}}1
+// OUT: history.pruned_rows{{[[:space:]]}}1
+//
+// HIST: run_id{{[[:space:]]}}timestamp_utc{{[[:space:]]}}key{{[[:space:]]}}value
+// HIST-NOT: 1{{[[:space:]]}}2026-02-10T00:00:00Z
+// HIST-DAG: 2{{[[:space:]]}}2026-02-10T01:00:00Z{{[[:space:]]}}cover.detected_mutants{{[[:space:]]}}2
+// HIST-DAG: 3{{[[:space:]]}}{{.*}}{{[[:space:]]}}cover.detected_mutants{{[[:space:]]}}3
