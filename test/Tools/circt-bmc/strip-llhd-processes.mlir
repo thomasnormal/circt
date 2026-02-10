@@ -16,10 +16,9 @@ module {
     hw.output
   }
   // CHECK-LABEL: hw.module @top
-  // CHECK-SAME: in %llhd_process_result
-  // CHECK-SAME: in %llhd_process_result_0
-  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 2 : i32
-  // CHECK: llhd.drv
+  // CHECK-NOT: llhd_process_result
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
+  // CHECK-NOT: llhd.drv
   // CHECK-NOT: llhd.process
   // CHECK-EXT-LABEL: hw.module @top
   // CHECK-EXT-NOT: llhd.process
@@ -78,11 +77,10 @@ module {
   }
 
   // CHECK-LABEL: hw.module @child
-  // CHECK-SAME: in %llhd_process_result
-  // CHECK-SAME: in %llhd_process_result_0
-  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 2 : i32
+  // CHECK-NOT: llhd_process_result
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
   // CHECK-LABEL: hw.module @parent
-  // CHECK: hw.instance "u" @child(in: %{{.*}}, llhd_process_result: %{{.*}}, llhd_process_result_0: %{{.*}}) -> ()
+  // CHECK: hw.instance "u" @child(in: %{{.*}}: !hw.struct<value: i1, unknown: i1>) -> ()
   hw.module @child(in %in : !hw.struct<value: i1, unknown: i1>) {
     %true = hw.constant true
     %t0 = llhd.constant_time <0ns, 0d, 1e>
@@ -100,6 +98,25 @@ module {
   hw.module @parent() {
     %sig_init = hw.aggregate_constant [false, false] : !hw.struct<value: i1, unknown: i1>
     hw.instance "u" @child(in: %sig_init : !hw.struct<value: i1, unknown: i1>) -> ()
+    hw.output
+  }
+
+  // CHECK-LABEL: hw.module @dead_result_drive
+  // CHECK-NOT: llhd_process_result
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
+  // CHECK-NOT: llhd.drv %cycle
+  // CHECK-NOT: llhd.process
+  hw.module @dead_result_drive() {
+    %c0_i32 = hw.constant 0 : i32
+    %t0 = llhd.constant_time <0ns, 0d, 1e>
+    %cycle = llhd.sig %c0_i32 : i32
+    %unused = llhd.prb %cycle : i32
+    %p:1 = llhd.process -> i32 {
+      cf.br ^bb1(%c0_i32 : i32)
+    ^bb1(%cur: i32):
+      llhd.wait yield (%cur : i32), delay %t0, ^bb1
+    }
+    llhd.drv %cycle, %p#0 after %t0 : i32
     hw.output
   }
 }

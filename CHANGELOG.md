@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 875 - February 10, 2026
+
+### BMC Hardening: Prune Dead LLHD Process-Result Abstraction
+
+1. Hardened LLHD process stripping to avoid unnecessary unconstrained inputs:
+   - file:
+     - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+   - change:
+     - when an `llhd.process` result is used only by `llhd.drv` operations
+       whose driven signals have no observable consumers, the pass now drops
+       those dead drives and skips introducing `llhd_process_result*` input
+       ports for that result.
+     - process-result inputs are now introduced only for observed uses, reducing
+       avoidable over-approximation.
+2. Added/updated regression coverage:
+   - updated:
+     - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+   - includes a new `@dead_result_drive` case to lock in dead-result pruning.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/strip-llhd-processes.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/strip-llhd-process-drives.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS (`272` discovered, `124` passed, `10` XFAIL, `138` unsupported).
+- Formal BMC lane snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-20260210-dead-process-result-prune ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - aggregates unchanged:
+    - `sv-tests/BMC`: `23/26`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+- Targeted semantic check:
+  - `16.10--property-local-var-uvm` remains `BMC_RESULT=SAT` with
+    `LLHD process abstraction introduced 2 unconstrained process-result input(s)`;
+    this confirms remaining closure work is on observed process semantics
+    (not dead-result abstraction noise).
+
 ## Iteration 874 - February 10, 2026
 
 ### LEC/BMC Hardening: LLHD Unroll Alloca Dominance Fix

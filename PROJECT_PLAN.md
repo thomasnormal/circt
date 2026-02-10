@@ -305,6 +305,21 @@ See CHANGELOG.md on recent progress.
     - LEC hardening: continue strict no-waiver `XPROP_ONLY` gating and deepen
       4-state mismatch diagnostics (unknown-source provenance and reduction
       paths).
+33. BMC LLHD abstraction hardening (February 10, 2026):
+    - `strip-llhd-processes` now drops process-result drive uses when the
+      driven signal has no observable consumers (dead probes / drive-only use),
+      instead of introducing unconstrained `llhd_process_result*` module inputs.
+    - This reduces avoidable over-approximation noise while preserving
+      conservative behavior for actually observed signal paths.
+34. Status after hardening rerun:
+    - full BMC lane aggregates remain unchanged
+      (`sv-tests` 23/26, `verilator-verification` 12/17,
+      `yosys/tests/sva` 7/14).
+    - 6-case UVM semantic candidate bucket remains semantically blocked by
+      observed LLHD process/interface abstraction paths (`pass=1 fail=5`); the
+      next closure target is lowering the residual `llhd.wait yield` process
+      result pattern (clock/cycle helper processes) without unconstrained
+      primary inputs.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
