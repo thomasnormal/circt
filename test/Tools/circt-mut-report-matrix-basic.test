@@ -27,6 +27,16 @@
 // CHECK: matrix.lane_budget.max_global_filter_lec_unknown_mutants{{[[:space:]]}}0
 // CHECK: matrix.lane_budget.max_global_filter_bmc_unknown_mutants{{[[:space:]]}}0
 // CHECK: matrix.lane_budget.max_errors{{[[:space:]]}}1
+// CHECK: matrix.lane_budget.worst_global_filter_timeout_mutants_lane{{[[:space:]]}}lane2
+// CHECK: matrix.lane_budget.worst_global_filter_timeout_mutants_value{{[[:space:]]}}3
+// CHECK: matrix.lane_budget.worst_global_filter_lec_unknown_mutants_lane{{[[:space:]]}}-
+// CHECK: matrix.lane_budget.worst_global_filter_lec_unknown_mutants_value{{[[:space:]]}}0
+// CHECK: matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_lane{{[[:space:]]}}-
+// CHECK: matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_value{{[[:space:]]}}0
+// CHECK: matrix.lane_budget.worst_errors_lane{{[[:space:]]}}lane2
+// CHECK: matrix.lane_budget.worst_errors_value{{[[:space:]]}}1
+// CHECK: matrix.lane_budget.lowest_detected_mutants_lane{{[[:space:]]}}lane2
+// CHECK: matrix.lane_budget.lowest_detected_mutants_value{{[[:space:]]}}1
 // CHECK: matrix.lane_budget.min_detected_mutants{{[[:space:]]}}1
 // CHECK: matrix.lane_budget.lanes_zero_detected_mutants{{[[:space:]]}}0
 // CHECK: matrix.lane_budget.lanes_nonzero_global_filter_timeout_mutants{{[[:space:]]}}2

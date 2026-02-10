@@ -6142,6 +6142,11 @@ static bool collectMatrixReport(
   uint64_t laneBudgetLanesNonZeroTimeoutMutants = 0;
   uint64_t laneBudgetLanesNonZeroLECUnknownMutants = 0;
   uint64_t laneBudgetLanesNonZeroBMCUnknownMutants = 0;
+  std::string laneBudgetWorstTimeoutLaneID = "-";
+  std::string laneBudgetWorstLECUnknownLaneID = "-";
+  std::string laneBudgetWorstBMCUnknownLaneID = "-";
+  std::string laneBudgetWorstErrorsLaneID = "-";
+  std::string laneBudgetLowestDetectedLaneID = "-";
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
   StringMap<uint64_t> extraMetricSums;
@@ -6229,6 +6234,27 @@ static bool collectMatrixReport(
       return;
     }
     accumulator += parsed;
+  };
+  auto updateWorstLane = [&](uint64_t value, StringRef laneID,
+                             uint64_t &currentWorstValue,
+                             std::string &currentWorstLaneID) {
+    if (value > currentWorstValue ||
+        (value == currentWorstValue &&
+         (currentWorstLaneID == "-" || laneID.str() < currentWorstLaneID))) {
+      currentWorstValue = value;
+      currentWorstLaneID = laneID.str();
+    }
+  };
+  auto updateLowestLane = [&](uint64_t value, StringRef laneID,
+                              bool &seenAny, uint64_t &currentLowestValue,
+                              std::string &currentLowestLaneID) {
+    if (!seenAny || value < currentLowestValue ||
+        (value == currentLowestValue &&
+         (currentLowestLaneID == "-" || laneID.str() < currentLowestLaneID))) {
+      seenAny = true;
+      currentLowestValue = value;
+      currentLowestLaneID = laneID.str();
+    }
   };
 
   for (size_t lineNo = 1; lineNo < lines.size(); ++lineNo) {
@@ -6339,43 +6365,40 @@ static bool collectMatrixReport(
 
     uint64_t detectedMutants = 0;
     if (tryGetMetric(metrics, "detected_mutants", detectedMutants)) {
-      if (!laneBudgetSawDetected) {
-        laneBudgetMinDetectedMutants = detectedMutants;
-        laneBudgetSawDetected = true;
-      } else {
-        laneBudgetMinDetectedMutants =
-            std::min(laneBudgetMinDetectedMutants, detectedMutants);
-      }
+      updateLowestLane(detectedMutants, laneID, laneBudgetSawDetected,
+                       laneBudgetMinDetectedMutants,
+                       laneBudgetLowestDetectedLaneID);
       if (detectedMutants == 0)
         ++laneBudgetLanesZeroDetectedMutants;
     }
 
     uint64_t timeoutMutants = 0;
     if (tryGetMetric(metrics, "global_filter_timeout_mutants", timeoutMutants)) {
-      laneBudgetMaxTimeoutMutants =
-          std::max(laneBudgetMaxTimeoutMutants, timeoutMutants);
+      updateWorstLane(timeoutMutants, laneID, laneBudgetMaxTimeoutMutants,
+                      laneBudgetWorstTimeoutLaneID);
       if (timeoutMutants > 0)
         ++laneBudgetLanesNonZeroTimeoutMutants;
     }
     uint64_t lecUnknownMutants = 0;
     if (tryGetMetric(metrics, "global_filter_lec_unknown_mutants",
                      lecUnknownMutants)) {
-      laneBudgetMaxLECUnknownMutants =
-          std::max(laneBudgetMaxLECUnknownMutants, lecUnknownMutants);
+      updateWorstLane(lecUnknownMutants, laneID, laneBudgetMaxLECUnknownMutants,
+                      laneBudgetWorstLECUnknownLaneID);
       if (lecUnknownMutants > 0)
         ++laneBudgetLanesNonZeroLECUnknownMutants;
     }
     uint64_t bmcUnknownMutants = 0;
     if (tryGetMetric(metrics, "global_filter_bmc_unknown_mutants",
                      bmcUnknownMutants)) {
-      laneBudgetMaxBMCUnknownMutants =
-          std::max(laneBudgetMaxBMCUnknownMutants, bmcUnknownMutants);
+      updateWorstLane(bmcUnknownMutants, laneID, laneBudgetMaxBMCUnknownMutants,
+                      laneBudgetWorstBMCUnknownLaneID);
       if (bmcUnknownMutants > 0)
         ++laneBudgetLanesNonZeroBMCUnknownMutants;
     }
     uint64_t errors = 0;
     if (tryGetMetric(metrics, "errors", errors))
-      laneBudgetMaxErrors = std::max(laneBudgetMaxErrors, errors);
+      updateWorstLane(errors, laneID, laneBudgetMaxErrors,
+                      laneBudgetWorstErrorsLaneID);
   }
 
   rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
@@ -6411,6 +6434,31 @@ static bool collectMatrixReport(
                     std::to_string(laneBudgetMaxBMCUnknownMutants));
   rows.emplace_back("matrix.lane_budget.max_errors",
                     std::to_string(laneBudgetMaxErrors));
+  rows.emplace_back("matrix.lane_budget.worst_global_filter_timeout_mutants_lane",
+                    laneBudgetWorstTimeoutLaneID);
+  rows.emplace_back("matrix.lane_budget.worst_global_filter_timeout_mutants_value",
+                    std::to_string(laneBudgetMaxTimeoutMutants));
+  rows.emplace_back(
+      "matrix.lane_budget.worst_global_filter_lec_unknown_mutants_lane",
+      laneBudgetWorstLECUnknownLaneID);
+  rows.emplace_back(
+      "matrix.lane_budget.worst_global_filter_lec_unknown_mutants_value",
+      std::to_string(laneBudgetMaxLECUnknownMutants));
+  rows.emplace_back(
+      "matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_lane",
+      laneBudgetWorstBMCUnknownLaneID);
+  rows.emplace_back(
+      "matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_value",
+      std::to_string(laneBudgetMaxBMCUnknownMutants));
+  rows.emplace_back("matrix.lane_budget.worst_errors_lane",
+                    laneBudgetWorstErrorsLaneID);
+  rows.emplace_back("matrix.lane_budget.worst_errors_value",
+                    std::to_string(laneBudgetMaxErrors));
+  rows.emplace_back("matrix.lane_budget.lowest_detected_mutants_lane",
+                    laneBudgetLowestDetectedLaneID);
+  rows.emplace_back("matrix.lane_budget.lowest_detected_mutants_value",
+                    std::to_string(laneBudgetSawDetected ? laneBudgetMinDetectedMutants
+                                                         : 0));
   rows.emplace_back("matrix.lane_budget.min_detected_mutants",
                     std::to_string(laneBudgetSawDetected ? laneBudgetMinDetectedMutants
                                                          : 0));
