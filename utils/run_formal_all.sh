@@ -38,8 +38,8 @@ Options:
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
   --fail-on-new-bmc-drop-remark-cases
-                         Fail when BMC dropped-syntax remark case count
-                         (`drop_remark_cases`) increases vs baseline
+                         Fail when BMC dropped-syntax remark count
+                         (`bmc_drop_remark_cases`) increases vs baseline
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1705,6 +1705,7 @@ FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
+BMC_DROP_REMARK_PATTERN="${BMC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -6719,6 +6720,27 @@ extract_kv() {
   echo "$line" | tr ' ' '\n' | sed -n "s/^${key}=\([0-9]\+\)$/\\1/p"
 }
 
+summarize_bmc_drop_remark_log() {
+  local log_file="$1"
+  if [[ ! -f "$log_file" ]]; then
+    echo "bmc_drop_remark_cases=0"
+    return 0
+  fi
+  local drop_line
+  drop_line="$(grep -E "dropped-syntax summary:" "$log_file" | tail -1 || true)"
+  if [[ -n "$drop_line" ]]; then
+    local drop_cases
+    drop_cases="$(extract_kv "$drop_line" drop_remark_cases)"
+    if [[ -n "$drop_cases" ]]; then
+      echo "bmc_drop_remark_cases=${drop_cases}"
+      return 0
+    fi
+  fi
+  local drop_hits
+  drop_hits="$(awk -v pattern="$BMC_DROP_REMARK_PATTERN" 'index($0, pattern) { ++count } END { print count + 0 }' "$log_file")"
+  echo "bmc_drop_remark_cases=${drop_hits}"
+}
+
 summarize_opentitan_xprop_file() {
   local xprop_file="$1"
   if [[ ! -s "$xprop_file" ]]; then
@@ -7897,12 +7919,9 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
       summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
-      drop_line=$(grep -E "sv-tests dropped-syntax summary:" "$OUT_DIR/sv-tests-bmc.log" | tail -1 || true)
-      if [[ -n "$drop_line" ]]; then
-        drop_cases=$(extract_kv "$drop_line" drop_remark_cases)
-        if [[ -n "$drop_cases" ]]; then
-          summary="${summary} bmc_drop_remark_cases=${drop_cases}"
-        fi
+      bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/sv-tests-bmc.log")"
+      if [[ -n "$bmc_drop_summary" ]]; then
+        summary="${summary} ${bmc_drop_summary}"
       fi
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
@@ -7978,12 +7997,9 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
       summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
-      drop_line=$(grep -E "sv-tests dropped-syntax summary:" "$OUT_DIR/sv-tests-bmc-uvm-semantics.log" | tail -1 || true)
-      if [[ -n "$drop_line" ]]; then
-        drop_cases=$(extract_kv "$drop_line" drop_remark_cases)
-        if [[ -n "$drop_cases" ]]; then
-          summary="${summary} bmc_drop_remark_cases=${drop_cases}"
-        fi
+      bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/sv-tests-bmc-uvm-semantics.log")"
+      if [[ -n "$bmc_drop_summary" ]]; then
+        summary="${summary} ${bmc_drop_summary}"
       fi
       bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file")"
       if [[ -n "$bmc_case_summary" ]]; then
@@ -8058,6 +8074,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
       summary="total=${total} pass=${pass} fail=${fail} xfail=${xfail} xpass=${xpass} error=${error} skip=${skip}"
+      bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/verilator-bmc.log")"
+      if [[ -n "$bmc_drop_summary" ]]; then
+        summary="${summary} ${bmc_drop_summary}"
+      fi
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/verilator-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
@@ -8135,6 +8155,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
       pass=$((total - failures - skipped))
       summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=${skipped}"
+      bmc_drop_summary="$(summarize_bmc_drop_remark_log "$OUT_DIR/yosys-bmc.log")"
+      if [[ -n "$bmc_drop_summary" ]]; then
+        summary="${summary} ${bmc_drop_summary}"
+      fi
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/yosys-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"

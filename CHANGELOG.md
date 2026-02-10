@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 928 - February 10, 2026
+
+### BMC No-Drop Hardening: Cross-Suite Drop-Remark Drift Tracking
+
+1. Updated `utils/run_formal_all.sh` to emit
+   `bmc_drop_remark_cases=<N>` for every BMC lane, not just `sv-tests`:
+   - added shared log summarizer `summarize_bmc_drop_remark_log`
+   - uses explicit `dropped-syntax summary` when available
+   - otherwise counts frontend log lines containing
+     `"will be dropped during lowering"` (configurable via
+     `BMC_DROP_REMARK_PATTERN`).
+2. Wired the metric into all BMC lane summaries:
+   - `sv-tests/BMC`
+   - `sv-tests-uvm/BMC_SEMANTICS`
+   - `verilator-verification/BMC`
+   - `yosys/tests/sva/BMC`
+   so `--fail-on-new-bmc-drop-remark-cases` now has cross-suite coverage.
+3. Added regression:
+   - `test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test`
+   - verifies baseline capture + strict-gate failure on non-`sv-tests` lane
+     drift (`1 -> 2`).
+4. Validation:
+   - `bash -n utils/run_formal_all.sh`
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test`
+     -> `2 passed`.
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate*.test`
+     -> `25 passed`.
+   - real focused runs:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-remarks-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+       -> `sv-tests/BMC total=26 pass=26 fail=0 bmc_drop_remark_cases=0`.
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-remarks-vy-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+       -> `verilator BMC bmc_drop_remark_cases=0`, `yosys BMC bmc_drop_remark_cases=0`.
+
 ## Iteration 927 - February 10, 2026
 
 ### BMC SMT-LIB Closure: Legalize `llvm.mlir.constant` in `verif.bmc`
