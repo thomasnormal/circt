@@ -542,12 +542,11 @@ Execution controls:
     `--native-global-filter-prequalify`
     (optional `--native-global-filter-prequalify-pair-file <path>`). This
     runs built-in circt-lec/circt-bmc/chain global classification for each
-    mutation from `--mutations-file`, emits reuse-compatible
+    mutation from `--mutations-file` or `--generate-mutations`, emits reuse-compatible
     `pair_qualification.tsv` rows (`test_id=-`), and dispatches
     `run_mutation_cover.sh` with `--reuse-pair-file`.
-  - native prequalification currently requires `--mutations-file` (not
-    `--generate-mutations`), rejects explicit `--reuse-pair-file`, and does
-    not support `--formal-global-propagate-cmd`.
+  - native prequalification rejects explicit `--reuse-pair-file`, and does not
+    support `--formal-global-propagate-cmd`.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
   - cover formal numeric/cache controls are now validated natively:

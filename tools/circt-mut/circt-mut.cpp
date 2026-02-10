@@ -973,15 +973,11 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         "--native-global-filter-prequalify, not both.";
     return result;
   }
-  if (nativeGlobalFilterPrequalify && hasGenerateMutations) {
+  if (nativeGlobalFilterPrequalify && !hasMutationsFile &&
+      !hasGenerateMutations) {
     result.error = "circt-mut cover: --native-global-filter-prequalify "
-                   "currently requires --mutations-file and does not support "
-                   "--generate-mutations yet.";
-    return result;
-  }
-  if (nativeGlobalFilterPrequalify && !hasMutationsFile) {
-    result.error = "circt-mut cover: --native-global-filter-prequalify "
-                   "requires --mutations-file.";
+                   "requires either --mutations-file or "
+                   "--generate-mutations.";
     return result;
   }
   if (nativeGlobalFilterPrequalify && hasReusePairFile) {
@@ -1677,11 +1673,25 @@ struct MutationRow {
 struct CoverNativePrequalifyConfig {
   CoverGlobalFilterProbeConfig probeCfg;
   std::string mutationsFile;
+  bool useGeneratedMutations = false;
+  uint64_t generateMutations = 0;
+  uint64_t mutationsSeed = 1;
+  std::string mutationsTop;
+  std::string mutationsYosys;
+  std::string mutationsModes;
+  std::string mutationsModeCounts;
+  std::string mutationsModeWeights;
+  std::string mutationsProfiles;
+  std::string mutationsCfg;
+  std::string mutationsSelect;
+  std::string reuseCacheDir;
+  std::string reuseCacheMode = "read-write";
   std::string workDir = "mutation-cover-results";
   std::string createMutatedScript;
   std::string mutantFormat = "il";
   uint64_t mutationLimit = 0;
   std::string pairFile;
+  std::string generateLogFile;
 };
 
 static bool parseMutationRowsForPrequalify(StringRef mutationsFile,
@@ -1780,6 +1790,77 @@ static bool parseCoverNativePrequalifyConfig(
         return false;
       continue;
     }
+    if (arg == "--generate-mutations" ||
+        arg.starts_with("--generate-mutations=")) {
+      std::string raw;
+      if (!consumeValue("--generate-mutations", raw))
+        return false;
+      if (!parseUIntArg(raw, "--generate-mutations", cfg.generateMutations))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-top" || arg.starts_with("--mutations-top=")) {
+      if (!consumeValue("--mutations-top", cfg.mutationsTop))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-seed" || arg.starts_with("--mutations-seed=")) {
+      std::string raw;
+      if (!consumeValue("--mutations-seed", raw))
+        return false;
+      if (!parseUIntArg(raw, "--mutations-seed", cfg.mutationsSeed))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-yosys" || arg.starts_with("--mutations-yosys=")) {
+      if (!consumeValue("--mutations-yosys", cfg.mutationsYosys))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-modes" || arg.starts_with("--mutations-modes=")) {
+      if (!consumeValue("--mutations-modes", cfg.mutationsModes))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-mode-counts" ||
+        arg.starts_with("--mutations-mode-counts=")) {
+      if (!consumeValue("--mutations-mode-counts", cfg.mutationsModeCounts))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-mode-weights" ||
+        arg.starts_with("--mutations-mode-weights=")) {
+      if (!consumeValue("--mutations-mode-weights", cfg.mutationsModeWeights))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-profiles" ||
+        arg.starts_with("--mutations-profiles=")) {
+      if (!consumeValue("--mutations-profiles", cfg.mutationsProfiles))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-cfg" || arg.starts_with("--mutations-cfg=")) {
+      if (!consumeValue("--mutations-cfg", cfg.mutationsCfg))
+        return false;
+      continue;
+    }
+    if (arg == "--mutations-select" ||
+        arg.starts_with("--mutations-select=")) {
+      if (!consumeValue("--mutations-select", cfg.mutationsSelect))
+        return false;
+      continue;
+    }
+    if (arg == "--reuse-cache-dir" || arg.starts_with("--reuse-cache-dir=")) {
+      if (!consumeValue("--reuse-cache-dir", cfg.reuseCacheDir))
+        return false;
+      continue;
+    }
+    if (arg == "--reuse-cache-mode" || arg.starts_with("--reuse-cache-mode=")) {
+      if (!consumeValue("--reuse-cache-mode", cfg.reuseCacheMode))
+        return false;
+      continue;
+    }
     if (arg == "--work-dir" || arg.starts_with("--work-dir=")) {
       if (!consumeValue("--work-dir", cfg.workDir))
         return false;
@@ -1806,11 +1887,18 @@ static bool parseCoverNativePrequalifyConfig(
     }
   }
 
-  if (cfg.mutationsFile.empty()) {
+  if (!cfg.mutationsFile.empty() && cfg.generateMutations > 0) {
     error = "circt-mut cover: --native-global-filter-prequalify requires "
-            "--mutations-file.";
+            "exactly one mutation source (--mutations-file or "
+            "--generate-mutations).";
     return false;
   }
+  if (cfg.mutationsFile.empty() && cfg.generateMutations == 0) {
+    error = "circt-mut cover: --native-global-filter-prequalify requires "
+            "either --mutations-file or --generate-mutations.";
+    return false;
+  }
+  cfg.useGeneratedMutations = cfg.generateMutations > 0;
   if (!isSupportedMutantFormat(cfg.mutantFormat)) {
     error = (Twine("circt-mut cover: unsupported --mutant-format value for "
                    "native prequalification: ") +
@@ -1844,7 +1932,132 @@ static bool parseCoverNativePrequalifyConfig(
   } else {
     cfg.pairFile = joinPath2(cfg.workDir, "native_global_filter_prequalify.tsv");
   }
+  if (cfg.useGeneratedMutations) {
+    cfg.mutationsFile = joinPath2(cfg.workDir, "generated_mutations.txt");
+    cfg.generateLogFile = joinPath2(cfg.workDir, "generate_mutations.log");
+  }
   return true;
+}
+
+static bool runNativeGenerateForPrequalify(const char *argv0,
+                                           const CoverNativePrequalifyConfig &cfg,
+                                           std::string &error) {
+  if (!cfg.useGeneratedMutations)
+    return true;
+
+  std::string mainExec =
+      sys::fs::getMainExecutable(argv0, reinterpret_cast<void *>(&printHelp));
+  if (mainExec.empty()) {
+    error = "circt-mut cover: unable to locate circt-mut executable for native "
+            "prequalification generation.";
+    return false;
+  }
+
+  if (!ensureParentDirForFile(cfg.mutationsFile, error))
+    return false;
+  if (!ensureParentDirForFile(cfg.generateLogFile, error))
+    return false;
+
+  SmallVector<std::string, 32> genCmd;
+  genCmd.push_back(mainExec);
+  genCmd.push_back("generate");
+  genCmd.push_back("--design");
+  genCmd.push_back(cfg.probeCfg.design);
+  genCmd.push_back("--out");
+  genCmd.push_back(cfg.mutationsFile);
+  genCmd.push_back("--count");
+  genCmd.push_back(std::to_string(cfg.generateMutations));
+  genCmd.push_back("--seed");
+  genCmd.push_back(std::to_string(cfg.mutationsSeed));
+  if (!cfg.mutationsTop.empty()) {
+    genCmd.push_back("--top");
+    genCmd.push_back(cfg.mutationsTop);
+  }
+  if (!cfg.mutationsYosys.empty()) {
+    genCmd.push_back("--yosys");
+    genCmd.push_back(cfg.mutationsYosys);
+  }
+  if (!cfg.mutationsModes.empty()) {
+    genCmd.push_back("--modes");
+    genCmd.push_back(cfg.mutationsModes);
+  }
+  if (!cfg.mutationsModeCounts.empty()) {
+    genCmd.push_back("--mode-counts");
+    genCmd.push_back(cfg.mutationsModeCounts);
+  }
+  if (!cfg.mutationsModeWeights.empty()) {
+    genCmd.push_back("--mode-weights");
+    genCmd.push_back(cfg.mutationsModeWeights);
+  }
+  if (!cfg.mutationsProfiles.empty()) {
+    genCmd.push_back("--profiles");
+    genCmd.push_back(cfg.mutationsProfiles);
+  }
+  if (!cfg.mutationsCfg.empty()) {
+    genCmd.push_back("--cfgs");
+    genCmd.push_back(cfg.mutationsCfg);
+  }
+  if (!cfg.mutationsSelect.empty()) {
+    genCmd.push_back("--selects");
+    genCmd.push_back(cfg.mutationsSelect);
+  }
+  if (!cfg.reuseCacheDir.empty() && cfg.reuseCacheMode != "off") {
+    genCmd.push_back("--cache-dir");
+    genCmd.push_back(joinPath2(cfg.reuseCacheDir, "generated_mutations"));
+  }
+
+  int rc = -1;
+  if (!runArgvToLog(genCmd, cfg.generateLogFile, /*timeoutSeconds=*/0, rc, error))
+    return false;
+  if (rc != 0) {
+    error = (Twine("circt-mut cover: native prequalification generation failed "
+                   "(exit=") +
+             Twine(rc) + "), see log: " + cfg.generateLogFile)
+                .str();
+    return false;
+  }
+  return true;
+}
+
+static SmallVector<std::string, 64>
+rewriteCoverArgsForPrequalifyDispatch(const CoverRewriteResult &rewrite,
+                                      const CoverNativePrequalifyConfig &cfg) {
+  auto shouldDropGenerateArg = [&](StringRef arg, bool &consumeNext) -> bool {
+    auto match = [&](StringRef opt) -> bool {
+      std::string withEq = (opt + "=").str();
+      if (arg == opt) {
+        consumeNext = true;
+        return true;
+      }
+      return arg.starts_with(withEq);
+    };
+    return match("--mutations-file") || match("--generate-mutations") ||
+           match("--mutations-top") || match("--mutations-seed") ||
+           match("--mutations-yosys") || match("--mutations-modes") ||
+           match("--mutations-mode-counts") ||
+           match("--mutations-mode-weights") || match("--mutations-profiles") ||
+           match("--mutations-cfg") || match("--mutations-select");
+  };
+
+  SmallVector<std::string, 64> rewrittenArgs;
+  if (cfg.useGeneratedMutations) {
+    for (size_t i = 0; i < rewrite.rewrittenArgs.size(); ++i) {
+      StringRef arg = rewrite.rewrittenArgs[i];
+      bool consumeNext = false;
+      if (shouldDropGenerateArg(arg, consumeNext)) {
+        if (consumeNext && i + 1 < rewrite.rewrittenArgs.size())
+          ++i;
+        continue;
+      }
+      rewrittenArgs.push_back(arg.str());
+    }
+    rewrittenArgs.push_back("--mutations-file");
+    rewrittenArgs.push_back(cfg.mutationsFile);
+  } else {
+    rewrittenArgs.append(rewrite.rewrittenArgs.begin(),
+                         rewrite.rewrittenArgs.end());
+  }
+  return rewrittenArgs;
 }
 
 static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
@@ -1857,6 +2070,10 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
   }
 
   if (!ensureParentDirForFile(cfg.pairFile, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  if (!runNativeGenerateForPrequalify(argv0, cfg, error)) {
     errs() << error << "\n";
     return 1;
   }
@@ -1967,9 +2184,8 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     return 1;
   }
 
-  SmallVector<std::string, 64> rewrittenArgs;
-  rewrittenArgs.append(rewrite.rewrittenArgs.begin(),
-                       rewrite.rewrittenArgs.end());
+  SmallVector<std::string, 64> rewrittenArgs =
+      rewriteCoverArgsForPrequalifyDispatch(rewrite, cfg);
   rewrittenArgs.push_back("--reuse-pair-file");
   rewrittenArgs.push_back(cfg.pairFile);
 

@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 853 - February 10, 2026
+
+### Native Prequalification Now Supports Generated Mutation Campaigns
+
+1. Extended native `circt-mut cover --native-global-filter-prequalify` to work
+   with both mutation sources:
+   - `--mutations-file`
+   - `--generate-mutations` (+ existing `--mutations-*` controls)
+2. For generated campaigns, prequalification now:
+   - runs native `circt-mut generate` internally to materialize
+     `<work-dir>/generated_mutations.txt` (and logs to
+     `<work-dir>/generate_mutations.log`),
+   - uses that generated list for native global formal prequalification, and
+   - rewrites cover dispatch arguments to pass `--mutations-file` (instead of
+     forwarding generation flags) plus `--reuse-pair-file`.
+3. Native prequalification generation now honors reuse-cache policy for
+   generation speedups:
+   - when `--reuse-cache-dir` is set and `--reuse-cache-mode` is not `off`,
+     generation uses `--cache-dir <reuse-cache-dir>/generated_mutations`.
+4. Updated prequalify source diagnostics:
+   - now requires either `--mutations-file` or `--generate-mutations`.
+
+### Tests and Documentation
+
+- Updated/added regression tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-generate-dispatch.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-missing-mutations-file.test`
+- Existing prequalify tests remain green:
+  - dispatch/missing-filter/reuse-conflict/cmd-unsupported.
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-prequalify-*.test`: PASS (6/6)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test`: PASS (35/35)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (129/129)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-prequalify-generate --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 852 - February 10, 2026
 
 ### Native Cover Prequalification Handoff in `circt-mut`
