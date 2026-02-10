@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 893 - February 10, 2026
+
+### BMC Semantic-Bucket Classifier: Explicit Tag Support + Source Counters
+
+1. Upgraded `utils/run_formal_all.sh` semantic-bucket summarizer to accept
+   explicit per-case bucket tags in result rows:
+   - recognized keys:
+     - `semantic_bucket`, `semantic_buckets`
+     - `bucket`, `buckets`
+     - `bmc_semantic_bucket`, `bmc_semantic_buckets`
+   - recognized values include canonical and alias forms:
+     - `disable_iff`, `local_var`, `multiclock`, `four_state`, `xprop`
+2. Classification precedence is now:
+   - explicit tag(s) from case row (when present)
+   - fallback regex classification over case id/path (legacy behavior).
+3. Added attribution-source counters to BMC lane summaries:
+   - `bmc_semantic_bucket_classified_cases`
+   - `bmc_semantic_bucket_tagged_cases`
+   - `bmc_semantic_bucket_regex_cases`
+4. Added regression test:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+   - verifies explicit `semantic_buckets=...` / `bucket=...` rows classify
+     cases correctly without regex dependence.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-ir-check-fingerprint-cases.test test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-baselines.test test/Tools/run-formal-all-help.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-tags-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^(sv-tests|sv-tests-uvm|verilator-verification|yosys/tests/sva)/BMC'`
+  - summary now includes source counters for all BMC lanes, e.g.
+    - `sv-tests/BMC`: `classified_cases=3 tagged_cases=0 regex_cases=3`
+    - `verilator-verification/BMC`: `classified_cases=0 tagged_cases=0 regex_cases=0`
+    - `yosys/tests/sva/BMC`: `classified_cases=0 tagged_cases=0 regex_cases=0`
+
 ## Iteration 892 - February 10, 2026
 
 ### Yosys BMC Case-Row Emission Fix for Semantic-Bucket Closure
