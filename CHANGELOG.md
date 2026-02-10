@@ -1,5 +1,78 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 950 - February 10, 2026
+
+### `circt-mut report`: Matrix Prequalify Drift Integrity Gate
+
+1. Extended `tools/circt-mut/circt-mut.cpp` matrix report ingestion to parse
+   per-lane prequalify counters from matrix `results.tsv` when present:
+   - `prequalify_summary_present`
+   - `prequalify_total_mutants`
+   - `prequalify_not_propagated_mutants`
+   - `prequalify_propagated_mutants`
+   - `prequalify_create_mutated_error_mutants`
+   - `prequalify_probe_error_mutants`
+   - `prequalify_cmd_token_*`, `prequalify_cmd_rc_*`,
+     `prequalify_cmd_timeout_propagated_mutants`,
+     `prequalify_cmd_error_mutants`
+2. Added report-side drift metrics between `results.tsv` and
+   `native_matrix_prequalify_summary.tsv` aggregates:
+   - `matrix.prequalify_drift_comparable`
+   - `matrix.prequalify_drift.<metric>.delta`
+   - `matrix.prequalify_drift.<metric>.abs_delta`
+   - `matrix.prequalify_drift_nonzero_metrics`
+3. Added native gating flag:
+   - `circt-mut report --fail-on-prequalify-drift`
+   - fails when drift is non-zero, or when required comparison inputs are
+     missing.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-matrix-prequalify-drift-gate.test`
+5. Updated `PROJECT_PLAN.md` mutation roadmap next-step text to shift from
+   basic drift detection to policy bundles and native scheduling migration.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-matrix-prequalify-drift-gate.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (145/145)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-prequalify-drift-gate --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `yosys/tests/sva` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
+## Iteration 949 - February 10, 2026
+
+### BMC UVM Semantic Lane Hardening: SMT-LIB Unsupported-Export Fallback
+
+1. Hardened `utils/run_sv_tests_circt_bmc.sh` BMC execution path:
+   - when `BMC_RUN_SMTLIB=1` fails specifically with
+     `for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions`,
+     the runner now retries the same case once with JIT BMC
+     (`--run` + `--shared-libs`).
+   - fallback is guarded to that explicit unsupported-export diagnostic, so
+     unrelated SMT-LIB failures still surface normally.
+2. Added regression coverage:
+   - `test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+   - verifies a case that fails under `--run-smtlib` with unsupported-export
+     diagnostics is retried and classified from the fallback result.
+3. Semantic-lane outcome shift (targeted run):
+   - before: `sv-tests-uvm/BMC_SEMANTICS total=6 pass=5 fail=0 error=1`
+   - after: `sv-tests-uvm/BMC_SEMANTICS total=6 pass=5 fail=1 error=0`
+   - the remaining fail-like row is now semantic (`16.15--property-iff-uvm-fail`)
+     instead of backend-export capability noise.
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-sv-tests-bmc-smtlib-fallback.test test/Tools/run-sv-tests-bmc-simfail.test`: PASS (2/2)
+- `utils/run_formal_all.sh --out-dir /tmp/formal-uvm-bmc-fallback-20260210 --sv-tests /home/thomas-ahle/sv-tests --include-lane-regex '^sv-tests-uvm/BMC_SEMANTICS$' --with-sv-tests-uvm-bmc-semantics --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=5 fail=1 error=0`
+  - case file confirms:
+    `16.15--property-iff-uvm-fail` is now `FAIL` (not `ERROR`).
+
 ## Iteration 948 - February 10, 2026
 
 ### Mutation Matrix: Per-Lane Native Prequalify Counters in `results.tsv`
