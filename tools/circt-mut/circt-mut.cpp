@@ -4754,6 +4754,7 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t laneTotal = 0;
   uint64_t lanePass = 0;
   uint64_t laneFail = 0;
+  uint64_t laneSkip = 0;
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
   uint64_t matrixJobs = 1;
   if (!cfg.matrixJobs.empty()) {
@@ -4764,7 +4765,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       return 1;
     }
   }
-  bool bufferedMode = !stopOnFail && matrixJobs > 1;
+  bool bufferedMode = matrixJobs > 1;
   std::optional<Regex> includeLaneRegex;
   std::optional<Regex> excludeLaneRegex;
   if (auto v = getLastOptionValue(args, "--include-lane-regex")) {
@@ -5140,14 +5141,33 @@ static int runNativeMatrixDispatch(const char *argv0,
     struct LaneJobOutcome {
       std::string row;
       bool pass = false;
+      bool skip = false;
     };
     std::vector<LaneJobOutcome> outcomes(pendingJobs.size());
     std::atomic<size_t> nextJob{0};
+    std::atomic<size_t> firstFailIndex{pendingJobs.size()};
+    std::atomic<bool> stopRequested{false};
     uint64_t workerCount = std::min<uint64_t>(matrixJobs, pendingJobs.size());
     std::vector<std::thread> workers;
     workers.reserve(workerCount);
+    auto updateFirstFail = [&](size_t idx) {
+      size_t current = firstFailIndex.load();
+      while (idx < current &&
+             !firstFailIndex.compare_exchange_weak(current, idx)) {
+      }
+    };
+    auto formatSkipRow = [&](const PendingLaneJob &job) {
+      return formatLaneRow(job.laneID, "SKIP", 0, "-", "SKIP", job.laneWorkDir,
+                           "-", "-", "STOP_ON_FAIL", "skipped_after_fail");
+    };
     auto runOneJob = [&](size_t idx) {
       const auto &job = pendingJobs[idx];
+      if (stopOnFail && stopRequested.load()) {
+        outcomes[idx].row = formatSkipRow(job);
+        outcomes[idx].pass = false;
+        outcomes[idx].skip = true;
+        return;
+      }
       int coverRC = -1;
       std::string runError;
       if (!runArgvToLog(job.coverCmd, job.laneLog, /*timeoutSeconds=*/0, coverRC,
@@ -5157,6 +5177,11 @@ static int runNativeMatrixDispatch(const char *argv0,
                           "-", "-", "DISPATCH_ERROR",
                           "cover_invocation_failed");
         outcomes[idx].pass = false;
+        outcomes[idx].skip = false;
+        if (stopOnFail) {
+          updateFirstFail(idx);
+          stopRequested.store(true);
+        }
         return;
       }
       std::string metricsPath = joinPath2(job.laneWorkDir, "metrics.tsv");
@@ -5189,6 +5214,11 @@ static int runNativeMatrixDispatch(const char *argv0,
           sys::fs::exists(metricsPath) ? metricsPath : "-",
           sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
       outcomes[idx].pass = pass;
+      outcomes[idx].skip = false;
+      if (!pass && stopOnFail) {
+        updateFirstFail(idx);
+        stopRequested.store(true);
+      }
     };
     auto workerFn = [&]() {
       while (true) {
@@ -5204,10 +5234,19 @@ static int runNativeMatrixDispatch(const char *argv0,
       for (auto &w : workers)
         w.join();
     }
+    size_t cutIndex = firstFailIndex.load();
     for (size_t i = 0; i < pendingJobs.size(); ++i) {
       const auto &job = pendingJobs[i];
+      if (stopOnFail && cutIndex < pendingJobs.size() && i > cutIndex) {
+        outcomes[i].row = formatSkipRow(job);
+        outcomes[i].pass = false;
+        outcomes[i].skip = true;
+      }
       bufferedRows[job.rowIndex] = outcomes[i].row;
-      if (outcomes[i].pass) {
+      if (outcomes[i].skip) {
+        ++laneSkip;
+        gateCounts["SKIP"]++;
+      } else if (outcomes[i].pass) {
         ++lanePass;
         gateCounts["PASS"]++;
       } else {
@@ -5244,6 +5283,7 @@ static int runNativeMatrixDispatch(const char *argv0,
   outs() << "native_matrix_dispatch_lane_jobs\t" << matrixJobs << "\n";
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";
+  outs() << "native_matrix_dispatch_skip\t" << laneSkip << "\n";
   return laneFail == 0 ? 0 : 1;
 }
 
