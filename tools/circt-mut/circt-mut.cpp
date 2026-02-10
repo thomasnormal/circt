@@ -3820,6 +3820,59 @@ static int runNativeMatrixGlobalFilterPrequalify(
   std::vector<std::string> rewrittenLines;
   rewrittenLines.reserve(rawLines.size());
   uint64_t prequalifiedLaneCount = 0;
+  uint64_t prequalifySummaryLaneCount = 0;
+  uint64_t prequalifySummaryMissingLaneCount = 0;
+  uint64_t prequalifyTotalMutants = 0;
+  uint64_t prequalifyNotPropagatedMutants = 0;
+  uint64_t prequalifyPropagatedMutants = 0;
+  uint64_t prequalifyCreateMutatedErrorMutants = 0;
+  uint64_t prequalifyProbeErrorMutants = 0;
+  uint64_t prequalifyCmdTokenNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdTokenPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCPropagatedMutants = 0;
+  uint64_t prequalifyCmdTimeoutPropagatedMutants = 0;
+  uint64_t prequalifyCmdErrorMutants = 0;
+
+  auto parsePrequalifySummaryMetrics =
+      [&](StringRef logPath, StringMap<uint64_t> &metrics,
+          std::string &parseError) -> bool {
+    std::string logText = readTextFileOrEmpty(logPath);
+    SmallVector<StringRef, 128> lines;
+    StringRef(logText).split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+    for (StringRef line : lines) {
+      line = line.trim();
+      if (line.empty() || line.starts_with("#"))
+        continue;
+      if (!line.starts_with("prequalify_"))
+        continue;
+      size_t tab = line.find('\t');
+      if (tab == StringRef::npos)
+        continue;
+      StringRef key = line.take_front(tab).trim();
+      StringRef value = line.drop_front(tab + 1).trim();
+      bool isNumericMetric =
+          key == "prequalify_total_mutants" || key.ends_with("_mutants");
+      if (!isNumericMetric)
+        continue;
+      uint64_t parsed = 0;
+      if (value.getAsInteger(10, parsed)) {
+        parseError =
+            (Twine("circt-mut matrix: invalid native prequalification metric in ") +
+             logPath + ": " + key + "=" + value)
+                .str();
+        return false;
+      }
+      metrics[key] = parsed;
+    }
+    return true;
+  };
+
+  auto addMetric = [](const StringMap<uint64_t> &metrics, StringRef key,
+                      uint64_t &dst) {
+    if (auto it = metrics.find(key); it != metrics.end())
+      dst += it->second;
+  };
 
   for (size_t lineNo = 0; lineNo < rawLines.size(); ++lineNo) {
     StringRef rawLine = rawLines[lineNo];
@@ -4067,6 +4120,36 @@ static int runNativeMatrixGlobalFilterPrequalify(
              << "), see log: " << lanePrequalifyLog << "\n";
       return 1;
     }
+    StringMap<uint64_t> laneMetrics;
+    if (!parsePrequalifySummaryMetrics(lanePrequalifyLog, laneMetrics, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    if (laneMetrics.find("prequalify_total_mutants") != laneMetrics.end())
+      ++prequalifySummaryLaneCount;
+    else
+      ++prequalifySummaryMissingLaneCount;
+    addMetric(laneMetrics, "prequalify_total_mutants", prequalifyTotalMutants);
+    addMetric(laneMetrics, "prequalify_not_propagated_mutants",
+              prequalifyNotPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_propagated_mutants",
+              prequalifyPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_create_mutated_error_mutants",
+              prequalifyCreateMutatedErrorMutants);
+    addMetric(laneMetrics, "prequalify_probe_error_mutants",
+              prequalifyProbeErrorMutants);
+    addMetric(laneMetrics, "prequalify_cmd_token_not_propagated_mutants",
+              prequalifyCmdTokenNotPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_cmd_token_propagated_mutants",
+              prequalifyCmdTokenPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_cmd_rc_not_propagated_mutants",
+              prequalifyCmdRCNotPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_cmd_rc_propagated_mutants",
+              prequalifyCmdRCPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_cmd_timeout_propagated_mutants",
+              prequalifyCmdTimeoutPropagatedMutants);
+    addMetric(laneMetrics, "prequalify_cmd_error_mutants",
+              prequalifyCmdErrorMutants);
 
     if (cols.size() <= ColReusePairFile)
       cols.resize(ColReusePairFile + 1);
@@ -4133,6 +4216,32 @@ static int runNativeMatrixGlobalFilterPrequalify(
   outs() << "native_matrix_prequalify_lanes_tsv\t" << rewrittenLanesPath
          << "\n";
   outs() << "native_matrix_prequalify_lanes\t" << prequalifiedLaneCount << "\n";
+  outs() << "native_matrix_prequalify_summary_lanes\t"
+         << prequalifySummaryLaneCount << "\n";
+  outs() << "native_matrix_prequalify_summary_missing_lanes\t"
+         << prequalifySummaryMissingLaneCount << "\n";
+  outs() << "native_matrix_prequalify_total_mutants\t" << prequalifyTotalMutants
+         << "\n";
+  outs() << "native_matrix_prequalify_not_propagated_mutants\t"
+         << prequalifyNotPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_propagated_mutants\t"
+         << prequalifyPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_create_mutated_error_mutants\t"
+         << prequalifyCreateMutatedErrorMutants << "\n";
+  outs() << "native_matrix_prequalify_probe_error_mutants\t"
+         << prequalifyProbeErrorMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_token_not_propagated_mutants\t"
+         << prequalifyCmdTokenNotPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_token_propagated_mutants\t"
+         << prequalifyCmdTokenPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_rc_not_propagated_mutants\t"
+         << prequalifyCmdRCNotPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_rc_propagated_mutants\t"
+         << prequalifyCmdRCPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_timeout_propagated_mutants\t"
+         << prequalifyCmdTimeoutPropagatedMutants << "\n";
+  outs() << "native_matrix_prequalify_cmd_error_mutants\t"
+         << prequalifyCmdErrorMutants << "\n";
   return 0;
 }
 

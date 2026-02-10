@@ -15,6 +15,17 @@
 // RUN: FileCheck %s --check-prefix=PAIR < %t/out/lane1/native_global_filter_prequalify.tsv
 //
 // LOG-DAG: native_matrix_prequalify_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_summary_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_summary_missing_lanes{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_total_mutants{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_prequalify_not_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_cmd_token_not_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_cmd_token_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_cmd_rc_not_propagated_mutants{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_cmd_rc_propagated_mutants{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_cmd_timeout_propagated_mutants{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_cmd_error_mutants{{[[:space:]]+}}0
 // LOG-DAG: ARG:--lanes-tsv
 // LOG-DAG: ARG:{{.*}}native_global_filter_prequalify_lanes.tsv
 //
