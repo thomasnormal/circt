@@ -6748,6 +6748,8 @@ bucket_case_sets = {
     "four_state": set(),
     "sampled_value": set(),
     "property_named": set(),
+    "implication_timing": set(),
+    "hierarchical_net": set(),
 }
 all_fail_like_cases = set()
 tagged_cases = 0
@@ -6783,6 +6785,12 @@ bucket_aliases = {
     "property-named": "property_named",
     "named_property": "property_named",
     "named-property": "property_named",
+    "implication_timing": "implication_timing",
+    "implication-timing": "implication_timing",
+    "imp_timing": "implication_timing",
+    "hierarchical_net": "hierarchical_net",
+    "hierarchical-net": "hierarchical_net",
+    "hier_net": "hierarchical_net",
 }
 
 def normalize_bucket_token(token: str):
@@ -6879,6 +6887,8 @@ parts = [
     f"bmc_semantic_bucket_four_state_cases={len(bucket_case_sets['four_state'])}",
     f"bmc_semantic_bucket_sampled_value_cases={len(bucket_case_sets['sampled_value'])}",
     f"bmc_semantic_bucket_property_named_cases={len(bucket_case_sets['property_named'])}",
+    f"bmc_semantic_bucket_implication_timing_cases={len(bucket_case_sets['implication_timing'])}",
+    f"bmc_semantic_bucket_hierarchical_net_cases={len(bucket_case_sets['hierarchical_net'])}",
     f"bmc_semantic_bucket_unclassified_cases={unclassified_cases}",
 ]
 print(" ".join(parts))
