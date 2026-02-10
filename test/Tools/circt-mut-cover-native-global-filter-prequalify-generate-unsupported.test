@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: not env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --design %t/design.il --generate-mutations 1 --native-global-filter-prequalify --formal-global-propagate-circt-lec /bin/true > %t/out.txt 2>&1
+// RUN: FileCheck %s < %t/out.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: circt-mut cover: --native-global-filter-prequalify currently requires --mutations-file and does not support --generate-mutations yet.

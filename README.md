@@ -404,6 +404,30 @@ circt-mut cover \
 Probe mode reports `classification` (`not_propagated` or `propagated`) plus
 `global_filter_rc` and `global_filter_log`. It currently supports built-in
 circt-lec/circt-bmc/chain modes (not `--formal-global-propagate-cmd`).
+For campaign-scale global relevance prequalification, `circt-mut cover` now
+also supports:
+
+```sh
+circt-mut cover \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --native-global-filter-prequalify \
+  --formal-global-propagate-circt-chain auto \
+  --work-dir /tmp/mutation-cover
+```
+
+Prequalify mode:
+- creates mutants and runs native built-in global filter classification
+  (`circt-lec`/`circt-bmc`/chain) before test dispatch,
+- writes a `pair_qualification.tsv`-compatible reuse file
+  (`test_id=-` prequalified rows), and
+- dispatches `run_mutation_cover.sh` with `--reuse-pair-file` set to that
+  generated file.
+
+Current scope limits:
+- requires `--mutations-file` (no `--generate-mutations` yet),
+- supports built-in filters only (not `--formal-global-propagate-cmd`),
+- cannot be combined with explicit `--reuse-pair-file`.
 Cover mutation source consistency is now also validated natively:
 - exactly one of `--mutations-file` or `--generate-mutations` must be set
 - conflicting or missing source configuration fails fast.
@@ -607,6 +631,38 @@ certitude_run \
   -rtl /path/to/filelist.f \
   -tb /path/to/testlist.tcl \
   -fault_model rtl_mutation \
+  -out /tmp/certitude-run
+```
+
+1b. Global relevance prequalification pass (before dynamic tests)
+
+`circt-mut cover`:
+
+```sh
+circt-mut cover \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --native-global-filter-prequalify \
+  --formal-global-propagate-circt-chain auto \
+  --work-dir /tmp/mutation-cover
+```
+
+Equivalent `mcy` flow (schematic; usually custom glue around formal + `mcy run`):
+
+```sh
+# precompute mutation relevance (custom script/pipeline)
+# then run MCY with filtered or prequalified mutation tasks
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```sh
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -fault_model rtl_mutation \
+  -formal_prune on \
   -out /tmp/certitude-run
 ```
 

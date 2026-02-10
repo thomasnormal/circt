@@ -442,6 +442,8 @@ struct CoverRewriteResult {
   bool nativeGlobalFilterProbe = false;
   std::string nativeGlobalFilterProbeMutant;
   std::string nativeGlobalFilterProbeLog;
+  bool nativeGlobalFilterPrequalify = false;
+  std::string nativeGlobalFilterPrequalifyPairFile;
 };
 
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
@@ -469,10 +471,13 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   bool hasGlobalFilterLEC = false;
   bool hasGlobalFilterBMC = false;
   bool hasGlobalFilterChain = false;
+  bool hasReusePairFile = false;
   std::string globalFilterChainMode;
   bool nativeGlobalFilterProbe = false;
   std::string nativeGlobalFilterProbeMutant;
   std::string nativeGlobalFilterProbeLog;
+  bool nativeGlobalFilterPrequalify = false;
+  std::string nativeGlobalFilterPrequalifyPairFile;
   for (size_t i = 0; i < args.size(); ++i) {
     StringRef arg = args[i];
     auto valueFromArg = [&]() -> StringRef {
@@ -616,8 +621,29 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       }
       continue;
     }
+    if (arg == "--native-global-filter-prequalify") {
+      nativeGlobalFilterPrequalify = true;
+      continue;
+    }
+    if (arg == "--native-global-filter-prequalify-pair-file" ||
+        arg.starts_with("--native-global-filter-prequalify-pair-file=")) {
+      size_t eqPos = arg.find('=');
+      if (eqPos != StringRef::npos) {
+        nativeGlobalFilterPrequalifyPairFile = arg.substr(eqPos + 1).str();
+      } else if (i + 1 < args.size()) {
+        nativeGlobalFilterPrequalifyPairFile = args[++i].str();
+      }
+      if (nativeGlobalFilterPrequalifyPairFile.empty()) {
+        result.error =
+            "circt-mut cover: missing value for --native-global-filter-prequalify-pair-file.";
+        return result;
+      }
+      continue;
+    }
     if (arg == "--mutations-file" || arg.starts_with("--mutations-file="))
       hasMutationsFile = true;
+    if (arg == "--reuse-pair-file" || arg.starts_with("--reuse-pair-file="))
+      hasReusePairFile = true;
     if (arg == "-h" || arg == "--help")
       wantsHelp = true;
     if (arg == "--generate-mutations" ||
@@ -919,8 +945,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                    "install coreutils timeout or set PATH.";
     return result;
   }
-  if (!wantsHelp && !nativeGlobalFilterProbe && !hasMutationsFile &&
-      !hasGenerateMutations) {
+  if (!wantsHelp && !nativeGlobalFilterProbe && !nativeGlobalFilterPrequalify &&
+      !hasMutationsFile && !hasGenerateMutations) {
     result.error = "circt-mut cover: requires either --mutations-file or "
                    "--generate-mutations.";
     return result;
@@ -941,10 +967,50 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         "--formal-global-propagate-circt-chain).";
     return result;
   }
+  if (nativeGlobalFilterProbe && nativeGlobalFilterPrequalify) {
+    result.error =
+        "circt-mut cover: use either --native-global-filter-probe-mutant or "
+        "--native-global-filter-prequalify, not both.";
+    return result;
+  }
+  if (nativeGlobalFilterPrequalify && hasGenerateMutations) {
+    result.error = "circt-mut cover: --native-global-filter-prequalify "
+                   "currently requires --mutations-file and does not support "
+                   "--generate-mutations yet.";
+    return result;
+  }
+  if (nativeGlobalFilterPrequalify && !hasMutationsFile) {
+    result.error = "circt-mut cover: --native-global-filter-prequalify "
+                   "requires --mutations-file.";
+    return result;
+  }
+  if (nativeGlobalFilterPrequalify && hasReusePairFile) {
+    result.error = "circt-mut cover: --native-global-filter-prequalify cannot "
+                   "be combined with --reuse-pair-file.";
+    return result;
+  }
+  if (nativeGlobalFilterPrequalify && hasGlobalFilterCmd) {
+    result.error = "circt-mut cover: --native-global-filter-prequalify "
+                   "supports built-in global filters only; "
+                   "--formal-global-propagate-cmd is not supported.";
+    return result;
+  }
+  if (nativeGlobalFilterPrequalify && !hasGlobalFilterLEC && !hasGlobalFilterBMC &&
+      !hasGlobalFilterChain) {
+    result.error =
+        "circt-mut cover: --native-global-filter-prequalify requires "
+        "a built-in global filter mode (--formal-global-propagate-circt-lec, "
+        "--formal-global-propagate-circt-bmc, or "
+        "--formal-global-propagate-circt-chain).";
+    return result;
+  }
 
   result.nativeGlobalFilterProbe = nativeGlobalFilterProbe;
   result.nativeGlobalFilterProbeMutant = nativeGlobalFilterProbeMutant;
   result.nativeGlobalFilterProbeLog = nativeGlobalFilterProbeLog;
+  result.nativeGlobalFilterPrequalify = nativeGlobalFilterPrequalify;
+  result.nativeGlobalFilterPrequalifyPairFile =
+      nativeGlobalFilterPrequalifyPairFile;
   result.ok = true;
   return result;
 }
@@ -976,6 +1042,11 @@ struct CoverGlobalFilterProbeConfig {
   uint64_t globalFilterBMCTimeoutSeconds = 0;
   uint64_t globalFilterBMCBound = 20;
   uint64_t globalFilterBMCIgnoreAssertsUntil = 0;
+};
+
+struct CoverGlobalFilterProbeOutcome {
+  std::string classification;
+  int finalRC = -1;
 };
 
 static std::string shellQuote(StringRef value) {
@@ -1447,19 +1518,9 @@ static bool parseCoverGlobalFilterProbeConfig(
   return true;
 }
 
-static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
-  CoverGlobalFilterProbeConfig cfg;
-  std::string error;
-  if (!parseCoverGlobalFilterProbeConfig(rewrite, cfg, error)) {
-    errs() << error << "\n";
-    return 1;
-  }
-
-  if (!ensureParentDirForFile(cfg.logFile, error)) {
-    errs() << error << "\n";
-    return 1;
-  }
-
+static bool executeNativeCoverGlobalFilterProbe(
+    const CoverGlobalFilterProbeConfig &cfg,
+    CoverGlobalFilterProbeOutcome &outcome, std::string &error) {
   std::string classification;
   int finalRC = -1;
 
@@ -1482,23 +1543,19 @@ static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
 
   if (!cfg.globalFilterChain.empty()) {
     if (cfg.globalFilterLEC.empty() || cfg.globalFilterBMC.empty()) {
-      errs() << "circt-mut cover: probe chain mode requires both "
-                "--formal-global-propagate-circt-lec and "
-                "--formal-global-propagate-circt-bmc.\n";
-      return 1;
+      error = "circt-mut cover: probe chain mode requires both "
+              "--formal-global-propagate-circt-lec and "
+              "--formal-global-propagate-circt-bmc.";
+      return false;
     }
     ProbeRawResult lecRaw =
         runCoverGlobalFilterLECRaw(cfg, cfg.logFile + ".lec", error);
-    if (!error.empty()) {
-      errs() << error << "\n";
-      return 1;
-    }
+    if (!error.empty())
+      return false;
     ProbeRawResult bmcRaw =
         runCoverGlobalFilterBMCRaw(cfg, cfg.logFile + ".bmc", error);
-    if (!error.empty()) {
-      errs() << error << "\n";
-      return 1;
-    }
+    if (!error.empty())
+      return false;
     finalRC = bmcRaw.rc;
     if (finalRC == 0)
       finalRC = lecRaw.rc;
@@ -1546,9 +1603,10 @@ static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
     std::error_code ec;
     raw_fd_ostream out(cfg.logFile, ec, sys::fs::OF_Text);
     if (ec) {
-      errs() << "circt-mut cover: failed to write probe log: " << cfg.logFile
-             << ": " << ec.message() << "\n";
-      return 1;
+      error = (Twine("circt-mut cover: failed to write probe log: ") +
+               cfg.logFile + ": " + ec.message())
+                  .str();
+      return false;
     }
     out << "# chain_mode=" << cfg.globalFilterChain << " lec_state="
         << lecRaw.state << " lec_rc=" << lecRaw.rc << "\n";
@@ -1563,32 +1621,362 @@ static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
     sys::fs::remove(cfg.logFile + ".bmc.mutant");
   } else if (!cfg.globalFilterLEC.empty()) {
     ProbeRawResult lecRaw = runCoverGlobalFilterLECRaw(cfg, cfg.logFile, error);
-    if (!error.empty()) {
-      errs() << error << "\n";
-      return 1;
-    }
+    if (!error.empty())
+      return false;
     classifyLEC(lecRaw.state);
     finalRC = lecRaw.rc;
   } else if (!cfg.globalFilterBMC.empty()) {
     ProbeRawResult bmcRaw = runCoverGlobalFilterBMCRaw(cfg, cfg.logFile, error);
-    if (!error.empty()) {
-      errs() << error << "\n";
-      return 1;
-    }
+    if (!error.empty())
+      return false;
     classifyBMC(bmcRaw.state);
     finalRC = bmcRaw.rc;
     sys::fs::remove(cfg.logFile + ".orig");
     sys::fs::remove(cfg.logFile + ".mutant");
   } else {
-    errs() << "circt-mut cover: no built-in global filter configured for "
-              "native probe.\n";
+    error = "circt-mut cover: no built-in global filter configured for "
+            "native probe.";
+    return false;
+  }
+
+  outcome.classification = classification;
+  outcome.finalRC = finalRC;
+  return true;
+}
+
+static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
+  CoverGlobalFilterProbeConfig cfg;
+  std::string error;
+  if (!parseCoverGlobalFilterProbeConfig(rewrite, cfg, error)) {
+    errs() << error << "\n";
     return 1;
   }
 
-  outs() << "classification\t" << classification << "\n";
-  outs() << "global_filter_rc\t" << finalRC << "\n";
+  if (!ensureParentDirForFile(cfg.logFile, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  CoverGlobalFilterProbeOutcome outcome;
+  if (!executeNativeCoverGlobalFilterProbe(cfg, outcome, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  outs() << "classification\t" << outcome.classification << "\n";
+  outs() << "global_filter_rc\t" << outcome.finalRC << "\n";
   outs() << "global_filter_log\t" << cfg.logFile << "\n";
-  return classification == "error" ? 1 : 0;
+  return outcome.classification == "error" ? 1 : 0;
+}
+
+struct MutationRow {
+  std::string id;
+  std::string spec;
+};
+
+struct CoverNativePrequalifyConfig {
+  CoverGlobalFilterProbeConfig probeCfg;
+  std::string mutationsFile;
+  std::string workDir = "mutation-cover-results";
+  std::string createMutatedScript;
+  std::string mutantFormat = "il";
+  uint64_t mutationLimit = 0;
+  std::string pairFile;
+};
+
+static bool parseMutationRowsForPrequalify(StringRef mutationsFile,
+                                           uint64_t mutationLimit,
+                                           std::vector<MutationRow> &rows,
+                                           std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(mutationsFile);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut cover: unable to read --mutations-file: ") +
+             mutationsFile)
+                .str();
+    return false;
+  }
+  StringRef contents = bufferOrErr.get()->getBuffer();
+  SmallVector<StringRef, 256> lines;
+  contents.split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    StringRef id = line.take_until([](char c) { return isspace(c); }).trim();
+    StringRef rest = line.drop_front(id.size()).trim();
+    if (id.empty() || rest.empty()) {
+      error = (Twine("circt-mut cover: malformed mutation line in ") +
+               mutationsFile + ": '" + line + "'")
+                  .str();
+      return false;
+    }
+    rows.push_back(MutationRow{id.str(), rest.str()});
+    if (mutationLimit > 0 && rows.size() >= mutationLimit)
+      break;
+  }
+  if (rows.empty()) {
+    error = (Twine("circt-mut cover: no usable mutations found in ") +
+             mutationsFile)
+                .str();
+    return false;
+  }
+  return true;
+}
+
+static bool isSupportedMutantFormat(StringRef fmt) {
+  return fmt == "il" || fmt == "v" || fmt == "sv";
+}
+
+static std::string joinPath2(StringRef a, StringRef b) {
+  SmallString<256> path(a);
+  sys::path::append(path, b);
+  return std::string(path.str());
+}
+
+static bool parseCoverNativePrequalifyConfig(
+    const char *argv0, const CoverRewriteResult &rewrite,
+    CoverNativePrequalifyConfig &cfg, std::string &error) {
+  CoverRewriteResult probeRewrite = rewrite;
+  probeRewrite.nativeGlobalFilterProbeMutant = "__native_prequalify_dummy__";
+  probeRewrite.nativeGlobalFilterProbeLog = "__native_prequalify_dummy__.log";
+  if (!parseCoverGlobalFilterProbeConfig(probeRewrite, cfg.probeCfg, error))
+    return false;
+  cfg.probeCfg.mutantDesign.clear();
+  cfg.probeCfg.logFile.clear();
+
+  auto parseUIntArg = [&](StringRef value, StringRef flag, uint64_t &out) {
+    if (value.getAsInteger(10, out)) {
+      error = (Twine("circt-mut cover: invalid value for ") + flag + ": " +
+               value + " (expected integer).")
+                  .str();
+      return false;
+    }
+    return true;
+  };
+
+  ArrayRef<std::string> args = rewrite.rewrittenArgs;
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    auto consumeValue = [&](StringRef optName,
+                            std::string &outValue) -> bool {
+      std::string withEq = (optName + "=").str();
+      if (arg.starts_with(withEq)) {
+        outValue = arg.substr(withEq.size()).str();
+        return true;
+      }
+      if (arg == optName) {
+        if (i + 1 >= args.size()) {
+          error = (Twine("circt-mut cover: missing value for ") + optName).str();
+          return false;
+        }
+        outValue = args[++i];
+        return true;
+      }
+      return true;
+    };
+
+    if (arg == "--mutations-file" || arg.starts_with("--mutations-file=")) {
+      if (!consumeValue("--mutations-file", cfg.mutationsFile))
+        return false;
+      continue;
+    }
+    if (arg == "--work-dir" || arg.starts_with("--work-dir=")) {
+      if (!consumeValue("--work-dir", cfg.workDir))
+        return false;
+      continue;
+    }
+    if (arg == "--create-mutated-script" ||
+        arg.starts_with("--create-mutated-script=")) {
+      if (!consumeValue("--create-mutated-script", cfg.createMutatedScript))
+        return false;
+      continue;
+    }
+    if (arg == "--mutant-format" || arg.starts_with("--mutant-format=")) {
+      if (!consumeValue("--mutant-format", cfg.mutantFormat))
+        return false;
+      continue;
+    }
+    if (arg == "--mutation-limit" || arg.starts_with("--mutation-limit=")) {
+      std::string raw;
+      if (!consumeValue("--mutation-limit", raw))
+        return false;
+      if (!parseUIntArg(raw, "--mutation-limit", cfg.mutationLimit))
+        return false;
+      continue;
+    }
+  }
+
+  if (cfg.mutationsFile.empty()) {
+    error = "circt-mut cover: --native-global-filter-prequalify requires "
+            "--mutations-file.";
+    return false;
+  }
+  if (!isSupportedMutantFormat(cfg.mutantFormat)) {
+    error = (Twine("circt-mut cover: unsupported --mutant-format value for "
+                   "native prequalification: ") +
+             cfg.mutantFormat + " (expected il|v|sv).")
+                .str();
+    return false;
+  }
+
+  if (cfg.createMutatedScript.empty()) {
+    auto defaultScript = resolveScriptPath(argv0, "create_mutated_yosys.sh");
+    if (!defaultScript) {
+      error = "circt-mut cover: unable to locate default "
+              "'create_mutated_yosys.sh' for native prequalification.";
+      return false;
+    }
+    cfg.createMutatedScript = *defaultScript;
+  } else {
+    auto resolvedCreateScript = resolveToolPath(cfg.createMutatedScript);
+    if (!resolvedCreateScript) {
+      error = (Twine("circt-mut cover: unable to resolve --create-mutated-script "
+                     "for native prequalification: ") +
+               cfg.createMutatedScript)
+                  .str();
+      return false;
+    }
+    cfg.createMutatedScript = *resolvedCreateScript;
+  }
+
+  if (!rewrite.nativeGlobalFilterPrequalifyPairFile.empty()) {
+    cfg.pairFile = rewrite.nativeGlobalFilterPrequalifyPairFile;
+  } else {
+    cfg.pairFile = joinPath2(cfg.workDir, "native_global_filter_prequalify.tsv");
+  }
+  return true;
+}
+
+static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
+    const char *argv0, const CoverRewriteResult &rewrite) {
+  CoverNativePrequalifyConfig cfg;
+  std::string error;
+  if (!parseCoverNativePrequalifyConfig(argv0, rewrite, cfg, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  if (!ensureParentDirForFile(cfg.pairFile, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  std::vector<MutationRow> rows;
+  if (!parseMutationRowsForPrequalify(cfg.mutationsFile, cfg.mutationLimit, rows,
+                                      error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  std::error_code pairEC;
+  raw_fd_ostream pairOut(cfg.pairFile, pairEC, sys::fs::OF_Text);
+  if (pairEC) {
+    errs() << "circt-mut cover: failed to open prequalification pair file: "
+           << cfg.pairFile << ": " << pairEC.message() << "\n";
+    return 1;
+  }
+  pairOut
+      << "mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\t"
+         "propagate_exit\tnote\n";
+
+  std::string prequalifyRoot = joinPath2(cfg.workDir, "native_global_filter_prequalify");
+  std::error_code mkdirEC = sys::fs::create_directories(prequalifyRoot);
+  if (mkdirEC) {
+    errs() << "circt-mut cover: failed to create native prequalification root: "
+           << prequalifyRoot << ": " << mkdirEC.message() << "\n";
+    return 1;
+  }
+
+  for (const MutationRow &row : rows) {
+    std::string mutationRoot = joinPath2(prequalifyRoot, row.id);
+    std::error_code rowEC = sys::fs::create_directories(mutationRoot);
+    if (rowEC) {
+      errs() << "circt-mut cover: failed to create mutation prequalification "
+             << "directory: " << mutationRoot << ": " << rowEC.message() << "\n";
+      return 1;
+    }
+    std::string mutationInput = joinPath2(mutationRoot, "mutation_input.txt");
+    std::string mutantDesign =
+        joinPath2(mutationRoot, (Twine("mutant.") + cfg.mutantFormat).str());
+    std::string createLog = joinPath2(mutationRoot, "create_mutated.log");
+    std::string probeLog = joinPath2(mutationRoot, "global_propagate.log");
+
+    {
+      std::error_code inputEC;
+      raw_fd_ostream inputOut(mutationInput, inputEC, sys::fs::OF_Text);
+      if (inputEC) {
+        errs() << "circt-mut cover: failed to write mutation input: "
+               << mutationInput << ": " << inputEC.message() << "\n";
+        return 1;
+      }
+      inputOut << row.id << " " << row.spec << "\n";
+    }
+
+    std::string propagation = "propagated";
+    int propagateRC = -1;
+    std::string note = "global_filter_propagated;native_prequalify=1";
+
+    SmallVector<std::string, 16> createCmd;
+    createCmd.push_back(cfg.createMutatedScript);
+    createCmd.push_back("-d");
+    createCmd.push_back(cfg.probeCfg.design);
+    createCmd.push_back("-i");
+    createCmd.push_back(mutationInput);
+    createCmd.push_back("-o");
+    createCmd.push_back(mutantDesign);
+    int createRC = -1;
+    std::string createError;
+    if (!runArgvToLog(createCmd, createLog, /*timeoutSeconds=*/0, createRC,
+                      createError)) {
+      note += ";native_prequalify_create_mutated_exec_error=1";
+    } else if (createRC != 0) {
+      propagateRC = createRC;
+      note += ";native_prequalify_create_mutated_error=1";
+    } else {
+      CoverGlobalFilterProbeConfig probeCfg = cfg.probeCfg;
+      probeCfg.mutantDesign = mutantDesign;
+      probeCfg.logFile = probeLog;
+      CoverGlobalFilterProbeOutcome outcome;
+      std::string probeError;
+      if (!executeNativeCoverGlobalFilterProbe(probeCfg, outcome, probeError)) {
+        note += ";native_prequalify_probe_exec_error=1";
+      } else if (outcome.classification == "not_propagated") {
+        propagation = "not_propagated";
+        propagateRC = outcome.finalRC;
+        note = "global_filter_not_propagated;native_prequalify=1";
+      } else if (outcome.classification == "propagated") {
+        propagation = "propagated";
+        propagateRC = outcome.finalRC;
+      } else {
+        propagation = "propagated";
+        propagateRC = outcome.finalRC;
+        note += ";native_prequalify_probe_error=1";
+      }
+    }
+
+    pairOut << row.id << "\t-\tactivated\t" << propagation
+            << "\t-1\t" << propagateRC << "\t" << note << "\n";
+  }
+  pairOut.close();
+
+  auto scriptPath = resolveScriptPath(argv0, "run_mutation_cover.sh");
+  if (!scriptPath) {
+    errs() << "circt-mut: unable to locate script 'run_mutation_cover.sh'.\n";
+    errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+              " utils scripts.\n";
+    return 1;
+  }
+
+  SmallVector<std::string, 64> rewrittenArgs;
+  rewrittenArgs.append(rewrite.rewrittenArgs.begin(),
+                       rewrite.rewrittenArgs.end());
+  rewrittenArgs.push_back("--reuse-pair-file");
+  rewrittenArgs.push_back(cfg.pairFile);
+
+  SmallVector<StringRef, 64> rewrittenArgsRef;
+  for (const std::string &arg : rewrittenArgs)
+    rewrittenArgsRef.push_back(arg);
+  return dispatchToScript(*scriptPath, rewrittenArgsRef);
 }
 
 struct MatrixRewriteResult {
@@ -2618,6 +3006,8 @@ static int runCoverFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   }
   if (rewrite.nativeGlobalFilterProbe)
     return runNativeCoverGlobalFilterProbe(rewrite);
+  if (rewrite.nativeGlobalFilterPrequalify)
+    return runNativeCoverGlobalFilterPrequalifyAndDispatch(argv0, rewrite);
 
   auto scriptPath = resolveScriptPath(argv0, "run_mutation_cover.sh");
   if (!scriptPath) {

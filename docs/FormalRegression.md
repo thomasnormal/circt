@@ -336,6 +336,37 @@ certitude_run \
   -out /tmp/certitude-run
 ```
 
+1b. Global relevance prequalification before dynamic tests
+
+`circt-mut cover`:
+
+```bash
+circt-mut cover \
+  --design /path/to/design.il \
+  --mutations-file /path/to/mutations.txt \
+  --native-global-filter-prequalify \
+  --formal-global-propagate-circt-chain auto \
+  --work-dir /tmp/mutation-cover
+```
+
+Equivalent MCY flow (schematic; custom formal-prune glue is typical):
+
+```bash
+# precompute mutation relevance with your formal wrapper
+mcy run -j8
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```bash
+certitude_run \
+  -rtl /path/to/filelist.f \
+  -tb /path/to/testlist.tcl \
+  -fault_model rtl_mutation \
+  -formal_prune on \
+  -out /tmp/certitude-run
+```
+
 2. Increase mutation volume / refresh generated set
 
 `circt-mut cover`:
@@ -506,6 +537,17 @@ Execution controls:
     built-in circt-lec/circt-bmc/chain classification on a single mutant and
     prints `classification`, `global_filter_rc`, and `global_filter_log`
     without launching test execution.
+  - native campaign prequalification mode is now available for built-in formal
+    filters:
+    `--native-global-filter-prequalify`
+    (optional `--native-global-filter-prequalify-pair-file <path>`). This
+    runs built-in circt-lec/circt-bmc/chain global classification for each
+    mutation from `--mutations-file`, emits reuse-compatible
+    `pair_qualification.tsv` rows (`test_id=-`), and dispatches
+    `run_mutation_cover.sh` with `--reuse-pair-file`.
+  - native prequalification currently requires `--mutations-file` (not
+    `--generate-mutations`), rejects explicit `--reuse-pair-file`, and does
+    not support `--formal-global-propagate-cmd`.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
   - cover formal numeric/cache controls are now validated natively:
