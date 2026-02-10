@@ -32,6 +32,7 @@ FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
 DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
+BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS - it's emitted before LTLToCore and LowerClockedAssertLike passes
@@ -167,6 +168,7 @@ drop_remark_cases=0
 
 declare -A expect_mode
 declare -A semantic_tags_by_case
+declare -A drop_remark_seen_cases
 
 load_semantic_tag_map() {
   if [[ -z "$BMC_SEMANTIC_TAG_MAP_FILE" || ! -f "$BMC_SEMANTIC_TAG_MAP_FILE" ]]; then
@@ -197,6 +199,26 @@ emit_result_row() {
       "$status" "$base" "$sv" "$tags" >> "$results_tmp"
   else
     printf "%s\t%s\t%s\n" "$status" "$base" "$sv" >> "$results_tmp"
+  fi
+}
+
+record_drop_remark_case() {
+  local case_id="$1"
+  local case_path="$2"
+  local verilog_log="$3"
+  if [[ -z "$case_id" || ! -s "$verilog_log" ]]; then
+    return
+  fi
+  if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+    return
+  fi
+  if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
+    return
+  fi
+  drop_remark_seen_cases["$case_id"]=1
+  drop_remark_cases=$((drop_remark_cases + 1))
+  if [[ -n "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+    printf "%s\t%s\n" "$case_id" "$case_path" >> "$BMC_DROP_REMARK_CASES_OUT"
   fi
 }
 
@@ -373,9 +395,7 @@ while IFS= read -r -d '' sv; do
   cmd+=("${files[@]}")
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-    if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
-      drop_remark_cases=$((drop_remark_cases + 1))
-    fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
     # Treat expected compile failures as PASS for negative compilation/parsing
     # tests. Simulation-negative tests are expected to compile and are handled
     # via SAT/UNSAT classification below.
@@ -389,9 +409,7 @@ while IFS= read -r -d '' sv; do
     emit_result_row "$result" "$base" "$sv"
     continue
   fi
-  if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
-    drop_remark_cases=$((drop_remark_cases + 1))
-  fi
+  record_drop_remark_case "$base" "$sv" "$verilog_log"
 
   if [[ "$run_bmc" == "0" ]]; then
     if [[ "$expect_compile_fail" == "1" ]]; then
@@ -580,6 +598,9 @@ if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OU
 fi
 if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
   sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
 fi
 
 echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"

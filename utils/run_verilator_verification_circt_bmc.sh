@@ -30,6 +30,7 @@ BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
+BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
@@ -99,6 +100,7 @@ skip=0
 total=0
 drop_remark_cases=0
 declare -A semantic_tags_by_case
+declare -A drop_remark_seen_cases
 
 is_xfail() {
   local name="$1"
@@ -140,6 +142,26 @@ emit_result_row() {
       "$status" "$base" "$sv" "$tags" >> "$results_tmp"
   else
     printf "%s\t%s\t%s\n" "$status" "$base" "$sv" >> "$results_tmp"
+  fi
+}
+
+record_drop_remark_case() {
+  local case_id="$1"
+  local case_path="$2"
+  local verilog_log="$3"
+  if [[ -z "$case_id" || ! -s "$verilog_log" ]]; then
+    return
+  fi
+  if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+    return
+  fi
+  if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
+    return
+  fi
+  drop_remark_seen_cases["$case_id"]=1
+  drop_remark_cases=$((drop_remark_cases + 1))
+  if [[ -n "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+    printf "%s\t%s\n" "$case_id" "$case_path" >> "$BMC_DROP_REMARK_CASES_OUT"
   fi
 }
 
@@ -277,9 +299,7 @@ for suite in "${suites[@]}"; do
     cmd+=("$sv")
 
     if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
-      if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
-        drop_remark_cases=$((drop_remark_cases + 1))
-      fi
+      record_drop_remark_case "$base" "$sv" "$verilog_log"
       result="ERROR"
       if is_xfail "$base"; then
         result="XFAIL"
@@ -290,9 +310,7 @@ for suite in "${suites[@]}"; do
       emit_result_row "$result" "$base" "$sv"
       continue
     fi
-    if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
-      drop_remark_cases=$((drop_remark_cases + 1))
-    fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
 
     bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
       "--module" "$top_for_file")
@@ -422,6 +440,9 @@ if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OU
 fi
 if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
   sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
 fi
 
 echo "verilator-verification summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"

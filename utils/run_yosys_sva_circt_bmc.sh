@@ -37,6 +37,7 @@ SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
+BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
@@ -8103,7 +8104,8 @@ load_semantic_tag_map() {
 
 record_drop_remark_case() {
   local case_id="$1"
-  local verilog_log="$2"
+  local case_path="$2"
+  local verilog_log="$3"
   if [[ -z "$case_id" || ! -s "$verilog_log" ]]; then
     return
   fi
@@ -8115,6 +8117,9 @@ record_drop_remark_case() {
   fi
   drop_remark_seen_cases["$case_id"]=1
   drop_remark_cases=$((drop_remark_cases + 1))
+  if [[ -n "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+    printf "%s\t%s\n" "$case_id" "$case_path" >> "$BMC_DROP_REMARK_CASES_OUT"
+  fi
 }
 
 report_case_outcome() {
@@ -8307,7 +8312,7 @@ run_case() {
   fi
   if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" \
       "${extra_def[@]}" "$sv" > "$mlir" 2> "$verilog_log"; then
-    record_drop_remark_case "$base" "$verilog_log"
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
     if [[ -n "$KEEP_LOGS_DIR" ]]; then
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-verilog.log" 2>/dev/null || true
@@ -8315,7 +8320,7 @@ run_case() {
     report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
     return
   fi
-  record_drop_remark_case "$base" "$verilog_log"
+  record_drop_remark_case "$base" "$sv" "$verilog_log"
   local out
   bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
       "--module" "$TOP" "--shared-libs=$Z3_LIB")
@@ -8420,6 +8425,9 @@ if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OU
 fi
 if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
   sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
 fi
 
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then

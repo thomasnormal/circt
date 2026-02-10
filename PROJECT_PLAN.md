@@ -1110,3 +1110,20 @@ See CHANGELOG.md on recent progress.
 12. Next closure feature for full-syntax-tree governance:
     add optional per-case drop-remark artifact export from all BMC runners and
     strict-gate support for "new dropped-syntax cases" deltas.
+13. Per-case dropped-syntax artifact closure landed (February 10, 2026):
+    - BMC runners now export optional case-level drop-remark artifacts via
+      `BMC_DROP_REMARK_CASES_OUT`:
+      `sv-tests`, `verilator-verification`, `yosys/tests/sva`.
+    - `yosys/tests/sva` deduplicates case IDs across pass/fail mode executions
+      before counting and artifact emission.
+    - `run_formal_all.sh` now passes lane-local drop-case artifact paths for
+      all BMC lanes and persists case IDs in baseline rows
+      (`bmc_drop_remark_case_ids`).
+    - new strict-gate option:
+      `--fail-on-new-bmc-drop-remark-case-ids`
+      (enabled by `--strict-gate`) fails on growth in dropped-syntax-affected
+      case IDs, not just count drift.
+14. Updated no-drop limitation after case-ID gate:
+    drift detection is now case-aware, but still tied to warning-pattern
+    detection (`"will be dropped during lowering"`) rather than first-class
+    lowering provenance tags emitted directly by the frontend/lowering passes.
