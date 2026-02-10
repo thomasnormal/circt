@@ -419,13 +419,13 @@ circt-mut cover \
 Prequalify mode:
 - creates mutants and runs native built-in global filter classification
   (`circt-lec`/`circt-bmc`/chain) before test dispatch,
+- supports both `--mutations-file` and `--generate-mutations` mutation sources,
 - writes a `pair_qualification.tsv`-compatible reuse file
   (`test_id=-` prequalified rows), and
 - dispatches `run_mutation_cover.sh` with `--reuse-pair-file` set to that
   generated file.
 
 Current scope limits:
-- requires `--mutations-file` (no `--generate-mutations` yet),
 - supports built-in filters only (not `--formal-global-propagate-cmd`),
 - cannot be combined with explicit `--reuse-pair-file`.
 Cover mutation source consistency is now also validated natively:

@@ -7,5 +7,4 @@
 // RUN: FileCheck %s < %t/out.txt
 // RUN: test ! -e %t/invoked
 //
-// CHECK: circt-mut cover: --native-global-filter-prequalify requires --mutations-file
-
+// CHECK: circt-mut cover: --native-global-filter-prequalify requires either --mutations-file or --generate-mutations.
