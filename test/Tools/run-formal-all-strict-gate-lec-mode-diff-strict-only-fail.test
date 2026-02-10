@@ -1,0 +1,13 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-circt-verilog-opentitan
+// RUN: printf '#!/usr/bin/env python3\nimport os,sys\nout = os.environ.get(\"OUT\", \"\")\nif not out:\n  sys.exit(8)\nmode = os.environ.get(\"LEC_MODE_LABEL\", \"LEC\")\nworkdir = \"\"\nargs = sys.argv[1:]\nfor i, arg in enumerate(args):\n  if arg == \"--workdir\" and i + 1 < len(args):\n    workdir = args[i + 1]\nos.makedirs(os.path.dirname(out), exist_ok=True)\nin_base = \"/out-base/\" in out\nrows = []\nif mode == \"LEC_STRICT\":\n  if in_base:\n    rows = [(\"FAIL\", \"a\"), (\"PASS\", \"b\"), (\"PASS\", \"c\")]\n  else:\n    rows = [(\"FAIL\", \"a\"), (\"FAIL\", \"b\"), (\"PASS\", \"c\")]\nelse:\n  rows = [(\"PASS\", \"a\"), (\"PASS\", \"b\"), (\"PASS\", \"c\")]\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n  for status, base in rows:\n    detail = workdir + \"/\" + base\n    if mode == \"LEC_STRICT\" and status != \"PASS\":\n      detail += \"#XPROP_ONLY\"\n    f.write(status + \"\\t\" + base + \"\\t\" + detail + \"\\topentitan\\t\" + mode + \"\\n\")\nif any(status != \"PASS\" for status, _ in rows):\n  print(\"LEC failures: 1\")\n  sys.exit(1)\nprint(\"LEC completed successfully.\")\nsys.exit(0)\n' > %t/utils/run_opentitan_circt_lec.py
+// RUN: chmod +x %t/utils/run_formal_all.sh %t/utils/run_opentitan_circt_lec.py %t/fake-circt-verilog-opentitan
+// RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out-base --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex '^opentitan/(LEC|LEC_STRICT|LEC_MODE_DIFF)$' --opentitan-lec-impl-filter '.*' --baseline-file %t/formal-baselines.tsv --update-baselines
+// RUN: FileCheck %s --check-prefix=BASE < %t/formal-baselines.tsv
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-new --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan %t/fake-circt-verilog-opentitan --include-lane-regex "^opentitan/(LEC|LEC_STRICT|LEC_MODE_DIFF)$" --opentitan-lec-impl-filter ".*" --baseline-file %t/formal-baselines.tsv --fail-on-new-lec-mode-diff-strict-only-fail' 2>&1 | FileCheck %s --check-prefix=STRICTONLY
+//
+// BASE: opentitan{{[[:space:]]+}}LEC_MODE_DIFF{{.*}}strict_only_fail=1
+// STRICTONLY: strict gate failures:
+// STRICTONLY: opentitan LEC_MODE_DIFF: strict_only_fail increased (1 -> 2, window=1)
