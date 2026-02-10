@@ -6685,6 +6685,7 @@ static bool collectMatrixReport(
   std::string laneBudgetWorstBMCUnknownLaneID = "-";
   std::string laneBudgetWorstErrorsLaneID = "-";
   std::string laneBudgetLowestDetectedLaneID = "-";
+  StringMap<MatrixPrequalifyLaneMetrics> resultsPrequalifyByLane;
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
   StringMap<uint64_t> extraMetricSums;
@@ -6915,6 +6916,29 @@ static bool collectMatrixReport(
                                laneBudgetRow.prequalifyCmdTimeoutPropagatedMutants);
       readOptionalResultMetric(fields, prequalifyCmdErrorMutantsCol,
                                laneBudgetRow.prequalifyCmdErrorMutants);
+      if (!laneID.empty()) {
+        MatrixPrequalifyLaneMetrics laneMetrics;
+        laneMetrics.hasSummary = rowSummaryPresent;
+        laneMetrics.totalMutants = laneBudgetRow.prequalifyTotalMutants;
+        laneMetrics.notPropagatedMutants =
+            laneBudgetRow.prequalifyNotPropagatedMutants;
+        laneMetrics.propagatedMutants = laneBudgetRow.prequalifyPropagatedMutants;
+        laneMetrics.createMutatedErrorMutants =
+            laneBudgetRow.prequalifyCreateMutatedErrorMutants;
+        laneMetrics.probeErrorMutants = laneBudgetRow.prequalifyProbeErrorMutants;
+        laneMetrics.cmdTokenNotPropagatedMutants =
+            laneBudgetRow.prequalifyCmdTokenNotPropagatedMutants;
+        laneMetrics.cmdTokenPropagatedMutants =
+            laneBudgetRow.prequalifyCmdTokenPropagatedMutants;
+        laneMetrics.cmdRCNotPropagatedMutants =
+            laneBudgetRow.prequalifyCmdRCNotPropagatedMutants;
+        laneMetrics.cmdRCPropagatedMutants =
+            laneBudgetRow.prequalifyCmdRCPropagatedMutants;
+        laneMetrics.cmdTimeoutPropagatedMutants =
+            laneBudgetRow.prequalifyCmdTimeoutPropagatedMutants;
+        laneMetrics.cmdErrorMutants = laneBudgetRow.prequalifyCmdErrorMutants;
+        resultsPrequalifyByLane[laneID] = laneMetrics;
+      }
     }
 
     std::string metricsPath;
@@ -7213,6 +7237,7 @@ static bool collectMatrixReport(
   uint64_t nativeCmdRCPropagatedMutants = 0;
   uint64_t nativeCmdTimeoutPropagatedMutants = 0;
   uint64_t nativeCmdErrorMutants = 0;
+  StringMap<MatrixPrequalifyLaneMetrics> nativePrequalifyByLane;
   if (nativeSummaryFileExists) {
     auto summaryBufferOrErr = MemoryBuffer::getFile(nativeSummaryPath);
     if (!summaryBufferOrErr) {
@@ -7288,6 +7313,10 @@ static bool collectMatrixReport(
         if (summaryLine.trim().empty())
           continue;
         splitTSVLine(summaryLine, fields);
+        StringRef summaryLaneID;
+        if (auto it = summaryColumns.find("lane_id"); it != summaryColumns.end() &&
+            it->second < fields.size())
+          summaryLaneID = fields[it->second].trim();
         ++nativeSummaryLanes;
         if (totalCol >= fields.size() || fields[totalCol].trim().empty() ||
             fields[totalCol].trim() == "-")
@@ -7306,6 +7335,39 @@ static bool collectMatrixReport(
         addSummaryMetric(fields, cmdTimeoutPropCol,
                          nativeCmdTimeoutPropagatedMutants);
         addSummaryMetric(fields, cmdErrCol, nativeCmdErrorMutants);
+        if (!summaryLaneID.empty()) {
+          MatrixPrequalifyLaneMetrics laneMetrics;
+          StringRef totalValue =
+              totalCol < fields.size() ? fields[totalCol].trim() : StringRef();
+          laneMetrics.hasSummary = !totalValue.empty() && totalValue != "-";
+          auto parseLaneMetric = [&](size_t col, uint64_t &dst) {
+            if (col >= fields.size())
+              return;
+            StringRef value = fields[col].trim();
+            if (value.empty() || value == "-")
+              return;
+            uint64_t parsed = 0;
+            if (value.getAsInteger(10, parsed)) {
+              ++nativeSummaryInvalidValues;
+              return;
+            }
+            dst = parsed;
+          };
+          parseLaneMetric(totalCol, laneMetrics.totalMutants);
+          parseLaneMetric(notPropCol, laneMetrics.notPropagatedMutants);
+          parseLaneMetric(propCol, laneMetrics.propagatedMutants);
+          parseLaneMetric(createErrCol, laneMetrics.createMutatedErrorMutants);
+          parseLaneMetric(probeErrCol, laneMetrics.probeErrorMutants);
+          parseLaneMetric(cmdTokenNotPropCol,
+                          laneMetrics.cmdTokenNotPropagatedMutants);
+          parseLaneMetric(cmdTokenPropCol, laneMetrics.cmdTokenPropagatedMutants);
+          parseLaneMetric(cmdRCNotPropCol, laneMetrics.cmdRCNotPropagatedMutants);
+          parseLaneMetric(cmdRCPropCol, laneMetrics.cmdRCPropagatedMutants);
+          parseLaneMetric(cmdTimeoutPropCol,
+                          laneMetrics.cmdTimeoutPropagatedMutants);
+          parseLaneMetric(cmdErrCol, laneMetrics.cmdErrorMutants);
+          nativePrequalifyByLane[summaryLaneID] = laneMetrics;
+        }
       }
     }
   }
@@ -7359,6 +7421,10 @@ static bool collectMatrixReport(
       hasResultsPrequalifyColumns && nativeSummaryFileExists != 0;
   rows.emplace_back("matrix.prequalify_drift_comparable",
                     prequalifyDriftComparable ? "1" : "0");
+  uint64_t prequalifyDriftLaneRowsCompared = 0;
+  uint64_t prequalifyDriftLaneRowsMismatch = 0;
+  uint64_t prequalifyDriftLaneRowsMissingInResults = 0;
+  uint64_t prequalifyDriftLaneRowsMissingInNative = 0;
   if (prequalifyDriftComparable) {
     appendDriftMetric("summary_present_lanes",
                       prequalifyResultsSummaryPresentLanes, nativeSummaryLanes);
@@ -7396,7 +7462,85 @@ static bool collectMatrixReport(
                       nativeCmdTimeoutPropagatedMutants);
     appendDriftMetric("cmd_error_mutants", prequalifyResultsCmdErrorMutantsSum,
                       nativeCmdErrorMutants);
+
+    StringSet<> laneUnion;
+    for (const auto &it : resultsPrequalifyByLane)
+      laneUnion.insert(it.getKey());
+    for (const auto &it : nativePrequalifyByLane)
+      laneUnion.insert(it.getKey());
+    for (const auto &laneIt : laneUnion) {
+      StringRef laneID = laneIt.getKey();
+      auto resIt = resultsPrequalifyByLane.find(laneID);
+      auto natIt = nativePrequalifyByLane.find(laneID);
+      std::string laneKey = sanitizeReportKeySegment(laneID);
+      std::string base =
+          (Twine("matrix.prequalify_drift.lane.") + laneKey).str();
+      if (resIt == resultsPrequalifyByLane.end()) {
+        ++prequalifyDriftLaneRowsMissingInResults;
+        rows.emplace_back((Twine(base) + ".status").str(), "missing_in_results");
+        continue;
+      }
+      if (natIt == nativePrequalifyByLane.end()) {
+        ++prequalifyDriftLaneRowsMissingInNative;
+        rows.emplace_back((Twine(base) + ".status").str(), "missing_in_native");
+        continue;
+      }
+      ++prequalifyDriftLaneRowsCompared;
+      SmallVector<std::string, 16> mismatchFields;
+      const auto &res = resIt->second;
+      const auto &nat = natIt->second;
+      auto checkEq = [&](StringRef name, uint64_t lhs, uint64_t rhs) {
+        if (lhs != rhs)
+          mismatchFields.push_back(name.str());
+      };
+      checkEq("summary_present", res.hasSummary ? 1 : 0,
+              nat.hasSummary ? 1 : 0);
+      if (res.hasSummary && nat.hasSummary)
+        checkEq("total_mutants", res.totalMutants, nat.totalMutants);
+      checkEq("not_propagated_mutants", res.notPropagatedMutants,
+              nat.notPropagatedMutants);
+      checkEq("propagated_mutants", res.propagatedMutants,
+              nat.propagatedMutants);
+      checkEq("create_mutated_error_mutants", res.createMutatedErrorMutants,
+              nat.createMutatedErrorMutants);
+      checkEq("probe_error_mutants", res.probeErrorMutants,
+              nat.probeErrorMutants);
+      checkEq("cmd_token_not_propagated_mutants",
+              res.cmdTokenNotPropagatedMutants,
+              nat.cmdTokenNotPropagatedMutants);
+      checkEq("cmd_token_propagated_mutants", res.cmdTokenPropagatedMutants,
+              nat.cmdTokenPropagatedMutants);
+      checkEq("cmd_rc_not_propagated_mutants", res.cmdRCNotPropagatedMutants,
+              nat.cmdRCNotPropagatedMutants);
+      checkEq("cmd_rc_propagated_mutants", res.cmdRCPropagatedMutants,
+              nat.cmdRCPropagatedMutants);
+      checkEq("cmd_timeout_propagated_mutants",
+              res.cmdTimeoutPropagatedMutants,
+              nat.cmdTimeoutPropagatedMutants);
+      checkEq("cmd_error_mutants", res.cmdErrorMutants, nat.cmdErrorMutants);
+
+      if (mismatchFields.empty()) {
+        rows.emplace_back((Twine(base) + ".status").str(), "match");
+        rows.emplace_back((Twine(base) + ".mismatch_count").str(), "0");
+      } else {
+        ++prequalifyDriftLaneRowsMismatch;
+        rows.emplace_back((Twine(base) + ".status").str(), "mismatch");
+        rows.emplace_back((Twine(base) + ".mismatch_count").str(),
+                          std::to_string(mismatchFields.size()));
+        for (size_t i = 0; i < mismatchFields.size(); ++i)
+          rows.emplace_back((Twine(base) + ".mismatch_" + Twine(i + 1)).str(),
+                            mismatchFields[i]);
+      }
+    }
   }
+  rows.emplace_back("matrix.prequalify_drift_lane_rows_compared",
+                    std::to_string(prequalifyDriftLaneRowsCompared));
+  rows.emplace_back("matrix.prequalify_drift_lane_rows_mismatch",
+                    std::to_string(prequalifyDriftLaneRowsMismatch));
+  rows.emplace_back("matrix.prequalify_drift_lane_rows_missing_in_results",
+                    std::to_string(prequalifyDriftLaneRowsMissingInResults));
+  rows.emplace_back("matrix.prequalify_drift_lane_rows_missing_in_native",
+                    std::to_string(prequalifyDriftLaneRowsMissingInNative));
   rows.emplace_back("matrix.prequalify_drift_nonzero_metrics",
                     std::to_string(prequalifyDriftNonZeroMetrics));
   if (prequalifyDriftNonZeroOut)
