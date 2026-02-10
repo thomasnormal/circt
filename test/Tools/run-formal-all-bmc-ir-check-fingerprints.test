@@ -9,6 +9,7 @@
 // RUN: FileCheck %s --check-prefix=IRROW < %t/out/bmc-abstraction-provenance-ir-check-attribution.tsv
 //
 // SUMMARY: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}1{{[[:space:]]+}}1{{[[:space:]]+}}0
-// IRHDR: suite{{.*}}ir_check_sites{{[[:space:]]+}}ir_check_fingerprints{{[[:space:]]+}}provenance_token_count
+// IRHDR: suite{{.*}}ir_check_sites{{[[:space:]]+}}ir_check_fingerprints{{[[:space:]]+}}ir_check_keys{{[[:space:]]+}}ir_check_key_modes{{[[:space:]]+}}provenance_token_count
 // IRROW: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_fp{{[[:space:]]+}}PASS{{[[:space:]]+}}0{{[[:space:]]+}}/tests/case_fp.sv{{[[:space:]]+}}2{{[[:space:]]+}}verif.assert;verif.clocked_assert
 // IRROW: chk_{{[0-9a-f]+}};chk_{{[0-9a-f]+}}
+// IRROW: k_fp_{{[0-9a-f]+}};k_fp_{{[0-9a-f]+}}{{[[:space:]]+}}fingerprint

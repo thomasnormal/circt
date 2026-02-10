@@ -1,5 +1,42 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 889 - February 10, 2026
+
+### BMC Check-ID Hardening: Structured Key Modes (`label|loc|fingerprint`)
+
+1. Extended BMC provenance reports in `utils/run_formal_all.sh` with explicit
+   structured check-key fields:
+   - `ir_check_keys`
+   - `ir_check_key_modes`
+2. Implemented deterministic key selection hierarchy per lowered check:
+   - use non-empty `label` when present (`k_lbl_<sha1-12>`)
+   - else use source `loc(...)` when present (`k_loc_<sha1-12>`)
+   - else fallback to fingerprint-derived key (`k_fp_<sha1-12>`)
+3. Purpose:
+   - make check-identity strategy explicit in artifacts
+   - provide forward-compatible schema for future true backend check IDs while
+     preserving current deterministic fallback behavior.
+4. Updated fingerprint test expectations:
+   - `test/Tools/run-formal-all-bmc-ir-check-fingerprints.test` now validates
+     both `ir_check_keys` and `ir_check_key_modes`.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-ir-check-fingerprints.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-check-attribution-long-line.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-uvm-semantics-keys-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^sv-tests-uvm/BMC_SEMANTICS$'`
+  - result:
+    - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=6 fail=0 xfail=0 xpass=0 error=0`
+    - attribution rows include:
+      - `ir_check_fingerprints=chk_<...>`
+      - `ir_check_keys=k_fp_<...>`
+      - `ir_check_key_modes=fingerprint`
+
 ## Iteration 888 - February 10, 2026
 
 ### BMC Attribution Fidelity Hardening: Full Check-Text Capture

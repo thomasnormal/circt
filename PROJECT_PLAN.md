@@ -523,6 +523,16 @@ See CHANGELOG.md on recent progress.
 62. Updated long-term implication:
     - Fingerprint collision risk from truncated check text is reduced, but true
       end-to-end check-ID propagation remains the target capability.
+63. Structured IR-check key stratification landed (February 10, 2026):
+    - BMC provenance reports now include:
+      `ir_check_keys` and `ir_check_key_modes`.
+    - Key selection order is now explicit:
+      `label` (non-empty) -> `loc` -> `fingerprint` fallback.
+64. Remaining limitation after structured-key landing:
+    - Current sv-tests UVM semantic lane still resolves to `fingerprint` mode
+      because lowered checks mostly lack non-empty labels/source locs.
+    - Next long-term feature remains backend-owned stable check IDs propagated
+      through lowering and solver witness reporting.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
