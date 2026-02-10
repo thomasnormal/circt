@@ -298,14 +298,67 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
-  # Check if the MLIR has any module to simulate
-  # Chapter 18 class-only tests have no top module
+  # Check if the MLIR has any module to simulate.
+  # For class-only tests (no hw.module), auto-generate a wrapper module that
+  # instantiates the class, calls randomize(), and $finishes. This provides
+  # semantic testing (full compile + simulate pipeline) rather than just
+  # compile-only verification.
   if ! grep -q 'llhd.entity\|llhd.proc\|hw.module' "$mlir"; then
-    result="NO_TOP"
-    skip=$((skip + 1))
-    total=$((total - 1))
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
-    continue
+    # Extract class name from the SV file
+    class_name="$(grep -m1 '^class ' "$sv" | sed 's/class \([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/')"
+    if [[ -z "$class_name" ]]; then
+      result="NO_TOP"
+      skip=$((skip + 1))
+      total=$((total - 1))
+      printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+      continue
+    fi
+
+    # Detect if the constructor needs arguments (e.g., "function new(int seed)")
+    ctor_args=""
+    ctor_line="$(grep -m1 'function new' "$sv" | sed 's/.*function new *(\(.*\));/\1/')"
+    if [[ -n "$ctor_line" ]] && [[ "$ctor_line" != *"function new"* ]]; then
+      # Count constructor parameters and provide default values (0 for each)
+      n_args=$(echo "$ctor_line" | tr ',' '\n' | wc -l)
+      ctor_args=$(printf '0%.0s' $(seq 1 "$n_args") | sed 's/0/, 0/g; s/^, //')
+    fi
+
+    # Generate wrapper SV file that exercises the class
+    wrapper="$tmpdir/${base}_wrapper.sv"
+    cat > "$wrapper" <<WRAPPER_EOF
+\`include "$(basename "$sv")"
+module top;
+  initial begin
+    $class_name obj;
+    obj = new($ctor_args);
+    if (obj.randomize())
+      \$display("PASS: %s randomize succeeded", "$class_name");
+    else
+      \$display("INFO: %s randomize returned 0", "$class_name");
+    \$finish;
+  end
+endmodule
+WRAPPER_EOF
+
+    # Recompile with wrapper
+    wrapper_cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
+      -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob \
+      --no-uvm-auto-include --top=top \
+      -I "$(dirname "$sv")" "$wrapper")
+    if run_limited "${wrapper_cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      top_module="top"
+    else
+      result="COMPILE_FAIL"
+      compile_fail=$((compile_fail + 1))
+      printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+      if [[ -n "$KEEP_LOGS_DIR" ]]; then
+        mkdir -p "$KEEP_LOGS_DIR"
+        cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+        cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+          2>/dev/null || true
+      fi
+      continue
+    fi
   fi
 
   # Build circt-sim command
