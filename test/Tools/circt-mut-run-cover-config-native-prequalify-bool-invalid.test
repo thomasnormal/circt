@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf '[cover]\ndesign = "d.il"\nmutations_file = "m.txt"\ntests_manifest = "t.tsv"\nwork_dir = "out/cover"\nnative_global_filter_prequalify = maybe\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj --mode cover > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+//
+// CHECK: circt-mut run: invalid boolean [cover] key 'native_global_filter_prequalify' value 'maybe'
+

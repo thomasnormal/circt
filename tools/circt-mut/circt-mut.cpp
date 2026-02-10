@@ -467,6 +467,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   std::string bmcOrigCacheMaxBytes;
   std::string bmcOrigCacheMaxAgeSeconds;
   std::string bmcOrigCacheEvictionPolicy;
+  std::string reuseCacheMode;
   bool hasGlobalFilterCmd = false;
   bool hasGlobalFilterLEC = false;
   bool hasGlobalFilterBMC = false;
@@ -703,6 +704,10 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         arg.starts_with("--bmc-orig-cache-eviction-policy=")) {
       bmcOrigCacheEvictionPolicy = valueFromArg().str();
     }
+    if (arg == "--reuse-cache-mode" ||
+        arg.starts_with("--reuse-cache-mode=")) {
+      reuseCacheMode = valueFromArg().str();
+    }
     if (arg == "--formal-global-propagate-circt-chain" ||
         arg.starts_with("--formal-global-propagate-circt-chain=")) {
       constexpr StringRef chainPrefix =
@@ -930,6 +935,9 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                           Regex("^(lru|fifo|cost-lru)$"),
                           "--bmc-orig-cache-eviction-policy",
                           "lru|fifo|cost-lru"))
+    return result;
+  if (!validateCoverRegex(reuseCacheMode, Regex("^(off|read|read-write)$"),
+                          "--reuse-cache-mode", "off|read|read-write"))
     return result;
   bool hasAnyGlobalFilterMode =
       hasGlobalFilterCmd || hasGlobalFilterLEC || hasGlobalFilterBMC ||
@@ -3883,6 +3891,25 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
+    if (!appendOptionalConfigBoolFlagArg(args, cfg.cover,
+                                         "native_global_filter_prequalify",
+                                         "--native-global-filter-prequalify",
+                                         "cover", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigPathArg(args, cfg.cover,
+                                "native_global_filter_prequalify_pair_file",
+                                "--native-global-filter-prequalify-pair-file",
+                                opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.cover,
+                                "native_global_filter_probe_mutant",
+                                "--native-global-filter-probe-mutant",
+                                opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.cover,
+                                "native_global_filter_probe_log",
+                                "--native-global-filter-probe-log",
+                                opts.projectDir);
 
     appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_cmd",
                             "--formal-global-propagate-cmd");

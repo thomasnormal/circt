@@ -1,5 +1,69 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 855 - February 10, 2026
+
+### `circt-mut run` Config Support for Native Cover Probe/Prequalify
+
+1. Extended `circt-mut run` cover config pass-through with native global-filter
+   controls:
+   - boolean: `native_global_filter_prequalify`
+   - paths: `native_global_filter_prequalify_pair_file`,
+     `native_global_filter_probe_mutant`,
+     `native_global_filter_probe_log`
+2. This allows project-level `circt-mut.toml` workflows to trigger native
+   cover probe/prequalification paths without ad-hoc CLI overrides.
+3. Added strict boolean validation for
+   `native_global_filter_prequalify`
+   via existing run-config boolean parsing rules.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/circt-mut-run-cover-config-native-probe.test`
+  - `test/Tools/circt-mut-run-cover-config-native-prequalify.test`
+  - `test/Tools/circt-mut-run-cover-config-native-prequalify-bool-invalid.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-cover-config-native-*.test test/Tools/circt-mut-run-cover-config*.test test/Tools/circt-mut-run-cover-*.test`: PASS (22/22)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-prequalify-*.test test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-run-*.test test/Tools/circt-mut-*.test`: PASS (188/188)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-run-config-native --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
+## Iteration 854 - February 10, 2026
+
+### `circt-mut cover` Reuse-Cache Mode Native Preflight Hardening
+
+1. Added native `circt-mut cover` validation for `--reuse-cache-mode` in
+   `rewriteCoverArgs`:
+   - accepted values: `off|read|read-write`
+   - invalid values now fail before script dispatch, matching
+     `run_mutation_cover.sh` semantics.
+2. This closes a preflight gap where malformed cache policy values could bypass
+   native checks and fail later in script execution.
+
+### Tests
+
+- Added regression test:
+  - `test/Tools/circt-mut-cover-reuse-cache-mode-invalid-native.test`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `python3 build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-reuse-cache-mode-invalid-native.test`: PASS (1/1)
+- `python3 build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test`: PASS (36/36)
+- `python3 build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (130/130)
+
 ## Iteration 853 - February 10, 2026
 
 ### Native Prequalification Now Supports Generated Mutation Campaigns
