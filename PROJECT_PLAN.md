@@ -338,6 +338,31 @@ See CHANGELOG.md on recent progress.
     - `lower-to-bmc` now propagates this to `verif.bmc` as
       `bmc_abstracted_llhd_interface_inputs` and emits an explicit warning that
       SAT witnesses may be spurious.
+- Stateful-probe semantic closure hardening (February 10, 2026):
+    - Removed `llhd-sig2reg` from the BMC LLHD lowering pipeline in
+      `tools/circt-bmc/circt-bmc.cpp` because this step could collapse
+      stateful probe-driven recurrences to init constants in straight-line LLHD
+      forms (named-property + sampled-value patterns), effectively dropping
+      meaningful semantics.
+    - The BMC flow now relies on `strip-llhd-interface-signals` for LLHD signal
+      elimination in this path, preserving read-before-write recurrence
+      behavior used by `$changed` and named property checks.
+    - Added end-to-end regression:
+      `test/Tools/circt-bmc/sva-stateful-probe-order-unsat-e2e.sv`.
+- Updated baseline after pipeline hardening (February 10, 2026):
+    - `sv-tests/BMC`: `26/26` pass.
+    - `verilator-verification/BMC`: `17/17` pass.
+    - `yosys/tests/sva/BMC`: `12/14` pass with `2` skip, `0` fail.
+    - `opentitan/LEC` + `opentitan/LEC_STRICT`: both `1/1` pass.
+- Remaining near-term hardening limitation:
+    - `circt-bmc --print-counterexample` still fails on stateful SVA designs
+      with a dominance verifier error in the counterexample emission path; this
+      is tooling/diagnostic debt (not proof-result correctness) and should be
+      closed to keep debug workflows first-class.
+- Full-syntax-tree closure policy target:
+    - keep reducing `llhd_process_result*` and
+      `signal_requires_abstraction` fallback usage so semantic closure is
+      achieved by explicit lowering, not abstraction, on the core BMC lanes.
 36. Remaining near-term formal limitations and next build targets:
     - BMC: positive-test SAT mismatches still cluster in local-var /
       multiclock / `disable iff` UVM semantics where residual interface
