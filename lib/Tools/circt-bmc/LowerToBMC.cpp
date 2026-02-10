@@ -651,9 +651,95 @@ void LowerToBMCPass::runOnOperation() {
     }
   }
 
+  auto collectUsedExplicitClockDomains = [&]() {
+    struct UsedExplicitClockDomains {
+      DenseSet<unsigned> indices;
+      bool hasUnresolvedUse = false;
+    };
+    UsedExplicitClockDomains usedClockDomains;
+
+    DenseMap<StringRef, unsigned> explicitClockNameToArgIndex;
+    auto inputNames = hwModule.getInputNames();
+    for (auto [idx, input] : llvm::enumerate(hwModule.getInputTypes())) {
+      if (!isa<seq::ClockType>(input))
+        continue;
+      if (idx >= inputNames.size())
+        continue;
+      if (auto nameAttr = dyn_cast_or_null<StringAttr>(inputNames[idx])) {
+        if (!nameAttr.getValue().empty())
+          explicitClockNameToArgIndex.try_emplace(nameAttr.getValue(), idx);
+      }
+    }
+
+    auto maybeAddExplicitClockArg = [&](unsigned argIndex) {
+      auto inputTypes = hwModule.getInputTypes();
+      if (argIndex >= inputTypes.size())
+        return;
+      if (!isa<seq::ClockType>(inputTypes[argIndex]))
+        return;
+      usedClockDomains.indices.insert(argIndex);
+    };
+
+    if (auto regClockSources =
+            hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+      for (auto attr : regClockSources) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto argIndexAttr = dyn_cast<IntegerAttr>(dict.get("arg_index"));
+        if (!argIndexAttr)
+          continue;
+        maybeAddExplicitClockArg(argIndexAttr.getInt());
+      }
+    }
+
+    if (auto regClocks = hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+      for (auto attr : regClocks) {
+        auto nameAttr = dyn_cast<StringAttr>(attr);
+        if (!nameAttr || nameAttr.getValue().empty())
+          continue;
+        if (auto it = explicitClockNameToArgIndex.find(nameAttr.getValue());
+            it != explicitClockNameToArgIndex.end())
+          usedClockDomains.indices.insert(it->second);
+      }
+    }
+
+    hwModule.walk([&](ltl::ClockOp clockOp) {
+      auto simplified = simplifyI1Value(clockOp.getClock());
+      Value canonical = simplified.value ? simplified.value : clockOp.getClock();
+      BlockArgument root;
+      if (!traceI1ValueRoot(canonical, root) || !root) {
+        usedClockDomains.hasUnresolvedUse = true;
+        return;
+      }
+      if (root.getOwner() != hwModule.getBodyBlock())
+        return;
+      maybeAddExplicitClockArg(root.getArgNumber());
+    });
+
+    hwModule.walk([&](Operation *op) {
+      if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+        return;
+      auto nameAttr = op->getAttrOfType<StringAttr>("bmc.clock");
+      if (!nameAttr || nameAttr.getValue().empty())
+        return;
+      if (auto it = explicitClockNameToArgIndex.find(nameAttr.getValue());
+          it != explicitClockNameToArgIndex.end())
+        usedClockDomains.indices.insert(it->second);
+      else
+        usedClockDomains.hasUnresolvedUse = true;
+    });
+
+    return usedClockDomains;
+  };
+
   if (!allowMultiClock && explicitClocks.size() > 1) {
-    hwModule.emitError("designs with multiple clocks not yet supported");
-    return signalPassFailure();
+    auto usedExplicitClocks = collectUsedExplicitClockDomains();
+    if (usedExplicitClocks.indices.size() > 1 ||
+        usedExplicitClocks.hasUnresolvedUse) {
+      hwModule.emitError("designs with multiple clocks not yet supported");
+      return signalPassFailure();
+    }
   }
 
   bool hasExplicitClockInput = !explicitClocks.empty();

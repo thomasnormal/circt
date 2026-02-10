@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 944 - February 10, 2026
+
+### BMC LowerToBMC Hardening: Explicit Multi-Clock Rejects Only on Used Domains
+
+1. Updated `lib/Tools/circt-bmc/LowerToBMC.cpp` single-clock gating for
+   modules with multiple explicit `!seq.clock` ports:
+   - replaced eager `explicitClocks.size() > 1` hard-fail with used-domain
+     analysis across:
+       - `bmc_reg_clock_sources` / `bmc_reg_clocks`
+       - `ltl.clock` roots
+       - explicit `bmc.clock` attributes
+   - single-clock mode now rejects only when multiple explicit clock domains
+     are actually used.
+2. Regression updates:
+   - added positive coverage:
+     `test/Tools/circt-bmc/lower-to-bmc-multiple-explicit-clocks-unused.mlir`
+     (second explicit clock port unused -> accepted in single-clock mode).
+   - updated negative coverage:
+     `test/Tools/circt-bmc/lower-to-bmc-errors.mlir`
+     to explicitly use both explicit clock domains in the failing case.
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-multiple-explicit-clocks-unused.mlir test/Tools/circt-bmc/lower-to-bmc-errors.mlir test/Tools/circt-bmc/lower-to-bmc-mixed-clock-unused-struct.mlir`
+     -> `3 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir`
+     -> `31 passed`, `1 xfail`.
+   - External formal sanity:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-l2bmc-explicit-used-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/BMC|verilator-verification/LEC|yosys/tests/sva/BMC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5` (known baseline),
+          `verilator-verification/LEC pass=17 fail=0`,
+          `yosys/tests/sva/BMC pass=7 fail=5 skip=2` (known baseline).
+
 ## Iteration 943 - February 10, 2026
 
 ### BMC ExternalizeRegisters Hardening: Fold `seq.initial` Constant Expressions
