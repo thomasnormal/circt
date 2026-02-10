@@ -475,6 +475,9 @@ Execution controls:
     `--formal-global-propagate-z3`, `--formal-global-propagate-bmc-z3`.
   - mutation-generation tool option `--mutations-yosys` is now pre-resolved
     natively for fast-fail diagnostics before dispatch.
+  - cover mutation source consistency is now validated natively:
+    - exactly one of `--mutations-file` or `--generate-mutations` is required.
+    - conflicting or missing source configuration fails fast.
   - generated-mutation allocation controls are now validated natively for
     cover dispatch:
     - `--generate-mutations` must be a positive integer.

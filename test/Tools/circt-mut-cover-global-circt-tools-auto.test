@@ -7,7 +7,7 @@
 // RUN: chmod +x %t/prefix/bin/circt-bmc
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/prefix/share/circt/utils/run_mutation_cover.sh
 // RUN: chmod +x %t/prefix/share/circt/utils/run_mutation_cover.sh
-// RUN: PATH="/usr/bin:/bin" %t/prefix/bin/circt-mut cover --formal-global-propagate-circt-lec --formal-global-propagate-circt-bmc --formal-global-propagate-circt-chain lec-then-bmc > %t/out.txt
+// RUN: PATH="/usr/bin:/bin" %t/prefix/bin/circt-mut cover --mutations-file %t/mutations.txt --formal-global-propagate-circt-lec --formal-global-propagate-circt-bmc --formal-global-propagate-circt-chain lec-then-bmc > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 //
 // CHECK: ARG:--formal-global-propagate-circt-lec
