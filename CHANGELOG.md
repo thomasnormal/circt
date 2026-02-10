@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 980 - February 10, 2026
+
+### `run_formal_all`: Require Explicit OpenTitan Lane Filters
+
+1. Enforced caller-owned filter policy for OpenTitan lanes in
+   `utils/run_formal_all.sh`:
+   - `opentitan/LEC` and `opentitan/LEC_STRICT` now require
+     `--opentitan-lec-impl-filter`
+   - `opentitan/E2E`, `opentitan/E2E_STRICT`, and `opentitan/E2E_MODE_DIFF`
+     now require `--opentitan-e2e-impl-filter`
+2. Added regex validation for the new filter options:
+   - invalid `--opentitan-lec-impl-filter` and
+     `--opentitan-e2e-impl-filter` now fail fast with explicit diagnostics.
+3. Included the OpenTitan filter options in lane-state config hashing so
+   resume compatibility tracks filter-contract changes.
+4. Added and updated regression coverage:
+   - new: `test/Tools/run-formal-all-opentitan-filter-invalid.test`
+   - updated OpenTitan formal-all callsites to pass explicit filters
+   - extended `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`
+     with OpenTitan lane checks.
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-*.test`: PASS (74/74)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-opentitan-filter-invalid.test test/Tools/run-formal-all-*opentitan*.test test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`: PASS (20/20)
+- External OpenTitan filter-contract smoke:
+  - missing filter gate:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-filter-require-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$'`
+    - result: fails with `opentitan/LEC requires explicit filter: set --opentitan-lec-impl-filter`
+  - explicit-filter pass:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-filter-pass-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC$' --opentitan-lec-impl-filter 'canright'`
+    - result: PASS (`total=1 pass=1 fail=0`).
+
 ## Iteration 979 - February 10, 2026
 
 ### `circt-mut matrix`: Native Dispatch Gate-Summary Parity

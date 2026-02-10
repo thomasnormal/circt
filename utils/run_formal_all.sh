@@ -2567,6 +2567,26 @@ if [[ -n "$YOSYS_LEC_TEST_FILTER" ]]; then
     exit 1
   fi
 fi
+if [[ -n "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OPENTITAN_LEC_IMPL_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --opentitan-lec-impl-filter: $OPENTITAN_LEC_IMPL_FILTER" >&2
+    exit 1
+  fi
+fi
+if [[ -n "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
+  set +e
+  printf '' | grep -Eq "$OPENTITAN_E2E_IMPL_FILTER" 2>/dev/null
+  lane_regex_ec=$?
+  set -e
+  if [[ "$lane_regex_ec" == "2" ]]; then
+    echo "invalid --opentitan-e2e-impl-filter: $OPENTITAN_E2E_IMPL_FILTER" >&2
+    exit 1
+  fi
+fi
 if [[ "$RESUME_FROM_LANE_STATE" == "1" && -z "$LANE_STATE_TSV" ]]; then
   echo "--resume-from-lane-state requires --lane-state-tsv" >&2
   exit 1
@@ -6256,6 +6276,8 @@ compute_lane_state_config_hash() {
     printf "verilator_lec_test_filter=%s\n" "$VERILATOR_LEC_TEST_FILTER"
     printf "yosys_bmc_test_filter=%s\n" "$YOSYS_BMC_TEST_FILTER"
     printf "yosys_lec_test_filter=%s\n" "$YOSYS_LEC_TEST_FILTER"
+    printf "opentitan_lec_impl_filter=%s\n" "$OPENTITAN_LEC_IMPL_FILTER"
+    printf "opentitan_e2e_impl_filter=%s\n" "$OPENTITAN_E2E_IMPL_FILTER"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
@@ -7050,6 +7072,37 @@ fi
 if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   if [[ -z "$YOSYS_LEC_TEST_FILTER" ]]; then
     echo "yosys/tests/sva/LEC requires explicit filter: set --yosys-lec-test-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OPENTITAN" == "1" ]] && lane_enabled "opentitan/LEC"; then
+  if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+    echo "opentitan/LEC requires explicit filter: set --opentitan-lec-impl-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]] && lane_enabled "opentitan/LEC_STRICT"; then
+  if [[ -z "$OPENTITAN_LEC_IMPL_FILTER" ]]; then
+    echo "opentitan/LEC_STRICT requires explicit filter: set --opentitan-lec-impl-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OPENTITAN_E2E" == "1" ]] && lane_enabled "opentitan/E2E"; then
+  if [[ -z "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
+    echo "opentitan/E2E requires explicit filter: set --opentitan-e2e-impl-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && lane_enabled "opentitan/E2E_STRICT"; then
+  if [[ -z "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
+    echo "opentitan/E2E_STRICT requires explicit filter: set --opentitan-e2e-impl-filter" >&2
+    exit 1
+  fi
+fi
+if [[ "$WITH_OPENTITAN_E2E" == "1" && "$WITH_OPENTITAN_E2E_STRICT" == "1" ]] && \
+   lane_enabled "opentitan/E2E_MODE_DIFF"; then
+  if [[ -z "$OPENTITAN_E2E_IMPL_FILTER" ]]; then
+    echo "opentitan/E2E_MODE_DIFF requires explicit filter: set --opentitan-e2e-impl-filter" >&2
     exit 1
   fi
 fi
