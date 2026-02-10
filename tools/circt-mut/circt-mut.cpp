@@ -1717,6 +1717,24 @@ static bool appendRequiredConfigArg(SmallVectorImpl<std::string> &args,
   return true;
 }
 
+static void appendOptionalConfigPathArg(SmallVectorImpl<std::string> &args,
+                                        const StringMap<std::string> &sectionMap,
+                                        StringRef key, StringRef optionFlag,
+                                        StringRef projectDir) {
+  auto it = sectionMap.find(key);
+  if (it == sectionMap.end() || it->second.empty())
+    return;
+  std::string value = it->second;
+  if (!value.empty() && !sys::path::is_absolute(value) &&
+      StringRef(value).contains('/')) {
+    SmallString<256> joined(projectDir);
+    sys::path::append(joined, value);
+    value = std::string(joined.str());
+  }
+  args.push_back(optionFlag.str());
+  args.push_back(value);
+}
+
 static void appendOptionalConfigArg(SmallVectorImpl<std::string> &args,
                                     const StringMap<std::string> &sectionMap,
                                     StringRef key, StringRef optionFlag) {
@@ -1725,6 +1743,29 @@ static void appendOptionalConfigArg(SmallVectorImpl<std::string> &args,
     return;
   args.push_back(optionFlag.str());
   args.push_back(it->second);
+}
+
+static bool appendOptionalConfigBoolFlagArg(
+    SmallVectorImpl<std::string> &args, const StringMap<std::string> &sectionMap,
+    StringRef key, StringRef optionFlag, StringRef sectionName,
+    std::string &error) {
+  auto it = sectionMap.find(key);
+  if (it == sectionMap.end() || it->second.empty())
+    return true;
+  std::string lowered = StringRef(it->second).trim().lower();
+  if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+      lowered == "on") {
+    args.push_back(optionFlag.str());
+    return true;
+  }
+  if (lowered == "0" || lowered == "false" || lowered == "no" ||
+      lowered == "off")
+    return true;
+  error = (Twine("circt-mut run: invalid boolean [") + sectionName + "] key '" +
+           key + "' value '" + it->second +
+           "' (expected 1|0|true|false|yes|no|on|off)")
+              .str();
+  return false;
 }
 
 static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
@@ -1820,13 +1861,10 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
   }
 
   auto runCoverFromConfig = [&]() -> int {
-    SmallVector<std::string, 32> args;
+    SmallVector<std::string, 96> args;
     if (!appendRequiredConfigArg(args, cfg.cover, "design", "--design", "cover",
                                  opts.projectDir, /*resolveRelativePath=*/true,
                                  error) ||
-        !appendRequiredConfigArg(args, cfg.cover, "mutations_file",
-                                 "--mutations-file", "cover", opts.projectDir,
-                                 /*resolveRelativePath=*/true, error) ||
         !appendRequiredConfigArg(args, cfg.cover, "tests_manifest",
                                  "--tests-manifest", "cover", opts.projectDir,
                                  /*resolveRelativePath=*/true, error) ||
@@ -1836,9 +1874,91 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
+
+    auto mutationFileIt = cfg.cover.find("mutations_file");
+    auto generateMutationsIt = cfg.cover.find("generate_mutations");
+    bool hasMutationsFile =
+        mutationFileIt != cfg.cover.end() && !mutationFileIt->second.empty();
+    bool hasGenerateMutations = generateMutationsIt != cfg.cover.end() &&
+                                !generateMutationsIt->second.empty();
+    if (hasMutationsFile && hasGenerateMutations) {
+      errs() << "circt-mut run: [cover] keys 'mutations_file' and "
+                "'generate_mutations' are mutually exclusive.\n";
+      return 1;
+    }
+    if (!hasMutationsFile && !hasGenerateMutations) {
+      errs() << "circt-mut run: [cover] requires either 'mutations_file' or "
+                "'generate_mutations'.\n";
+      return 1;
+    }
+    if (hasMutationsFile) {
+      if (!appendRequiredConfigArg(args, cfg.cover, "mutations_file",
+                                   "--mutations-file", "cover",
+                                   opts.projectDir,
+                                   /*resolveRelativePath=*/true, error)) {
+        errs() << error << "\n";
+        return 1;
+      }
+    } else {
+      appendOptionalConfigArg(args, cfg.cover, "generate_mutations",
+                              "--generate-mutations");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_top", "--mutations-top");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_seed",
+                              "--mutations-seed");
+      appendOptionalConfigPathArg(args, cfg.cover, "mutations_yosys",
+                                  "--mutations-yosys", opts.projectDir);
+      appendOptionalConfigArg(args, cfg.cover, "mutations_modes",
+                              "--mutations-modes");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_mode_counts",
+                              "--mutations-mode-counts");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_profiles",
+                              "--mutations-profiles");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_cfg", "--mutations-cfg");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_select",
+                              "--mutations-select");
+    }
+
+    appendOptionalConfigPathArg(args, cfg.cover, "create_mutated_script",
+                                "--create-mutated-script", opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover, "formal_activate_cmd",
+                            "--formal-activate-cmd");
+    appendOptionalConfigArg(args, cfg.cover, "formal_propagate_cmd",
+                            "--formal-propagate-cmd");
+    appendOptionalConfigArg(args, cfg.cover, "coverage_threshold",
+                            "--coverage-threshold");
+    appendOptionalConfigArg(args, cfg.cover, "jobs", "--jobs");
+    appendOptionalConfigArg(args, cfg.cover, "reuse_compat_mode",
+                            "--reuse-compat-mode");
+    appendOptionalConfigPathArg(args, cfg.cover, "reuse_pair_file",
+                                "--reuse-pair-file", opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.cover, "reuse_summary_file",
+                                "--reuse-summary-file", opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.cover, "reuse_manifest_file",
+                                "--reuse-manifest-file", opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.cover, "reuse_cache_dir",
+                                "--reuse-cache-dir", opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover, "reuse_cache_mode",
+                            "--reuse-cache-mode");
+
+    if (!appendOptionalConfigBoolFlagArg(args, cfg.cover, "resume", "--resume",
+                                         "cover", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.cover, "skip_baseline",
+                                         "--skip-baseline", "cover", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.cover, "fail_on_undetected",
+                                         "--fail-on-undetected", "cover",
+                                         error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.cover, "fail_on_errors",
+                                         "--fail-on-errors", "cover", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_cmd",
+                            "--formal-global-propagate-cmd");
     appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_chain",
                             "--formal-global-propagate-circt-chain");
-    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_timeout_seconds",
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_timeout_seconds",
                             "--formal-global-propagate-timeout-seconds");
     appendOptionalConfigArg(args, cfg.cover,
                             "formal_global_propagate_lec_timeout_seconds",
@@ -1846,19 +1966,61 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     appendOptionalConfigArg(args, cfg.cover,
                             "formal_global_propagate_bmc_timeout_seconds",
                             "--formal-global-propagate-bmc-timeout-seconds");
-    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_lec",
-                            "--formal-global-propagate-circt-lec");
-    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_bmc",
-                            "--formal-global-propagate-circt-bmc");
+    appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_circt_lec",
+                                "--formal-global-propagate-circt-lec",
+                                opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_lec_args",
+                            "--formal-global-propagate-circt-lec-args");
+    appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_circt_bmc",
+                                "--formal-global-propagate-circt-bmc",
+                                opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_c1",
+                            "--formal-global-propagate-c1");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_c2",
+                            "--formal-global-propagate-c2");
+    appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_z3",
+                                "--formal-global-propagate-z3", opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_assume_known_inputs",
+                            "--formal-global-propagate-assume-known-inputs");
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_accept_xprop_only",
+                            "--formal-global-propagate-accept-xprop-only");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_args",
+                            "--formal-global-propagate-circt-bmc-args");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_bound",
+                            "--formal-global-propagate-bmc-bound");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_module",
+                            "--formal-global-propagate-bmc-module");
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_bmc_run_smtlib",
+                            "--formal-global-propagate-bmc-run-smtlib");
+    appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_bmc_z3",
+                                "--formal-global-propagate-bmc-z3",
+                                opts.projectDir);
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_bmc_assume_known_inputs",
+                            "--formal-global-propagate-bmc-assume-known-inputs");
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_bmc_ignore_asserts_until",
+                            "--formal-global-propagate-bmc-ignore-asserts-until");
+    appendOptionalConfigArg(args, cfg.cover, "bmc_orig_cache_max_entries",
+                            "--bmc-orig-cache-max-entries");
+    appendOptionalConfigArg(args, cfg.cover, "bmc_orig_cache_max_bytes",
+                            "--bmc-orig-cache-max-bytes");
+    appendOptionalConfigArg(args, cfg.cover, "bmc_orig_cache_max_age_seconds",
+                            "--bmc-orig-cache-max-age-seconds");
+    appendOptionalConfigArg(args, cfg.cover, "bmc_orig_cache_eviction_policy",
+                            "--bmc-orig-cache-eviction-policy");
 
-    SmallVector<StringRef, 32> argRefs;
+    SmallVector<StringRef, 96> argRefs;
     for (const auto &arg : args)
       argRefs.push_back(arg);
     return runCoverFlow(argv0, argRefs);
   };
 
   auto runMatrixFromConfig = [&]() -> int {
-    SmallVector<std::string, 32> args;
+    SmallVector<std::string, 96> args;
     if (!appendRequiredConfigArg(args, cfg.matrix, "lanes_tsv", "--lanes-tsv",
                                  "matrix", opts.projectDir,
                                  /*resolveRelativePath=*/true, error) ||
@@ -1868,6 +2030,57 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
       errs() << error << "\n";
       return 1;
     }
+    appendOptionalConfigPathArg(args, cfg.matrix, "create_mutated_script",
+                                "--create-mutated-script", opts.projectDir);
+    appendOptionalConfigArg(args, cfg.matrix, "jobs_per_lane",
+                            "--jobs-per-lane");
+    appendOptionalConfigArg(args, cfg.matrix, "lane_jobs", "--lane-jobs");
+    appendOptionalConfigArg(args, cfg.matrix, "lane_schedule_policy",
+                            "--lane-schedule-policy");
+    appendOptionalConfigArg(args, cfg.matrix, "results_file", "--results-file");
+    appendOptionalConfigArg(args, cfg.matrix, "gate_summary_file",
+                            "--gate-summary-file");
+    appendOptionalConfigArg(args, cfg.matrix, "reuse_compat_mode",
+                            "--reuse-compat-mode");
+    appendOptionalConfigPathArg(args, cfg.matrix, "reuse_cache_dir",
+                                "--reuse-cache-dir", opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.matrix, "default_reuse_pair_file",
+                                "--default-reuse-pair-file", opts.projectDir);
+    appendOptionalConfigPathArg(args, cfg.matrix, "default_reuse_summary_file",
+                                "--default-reuse-summary-file", opts.projectDir);
+    appendOptionalConfigArg(args, cfg.matrix, "include_lane_regex",
+                            "--include-lane-regex");
+    appendOptionalConfigArg(args, cfg.matrix, "exclude_lane_regex",
+                            "--exclude-lane-regex");
+    if (!appendOptionalConfigBoolFlagArg(args, cfg.matrix, "skip_baseline",
+                                         "--skip-baseline", "matrix", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.matrix, "fail_on_undetected",
+                                         "--fail-on-undetected", "matrix",
+                                         error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.matrix, "fail_on_errors",
+                                         "--fail-on-errors", "matrix", error) ||
+        !appendOptionalConfigBoolFlagArg(args, cfg.matrix, "stop_on_fail",
+                                         "--stop-on-fail", "matrix", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_modes",
+                            "--default-mutations-modes");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_mode_counts",
+                            "--default-mutations-mode-counts");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_profiles",
+                            "--default-mutations-profiles");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_cfg",
+                            "--default-mutations-cfg");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_select",
+                            "--default-mutations-select");
+    appendOptionalConfigPathArg(args, cfg.matrix, "default_mutations_yosys",
+                                "--default-mutations-yosys", opts.projectDir);
+
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_cmd",
+                            "--default-formal-global-propagate-cmd");
     appendOptionalConfigArg(args, cfg.matrix,
                             "default_formal_global_propagate_circt_chain",
                             "--default-formal-global-propagate-circt-chain");
@@ -1880,14 +2093,81 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
     appendOptionalConfigArg(args, cfg.matrix,
                             "default_formal_global_propagate_bmc_timeout_seconds",
                             "--default-formal-global-propagate-bmc-timeout-seconds");
-    appendOptionalConfigArg(args, cfg.matrix,
+    appendOptionalConfigPathArg(args, cfg.matrix,
                             "default_formal_global_propagate_circt_lec",
-                            "--default-formal-global-propagate-circt-lec");
+                            "--default-formal-global-propagate-circt-lec",
+                            opts.projectDir);
     appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_circt_lec_args",
+                            "--default-formal-global-propagate-circt-lec-args");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_c1",
+                            "--default-formal-global-propagate-c1");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_c2",
+                            "--default-formal-global-propagate-c2");
+    appendOptionalConfigPathArg(args, cfg.matrix,
+                            "default_formal_global_propagate_z3",
+                            "--default-formal-global-propagate-z3",
+                            opts.projectDir);
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.matrix, "default_formal_global_propagate_assume_known_inputs",
+            "--default-formal-global-propagate-assume-known-inputs", "matrix",
+            error) ||
+        !appendOptionalConfigBoolFlagArg(
+            args, cfg.matrix, "default_formal_global_propagate_accept_xprop_only",
+            "--default-formal-global-propagate-accept-xprop-only", "matrix",
+            error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigPathArg(args, cfg.matrix,
                             "default_formal_global_propagate_circt_bmc",
-                            "--default-formal-global-propagate-circt-bmc");
+                            "--default-formal-global-propagate-circt-bmc",
+                            opts.projectDir);
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_circt_bmc_args",
+                            "--default-formal-global-propagate-circt-bmc-args");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_bmc_bound",
+                            "--default-formal-global-propagate-bmc-bound");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_bmc_module",
+                            "--default-formal-global-propagate-bmc-module");
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.matrix, "default_formal_global_propagate_bmc_run_smtlib",
+            "--default-formal-global-propagate-bmc-run-smtlib", "matrix",
+            error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigPathArg(args, cfg.matrix,
+                                "default_formal_global_propagate_bmc_z3",
+                                "--default-formal-global-propagate-bmc-z3",
+                                opts.projectDir);
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.matrix,
+            "default_formal_global_propagate_bmc_assume_known_inputs",
+            "--default-formal-global-propagate-bmc-assume-known-inputs",
+            "matrix", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_bmc_ignore_asserts_until",
+                            "--default-formal-global-propagate-bmc-ignore-asserts-until");
+    appendOptionalConfigArg(args, cfg.matrix, "default_bmc_orig_cache_max_entries",
+                            "--default-bmc-orig-cache-max-entries");
+    appendOptionalConfigArg(args, cfg.matrix, "default_bmc_orig_cache_max_bytes",
+                            "--default-bmc-orig-cache-max-bytes");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_bmc_orig_cache_max_age_seconds",
+                            "--default-bmc-orig-cache-max-age-seconds");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_bmc_orig_cache_eviction_policy",
+                            "--default-bmc-orig-cache-eviction-policy");
 
-    SmallVector<StringRef, 32> argRefs;
+    SmallVector<StringRef, 96> argRefs;
     for (const auto &arg : args)
       argRefs.push_back(arg);
     return runMatrixFlow(argv0, argRefs);

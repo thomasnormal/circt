@@ -132,6 +132,17 @@ circt-mut run --project-dir /path/to/mut-campaign --mode all
 
 `circt-mut run` reads `circt-mut.toml` and dispatches the native
 preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
+For `[cover]`, config now supports either:
+- `mutations_file = "..."`, or
+- `generate_mutations = <N>` with generator controls
+  (`mutations_modes`, `mutations_mode_counts`, `mutations_profiles`,
+  `mutations_cfg`, `mutations_select`, `mutations_yosys`, `mutations_seed`,
+  `mutations_top`).
+Those modes are mutually exclusive and validated natively before script
+dispatch.
+`circt-mut run` now also accepts boolean gate toggles in config for cover and
+matrix (`resume`, `skip_baseline`, `fail_on_undetected`, `fail_on_errors`,
+`stop_on_fail`) using `1|0|true|false|yes|no|on|off`.
 
 Aggregate campaign results:
 
