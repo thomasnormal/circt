@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 941 - February 10, 2026
+
+### BMC SMTLIB Hardening: Live-Cone LLVM Rejection in `verif.bmc`
+
+1. Updated `convert-verif-to-smt(for-smtlib-export=true)` handling of LLVM ops
+   inside `verif.bmc` regions in `lib/Conversion/VerifToSMT/VerifToSMT.cpp`:
+   - introduced live-cone analysis rooted at:
+     - `verif.yield` operands
+     - `verif.assume` property/enable
+     - `verif.assert` property/enable
+     - `verif.cover` property/enable
+   - LLVM-op rejection now applies only to live ops in that cone.
+2. Updated SMTLIB inlining path to clone only live ops from each BMC region
+   block, avoiding dead-op carryover into solver regions.
+3. Added regression coverage:
+   - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-dead-op.mlir`
+   - verifies dead LLVM ops no longer block SMTLIB export.
+4. Existing safety behavior retained:
+   - live unsupported LLVM ops still produce explicit diagnostics
+     (`bmc-for-smtlib-llvm-op-error.mlir` remains passing).
+5. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-dead-op.mlir test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+     -> `3 passed`.
+   - `build/bin/llvm-lit -sv test/Conversion/VerifToSMT/bmc-for-smtlib*.mlir`
+     -> `3 passed`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-smtlib-livecone-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/LEC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/LEC pass=17 fail=0`.
+
 ## Iteration 940 - February 10, 2026
 
 ### BMC Syntax Closure: Preserve Built-In Class Methods (No Drop Remark)
