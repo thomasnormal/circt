@@ -23,7 +23,12 @@ module {
   // CHECK-EXT-LABEL: hw.module @top
   // CHECK-EXT-NOT: llhd.process
   // CHECK-LABEL: hw.module @assert_proc
-  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 1 : i32
+  // CHECK-DAG: circt.bmc_abstracted_llhd_process_result_details =
+  // CHECK-DAG: circt.bmc_abstracted_llhd_process_results = 1 : i32
+  // CHECK-DAG: llhd_process_result
+  // CHECK-DAG: observable_signal_use
+  // CHECK-DAG: signal = "sig"
+  // CHECK-DAG: result = 0
   // CHECK: llhd.prb
   // CHECK: hw.struct_extract
   // CHECK: verif.assert

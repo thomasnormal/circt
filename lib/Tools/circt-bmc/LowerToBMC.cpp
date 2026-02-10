@@ -520,18 +520,53 @@ void LowerToBMCPass::runOnOperation() {
   auto abstractedProcessResults =
       hwModule->getAttrOfType<IntegerAttr>(
           "circt.bmc_abstracted_llhd_process_results");
+  auto abstractedProcessResultDetails =
+      hwModule->getAttrOfType<ArrayAttr>(
+          "circt.bmc_abstracted_llhd_process_result_details");
   auto abstractedInterfaceInputs =
       hwModule->getAttrOfType<IntegerAttr>(
           "circt.bmc_abstracted_llhd_interface_inputs");
   auto abstractedInterfaceInputDetails =
       hwModule->getAttrOfType<ArrayAttr>(
           "circt.bmc_abstracted_llhd_interface_input_details");
+  auto sanitizeToken = [](StringRef token) {
+    std::string out;
+    out.reserve(token.size());
+    for (char c : token)
+      out.push_back(std::isspace(static_cast<unsigned char>(c)) ? '_' : c);
+    if (out.empty())
+      out = "unknown";
+    return out;
+  };
   if (abstractedProcessResults && abstractedProcessResults.getInt() > 0) {
     hwModule.emitWarning()
         << "LLHD process abstraction introduced "
         << abstractedProcessResults.getInt()
         << " unconstrained process-result input(s); SAT witnesses may be "
            "spurious";
+  }
+  if (abstractedProcessResultDetails && !abstractedProcessResultDetails.empty()) {
+    for (Attribute entry : abstractedProcessResultDetails) {
+      auto dict = dyn_cast<DictionaryAttr>(entry);
+      if (!dict)
+        continue;
+      std::string reason = "unknown";
+      std::string signal = "none";
+      std::string name = "unknown";
+      std::string result = "none";
+      if (auto reasonAttr = dict.getAs<StringAttr>("reason"))
+        reason = sanitizeToken(reasonAttr.getValue());
+      if (auto signalAttr = dict.getAs<StringAttr>("signal"))
+        signal = sanitizeToken(signalAttr.getValue());
+      if (auto nameAttr = dict.getAs<StringAttr>("name"))
+        name = sanitizeToken(nameAttr.getValue());
+      if (auto resultAttr = dict.getAs<IntegerAttr>("result"))
+        result = std::to_string(resultAttr.getInt());
+      hwModule.emitWarning()
+          << "BMC_PROVENANCE_LLHD_PROCESS "
+          << "reason=" << reason << " result=" << result
+          << " signal=" << signal << " name=" << name;
+    }
   }
   if (abstractedInterfaceInputs && abstractedInterfaceInputs.getInt() > 0) {
     hwModule.emitWarning()
@@ -541,15 +576,6 @@ void LowerToBMCPass::runOnOperation() {
   }
   if (abstractedInterfaceInputDetails &&
       !abstractedInterfaceInputDetails.empty()) {
-    auto sanitizeToken = [](StringRef token) {
-      std::string out;
-      out.reserve(token.size());
-      for (char c : token)
-        out.push_back(std::isspace(static_cast<unsigned char>(c)) ? '_' : c);
-      if (out.empty())
-        out = "unknown";
-      return out;
-    };
     for (Attribute entry : abstractedInterfaceInputDetails) {
       auto dict = dyn_cast<DictionaryAttr>(entry);
       if (!dict)
@@ -1391,6 +1417,10 @@ void LowerToBMCPass::runOnOperation() {
   if (abstractedProcessResults && abstractedProcessResults.getInt() > 0)
     bmcOp->setAttr("bmc_abstracted_llhd_process_results",
                    abstractedProcessResults);
+  if (abstractedProcessResultDetails &&
+      !abstractedProcessResultDetails.empty())
+    bmcOp->setAttr("bmc_abstracted_llhd_process_result_details",
+                   abstractedProcessResultDetails);
   if (abstractedInterfaceInputs && abstractedInterfaceInputs.getInt() > 0)
     bmcOp->setAttr("bmc_abstracted_llhd_interface_inputs",
                    abstractedInterfaceInputs);

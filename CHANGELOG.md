@@ -1,5 +1,68 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 880 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Process-Result Provenance
+
+1. Added structured process-result abstraction details in LLHD stripping:
+   - file:
+     - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+   - changes:
+     - when process results are abstracted, emit
+       `circt.bmc_abstracted_llhd_process_result_details` with per-result
+       dictionaries carrying:
+       - `name`, `base`, `type`
+       - `reason` (`non_drive_use` / `observable_signal_use`)
+       - `result` (process result index)
+       - optional `signal`
+       - `loc`
+2. Propagated and surfaced process-result provenance at BMC lowering:
+   - file:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+   - changes:
+     - propagate module attr to `verif.bmc` as
+       `bmc_abstracted_llhd_process_result_details`
+     - emit machine-readable provenance warnings:
+       `BMC_PROVENANCE_LLHD_PROCESS reason=... result=... signal=... name=...`
+3. Extended BMC lane provenance ingestion for process tokens:
+   - files:
+     - `utils/run_sv_tests_circt_bmc.sh`
+     - `utils/run_verilator_verification_circt_bmc.sh`
+     - `utils/run_yosys_sva_circt_bmc.sh`
+   - change:
+     - provenance collectors now ingest both
+       `BMC_PROVENANCE_LLHD_INTERFACE ...` and
+       `BMC_PROVENANCE_LLHD_PROCESS ...`
+4. Added/updated focused regressions:
+   - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+   - `test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc`: PASS
+- Targeted lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/strip-llhd-processes.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`: PASS
+- Script syntax:
+  - `bash -n utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-procprov-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `sv-tests/BMC`: `23/26`, `bmc_abstraction_provenance_tokens=2`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+- Strict-gate smoke (temp baseline):
+  - two-pass run with
+    `--strict-gate --fail-on-new-bmc-abstraction-provenance` over BMC lanes:
+    PASS
+  - baseline now captures process provenance tokens for `sv-tests/BMC`:
+    - `process reason=observable_signal_use result=0 signal=clk name=llhd_process_result`
+    - `process reason=observable_signal_use result=1 signal=clk name=llhd_process_result_0`
+
 ## Iteration 879 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Provenance Drift Gating
