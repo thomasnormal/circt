@@ -522,6 +522,9 @@ void LowerToBMCPass::runOnOperation() {
   auto abstractedInterfaceInputs =
       hwModule->getAttrOfType<IntegerAttr>(
           "circt.bmc_abstracted_llhd_interface_inputs");
+  auto abstractedInterfaceInputDetails =
+      hwModule->getAttrOfType<ArrayAttr>(
+          "circt.bmc_abstracted_llhd_interface_input_details");
   if (abstractedProcessResults && abstractedProcessResults.getInt() > 0) {
     hwModule.emitWarning()
         << "LLHD process abstraction introduced "
@@ -1357,6 +1360,10 @@ void LowerToBMCPass::runOnOperation() {
   if (abstractedInterfaceInputs && abstractedInterfaceInputs.getInt() > 0)
     bmcOp->setAttr("bmc_abstracted_llhd_interface_inputs",
                    abstractedInterfaceInputs);
+  if (abstractedInterfaceInputDetails &&
+      !abstractedInterfaceInputDetails.empty())
+    bmcOp->setAttr("bmc_abstracted_llhd_interface_input_details",
+                   abstractedInterfaceInputDetails);
   auto inputNames = hwModule.getInputNames();
   if (!inputNames.empty())
     bmcOp->setAttr("bmc_input_names", builder.getArrayAttr(inputNames));

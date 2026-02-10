@@ -337,6 +337,25 @@ See CHANGELOG.md on recent progress.
     - Next feature for semantic closure cadence:
       add per-input abstraction provenance metadata and strict drift gates on
       abstraction-count/provenance deltas in BMC/LEC formal lanes.
+37. Interface-provenance closure progress (February 10, 2026):
+    - `strip-llhd-interface-signals` now emits structured per-input details in
+      `circt.bmc_abstracted_llhd_interface_input_details` (name/base/type) in
+      addition to the existing abstraction count.
+    - `lower-to-bmc` propagates these details into `verif.bmc` as
+      `bmc_abstracted_llhd_interface_input_details`, enabling machine-readable
+      SAT risk triage per abstracted interface input.
+38. Current capability limits after provenance landing:
+    - Provenance currently captures insertion-level metadata
+      (input name/base/type), but not yet source-operation paths
+      (which store/read chain forced abstraction).
+    - Formal lane gating is still aggregate-count based; per-input provenance
+      drift gating in `run_formal_all.sh` remains to be implemented.
+39. Next long-term feature sequence for BMC/LEC closure:
+    - add source-path provenance (`signal`, `field`, `reason`, source loc) for
+      each abstracted interface input;
+    - add optional fail-on-drift checks for provenance deltas in BMC/LEC lanes;
+    - mirror the same structured provenance model for process-result
+      abstractions to unify SAT risk diagnostics.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
