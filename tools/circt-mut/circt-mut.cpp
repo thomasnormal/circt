@@ -5658,6 +5658,18 @@ struct MatrixLaneBudgetRow {
   std::string status;
   std::string gateStatus;
   bool hasMetrics = false;
+  bool hasPrequalifySummary = false;
+  uint64_t prequalifyTotalMutants = 0;
+  uint64_t prequalifyNotPropagatedMutants = 0;
+  uint64_t prequalifyPropagatedMutants = 0;
+  uint64_t prequalifyCreateMutatedErrorMutants = 0;
+  uint64_t prequalifyProbeErrorMutants = 0;
+  uint64_t prequalifyCmdTokenNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdTokenPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCPropagatedMutants = 0;
+  uint64_t prequalifyCmdTimeoutPropagatedMutants = 0;
+  uint64_t prequalifyCmdErrorMutants = 0;
   uint64_t detectedMutants = 0;
   uint64_t errors = 0;
   uint64_t timeoutMutants = 0;
@@ -6761,6 +6773,24 @@ static bool collectMatrixReport(
     }
     accumulator += parsed;
   };
+  auto readOptionalResultMetric = [&](ArrayRef<StringRef> rowFields, size_t col,
+                                      uint64_t &value,
+                                      bool allowDash = false) {
+    value = 0;
+    if (col == static_cast<size_t>(-1) || col >= rowFields.size())
+      return;
+    StringRef fieldValue = rowFields[col].trim();
+    if (fieldValue.empty())
+      return;
+    if (allowDash && fieldValue == "-")
+      return;
+    uint64_t parsed = 0;
+    if (fieldValue.getAsInteger(10, parsed)) {
+      ++prequalifyResultsInvalidMetricValues;
+      return;
+    }
+    value = parsed;
+  };
   auto updateWorstLane = [&](uint64_t value, StringRef laneID,
                              uint64_t &currentWorstValue,
                              std::string &currentWorstLaneID) {
@@ -6860,6 +6890,31 @@ static bool collectMatrixReport(
                               prequalifyResultsCmdTimeoutPropagatedMutantsSum);
       addOptionalResultMetric(fields, prequalifyCmdErrorMutantsCol,
                               prequalifyResultsCmdErrorMutantsSum);
+      laneBudgetRow.hasPrequalifySummary = rowSummaryPresent;
+      readOptionalResultMetric(fields, prequalifyTotalMutantsCol,
+                               laneBudgetRow.prequalifyTotalMutants,
+                               /*allowDash=*/true);
+      readOptionalResultMetric(fields, prequalifyNotPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyNotPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCreateMutatedErrorMutantsCol,
+                               laneBudgetRow.prequalifyCreateMutatedErrorMutants);
+      readOptionalResultMetric(fields, prequalifyProbeErrorMutantsCol,
+                               laneBudgetRow.prequalifyProbeErrorMutants);
+      readOptionalResultMetric(
+          fields, prequalifyCmdTokenNotPropagatedMutantsCol,
+          laneBudgetRow.prequalifyCmdTokenNotPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCmdTokenPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyCmdTokenPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCmdRCNotPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyCmdRCNotPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCmdRCPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyCmdRCPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCmdTimeoutPropagatedMutantsCol,
+                               laneBudgetRow.prequalifyCmdTimeoutPropagatedMutants);
+      readOptionalResultMetric(fields, prequalifyCmdErrorMutantsCol,
+                               laneBudgetRow.prequalifyCmdErrorMutants);
     }
 
     std::string metricsPath;
@@ -7035,6 +7090,43 @@ static bool collectMatrixReport(
                                                 : lane.gateStatus);
       rows.emplace_back((Twine(laneBase) + ".has_metrics").str(),
                         lane.hasMetrics ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".prequalify_summary_present").str(),
+                        lane.hasPrequalifySummary ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".prequalify_total_mutants").str(),
+                        lane.hasPrequalifySummary
+                            ? std::to_string(lane.prequalifyTotalMutants)
+                            : std::string("-"));
+      rows.emplace_back(
+          (Twine(laneBase) + ".prequalify_not_propagated_mutants").str(),
+          std::to_string(lane.prequalifyNotPropagatedMutants));
+      rows.emplace_back((Twine(laneBase) + ".prequalify_propagated_mutants").str(),
+                        std::to_string(lane.prequalifyPropagatedMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".prequalify_create_mutated_error_mutants").str(),
+          std::to_string(lane.prequalifyCreateMutatedErrorMutants));
+      rows.emplace_back((Twine(laneBase) + ".prequalify_probe_error_mutants").str(),
+                        std::to_string(lane.prequalifyProbeErrorMutants));
+      rows.emplace_back(
+          (Twine(laneBase) +
+           ".prequalify_cmd_token_not_propagated_mutants")
+              .str(),
+          std::to_string(lane.prequalifyCmdTokenNotPropagatedMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".prequalify_cmd_token_propagated_mutants").str(),
+          std::to_string(lane.prequalifyCmdTokenPropagatedMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".prequalify_cmd_rc_not_propagated_mutants").str(),
+          std::to_string(lane.prequalifyCmdRCNotPropagatedMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".prequalify_cmd_rc_propagated_mutants").str(),
+          std::to_string(lane.prequalifyCmdRCPropagatedMutants));
+      rows.emplace_back(
+          (Twine(laneBase) +
+           ".prequalify_cmd_timeout_propagated_mutants")
+              .str(),
+          std::to_string(lane.prequalifyCmdTimeoutPropagatedMutants));
+      rows.emplace_back((Twine(laneBase) + ".prequalify_cmd_error_mutants").str(),
+                        std::to_string(lane.prequalifyCmdErrorMutants));
       rows.emplace_back((Twine(laneBase) + ".detected_mutants").str(),
                         std::to_string(lane.detectedMutants));
       rows.emplace_back((Twine(laneBase) + ".errors").str(),
