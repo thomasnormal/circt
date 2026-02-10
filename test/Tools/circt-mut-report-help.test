@@ -11,7 +11,11 @@
 // CHECK: --trend-history
 // CHECK: --trend-window
 // CHECK: --policy-profile
+// CHECK: formal-regression-matrix-guard
+// CHECK: formal-regression-matrix-trend-guard
 // CHECK: --append-history
+// CHECK: --fail-if-value-gt
+// CHECK: --fail-if-value-lt
 // CHECK: --fail-if-delta-gt
 // CHECK: --fail-if-delta-lt
 // CHECK: --fail-if-trend-delta-gt
