@@ -187,6 +187,14 @@ See CHANGELOG.md on recent progress.
       LLVM translation with `builtin.unrealized_conversion_cast` around
       4-state `hw.struct` lowering (`X`/`Z` semantic path), now a prioritized
       BMC closure item.
+15. SMTLIB hardening status (February 10, 2026):
+    - `convert-verif-to-smt(for-smtlib-export=true)` now emits an explicit
+      capability diagnostic when `verif.bmc` regions still contain LLVM ops,
+      instead of generic legalization failure.
+16. Next closure feature for this bucket:
+    - lower/eliminate mixed concrete (`i1`) <-> symbolic (`!smt.bv<1>`) bridge
+      casts in BMC circuit lowering for UVM `disable iff` fail-path tests
+      (`16.15--property-iff-uvm-fail` class).
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

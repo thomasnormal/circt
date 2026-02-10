@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 860 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: SMTLIB LLVM-Op Guard + Post-Lowering Cast Reconcile
+
+1. Added explicit SMTLIB capability diagnostics in Verif-to-SMT BMC lowering:
+   - file: `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+   - when `for-smtlib-export=true`, `verif.bmc` now rejects LLVM-dialect ops in
+     BMC regions with a targeted error:
+     `for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions; found '<op>'`
+   - this replaces prior generic legalization-only failure for this class.
+2. Added a post-`lower-smt-to-z3-llvm` cast cleanup stage in `circt-bmc`:
+   - file: `tools/circt-bmc/circt-bmc.cpp`
+   - inserted `reconcile-unrealized-casts` after `lower-smt-to-z3-llvm` in the
+     LLVM/JIT path before final translation.
+3. Added regression coverage for the new SMTLIB guard:
+   - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+
+### Validation
+
+- `ninja -C build circt-opt circt-bmc`: PASS
+- `python3 build/bin/llvm-lit -sv -j 4 test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir test/Conversion/VerifToSMT/verif-to-smt-errors.mlir test/Tools/circt-bmc/scf-dialect-registered.mlir`: PASS
+- Repro diagnostics:
+  - `circt-opt /tmp/v2s_fail_try2.mlir --convert-verif-to-smt='for-smtlib-export=true'`
+    now emits the targeted LLVM-op-in-BMC-region capability error.
+  - `circt-bmc --run-smtlib ... 16.15--property-iff-uvm-fail.mlir`
+    now emits the same targeted capability error with concrete offending op.
+- Candidate semantic bucket rerun:
+  - `ALLOW_MULTI_CLOCK=1 INCLUDE_UVM_TAGS=1 TEST_FILTER='^(16.13--sequence-multiclock-uvm|16.15--property-iff-uvm|16.15--property-iff-uvm-fail|16.10--property-local-var-uvm|16.10--sequence-local-var-uvm|16.11--sequence-subroutine-uvm)$' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - result: `total=6 pass=5 error=1` (remaining: `16.15--property-iff-uvm-fail`)
+
 ## Iteration 859 - February 10, 2026
 
 ### Native Matrix Global-Filter Prequalification in `circt-mut`

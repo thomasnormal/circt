@@ -4915,8 +4915,8 @@ struct VerifBoundedModelCheckingOpConversion
     rewriter.createBlock(&solver.getBodyRegion());
 
     auto inlineBMCBlock =
-        [&](Block &block, ValueRange inputs,
-            ArrayRef<Type> resultTypes) -> FailureOr<SmallVector<Value>> {
+        [&](Block &block, ValueRange inputs, ArrayRef<Type> resultTypes,
+            StringRef regionName) -> FailureOr<SmallVector<Value>> {
       if (block.getNumArguments() != inputs.size()) {
         op.emitError("verif.bmc region has unexpected argument count when "
                      "exporting SMT-LIB");
@@ -4959,10 +4959,28 @@ struct VerifBoundedModelCheckingOpConversion
 
       SmallVector<Value> results;
       results.reserve(resultTypes.size());
+      unsigned yieldIndex = 0;
       for (auto [operand, resultTy] :
-           llvm::zip(yieldOp.getOperands(), resultTypes))
-        results.push_back(typeConverter->materializeTargetConversion(
-            rewriter, loc, resultTy, mapping.lookup(operand)));
+           llvm::zip(yieldOp.getOperands(), resultTypes)) {
+        Value mappedOperand = mapping.lookupOrNull(operand);
+        if (!mappedOperand) {
+          op.emitError("missing mapped verif.yield operand #")
+              << yieldIndex << " while lowering verif.bmc " << regionName
+              << " region for SMT-LIB export";
+          return failure();
+        }
+        Value converted = typeConverter->materializeTargetConversion(
+            rewriter, loc, resultTy, mappedOperand);
+        if (!converted) {
+          op.emitError("failed to materialize verif.yield operand #")
+              << yieldIndex << " conversion in verif.bmc " << regionName
+              << " region for SMT-LIB export from " << mappedOperand.getType()
+              << " to " << resultTy;
+          return failure();
+        }
+        results.push_back(converted);
+        ++yieldIndex;
+      }
       return results;
     };
 
@@ -4970,7 +4988,7 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<Value> initVals;
     if (emitSMTLIB) {
       auto initValsOr = inlineBMCBlock(op.getInit().front(), ValueRange{},
-                                       initOutputTy);
+                                       initOutputTy, "init");
       if (failed(initValsOr))
         return failure();
       initVals = std::move(*initValsOr);
@@ -6713,8 +6731,9 @@ struct VerifBoundedModelCheckingOpConversion
         for (auto stateArg :
              iterRange.drop_back(1 + numFinalChecks).take_back(numStateArgs))
           loopCallInputs.push_back(stateArg);
-        auto loopValsVecOr =
-            inlineBMCBlock(op.getLoop().front(), loopCallInputs, initOutputTy);
+        auto loopValsVecOr = inlineBMCBlock(op.getLoop().front(),
+                                            loopCallInputs, initOutputTy,
+                                            "loop");
         if (failed(loopValsVecOr))
           return failure();
         SmallVector<Value> loopValsVec = std::move(*loopValsVecOr);
@@ -6924,8 +6943,9 @@ struct VerifBoundedModelCheckingOpConversion
         }
 
         // Execute the circuit.
-        auto circuitCallOutsVecOr = inlineBMCBlock(
-            op.getCircuit().front(), circuitInputs, circuitOutputTy);
+        auto circuitCallOutsVecOr =
+            inlineBMCBlock(op.getCircuit().front(), circuitInputs,
+                           circuitOutputTy, "circuit");
         if (failed(circuitCallOutsVecOr))
           return failure();
         SmallVector<Value> circuitCallOutsVec = std::move(*circuitCallOutsVecOr);
@@ -8335,6 +8355,26 @@ void ConvertVerifToSMTPass::runOnOperation() {
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
+          if (forSMTLIBExport) {
+            Operation *unsupportedOp = nullptr;
+            bmcOp->walk([&](Operation *nested) {
+              if (nested == bmcOp.getOperation())
+                return WalkResult::advance();
+              auto *dialect = nested->getDialect();
+              if (!dialect || dialect->getNamespace() != "llvm")
+                return WalkResult::advance();
+              unsupportedOp = nested;
+              return WalkResult::interrupt();
+            });
+            if (unsupportedOp) {
+              unsupportedOp->emitError(
+                  "for-smtlib-export does not support LLVM dialect operations "
+                  "inside verif.bmc regions; found '")
+                  << unsupportedOp->getName() << "'";
+              return WalkResult::interrupt();
+            }
+          }
+
           auto regTypes = TypeRange(bmcOp.getCircuit().getArgumentTypes())
                               .take_back(bmcOp.getNumRegs());
           for (auto [regType, initVal] :
