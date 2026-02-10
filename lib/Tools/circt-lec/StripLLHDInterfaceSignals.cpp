@@ -3003,7 +3003,8 @@ struct StripLLHDInterfaceSignalsPass
 
 static LogicalResult
 stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
-                     ModuleState &state, bool strictMode) {
+                     ModuleState &state, bool strictMode,
+                     bool requireNoLLHD) {
   bool globalZeroInit = false;
   if (auto addr = sigOp.getInit().getDefiningOp<LLVM::AddressOfOp>()) {
     if (auto module = sigOp->getParentOfType<ModuleOp>()) {
@@ -3599,6 +3600,8 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         return sigOp.emitError(
             "LLHD interface signal requires abstraction; rerun without "
             "--strict-llhd");
+      if (!requireNoLLHD)
+        continue;
       auto module = sigOp->getParentOfType<hw::HWModuleOp>();
       if (!module)
         return sigOp.emitError("expected LLHD signal in hw.module for LEC");
@@ -3618,31 +3621,34 @@ stripInterfaceSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       continue;
     }
 
-    for (auto read : field.reads) {
-      if (!dom.dominates(field.storedValue, read.getOperation())) {
-        if (strictMode)
-          return sigOp.emitError(
-              "LLHD interface signal read before dominating store; rerun "
-              "without --strict-llhd");
-        auto module = sigOp->getParentOfType<hw::HWModuleOp>();
-        if (!module)
-          return sigOp.emitError("expected LLHD signal in hw.module for LEC");
-        auto baseName = sigOp.getNameAttr()
-                            ? sigOp.getNameAttr().getValue()
-                            : StringRef("llhd_if");
-        std::string name = baseName.str();
-        name += "_field";
-        name += std::to_string(entry.first);
-        Value newInput = state.addInput(
-            module, name, field.reads.front().getType(),
-            "interface_read_before_dominating_store", baseName, entry.first,
-            read.getLoc());
-        for (auto readToReplace : field.reads)
-          readToReplace.getResult().replaceAllUsesWith(newInput);
-        break;
-      }
-      read.getResult().replaceAllUsesWith(field.storedValue);
+    bool allReadsDominated = llvm::all_of(field.reads, [&](llhd::ProbeOp read) {
+      return dom.dominates(field.storedValue, read.getOperation());
+    });
+    if (!allReadsDominated) {
+      if (strictMode)
+        return sigOp.emitError(
+            "LLHD interface signal read before dominating store; rerun "
+            "without --strict-llhd");
+      if (!requireNoLLHD)
+        continue;
+      auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+      if (!module)
+        return sigOp.emitError("expected LLHD signal in hw.module for LEC");
+      auto baseName = sigOp.getNameAttr() ? sigOp.getNameAttr().getValue()
+                                          : StringRef("llhd_if");
+      std::string name = baseName.str();
+      name += "_field";
+      name += std::to_string(entry.first);
+      Value newInput = state.addInput(
+          module, name, field.reads.front().getType(),
+          "interface_read_before_dominating_store", baseName, entry.first,
+          field.reads.front().getLoc());
+      for (auto readToReplace : field.reads)
+        readToReplace.getResult().replaceAllUsesWith(newInput);
+      continue;
     }
+    for (auto read : field.reads)
+      read.getResult().replaceAllUsesWith(field.storedValue);
   }
 
   bool erased = true;
@@ -3719,7 +3725,8 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
     auto stateIt = moduleStates.find(parentModule.getOperation());
     if (stateIt == moduleStates.end())
       return signalPassFailure();
-    if (failed(stripInterfaceSignal(sigOp, dom, stateIt->second, this->strict)))
+    if (failed(stripInterfaceSignal(sigOp, dom, stateIt->second, this->strict,
+                                    this->requireNoLLHD)))
       return signalPassFailure();
   }
 
