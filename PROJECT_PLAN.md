@@ -1074,9 +1074,12 @@ See CHANGELOG.md on recent progress.
    `"will be dropped during lowering"` and supports opt-in enforcement via
    `FAIL_ON_DROP_REMARKS=1`.
 6. Formal orchestration now tracks this guardrail in strict-gate telemetry:
-   `utils/run_formal_all.sh` captures `bmc_drop_remark_cases` for
-   `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS`, and can gate regression via
-   `--fail-on-new-bmc-drop-remark-cases` (enabled by `--strict-gate`).
+   `utils/run_formal_all.sh` captures `bmc_drop_remark_cases` for all active
+   BMC lanes:
+   `sv-tests/BMC`, `sv-tests-uvm/BMC_SEMANTICS`,
+   `verilator-verification/BMC`, and `yosys/tests/sva/BMC`, and can gate
+   regression via `--fail-on-new-bmc-drop-remark-cases`
+   (enabled by `--strict-gate`).
 7. SMT-LIB syntax-tree closure progress (February 10, 2026):
    `convert-verif-to-smt(for-smtlib-export=true)` now legalizes
    `llvm.mlir.constant` (scalar integer/float) inside `verif.bmc` regions to
@@ -1085,3 +1088,11 @@ See CHANGELOG.md on recent progress.
    `llvm.mlir.constant` to `llvm.call` (`malloc` path), making the next closure
    target explicit: eliminate or legalize call/pointer constructs in BMC
    regions for SMT-LIB export.
+9. Cross-suite no-drop telemetry validation (February 10, 2026):
+   focused `run_formal_all.sh` lane reruns now report
+   `bmc_drop_remark_cases=0` on:
+   - `sv-tests/BMC` (`26/26` pass)
+   - `verilator-verification/BMC` (`12/17` pass)
+   - `yosys/tests/sva/BMC` (`7/14` pass, `2` skip)
+   confirming no new dropped-syntax remark signal while semantic fail-like
+   closure continues on non-sv-tests suites.
