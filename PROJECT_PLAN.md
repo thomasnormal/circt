@@ -217,6 +217,19 @@ See CHANGELOG.md on recent progress.
     build a BMC-native LLHD/interface-storage elimination step for 4-state
     bridge paths (`smt.bv` <-> `i1` round-trips) before SMT-to-Z3 LLVM
     lowering, with focused regression on the 6-case UVM candidate set.
+22. Updated status (February 10, 2026, current branch):
+    - `circt-bmc` LLHD flow now reuses targeted LEC preprocessing
+      (`lower-llhd-ref-ports` + `strip-llhd-interface-signals` with
+      `require-no-llhd=false`) without running full `lower-lec-llvm`.
+    - Revalidation on the 6-case UVM semantic candidate set with
+      `FORCE_BMC=1 ALLOW_MULTI_CLOCK=1`:
+      5/6 no longer hit LLVM bridge-cast translation errors and now produce
+      real BMC outcomes (`SAT` / pass-fail classification), including
+      `16.15--property-iff-uvm-fail` passing.
+    - Remaining blocker:
+      `16.13--sequence-multiclock-uvm` fails with multi-clock metadata
+      legalization (`bmc_reg_clocks` / `bmc_reg_clock_sources`) and is now the
+      primary multiclock closure item.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
