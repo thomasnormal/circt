@@ -5366,6 +5366,28 @@ static bool parseKeyValueTSV(StringRef path, StringMap<std::string> &values,
   return true;
 }
 
+static std::string sanitizeReportKeySegment(StringRef raw) {
+  std::string out;
+  out.reserve(raw.size());
+  bool prevUnderscore = false;
+  for (char c : raw) {
+    bool isSafe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '_';
+    if (isSafe) {
+      out.push_back(c);
+      prevUnderscore = false;
+    } else if (!prevUnderscore) {
+      out.push_back('_');
+      prevUnderscore = true;
+    }
+  }
+  while (!out.empty() && out.back() == '_')
+    out.pop_back();
+  if (out.empty())
+    out = "lane";
+  return out;
+}
+
 static void appendMetricRow(std::vector<std::pair<std::string, std::string>> &rows,
                             StringRef prefix,
                             const StringMap<std::string> &metrics, StringRef key,
@@ -6504,6 +6526,41 @@ static bool collectMatrixReport(
   rows.emplace_back(
       "matrix.lane_budget.lanes_nonzero_global_filter_bmc_unknown_mutants",
       std::to_string(laneBudgetLanesNonZeroBMCUnknownMutants));
+  rows.emplace_back("matrix.lane_budget.rows_total", std::to_string(lanesTotal));
+  if (laneBudgetRowsOut) {
+    StringMap<uint64_t> laneBaseCounts;
+    for (const auto &lane : *laneBudgetRowsOut) {
+      std::string safeLane = sanitizeReportKeySegment(lane.laneID);
+      uint64_t ordinal = ++laneBaseCounts[safeLane];
+      std::string laneBase =
+          ordinal == 1
+              ? (Twine("matrix.lane_budget.lane.") + safeLane).str()
+              : (Twine("matrix.lane_budget.lane.") + safeLane + "__" +
+                 Twine(ordinal))
+                    .str();
+      rows.emplace_back((Twine(laneBase) + ".lane_id").str(), lane.laneID);
+      rows.emplace_back((Twine(laneBase) + ".status").str(),
+                        lane.status.empty() ? std::string("-") : lane.status);
+      rows.emplace_back((Twine(laneBase) + ".gate_status").str(),
+                        lane.gateStatus.empty() ? std::string("-")
+                                                : lane.gateStatus);
+      rows.emplace_back((Twine(laneBase) + ".has_metrics").str(),
+                        lane.hasMetrics ? "1" : "0");
+      rows.emplace_back((Twine(laneBase) + ".detected_mutants").str(),
+                        std::to_string(lane.detectedMutants));
+      rows.emplace_back((Twine(laneBase) + ".errors").str(),
+                        std::to_string(lane.errors));
+      rows.emplace_back(
+          (Twine(laneBase) + ".global_filter_timeout_mutants").str(),
+          std::to_string(lane.timeoutMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".global_filter_lec_unknown_mutants").str(),
+          std::to_string(lane.lecUnknownMutants));
+      rows.emplace_back(
+          (Twine(laneBase) + ".global_filter_bmc_unknown_mutants").str(),
+          std::to_string(lane.bmcUnknownMutants));
+    }
+  }
   rows.emplace_back(
       "matrix.coverage_percent_avg",
       coverageCount ? formatDouble2(coverageSum / static_cast<double>(coverageCount))
