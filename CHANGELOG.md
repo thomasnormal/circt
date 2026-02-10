@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 870 - February 10, 2026
+
+### BMC Semantic Closure: `disable iff` Constant-Guard Fix
+
+1. Fixed `disable iff` lowering in `LTLToCore` to avoid spurious first-sample
+   violations when the disable guard is statically true:
+   - added i1 constant detection helper in `LTLPropertyLowerer`.
+   - short-circuit `lowerDisableIff` when disable guard is constant `1`.
+   - skipped top-level sampled-value shift for already-constant-true safety and
+     final checks (prevents false initial-state failures for always-disabled
+     properties).
+   - file:
+     - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+2. Added focused regression:
+   - `test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir`
+   - checks:
+     - `disable iff (1'b1)` path reports `BMC_RESULT=UNSAT`
+     - `disable iff (1'b0)` path reports `BMC_RESULT=SAT`
+3. Updated BMC harness expectation tests after improved classification:
+   - `test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir`
+   - `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir`
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-bmc`: PASS
+  - `ninja -C build circt-opt`: PASS
+- Targeted reproducer:
+  - `/tmp/min-disable-iff.hw.mlir` with `circt-bmc -b 2`
+  - `--module m_unsat`: `Bound reached with no violations!`
+  - `--module m_sat`: `Assertion can be violated!`
+- sv-tests targeted pair:
+  - `OUT=/tmp/triage-disiff-pass-after.txt TEST_FILTER='^16\\.15--property-disable-iff$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: PASS
+  - `OUT=/tmp/triage-disiff-fail-after.txt TEST_FILTER='^16\\.15--property-disable-iff-fail$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: FAIL (expected)
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS
+
 ## Iteration 869 - February 10, 2026
 
 ### BMC Semantic Closure: Multiclock Register-Clock Source Index Remap
