@@ -3,6 +3,7 @@ set -euo pipefail
 
 YOSYS_SVA_DIR="${1:-/home/thomas-ahle/yosys/tests/sva}"
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
+OUT="${OUT:-}"
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -135,6 +136,10 @@ if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
 fi
 
 tmpdir="$(mktemp -d)"
+if [[ -n "$OUT" ]]; then
+  mkdir -p "$(dirname "$OUT")"
+  : > "$OUT"
+fi
 cleanup() {
   rm -rf "$tmpdir"
 }
@@ -8054,11 +8059,23 @@ PY
   fi
 }
 
+emit_case_result_row() {
+  local status="$1"
+  local base="$2"
+  local case_path="$3"
+  if [[ -z "$OUT" ]]; then
+    return
+  fi
+  printf "%s\t%s\t%s\tyosys/tests/sva\tBMC\n" \
+    "$status" "$base" "$case_path" >> "$OUT"
+}
+
 report_case_outcome() {
   local base="$1"
   local mode="$2"
   local passed="$3"
   local profile="$4"
+  local case_path="${5:-$YOSYS_SVA_DIR/$base.sv}"
   mode_total=$((mode_total + 1))
   record_observed_case "$base" "$mode" "$profile" "$passed"
   local expected
@@ -8066,12 +8083,14 @@ report_case_outcome() {
   case "$expected" in
     skip)
       echo "UNSKIP($mode): $base [$profile]"
+      emit_case_result_row "UNSKIP" "$base" "$case_path"
       mode_out_unskip=$((mode_out_unskip + 1))
       failures=$((failures + 1))
       ;;
     xfail)
       if [[ "$passed" == "1" ]]; then
         echo "XPASS($mode): $base [$profile]"
+        emit_case_result_row "XPASS" "$base" "$case_path"
         mode_out_xpass=$((mode_out_xpass + 1))
         xpasses=$((xpasses + 1))
         if [[ "$ALLOW_XPASS" != "1" ]]; then
@@ -8079,6 +8098,7 @@ report_case_outcome() {
         fi
       else
         echo "XFAIL($mode): $base [$profile]"
+        emit_case_result_row "XFAIL" "$base" "$case_path"
         mode_out_xfail=$((mode_out_xfail + 1))
         xfails=$((xfails + 1))
       fi
@@ -8086,19 +8106,23 @@ report_case_outcome() {
     fail)
       if [[ "$passed" == "1" ]]; then
         echo "EPASS($mode): $base [$profile]"
+        emit_case_result_row "EPASS" "$base" "$case_path"
         mode_out_epass=$((mode_out_epass + 1))
         failures=$((failures + 1))
       else
         echo "EFAIL($mode): $base [$profile]"
+        emit_case_result_row "EFAIL" "$base" "$case_path"
         mode_out_efail=$((mode_out_efail + 1))
       fi
       ;;
     pass)
       if [[ "$passed" == "1" ]]; then
         echo "PASS($mode): $base"
+        emit_case_result_row "PASS" "$base" "$case_path"
         mode_out_pass=$((mode_out_pass + 1))
       else
         echo "FAIL($mode): $base"
+        emit_case_result_row "FAIL" "$base" "$case_path"
         mode_out_fail=$((mode_out_fail + 1))
         failures=$((failures + 1))
       fi
@@ -8112,6 +8136,7 @@ report_skipped_case() {
   local profile="$3"
   local reason="$4"
   local emit_line="${5:-1}"
+  local case_path="${6:-$YOSYS_SVA_DIR/$base.sv}"
   mode_total=$((mode_total + 1))
   mode_skipped=$((mode_skipped + 1))
   case "$mode" in
@@ -8130,6 +8155,7 @@ report_skipped_case() {
   if [[ "$emit_line" == "1" ]]; then
     echo "SKIP($reason): $base"
   fi
+  emit_case_result_row "SKIP" "$base" "$case_path"
   if [[ "$expected" == "skip" ]]; then
     mode_skipped_expected=$((mode_skipped_expected + 1))
     if [[ "$emit_line" == "1" ]]; then
@@ -8206,7 +8232,7 @@ run_case() {
   base="$(basename "$sv" .sv)"
   if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
     if ! grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
-      report_skipped_case "$base" "$mode" "$(case_profile)" "fail-no-macro"
+      report_skipped_case "$base" "$mode" "$(case_profile)" "fail-no-macro" 1 "$sv"
       return
     fi
   fi
@@ -8233,7 +8259,7 @@ run_case() {
   fi
   if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" \
       "${extra_def[@]}" "$sv" > "$mlir"; then
-    report_case_outcome "$base" "$mode" 0 "$(case_profile)"
+    report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
     return
   fi
   local out
@@ -8263,29 +8289,29 @@ run_case() {
   append_bmc_abstraction_provenance "$base" "$mode" "$sv" "$bmc_log"
   if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
       grep -q "no property provided to check in module" "$bmc_log"; then
-    report_skipped_case "$base" "$mode" "$(case_profile)" "no-property"
+    report_skipped_case "$base" "$mode" "$(case_profile)" "no-property" 1 "$sv"
     skipped=$((skipped + 1))
     return
   fi
 
   if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
     if [[ "$bmc_status" -eq 0 ]]; then
-      report_case_outcome "$base" "$mode" 1 "$(case_profile)"
+      report_case_outcome "$base" "$mode" 1 "$(case_profile)" "$sv"
     else
-      report_case_outcome "$base" "$mode" 0 "$(case_profile)"
+      report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
     fi
   else
     if [[ "$mode" == "pass" ]]; then
       if ! grep -q "Bound reached with no violations!" <<<"$out"; then
-        report_case_outcome "$base" "$mode" 0 "$(case_profile)"
+        report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
       else
-        report_case_outcome "$base" "$mode" 1 "$(case_profile)"
+        report_case_outcome "$base" "$mode" 1 "$(case_profile)" "$sv"
       fi
     else
       if ! grep -q "Assertion can be violated!" <<<"$out"; then
-        report_case_outcome "$base" "$mode" 0 "$(case_profile)"
+        report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
       else
-        report_case_outcome "$base" "$mode" 1 "$(case_profile)"
+        report_case_outcome "$base" "$mode" 1 "$(case_profile)" "$sv"
       fi
     fi
   fi
@@ -8309,8 +8335,8 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   base="$(basename "$sv" .sv)"
   if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
     profile="$(case_profile)"
-    report_skipped_case "$base" pass "$profile" "vhdl" 1
-    report_skipped_case "$base" fail "$profile" "vhdl" 0
+    report_skipped_case "$base" pass "$profile" "vhdl" 1 "$sv"
+    report_skipped_case "$base" fail "$profile" "vhdl" 0 "$sv"
     skipped=$((skipped + 1))
     continue
   fi

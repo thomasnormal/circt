@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 892 - February 10, 2026
+
+### Yosys BMC Case-Row Emission Fix for Semantic-Bucket Closure
+
+1. Fixed `utils/run_yosys_sva_circt_bmc.sh` to honor `OUT` and emit
+   deterministic case rows during normal execution:
+   - row format: `STATUS  base  path  suite  mode`
+   - current suite/mode tags: `yosys/tests/sva`, `BMC`
+2. Case-row emission is now wired through all per-case outcomes:
+   - `PASS`, `FAIL`, `XFAIL`, `XPASS`, `EFAIL`, `EPASS`, `UNSKIP`, `SKIP`
+3. This closes the telemetry gap where `run_formal_all.sh` could only parse
+   yosys BMC aggregate summary counters and had no stable per-case rows for:
+   - semantic-bucket counting
+   - fail-like case attribution
+   - strict-gate case-drift checks.
+4. Added regression coverage:
+   - `test/Tools/run-yosys-sva-bmc-out-file.test`
+   - verifies `OUT` file is created and carries suite/mode-tagged case rows.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_yosys_sva_circt_bmc.sh utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-yosys-sva-bmc-out-file.test test/Tools/run-yosys-sva-bmc-summary-modes.test test/Tools/run-yosys-sva-bmc-summary-artifacts.test test/Tools/run-formal-all-expected-failure-cases-yosys-bmc.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`: PASS
+- Real suite runs:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-yosys-bmc-outrows-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^yosys/tests/sva/BMC$'`
+    - `yosys/tests/sva/BMC`: summary now includes semantic buckets:
+      `bmc_semantic_bucket_fail_like_cases=6`
+      `bmc_semantic_bucket_unclassified_cases=6`
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-bucket-followup2-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^(sv-tests|sv-tests-uvm|verilator-verification|yosys/tests/sva)/BMC'`
+    - all four BMC lanes now emit `bmc_semantic_bucket_*_cases`.
+
 ## Iteration 891 - February 10, 2026
 
 ### BMC Semantic-Closure Strict-Gate: Bucket Drift Controls
