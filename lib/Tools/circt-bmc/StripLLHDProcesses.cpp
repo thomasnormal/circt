@@ -157,6 +157,7 @@ struct StripLLHDProcessesPass
         hwModule.walk(
             [&](ProcessOp process) { processes.push_back(process); });
         DenseMap<Value, Value> signalInputs;
+        int64_t abstractedProcessResultCount = 0;
         auto getSignalName = [](Value signal) -> StringRef {
           if (auto sig = signal.getDefiningOp<SignalOp>()) {
             if (auto nameAttr = sig.getNameAttr())
@@ -634,8 +635,18 @@ struct StripLLHDProcessesPass
                 StringAttr::get(hwModule.getContext(), name),
                 result.getType());
             result.replaceAllUsesWith(newInput.second);
+            ++abstractedProcessResultCount;
           }
           process.erase();
+        }
+
+        if (abstractedProcessResultCount > 0) {
+          hwModule->setAttr(
+              "circt.bmc_abstracted_llhd_process_results",
+              IntegerAttr::get(IntegerType::get(hwModule.getContext(), 32),
+                               abstractedProcessResultCount));
+        } else {
+          hwModule->removeAttr("circt.bmc_abstracted_llhd_process_results");
         }
 
         SmallVector<InstanceOp> instances;

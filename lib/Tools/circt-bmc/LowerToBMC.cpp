@@ -516,6 +516,16 @@ void LowerToBMCPass::runOnOperation() {
 
   auto numRegs = hwModule->getAttrOfType<IntegerAttr>("num_regs");
   auto initialValues = hwModule->getAttrOfType<ArrayAttr>("initial_values");
+  auto abstractedProcessResults =
+      hwModule->getAttrOfType<IntegerAttr>(
+          "circt.bmc_abstracted_llhd_process_results");
+  if (abstractedProcessResults && abstractedProcessResults.getInt() > 0) {
+    hwModule.emitWarning()
+        << "LLHD process abstraction introduced "
+        << abstractedProcessResults.getInt()
+        << " unconstrained process-result input(s); SAT witnesses may be "
+           "spurious";
+  }
   if (numRegs && initialValues) {
     for (auto value : initialValues) {
       if (!isa<IntegerAttr, UnitAttr>(value)) {
@@ -1332,6 +1342,9 @@ void LowerToBMCPass::runOnOperation() {
       verif::BoundedModelCheckingOp::create(
           builder, loc, effectiveBound,
           cast<IntegerAttr>(numRegs).getValue().getZExtValue(), initialValues);
+  if (abstractedProcessResults && abstractedProcessResults.getInt() > 0)
+    bmcOp->setAttr("bmc_abstracted_llhd_process_results",
+                   abstractedProcessResults);
   auto inputNames = hwModule.getInputNames();
   if (!inputNames.empty())
     bmcOp->setAttr("bmc_input_names", builder.getArrayAttr(inputNames));

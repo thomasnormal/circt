@@ -1,5 +1,41 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 872 - February 10, 2026
+
+### BMC LLHD Abstraction Observability Hardening
+
+1. Added explicit abstraction-count tagging in LLHD process stripping:
+   - file:
+     - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+   - modules now get:
+     - `circt.bmc_abstracted_llhd_process_results = <count>`
+     when dynamic LLHD process results are replaced by unconstrained inputs.
+2. Propagated abstraction metadata into BMC ops and diagnostics:
+   - file:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+   - `lower-to-bmc` now:
+     - propagates module attr into `verif.bmc` as
+       `bmc_abstracted_llhd_process_results`.
+     - emits an explicit warning when abstraction is present:
+       SAT witnesses may be spurious.
+3. Added/updated regression coverage:
+   - new:
+     - `test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+   - updated:
+     - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+       (checks per-module abstraction-count attrs and existing behavior).
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/strip-llhd-processes.mlir test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS (`272` discovered, `124` passed, `10` XFAIL, `138` unsupported).
+- Semantic-candidate revalidation:
+  - `OUT=/tmp/sv-tests-bmc-uvm6-postattr-20260210.txt INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 TEST_FILTER='^(16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm|16\\.15--property-iff-uvm-fail|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm)$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - summary unchanged: `total=6 pass=1 fail=5 error=0`.
+
 ## Iteration 871 - February 10, 2026
 
 ### BMC Semantic Closure: Implication Delay Hardening + LLHD Abstraction Triage
