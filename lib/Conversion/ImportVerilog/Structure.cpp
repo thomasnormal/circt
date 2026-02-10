@@ -4781,17 +4781,18 @@ struct ClassDeclVisitor {
         }
       }
       if (!isUserCallback) {
-        LLVM_DEBUG(llvm::dbgs() << "        Skipping builtin method\n");
-        static bool remarkEmitted = false;
-        if (remarkEmitted)
-          return success();
-
-        mlir::emitRemark(classLowering.op.getLoc())
-            << "Class builtin functions (needed for randomization, "
-               "constraints, "
-               "and covergroups) are not yet supported and will be dropped "
-               "during lowering.";
-        remarkEmitted = true;
+        LLVM_DEBUG(llvm::dbgs() << "        Preserving builtin method "
+                                << "declaration\n");
+        // Built-in class methods don't have user bodies to lower, but we still
+        // preserve their declarations so they remain part of the lowered class
+        // syntax tree and can be referenced by call lowering paths.
+        auto *builtinDecl = context.declareFunction(fn);
+        if (!builtinDecl || !builtinDecl->op) {
+          mlir::emitError(classLowering.op.getLoc())
+              << "failed to preserve builtin class method declaration '"
+              << fn.name << "'";
+          return failure();
+        }
         return success();
       }
       LLVM_DEBUG(llvm::dbgs()

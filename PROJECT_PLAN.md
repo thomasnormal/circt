@@ -146,6 +146,9 @@ See CHANGELOG.md on recent progress.
   - Remaining closure gap is now semantic correctness (reducing fail-like rows
     themselves), not bucket attribution coverage.
   - Syntax-tree completeness gaps to close next:
+    - BMC/ImportVerilog: implicit built-in class methods are now preserved as
+      declarations (no generic drop remark); continue auditing remaining
+      dropped-syntax emit sites to keep "no intentional drops" true end-to-end.
     - BMC: continue the "no implicit drops" audit by ensuring clock/semantic
       matching helpers do not materialize transient IR when comparing syntax
       trees (`LowerToBMC.cpp` now side-effect-free for explicit-clock lookup).
