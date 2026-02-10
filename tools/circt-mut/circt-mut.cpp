@@ -142,8 +142,14 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
   os << "                           formal-regression-basic|formal-regression-trend|\n";
   os << "                           formal-regression-matrix-basic|\n";
-  os << "                           formal-regression-matrix-trend\n";
+  os << "                           formal-regression-matrix-trend|\n";
+  os << "                           formal-regression-matrix-guard|\n";
+  os << "                           formal-regression-matrix-trend-guard\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
+  os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
+  os << "  --fail-if-value-lt RULE  Fail if current numeric value is below threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
   os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
   os << "  --fail-if-delta-lt RULE  Fail if numeric delta is below threshold\n";
@@ -5269,6 +5275,8 @@ struct ReportOptions {
   uint64_t trendWindowRuns = 0;
   SmallVector<std::string, 4> policyProfiles;
   std::string appendHistoryFile;
+  SmallVector<DeltaGateRule, 8> failIfValueGtRules;
+  SmallVector<DeltaGateRule, 8> failIfValueLtRules;
   SmallVector<DeltaGateRule, 8> failIfDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaGtRules;
@@ -5476,9 +5484,35 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-guard") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-trend-guard") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
-           "formal-regression-matrix-basic|formal-regression-matrix-trend)")
+           "formal-regression-matrix-basic|formal-regression-matrix-trend|"
+           "formal-regression-matrix-guard|"
+           "formal-regression-matrix-trend-guard)")
               .str();
   return false;
 }
@@ -6667,6 +6701,26 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.appendHistoryFile = v->str();
       continue;
     }
+    if (arg == "--fail-if-value-gt" || arg.starts_with("--fail-if-value-gt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-value-gt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-value-gt", rule, result.error))
+        return result;
+      result.opts.failIfValueGtRules.push_back(rule);
+      continue;
+    }
+    if (arg == "--fail-if-value-lt" || arg.starts_with("--fail-if-value-lt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-value-lt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-value-lt", rule, result.error))
+        return result;
+      result.opts.failIfValueLtRules.push_back(rule);
+      continue;
+    }
     if (arg == "--fail-if-delta-gt" || arg.starts_with("--fail-if-delta-gt=")) {
       auto v = consumeValue(i, arg, "--fail-if-delta-gt");
       if (!v)
@@ -6943,6 +6997,56 @@ static int runNativeReport(const ReportOptions &opts) {
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;
+  }
+  if (!opts.failIfValueGtRules.empty() || !opts.failIfValueLtRules.empty()) {
+    SmallVector<std::string, 8> failures;
+    StringMap<std::string> currentValues;
+    for (const auto &row : rows)
+      currentValues[row.first] = row.second;
+    auto evaluateValueRule = [&](const DeltaGateRule &rule,
+                                 bool isUpperBound) -> bool {
+      auto it = currentValues.find(rule.key);
+      if (it == currentValues.end()) {
+        errs() << "circt-mut report: current numeric key missing for value gate "
+                  "rule key '"
+               << rule.key << "'\n";
+        return false;
+      }
+      auto parsed = parseOptionalDouble(it->second);
+      if (!parsed) {
+        errs() << "circt-mut report: current value for gate rule key '" << rule.key
+               << "' is not numeric: '" << it->second << "'\n";
+        return false;
+      }
+      double value = *parsed;
+      if ((isUpperBound && value > rule.threshold) ||
+          (!isUpperBound && value < rule.threshold)) {
+        failures.push_back((Twine(rule.key) + " value=" + formatDouble2(value) +
+                            (isUpperBound ? " > " : " < ") +
+                            formatDouble2(rule.threshold))
+                               .str());
+      }
+      return true;
+    };
+
+    for (const auto &rule : opts.failIfValueGtRules)
+      if (!evaluateValueRule(rule, /*isUpperBound=*/true))
+        return 1;
+    for (const auto &rule : opts.failIfValueLtRules)
+      if (!evaluateValueRule(rule, /*isUpperBound=*/false))
+        return 1;
+
+    rows.emplace_back("value_gate.rules_total",
+                      std::to_string(opts.failIfValueGtRules.size() +
+                                     opts.failIfValueLtRules.size()));
+    rows.emplace_back("value_gate.failure_count",
+                      std::to_string(failures.size()));
+    rows.emplace_back("value_gate.status", failures.empty() ? "pass" : "fail");
+    for (size_t i = 0; i < failures.size(); ++i)
+      rows.emplace_back((Twine("value_gate.failure_") + Twine(i + 1)).str(),
+                        failures[i]);
+    if (!failures.empty())
+      finalRC = std::max(finalRC, 2);
   }
   if (!opts.failIfTrendDeltaGtRules.empty() ||
       !opts.failIfTrendDeltaLtRules.empty()) {
