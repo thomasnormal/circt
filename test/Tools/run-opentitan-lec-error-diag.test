@@ -1,0 +1,19 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/bin %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: printf '#!/bin/sh\necho \"circt-verilog failed\" >&2\nexit 2\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho \"unexpected circt-opt invocation\" >&2\nexit 7\n' > %t/bin/circt-opt
+// RUN: chmod +x %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\necho \"unexpected circt-lec invocation\" >&2\nexit 7\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-lec
+// RUN: not env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir > %t/out.log 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv
+//
+// LOG: Running LEC on 1 AES S-Box implementation(s)...
+// LOG: aes_sbox_canright FAIL (CIRCT_VERILOG_ERROR)
+// LOG: LEC failures: 1
+// RESULT: FAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright#CIRCT_VERILOG_ERROR{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}CIRCT_VERILOG_ERROR

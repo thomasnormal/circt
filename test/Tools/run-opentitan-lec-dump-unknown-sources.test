@@ -17,4 +17,4 @@
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
 // CHECK: aes_sbox_canright OK
 // CHECK: LEC completed successfully.
-// RESULTPASS: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// RESULTPASS: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}PASS

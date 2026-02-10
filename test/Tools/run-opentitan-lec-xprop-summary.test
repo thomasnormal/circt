@@ -17,5 +17,5 @@
 // CHECK: Running LEC on 1 AES S-Box implementation(s)...
 // CHECK: aes_sbox_canright XPROP_ONLY (accepted)
 // CHECK: LEC completed successfully.
-// RESULTXFAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[#]}}XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC
+// RESULTXFAIL: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[#]}}XPROP_ONLY{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY
 // XPROW: XFAIL{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}LEC{{[[:space:]]+}}XPROP_ONLY{{[[:space:]]+}}NEQ{{[[:space:]]+}}const-unknown-ones=4,input-unknown-extracts=5,input-unknown-inversions=34,unknown-xor-inversions=29{{[[:space:]]+}}{{.*}}/aes_sbox_canright{{[[:space:]]+}}UNSAT
