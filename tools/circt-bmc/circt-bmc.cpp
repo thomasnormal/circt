@@ -912,6 +912,9 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   options.debug = printSolverOutput;
   options.printModelInputs = printSolverOutput || printCounterexample;
   lowerPM.addPass(createLowerSMTToZ3LLVM(options));
+  // LowerSMTToZ3LLVM may leave bridge casts for mixed concrete/symbolic IR.
+  // Reconcile what can be folded before attempting LLVM translation/JIT.
+  lowerPM.addPass(mlir::createReconcileUnrealizedCastsPass());
   lowerPM.addPass(createCSEPass());
   lowerPM.addPass(createBottomUpSimpleCanonicalizerPass());
   lowerPM.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
