@@ -38,6 +38,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -139,6 +140,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           Compare against latest snapshot in history TSV\n";
   os << "  --history FILE           Shorthand for compare-latest + trend + append history\n";
   os << "  --history-bootstrap      Allow missing --history file by skipping compare/trend gates on bootstrap run\n";
+  os << "  --history-max-runs N     Keep only latest N runs in history after append\n";
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
@@ -5281,6 +5283,7 @@ struct ReportOptions {
   std::string compareHistoryLatestFile;
   std::string historyFile;
   bool historyBootstrap = false;
+  uint64_t historyMaxRuns = 0;
   std::string trendHistoryFile;
   uint64_t trendWindowRuns = 0;
   SmallVector<std::string, 4> policyProfiles;
@@ -5913,6 +5916,88 @@ static bool loadHistorySnapshots(StringRef path,
   if (snapshots.empty()) {
     error = (Twine("circt-mut report: no history snapshots found in: ") + path).str();
     return false;
+  }
+  return true;
+}
+
+static bool pruneHistoryToMaxRuns(StringRef path, uint64_t maxRuns,
+                                  uint64_t &prunedRuns, uint64_t &prunedRows,
+                                  std::string &error) {
+  prunedRuns = 0;
+  prunedRows = 0;
+  if (maxRuns == 0 || !sys::fs::exists(path))
+    return true;
+
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read history file: ") + path).str();
+    return false;
+  }
+
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  struct Row {
+    uint64_t runID = 0;
+    std::string timestamp;
+    std::string key;
+    std::string value;
+  };
+  std::vector<Row> rows;
+  std::set<uint64_t> runIDs;
+  SmallVector<StringRef, 8> fields;
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.rtrim("\r").trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    splitTSVLine(line, fields);
+    if (fields.size() < 4)
+      continue;
+    StringRef runIDField = fields[0].trim();
+    if (runIDField.empty() || runIDField == "run_id")
+      continue;
+    uint64_t runID = 0;
+    if (runIDField.getAsInteger(10, runID)) {
+      error = (Twine("circt-mut report: invalid history run_id '") + runIDField +
+               "' in " + path)
+                  .str();
+      return false;
+    }
+    Row row;
+    row.runID = runID;
+    row.timestamp = fields[1].trim().str();
+    row.key = fields[2].trim().str();
+    row.value = fields[3].trim().str();
+    rows.push_back(std::move(row));
+    runIDs.insert(runID);
+  }
+
+  if (runIDs.size() <= maxRuns)
+    return true;
+
+  std::vector<uint64_t> sortedRunIDs(runIDs.begin(), runIDs.end());
+  uint64_t keepFromRunID = sortedRunIDs[sortedRunIDs.size() - maxRuns];
+  prunedRuns = 0;
+  for (uint64_t runID : sortedRunIDs)
+    if (runID < keepFromRunID)
+      ++prunedRuns;
+
+  std::error_code ec;
+  raw_fd_ostream os(path, ec, sys::fs::OF_Text);
+  if (ec) {
+    error = (Twine("circt-mut report: failed to rewrite history file: ") + path +
+             ": " + ec.message())
+                .str();
+    return false;
+  }
+  os << "run_id\ttimestamp_utc\tkey\tvalue\n";
+  for (const auto &row : rows) {
+    if (row.runID < keepFromRunID) {
+      ++prunedRows;
+      continue;
+    }
+    os << row.runID << "\t" << row.timestamp << "\t" << row.key << "\t"
+       << row.value << "\n";
   }
   return true;
 }
@@ -7033,6 +7118,21 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.historyBootstrap = true;
       continue;
     }
+    if (arg == "--history-max-runs" || arg.starts_with("--history-max-runs=")) {
+      auto v = consumeValue(i, arg, "--history-max-runs");
+      if (!v)
+        return result;
+      uint64_t parsed = 0;
+      if (StringRef(*v).trim().getAsInteger(10, parsed) || parsed == 0) {
+        result.error =
+            (Twine("circt-mut report: invalid --history-max-runs value: ") + *v +
+             " (expected positive integer)")
+                .str();
+        return result;
+      }
+      result.opts.historyMaxRuns = parsed;
+      continue;
+    }
     if (arg == "--trend-history" || arg.starts_with("--trend-history=")) {
       auto v = consumeValue(i, arg, "--trend-history");
       if (!v)
@@ -7174,6 +7274,11 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       !result.opts.compareHistoryLatestFile.empty()) {
     result.error = "circt-mut report: --compare and --compare-history-latest "
                    "are mutually exclusive";
+    return result;
+  }
+  if (result.opts.historyMaxRuns > 0 && result.opts.appendHistoryFile.empty()) {
+    result.error = "circt-mut report: --history-max-runs requires --append-history "
+                   "or --history";
     return result;
   }
   if (!result.opts.historyFile.empty()) {
@@ -7572,6 +7677,18 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("history.file", historyPath);
     rows.emplace_back("history.appended_run_id", std::to_string(nextRunID));
     rows.emplace_back("history.appended_timestamp_utc", timestampUTC);
+    if (opts.historyMaxRuns > 0) {
+      uint64_t prunedRuns = 0;
+      uint64_t prunedRows = 0;
+      if (!pruneHistoryToMaxRuns(historyPath, opts.historyMaxRuns, prunedRuns,
+                                 prunedRows, error)) {
+        errs() << error << "\n";
+        return 1;
+      }
+      rows.emplace_back("history.max_runs", std::to_string(opts.historyMaxRuns));
+      rows.emplace_back("history.pruned_runs", std::to_string(prunedRuns));
+      rows.emplace_back("history.pruned_rows", std::to_string(prunedRows));
+    }
   }
   if (historyBootstrapActivated)
     rows.emplace_back("history.bootstrap_active", "1");
