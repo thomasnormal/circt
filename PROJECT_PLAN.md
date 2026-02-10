@@ -559,6 +559,16 @@ See CHANGELOG.md on recent progress.
     - bucket counts are name/path-based classification heuristics, not direct
       solver-IR semantic tags; deep closure still requires backend-emitted
       semantic category metadata for exact attribution.
+70. Cross-suite semantic-bucket coverage limitation (February 10, 2026):
+    - `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS` emit bucket counters
+      with concrete signal (`disable_iff=1`, `local_var=2` in current
+      `sv-tests/BMC` baseline rerun).
+    - `verilator-verification/BMC` currently reports only unclassified
+      bucketed fail-like cases.
+    - `yosys/tests/sva/BMC` currently lacks bucket counters in summary output
+      on this run path because case-level rows are not always emitted;
+      next hardening target is deterministic case-row export for yosys BMC so
+      semantic-bucket drift gates can apply uniformly.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

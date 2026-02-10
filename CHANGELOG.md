@@ -47,6 +47,17 @@
       `bmc_semantic_bucket_multiclock_cases=0`
       `bmc_semantic_bucket_four_state_cases=0`
       `bmc_semantic_bucket_unclassified_cases=0`.
+- Broader cross-suite BMC closure rerun:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-bucket-followup-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^(sv-tests|sv-tests-uvm|verilator-verification|yosys/tests/sva)/BMC'`
+  - result:
+    - `sv-tests/BMC`: `total=26 pass=23 fail=3`
+    - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=6 fail=0`
+    - `verilator-verification/BMC`: `total=17 pass=12 fail=5` (`unclassified=5`)
+    - `yosys/tests/sva/BMC`: `total=14 pass=7 fail=5 skip=2`
+  - note:
+    - `yosys/tests/sva/BMC` summary in this run path does not yet carry
+      semantic-bucket counters, indicating remaining case-row export
+      normalization work for uniform bucket drift gating.
 
 ## Iteration 890 - February 10, 2026
 
