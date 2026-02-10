@@ -7378,8 +7378,10 @@ static bool collectMatrixReport(
   uint64_t lanesTotal = 0;
   uint64_t lanesPass = 0;
   uint64_t lanesFail = 0;
+  uint64_t lanesSkip = 0;
   uint64_t gatePass = 0;
   uint64_t gateFail = 0;
+  uint64_t gateSkip = 0;
   uint64_t lanesWithMetrics = 0;
   uint64_t lanesMissingMetrics = 0;
   uint64_t invalidMetricValues = 0;
@@ -7571,12 +7573,16 @@ static bool collectMatrixReport(
     laneBudgetRow.gateStatus = gate.str();
     if (status == "PASS")
       ++lanesPass;
-    else
+    else if (status == "FAIL")
       ++lanesFail;
+    else if (status == "SKIP")
+      ++lanesSkip;
     if (gate == "PASS")
       ++gatePass;
     else if (gate == "FAIL")
       ++gateFail;
+    else if (gate == "SKIP")
+      ++gateSkip;
 
     if (auto coverage = parseOptionalDouble(getField(coverageCol))) {
       coverageSum += *coverage;
@@ -7762,8 +7768,10 @@ static bool collectMatrixReport(
   rows.emplace_back("matrix.lanes_total", std::to_string(lanesTotal));
   rows.emplace_back("matrix.lanes_pass", std::to_string(lanesPass));
   rows.emplace_back("matrix.lanes_fail", std::to_string(lanesFail));
+  rows.emplace_back("matrix.lanes_skip", std::to_string(lanesSkip));
   rows.emplace_back("matrix.gate_pass", std::to_string(gatePass));
   rows.emplace_back("matrix.gate_fail", std::to_string(gateFail));
+  rows.emplace_back("matrix.gate_skip", std::to_string(gateSkip));
   rows.emplace_back("matrix.lanes_with_metrics", std::to_string(lanesWithMetrics));
   rows.emplace_back("matrix.lanes_missing_metrics",
                     std::to_string(lanesMissingMetrics));

@@ -1,5 +1,86 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 991 - February 10, 2026
+
+### `circt-mut report`: Matrix SKIP-Lane Accounting
+
+1. Extended matrix report aggregation in `tools/circt-mut/circt-mut.cpp` to
+   classify lane and gate status tri-state counts:
+   - `matrix.lanes_pass`, `matrix.lanes_fail`, `matrix.lanes_skip`
+   - `matrix.gate_pass`, `matrix.gate_fail`, `matrix.gate_skip`
+2. This aligns report output with native matrix stop-on-fail behavior where
+   post-cut lanes are emitted as explicit `SKIP` rows.
+3. Added regression coverage:
+   - `test/Tools/circt-mut-report-matrix-skip-status.test`
+   - updated `test/Tools/circt-mut-report-matrix-basic.test` with explicit
+     zero-skip checks.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-matrix-skip-status.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (61/61)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (189/189)
+- External filtered cadence attempt:
+  - command reached `sv-tests`, `verilator-verification`, `yosys`, `opentitan`
+    and `AVIP` lanes with explicit filters,
+  - terminated by unrelated shared-worktree harness issue:
+    `utils/run_formal_all.sh: line 9277: opentitan_e2e_pass: unbound variable`.
+
+## Iteration 990 - February 10, 2026
+
+### `circt-mut matrix`: Parallel Native `--stop-on-fail` Deterministic Cut
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to
+   support deterministic stop semantics with parallel lane jobs:
+   - `--native-matrix-dispatch --jobs N --stop-on-fail`
+2. Behavior in native parallel mode:
+   - first failing lane determines deterministic cut point,
+   - later lanes are emitted as explicit `SKIP` rows with
+     `config_error_code=STOP_ON_FAIL`,
+   - gate summary now includes `SKIP` counts.
+3. Added native telemetry:
+   - `native_matrix_dispatch_skip`
+4. Added regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-stop-on-fail-jobs.test`
+     validates fail-fast cut behavior and deterministic row ordering.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch*.test`: PASS (8/8)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-*.test`: PASS (51/51)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (188/188)
+- External filtered cadence:
+  - blocked by unrelated syntax error in `utils/run_formal_all.sh`
+    (`line 9442: syntax error near unexpected token '('`) in current shared
+    worktree; rerun deferred after that script is repaired.
+
+## Iteration 989 - February 10, 2026
+
+### `run_formal_all`: Make Lane Filters CLI-Only
+
+1. Hardened `utils/run_formal_all.sh` filter sourcing to avoid ambient
+   cross-agent defaults:
+   - lane/tag filter variables are now initialized empty and only populated
+     from explicit CLI flags in the current invocation.
+   - environment-only filter values (for example
+     `VERILATOR_BMC_TEST_FILTER=...`) no longer satisfy lane filter
+     requirements.
+2. Added regression coverage:
+   - `test/Tools/run-formal-all-filter-env-ignored.test` verifies env-only
+     filter injection is rejected for both `verilator-verification/BMC` and
+     `sv-tests/BMC`.
+3. Help text clarity:
+   - updated deprecated `--require-explicit-sv-tests-filters` note to match
+     current behavior (explicit filters required for selected
+     BMC/LEC/OpenTitan lanes).
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-filter-env-ignored.test test/Tools/run-formal-all-require-explicit-sv-tests-filters.test test/Tools/run-formal-all-help.test`: PASS (3/3)
+
 ## Iteration 988 - February 10, 2026
 
 ### `circt-mut matrix`: Native Lane-Parallel Dispatch (`--jobs`)
