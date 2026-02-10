@@ -827,7 +827,6 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
 
     llhdPostPM.addPass(createMapArithToCombPass(true));
     llhdPostPM.addPass(llhd::createCombineDrivesPass());
-    llhdPostPM.addPass(llhd::createSig2Reg());
     llhdPostPM.addPass(mlir::createCSEPass());
     llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     if (llhdOptions.detectMemories) {

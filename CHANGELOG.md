@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 920 - February 10, 2026
+
+### BMC Semantic Closure: Preserve Stateful LLHD Probe Semantics
+
+1. Updated `tools/circt-bmc/circt-bmc.cpp` LLHD pipeline:
+   - removed `llhd-sig2reg` from the BMC LLHD lowering sequence.
+   - retained LLHD signal lowering through `strip-llhd-interface-signals`.
+2. Root issue addressed:
+   - in straight-line LLHD forms, `llhd-sig2reg` could collapse probe-driven
+     recurrences to init constants, causing spurious SAT on `$changed` +
+     named-property checks.
+3. Added regression:
+   - `test/Tools/circt-bmc/sva-stateful-probe-order-unsat-e2e.sv`
+   - expected `BMC_RESULT=UNSAT` in both JIT and SMT-LIB.
+4. Focused validation:
+   - `circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-stateful-probe-order-unsat-e2e.sv | circt-bmc -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat -`
+     -> `BMC_RESULT=UNSAT`
+   - `... | circt-bmc --run-smtlib --z3-path=/home/thomas-ahle/z3-install/bin/z3 -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat -`
+     -> `BMC_RESULT=UNSAT`
+5. Cross-suite validation:
+   - `TEST_FILTER='assert_changed|assert_fell|assert_named|assert_named_typed|assert_stable' utils/run_verilator_verification_circt_bmc.sh /home/thomas-ahle/verilator-verification`
+     -> `total=6 pass=6 fail=0` (same in SMT-LIB mode with `BMC_RUN_SMTLIB=1`)
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-no-sig2reg-20260210 ... --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+     -> `sv-tests/BMC 26/26 pass`, `verilator-verification/BMC 17/17 pass`,
+        `yosys/tests/sva/BMC 12 pass / 0 fail / 2 skip`,
+        `opentitan/LEC 1/1 pass`, `opentitan/LEC_STRICT 1/1 pass`.
+
 ## Iteration 919 - February 10, 2026
 
 ### BMC Semantic Closure: Ordered LLHD Drive Semantics for Local-Var/Disable-Iff
