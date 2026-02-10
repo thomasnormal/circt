@@ -20,7 +20,8 @@ Options:
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
                          Also enables OpenTitan strict LEC X-prop key-prefix
                          drift checks (`xprop_diag_`, `xprop_status_`,
-                         `xprop_result_`, `xprop_counter_`) when
+                         `xprop_result_`, `xprop_counter_`,
+                         `xprop_assume_known_result_`) when
                          `--with-opentitan-lec-strict` is active.
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
@@ -3849,6 +3850,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
       "xprop_status_"
       "xprop_result_"
       "xprop_counter_"
+      "xprop_assume_known_result_"
     )
   fi
 fi

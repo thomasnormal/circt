@@ -655,6 +655,10 @@ See CHANGELOG.md on recent progress.
       assume_known_result, source_file)`.
     - This closes a strict/no-waiver triage gap by making 4-state
       assume-known behavior machine-readable and strict-gate-addressable.
+83. Strict-gate default OpenTitan LEC X-prop key-prefix policy now includes
+    `xprop_assume_known_result_` (in addition to diag/status/result/counter).
+    - This closes a governance gap where assume-known semantic drift could
+      bypass strict mode unless users manually provided extra prefix flags.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
