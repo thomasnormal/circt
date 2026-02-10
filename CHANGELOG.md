@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 961 - February 10, 2026
+
+### `circt-mut report`: Lane-Level Matrix Keys for History/Trend Gating
+
+1. Extended `tools/circt-mut/circt-mut.cpp` matrix report emission with stable
+   per-lane keys (sanitized lane IDs) for direct gating and history tracking:
+   - `matrix.lane_budget.rows_total`
+   - `matrix.lane_budget.lane.<lane>.lane_id`
+   - `matrix.lane_budget.lane.<lane>.status`
+   - `matrix.lane_budget.lane.<lane>.gate_status`
+   - `matrix.lane_budget.lane.<lane>.has_metrics`
+   - `matrix.lane_budget.lane.<lane>.detected_mutants`
+   - `matrix.lane_budget.lane.<lane>.errors`
+   - `matrix.lane_budget.lane.<lane>.global_filter_timeout_mutants`
+   - `matrix.lane_budget.lane.<lane>.global_filter_lec_unknown_mutants`
+   - `matrix.lane_budget.lane.<lane>.global_filter_bmc_unknown_mutants`
+2. Added deterministic key-segment sanitization for lane IDs and duplicate-key
+   suffixing (`__N`) to keep history/report rows stable and parse-safe.
+3. This enables lane-level trend gates using existing native report machinery
+   (`--trend-history` + `--fail-if-trend-delta-*`) without adding new CLI
+   surface area.
+4. Added/updated regression coverage:
+   - new: `test/Tools/circt-mut-report-lane-budget-trend-gate-fail.test`
+   - updated: `test/Tools/circt-mut-report-matrix-basic.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-lane-budget-out.test test/Tools/circt-mut-report-lane-budget-out-mode-error.test test/Tools/circt-mut-report-lane-budget-trend-gate-fail.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (38/38)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (157/157)
+- Filtered external cadence:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-trend-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --sv-tests-uvm-bmc-semantics-tag-regex '.*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped`)
+    - `verilator-verification` BMC/LEC: PASS (`17/17`)
+    - `yosys/tests/sva` BMC: FAIL (`2` fail), LEC: PASS (`14/14`)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 960 - February 10, 2026
 
 ### run_formal_all: Generic LEC Counter Telemetry + Drift Gates
