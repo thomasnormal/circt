@@ -6640,6 +6640,140 @@ arith_dispatch:
       }
     }
 
+    // Intercept UVM analysis port connect() and write() via call_indirect.
+    // connect() stores port->provider connections natively, bypassing the
+    // "Late Connection" phase check that incorrectly rejects connections
+    // during connect_phase (UVM thinks end_of_elaboration already ran).
+    if (calleeName.contains("uvm_port_base") && calleeName.contains("::connect") &&
+        !calleeName.contains("connect_phase") && args.size() >= 2) {
+      uint64_t selfAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      uint64_t providerAddr = args[1].isX() ? 0 : args[1].getUInt64();
+      if (selfAddr != 0 && providerAddr != 0) {
+        auto &conns = analysisPortConnections[selfAddr];
+        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end())
+          conns.push_back(providerAddr);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: intercepted port connect: 0x"
+                   << llvm::format_hex(selfAddr, 16) << " -> 0x"
+                   << llvm::format_hex(providerAddr, 16) << " (total "
+                   << conns.size() << " connections)\n");
+      }
+      // Fall through to normal execution so m_provided_by/m_provided_to are
+      // populated. Even if the "Late Connection" warning fires and the UVM
+      // connect returns early, our native map has the connection.
+    }
+
+    // Intercept analysis_port::write to broadcast to connected ports.
+    // When the native port_base connect() is rejected due to "Late Connection",
+    // the UVM write() loop finds 0 subscribers. We use our native connection
+    // map to resolve the correct imp write function via vtable dispatch.
+    // Supports multi-hop chains: port → port/export → imp.
+    if (calleeName.contains("analysis_port") && calleeName.contains("::write") &&
+        !calleeName.contains("write_m_") && args.size() >= 2) {
+      uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      // Flatten the connection chain to find all terminal imps.
+      // A terminal is any address that doesn't appear as a key in our map.
+      llvm::SmallVector<uint64_t, 4> terminals;
+      llvm::SmallVector<uint64_t, 8> worklist;
+      llvm::DenseSet<uint64_t> visited;
+      auto seedIt = analysisPortConnections.find(portAddr);
+      if (seedIt != analysisPortConnections.end()) {
+        for (uint64_t a : seedIt->second)
+          worklist.push_back(a);
+      }
+      while (!worklist.empty()) {
+        uint64_t addr = worklist.pop_back_val();
+        if (!visited.insert(addr).second)
+          continue;
+        auto chainIt = analysisPortConnections.find(addr);
+        if (chainIt != analysisPortConnections.end() && !chainIt->second.empty()) {
+          // This is an intermediate port/export — follow its connections.
+          for (uint64_t next : chainIt->second)
+            worklist.push_back(next);
+        } else {
+          // Terminal (imp or unconnected export).
+          terminals.push_back(addr);
+        }
+      }
+      if (!terminals.empty()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: analysis_port::write intercepted, "
+                   << terminals.size() << " terminal subscribers\n");
+        for (uint64_t impAddr : terminals) {
+          // Resolve the imp's write function via vtable dispatch.
+          // Object layout: [i32 class_id][ptr vtable_ptr][...fields...]
+          // Read vtable pointer at byte offset 4 from the imp object.
+          uint64_t vtableOff = 0;
+          MemoryBlock *impBlock = findBlockByAddress(impAddr, vtableOff);
+          if (!impBlock || vtableOff + 4 + 8 > impBlock->size) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  call_indirect: imp object at 0x"
+                       << llvm::format_hex(impAddr, 16)
+                       << " not found in memory\n");
+            continue;
+          }
+          uint64_t vtableAddr = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            vtableAddr |= static_cast<uint64_t>(
+                              impBlock->data[vtableOff + 4 + i])
+                          << (i * 8);
+          auto globalIt = addressToGlobal.find(vtableAddr);
+          if (globalIt == addressToGlobal.end()) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  call_indirect: vtable at 0x"
+                       << llvm::format_hex(vtableAddr, 16)
+                       << " not found in addressToGlobal\n");
+            continue;
+          }
+          // Read the write function pointer from vtable slot 11.
+          auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
+          if (vtableBlockIt == globalMemoryBlocks.end())
+            continue;
+          auto &vtableBlock = vtableBlockIt->second;
+          unsigned writeSlot = 11;
+          unsigned slotOffset = writeSlot * 8;
+          if (slotOffset + 8 > vtableBlock.size)
+            continue;
+          uint64_t writeFuncAddr = 0;
+          for (unsigned i = 0; i < 8; ++i)
+            writeFuncAddr |=
+                static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                << (i * 8);
+          auto funcIt2 = addressToFunction.find(writeFuncAddr);
+          if (funcIt2 == addressToFunction.end()) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  call_indirect: write func at vtable slot 11 (addr 0x"
+                       << llvm::format_hex(writeFuncAddr, 16)
+                       << ") not found\n");
+            continue;
+          }
+          auto impWriteFunc = moduleOp.lookupSymbol<func::FuncOp>(funcIt2->second);
+          if (!impWriteFunc) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "  call_indirect: function \'" << funcIt2->second
+                       << "\' not found in module\n");
+            continue;
+          }
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  call_indirect: dispatching write to "
+                     << funcIt2->second << " (imp at 0x"
+                     << llvm::format_hex(impAddr, 16) << ")\n");
+          SmallVector<InterpretedValue, 2> impArgs;
+          impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
+          impArgs.push_back(args[1]); // transaction object
+          SmallVector<InterpretedValue, 2> impResults;
+          auto &cState = processStates[procId];
+          ++cState.callDepth;
+          interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
+                            callIndirectOp);
+          --cState.callDepth;
+        }
+        return success();
+      }
+      // If no native connections, fall through to normal execution
+      // (which will iterate the UVM m_imp_list -- may be empty).
+    }
+
     // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
     auto &callState = processStates[procId];
     constexpr size_t maxCallDepth = 200;

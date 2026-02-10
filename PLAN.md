@@ -8,9 +8,9 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 |--------|-------|------|
 | circt-sim unit tests | 223/223 | 100% |
 | ImportVerilog tests | 268/268 | 100% |
-| sv-tests simulation | 912 total, 853 pass, 0 fail | 99.9% |
-| sv-tests xfail | 4 UVM + 54 compile-only/negative | |
-| sv-tests xpass | 4 (agent_active/env/passive, monitor_env) | resolveSignalId fix |
+| sv-tests simulation | 912 total, 856 pass, 0 fail | 99.9% |
+| sv-tests xfail | 1 UVM + 54 compile-only/negative | |
+| sv-tests xpass | 7 (4 agent/monitor + 3 scoreboard) | resolveSignalId + analysis port fixes |
 | AVIPs (hvl_top only) | 9/9 pass | Full phase lifecycle; no transactions without hdl_top |
 | AVIPs with transactions | 0/9 | **Blocked**: BFM gap — no hdl_top simulated |
 | sv-tests BMC | 26/26 | 100% (Codex) |
@@ -30,16 +30,13 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 4. **4 UVM tests now pass**: `uvm_agent_active` (resolveDrivers + VIF shadows), `uvm_agent_env`, `uvm_agent_passive`, `uvm_monitor_env` (resolveSignalId fix).
 
-### xfail Breakdown (4 UVM tests remaining)
+### xfail Breakdown (1 UVM test remaining)
 
 | Category | Count | Tests | Root Cause |
 |----------|-------|-------|------------|
-| Analysis port | 3 | uvm_scoreboard_env, uvm_scoreboard_monitor_agent_env, uvm_scoreboard_monitor_env | UVM analysis_port "Late Connection" not intercepted — data writes work but monitor/scoreboard don't receive |
 | Sequencer interface | 1 | uvm_driver_sequencer_env | Needs sequencer interface implementation |
 
-**Root cause (scoreboard 3)**: DUT and driver work correctly (data propagates through interface), but the UVM analysis port `connect()` call at end_of_elaboration is not intercepted, so monitor→scoreboard TLM connections are never established.
-
-**Root cause (sequencer 1)**: Missing `get_next_item()`/`item_done()` sequencer interface implementation.
+**Root cause**: Missing `get_next_item()`/`item_done()` sequencer interface implementation.
 
 ### Tests Now Passing (previously xfail)
 
@@ -96,11 +93,12 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 - ✅ VIF shadow signals (interface field → signal bridging)
 - ✅ uvm_agent_active, uvm_agent_env, uvm_agent_passive, uvm_monitor_env now pass
 - ✅ resolveSignalId cast+probe tracing for interface module ports
+- ✅ uvm_scoreboard_env, uvm_scoreboard_monitor_env, uvm_scoreboard_monitor_agent_env now pass
+- ✅ Analysis port connect/write interceptor with chain-following dispatch
 
-**Remaining 4 xfail**: 3 scoreboard (analysis port Late Connection), 1 driver_sequencer (sequencer interface).
+**Remaining 1 xfail**: uvm_driver_sequencer_env (sequencer interface).
 
 **Investigation needed**:
-- Intercept UVM analysis_port `connect()` to establish TLM connections
 - Implement sequencer interface (`get_next_item()`, `item_done()`)
 
 **Also pending**:
@@ -132,7 +130,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 | Priority | Track | Next Task | Impact |
 |----------|-------|-----------|--------|
 | P0 | Track 5 | Recompile AVIPs + dual-top simulation | ALL AVIP coverage testing blocked |
-| P0 | Track 4 | Fix 4 UVM xfail (analysis port + sequencer) | Last 4 xfail tests |
+| P0 | Track 4 | Fix last UVM xfail (sequencer interface) | Last 1 xfail test |
 | P1 | Track 3 | Coverage verification after Track 5 | End-to-end coverage numbers |
 | P2 | Track 4 | SVA concurrent assertions | 26 compile-only tests |
 | P3 | Track 6 | Performance optimization | Faster simulation |
@@ -143,7 +141,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 |-------|---------|----------|
 | circt-sim unit | `python3 build/bin/llvm-lit test/Tools/circt-sim/ -v` | 223 pass |
 | ImportVerilog | `python3 build/bin/llvm-lit test/Conversion/ImportVerilog/ -v` | 268 pass |
-| sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh` | 0 fail, 4 xpass, 4 UVM xfail |
+| sv-tests sim | `bash utils/run_sv_tests_circt_sim.sh` | 0 fail, 7 xpass, 1 UVM xfail |
 | AVIPs | `circt-sim X.mlir --top Y --max-time=500000000` | All 9 exit 0 |
 | sv-tests BMC | `BMC_SMOKE_ONLY=1 bash utils/run_sv_tests_circt_bmc.sh` | 26/26 |
 | sv-tests LEC | `LEC_SMOKE_ONLY=1 bash utils/run_sv_tests_circt_lec.sh` | 23/23 |
