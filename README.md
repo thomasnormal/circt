@@ -448,6 +448,12 @@ circt-mut cover \
   --mutations-seed 1
 ```
 
+When `--generate-mutations` is not evenly divisible by selected top-level
+mode groups, extra allocations are now distributed with deterministic
+seed-rotated assignment (`--mutations-seed`) instead of always favoring the
+first listed mode group. Native `circt-mut generate` and
+`utils/generate_mutations_yosys.sh` use the same policy.
+
 Run multiple lanes with `circt-mut matrix`:
 
 ```sh

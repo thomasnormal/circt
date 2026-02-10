@@ -566,15 +566,38 @@ fi
 mode_count="${#MODE_LIST[@]}"
 base_count=0
 extra_count=0
+mode_extra_start=0
 if [[ "$mode_counts_enabled" -eq 0 ]]; then
   base_count=$((COUNT / mode_count))
   extra_count=$((COUNT % mode_count))
+  if [[ "$mode_count" -gt 0 ]]; then
+    mode_extra_start=$((SEED % mode_count))
+  fi
 fi
 
 declare -a MODE_OUT_FILES
 declare -a MODE_TARGET_LIST=()
 declare -a MODE_TARGET_COUNTS=()
 declare -a ROUND_COUNTS=()
+
+is_rotated_extra_index() {
+  local index="$1"
+  local start="$2"
+  local extra="$3"
+  local total="$4"
+  local dist=0
+  if [[ "$extra" -le 0 || "$total" -le 0 ]]; then
+    return 1
+  fi
+  if [[ "$extra" -ge "$total" ]]; then
+    return 0
+  fi
+  dist=$(( (index - start + total) % total ))
+  if [[ "$dist" -lt "$extra" ]]; then
+    return 0
+  fi
+  return 1
+}
 
 for idx in "${!MODE_LIST[@]}"; do
   mode="${MODE_LIST[$idx]}"
@@ -585,7 +608,7 @@ for idx in "${!MODE_LIST[@]}"; do
     fi
   else
     list_count="$base_count"
-    if [[ "$idx" -lt "$extra_count" ]]; then
+    if is_rotated_extra_index "$idx" "$mode_extra_start" "$extra_count" "$mode_count"; then
       list_count=$((list_count + 1))
     fi
   fi
@@ -724,10 +747,11 @@ for ((topup_round=1; topup_round<=MAX_TOPUP_ROUNDS; ++topup_round)); do
   target_count="${#MODE_TARGET_LIST[@]}"
   topup_base=$((needed / target_count))
   topup_extra=$((needed % target_count))
+  topup_extra_start=$(( (SEED + topup_round) % target_count ))
   ROUND_COUNTS=()
   for idx in "${!MODE_TARGET_LIST[@]}"; do
     topup_count="$topup_base"
-    if [[ "$idx" -lt "$topup_extra" ]]; then
+    if is_rotated_extra_index "$idx" "$topup_extra_start" "$topup_extra" "$target_count"; then
       topup_count=$((topup_count + 1))
     fi
     ROUND_COUNTS+=("$topup_count")

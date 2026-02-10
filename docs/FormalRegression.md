@@ -556,7 +556,9 @@ Execution controls:
   operator-family mixes. Supports concrete Yosys modes
   (`inv,const0,const1,cnot0,cnot1`) and family aliases
   (`arith,control,balanced,all`), where family counts are deterministically
-  split across their concrete modes.
+  split across their concrete modes. When total count is not divisible across
+  top-level mode groups, remainder assignments are deterministic but
+  seed-rotated by `--mutations-seed`.
 - `--mutations-mode-counts <csv>`: explicit mode allocation for
   auto-generation (`generate_mutations_yosys.sh --mode-counts`), e.g.
   `arith=700,control=300` (sum must match `--generate-mutations`).

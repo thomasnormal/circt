@@ -3835,6 +3835,18 @@ static void modeFamilyTargets(StringRef modeName,
   out.push_back(modeName.str());
 }
 
+static bool isIndexInRotatedExtraPrefix(uint64_t index, uint64_t start,
+                                        uint64_t extraCount,
+                                        uint64_t totalCount) {
+  if (extraCount == 0 || totalCount == 0)
+    return false;
+  if (extraCount >= totalCount)
+    return true;
+  start %= totalCount;
+  uint64_t distance = (index + totalCount - start) % totalCount;
+  return distance < extraCount;
+}
+
 static bool appendProfile(StringRef profileName,
                           SmallVectorImpl<std::string> &profileModes,
                           SmallVectorImpl<std::string> &profileCfgs,
@@ -4111,9 +4123,11 @@ static int runNativeGenerate(const GenerateOptions &opts) {
   uint64_t modeCount = finalModes.size();
   uint64_t baseCount = 0;
   uint64_t extraCount = 0;
+  uint64_t modeExtraStart = 0;
   if (!modeCountsEnabled) {
     baseCount = opts.count / modeCount;
     extraCount = opts.count % modeCount;
+    modeExtraStart = opts.seed % modeCount;
   }
 
   for (size_t i = 0; i < finalModes.size(); ++i) {
@@ -4124,7 +4138,9 @@ static int runNativeGenerate(const GenerateOptions &opts) {
       if (it != modeCountByMode.end())
         listCount = it->second;
     } else {
-      listCount = baseCount + (i < extraCount ? 1 : 0);
+      listCount = baseCount;
+      if (isIndexInRotatedExtraPrefix(i, modeExtraStart, extraCount, modeCount))
+        ++listCount;
     }
     if (listCount == 0)
       continue;
@@ -4454,11 +4470,17 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     uint64_t targetCount = modeTargetList.size();
     uint64_t topupBase = needed / targetCount;
     uint64_t topupExtra = needed % targetCount;
+    uint64_t topupExtraStart = (opts.seed + round) % targetCount;
 
     SmallVector<uint64_t, 16> topupCounts;
     topupCounts.reserve(targetCount);
-    for (uint64_t i = 0; i < targetCount; ++i)
-      topupCounts.push_back(topupBase + (i < topupExtra ? 1 : 0));
+    for (uint64_t i = 0; i < targetCount; ++i) {
+      uint64_t count = topupBase;
+      if (isIndexInRotatedExtraPrefix(i, topupExtraStart, topupExtra,
+                                      targetCount))
+        ++count;
+      topupCounts.push_back(count);
+    }
 
     if (!runGenerationRound((Twine("topup") + Twine(round)).str(),
                             opts.seed + round, topupCounts, roundOutFiles))
