@@ -2,6 +2,7 @@
 // RUN: printf 'total_mutants\t10\nrelevant_mutants\t8\ndetected_mutants\t6\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t1\nnot_activated_mutants\t1\nerrors\t0\nglobal_filter_timeout_mutants\t2\nglobal_filter_lec_runtime_ns\t100\nchain_lec_unknown_fallbacks\t1\nbmc_orig_cache_hit_mutants\t4\n' > %t/proj/out/matrix/lane1/metrics.tsv
 // RUN: printf 'total_mutants\t5\nrelevant_mutants\t3\ndetected_mutants\t1\npropagated_not_detected_mutants\t2\nnot_propagated_mutants\t1\nnot_activated_mutants\t1\nerrors\t1\nglobal_filter_timeout_mutants\t3\nglobal_filter_lec_runtime_ns\t200\nchain_lec_unknown_fallbacks\t2\nbmc_orig_cache_hit_mutants\t1\n' > %t/proj/out/matrix/lane2/metrics.tsv
 // RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\nlane1\tPASS\t0\t75.00\tPASS\t%t/proj/out/matrix/lane1\t%t/proj/out/matrix/lane1/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\nlane2\tFAIL\t4\t50.00\tFAIL\t%t/proj/out/matrix/lane2\t%t/proj/out/matrix/lane2/metrics.tsv\t-\tdisabled\t0\t0\t0\t0\t0\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'lane_id\tpair_file\tlog_file\thas_summary\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\nlane1\t%t/proj/out/matrix/lane1/native_global_filter_prequalify.tsv\t%t/proj/out/matrix/lane1/native_global_filter_prequalify.log\t1\t10\t2\t8\t1\t0\t2\t1\t0\t0\t0\t0\nlane2\t%t/proj/out/matrix/lane2/native_global_filter_prequalify.tsv\t%t/proj/out/matrix/lane2/native_global_filter_prequalify.log\t0\t-\t0\t0\t0\t1\t0\t0\t0\t1\t1\t0\n' > %t/proj/out/matrix/native_matrix_prequalify_summary.tsv
 // RUN: circt-mut report --project-dir %t/proj --mode matrix > %t/out.txt
 // RUN: FileCheck %s < %t/out.txt
 
@@ -28,3 +29,17 @@
 // CHECK: matrix.global_filter_lec_runtime_ns_sum{{[[:space:]]}}300
 // CHECK: matrix.chain_lec_unknown_fallbacks_sum{{[[:space:]]}}3
 // CHECK: matrix.bmc_orig_cache_hit_mutants_sum{{[[:space:]]}}5
+// CHECK: matrix.native_prequalify_summary_file_exists{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_summary_lanes{{[[:space:]]}}2
+// CHECK: matrix.native_prequalify_summary_missing_lanes{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_total_mutants_sum{{[[:space:]]}}10
+// CHECK: matrix.native_prequalify_not_propagated_mutants_sum{{[[:space:]]}}2
+// CHECK: matrix.native_prequalify_propagated_mutants_sum{{[[:space:]]}}8
+// CHECK: matrix.native_prequalify_create_mutated_error_mutants_sum{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_probe_error_mutants_sum{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_cmd_token_not_propagated_mutants_sum{{[[:space:]]}}2
+// CHECK: matrix.native_prequalify_cmd_token_propagated_mutants_sum{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_cmd_rc_not_propagated_mutants_sum{{[[:space:]]}}0
+// CHECK: matrix.native_prequalify_cmd_rc_propagated_mutants_sum{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_cmd_timeout_propagated_mutants_sum{{[[:space:]]}}1
+// CHECK: matrix.native_prequalify_cmd_error_mutants_sum{{[[:space:]]}}0

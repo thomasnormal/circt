@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 947 - February 10, 2026
+
+### `circt-mut` Matrix Native Prequalify Lane Summary Artifact + Report Ingestion
+
+1. Extended native matrix prequalification in `tools/circt-mut/circt-mut.cpp`
+   to emit a stable lane-level summary artifact:
+   - `<out-dir>/native_matrix_prequalify_summary.tsv`
+   - one row per prequalified lane with pair/log paths and
+     `prequalify_*_mutants` counters.
+2. Extended matrix prequalification stdout summary with:
+   - `native_matrix_prequalify_summary_tsv`
+3. Extended `circt-mut report --mode matrix` ingestion to consume
+   `native_matrix_prequalify_summary.tsv` (when present) and emit:
+   - `matrix.native_prequalify_summary_file`
+   - `matrix.native_prequalify_summary_file_exists`
+   - `matrix.native_prequalify_summary_lanes`
+   - `matrix.native_prequalify_summary_missing_lanes`
+   - `matrix.native_prequalify_invalid_metric_values`
+   - `matrix.native_prequalify_*_sum` aggregate counters
+4. Added/updated regression tests:
+   - `test/Tools/circt-mut-matrix-native-global-filter-prequalify.test`
+   - `test/Tools/circt-mut-matrix-native-global-filter-prequalify-cmd.test`
+   - `test/Tools/circt-mut-report-matrix-basic.test`
+5. Updated `PROJECT_PLAN.md` mutation roadmap next steps to move from
+   summary-artifact emission to embedding per-lane prequal counters in matrix
+   `results.tsv` rows for history/diff workflows.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-global-filter-prequalify*.test test/Tools/circt-mut-report-matrix-basic.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-all-config-out.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (144/144)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-prequalify-lane-summary --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `yosys/tests/sva` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 946 - February 10, 2026
 
 ### LEC LowerLECLLVM Hardening: Support `llvm.mlir.zero` 4-State Struct Conversion
