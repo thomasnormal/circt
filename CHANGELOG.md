@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 972 - February 10, 2026
+
+### `circt-mut report`: Lane-Aware Prequalify Drift Gate Hardening
+
+1. Hardened `tools/circt-mut/circt-mut.cpp` prequalify drift gating so
+   `--fail-on-prequalify-drift` now fails on lane-level divergence, not only
+   aggregate counter drift.
+2. Extended report gate telemetry rows:
+   - `matrix.prequalify_drift_gate_lane_rows_mismatch`
+   - `matrix.prequalify_drift_gate_lane_rows_missing_in_results`
+   - `matrix.prequalify_drift_gate_lane_rows_missing_in_native`
+3. Gate pass criteria now requires all of the following:
+   - `matrix.prequalify_drift_nonzero_metrics == 0`
+   - `matrix.prequalify_drift_lane_rows_mismatch == 0`
+   - `matrix.prequalify_drift_lane_rows_missing_in_results == 0`
+   - `matrix.prequalify_drift_lane_rows_missing_in_native == 0`
+4. Added regression coverage for the aggregate-cancel blind spot:
+   - `test/Tools/circt-mut-report-matrix-prequalify-lane-drift-gate.test`
+   - verifies failure when per-lane counters mismatch even with
+     `matrix.prequalify_drift_nonzero_metrics=0`.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-matrix-prequalify-drift-gate.test test/Tools/circt-mut-report-matrix-prequalify-lane-drift-gate.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (56/56)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (176/176)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-prequalify-lane-gate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --lec-accept-xprop-only`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator/yosys BMC FAIL, verilator/yosys/opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 971 - February 10, 2026
 
 ### `run_formal_all`: LEC Missing-Diag Strict-Gate Hardening

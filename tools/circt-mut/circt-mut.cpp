@@ -6536,6 +6536,9 @@ static bool collectMatrixReport(
     StringRef matrixOutDir, std::vector<std::pair<std::string, std::string>> &rows,
     std::string &error, uint64_t *prequalifyDriftNonZeroOut = nullptr,
     bool *prequalifyDriftComparableOut = nullptr,
+    uint64_t *prequalifyDriftLaneRowsMismatchOut = nullptr,
+    uint64_t *prequalifyDriftLaneRowsMissingInResultsOut = nullptr,
+    uint64_t *prequalifyDriftLaneRowsMissingInNativeOut = nullptr,
     std::vector<MatrixLaneBudgetRow> *laneBudgetRowsOut = nullptr) {
   SmallString<256> resultsPath(matrixOutDir);
   sys::path::append(resultsPath, "results.tsv");
@@ -7547,6 +7550,14 @@ static bool collectMatrixReport(
     *prequalifyDriftNonZeroOut = prequalifyDriftNonZeroMetrics;
   if (prequalifyDriftComparableOut)
     *prequalifyDriftComparableOut = prequalifyDriftComparable;
+  if (prequalifyDriftLaneRowsMismatchOut)
+    *prequalifyDriftLaneRowsMismatchOut = prequalifyDriftLaneRowsMismatch;
+  if (prequalifyDriftLaneRowsMissingInResultsOut)
+    *prequalifyDriftLaneRowsMissingInResultsOut =
+        prequalifyDriftLaneRowsMissingInResults;
+  if (prequalifyDriftLaneRowsMissingInNativeOut)
+    *prequalifyDriftLaneRowsMissingInNativeOut =
+        prequalifyDriftLaneRowsMissingInNative;
   return true;
 }
 
@@ -8059,6 +8070,9 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string error;
   uint64_t prequalifyDriftNonZero = 0;
   bool prequalifyDriftComparable = false;
+  uint64_t prequalifyDriftLaneRowsMismatch = 0;
+  uint64_t prequalifyDriftLaneRowsMissingInResults = 0;
+  uint64_t prequalifyDriftLaneRowsMissingInNative = 0;
   std::vector<MatrixLaneBudgetRow> laneBudgetRows;
   if (!opts.laneBudgetOutFile.empty() &&
       !(opts.mode == "matrix" || opts.mode == "all")) {
@@ -8074,7 +8088,11 @@ static int runNativeReport(const ReportOptions &opts) {
   }
   if (opts.mode == "matrix" || opts.mode == "all") {
     if (!collectMatrixReport(matrixOutDir, rows, error, &prequalifyDriftNonZero,
-                             &prequalifyDriftComparable, &laneBudgetRows)) {
+                             &prequalifyDriftComparable,
+                             &prequalifyDriftLaneRowsMismatch,
+                             &prequalifyDriftLaneRowsMissingInResults,
+                             &prequalifyDriftLaneRowsMissingInNative,
+                             &laneBudgetRows)) {
       errs() << error << "\n";
       return 1;
     }
@@ -8336,20 +8354,34 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("matrix.prequalify_drift_gate_enabled", "1");
     rows.emplace_back("matrix.prequalify_drift_gate_comparable",
                       prequalifyDriftComparable ? "1" : "0");
+    rows.emplace_back("matrix.prequalify_drift_gate_lane_rows_mismatch",
+                      std::to_string(prequalifyDriftLaneRowsMismatch));
+    rows.emplace_back("matrix.prequalify_drift_gate_lane_rows_missing_in_results",
+                      std::to_string(prequalifyDriftLaneRowsMissingInResults));
+    rows.emplace_back("matrix.prequalify_drift_gate_lane_rows_missing_in_native",
+                      std::to_string(prequalifyDriftLaneRowsMissingInNative));
     if (!prequalifyDriftComparable) {
       rows.emplace_back("matrix.prequalify_drift_gate_status", "error");
       rows.emplace_back("matrix.prequalify_drift_gate_reason",
                         "matrix results prequalify columns or native summary "
                         "artifact missing");
       finalRC = std::max(finalRC, 2);
-    } else if (prequalifyDriftNonZero == 0) {
+    } else if (prequalifyDriftNonZero == 0 &&
+               prequalifyDriftLaneRowsMismatch == 0 &&
+               prequalifyDriftLaneRowsMissingInResults == 0 &&
+               prequalifyDriftLaneRowsMissingInNative == 0) {
       rows.emplace_back("matrix.prequalify_drift_gate_status", "pass");
       rows.emplace_back("matrix.prequalify_drift_gate_reason", "-");
     } else {
       rows.emplace_back("matrix.prequalify_drift_gate_status", "fail");
       rows.emplace_back("matrix.prequalify_drift_gate_reason",
                         (Twine("nonzero_drift_metrics=") +
-                         Twine(prequalifyDriftNonZero))
+                         Twine(prequalifyDriftNonZero) + ",lane_rows_mismatch=" +
+                         Twine(prequalifyDriftLaneRowsMismatch) +
+                         ",lane_rows_missing_in_results=" +
+                         Twine(prequalifyDriftLaneRowsMissingInResults) +
+                         ",lane_rows_missing_in_native=" +
+                         Twine(prequalifyDriftLaneRowsMissingInNative))
                             .str());
       finalRC = std::max(finalRC, 2);
     }
