@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 925 - February 10, 2026
+
+### BMC Harness No-Drop Guardrail: Track/Gate Frontend Drop Remarks
+
+1. Updated `utils/run_sv_tests_circt_bmc.sh`:
+   - added drop-remark tracking for frontend diagnostics matching
+     `"will be dropped during lowering"`.
+   - added summary line:
+     `sv-tests dropped-syntax summary: drop_remark_cases=<N> ...`
+   - added opt-in gate:
+     `FAIL_ON_DROP_REMARKS=1` now fails the run when `drop_remark_cases>0`.
+2. Added regression:
+   - `test/Tools/circt-bmc/sv-tests-drop-remarks-gate.mlir`
+   - checks both summary reporting and fail-on-drop gate behavior
+     (feature-gated by `uvm` lit feature).
+3. Validation:
+   - `llvm-lit -sv test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir test/Tools/circt-bmc/sv-tests-no-property-skip.mlir test/Tools/circt-bmc/sv-tests-uvm-force-bmc.mlir`
+     -> nearby harness tests remained green/feature-appropriate.
+   - Manual harness run on mini UVM corpus:
+     `TAG_REGEX='uvm' TEST_FILTER='uvm-local-var-mini$' ... utils/run_sv_tests_circt_bmc.sh test/Tools/circt-bmc/Inputs/sv-tests-mini-uvm`
+     -> `drop_remark_cases=1`.
+   - Same run with `FAIL_ON_DROP_REMARKS=1`
+     -> exit code `2` with
+        `FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=1`.
+
 ## Iteration 924 - February 10, 2026
 
 ### BMC/LEC No-Drop Hardening: Preserve Residual LLHD When Allowed

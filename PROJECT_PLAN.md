@@ -1068,3 +1068,8 @@ See CHANGELOG.md on recent progress.
    `for-smtlib-export` still rejects residual LLVM ops in `verif.bmc` regions
    (for example `llvm.mlir.constant`), so this remains the next syntax-tree
    completeness target for BMC formal parity.
+5. New no-drop guardrail available in sv-tests BMC harness:
+   `utils/run_sv_tests_circt_bmc.sh` now reports
+   `drop_remark_cases` for frontend diagnostics matching
+   `"will be dropped during lowering"` and supports opt-in enforcement via
+   `FAIL_ON_DROP_REMARKS=1`.
