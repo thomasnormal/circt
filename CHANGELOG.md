@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 830 - February 10, 2026
+
+### `circt-mut report` Built-In Policy Profiles
+
+1. Added reusable policy profile support for report gating:
+   - `--policy-profile formal-regression-basic`
+   - `--policy-profile formal-regression-trend`
+2. `formal-regression-basic` preloads compare-delta gates for formal regression
+   metrics:
+   - `cover.detected_mutants` (no regression)
+   - `cover.global_filter_timeout_mutants` (no increase)
+   - `cover.global_filter_lec_unknown_mutants` (no increase)
+   - `cover.global_filter_bmc_unknown_mutants` (no increase)
+3. `formal-regression-trend` preloads trend-delta gates for the same metrics.
+4. Added policy metadata rows to report output:
+   - `policy.profile_count`
+   - `policy.profile_<n>`
+5. Hardened report data hygiene:
+   - `policy.*` rows are excluded from compare diff accounting and history
+     snapshot append payloads to avoid metadata churn in metric baselines.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+  - `test/Tools/circt-mut-report-policy-basic-gate-fail.test`
+  - `test/Tools/circt-mut-report-policy-trend-requires-history.test`
+  - `test/Tools/circt-mut-report-policy-trend-gate-fail.test`
+- Updated:
+  - `test/Tools/circt-mut-report-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report*.test test/Tools/circt-mut-help.test`: PASS (26/26)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (121/121)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report-policy --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 829 - February 10, 2026
 
 ### `circt-mut report` Native History-Trend Summaries and Gates
