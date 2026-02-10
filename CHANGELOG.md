@@ -1,5 +1,24 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 912 - February 10, 2026
+
+### BMC/LEC Closure Snapshot Revalidation
+
+1. Re-ran cross-suite closure lanes after strict-gate default assume-known
+   policy landing:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-closure-20260210b --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/LEC_STRICT$'`
+2. Result snapshot:
+   - `sv-tests/BMC`: `total=26 pass=23 fail=3` (`disable_iff=1`, `local_var=2`, `unclassified=0`)
+   - `verilator-verification/BMC`: `total=17 pass=12 fail=5` (`sampled_value=3`, `property_named=2`, `unclassified=0`)
+   - `yosys/tests/sva/BMC`: `total=14 pass=7 fail=5 skip=2`
+     (`disable_iff=2`, `four_state=1`, `sampled_value=1`,
+     `implication_timing=2`, `hierarchical_net=1`, `unclassified=0`)
+   - `opentitan/LEC_STRICT`: `total=1 pass=1 fail=0`
+3. Interpretation:
+   - No regression introduced by the new strict-gate default key-prefix policy.
+   - Remaining work stays semantic-correctness closure on BMC fail-like rows,
+     not bucket-attribution coverage.
+
 ## Iteration 911 - February 10, 2026
 
 ### LEC Hardening: Strict-Gate Default Assume-Known Drift Policy
