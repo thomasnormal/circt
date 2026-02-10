@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 985 - February 10, 2026
+
+### `circt-mut matrix`: Combined Native Prequalify + Native Dispatch
+
+1. Removed the native-mode incompatibility in `tools/circt-mut/circt-mut.cpp`:
+   - `--native-matrix-dispatch` now works with
+     `--native-global-filter-prequalify`.
+2. Reworked matrix flow sequencing:
+   - run native prequalification first (lane manifest rewrite + summaries),
+   - then execute native lane dispatch against rewritten lanes.
+3. Added shared post-dispatch annotation for native/script matrix flows:
+   - native prequalify summary metrics are now applied to matrix `results.tsv`
+     after native dispatch as well.
+4. Updated regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-conflict.test`
+     now validates the combined-flow success path and annotated output.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch*.test`: PASS (6/6)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-*.test`: PASS (49/49)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (186/186)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-prequalify-dispatch-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*'`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator BMC/LEC PASS, yosys BMC/LEC PASS, opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 984 - February 10, 2026
 
 ### `run_formal_all`: Strict-Gate Absolute No-Drop Option

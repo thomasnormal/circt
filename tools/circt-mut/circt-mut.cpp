@@ -3575,13 +3575,6 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     return result;
   }
 
-  if (result.nativeGlobalFilterPrequalify && result.nativeMatrixDispatch) {
-    result.error =
-        "circt-mut matrix: --native-matrix-dispatch cannot be combined with "
-        "--native-global-filter-prequalify yet.";
-    return result;
-  }
-
   result.ok = true;
   return result;
 }
@@ -5115,42 +5108,8 @@ static int runNativeMatrixDispatch(const char *argv0,
   return laneFail == 0 ? 0 : 1;
 }
 
-static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
-  MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
-  if (!rewrite.ok) {
-    errs() << rewrite.error << "\n";
-    return 1;
-  }
-  if (rewrite.nativeMatrixDispatch)
-    return runNativeMatrixDispatch(argv0, rewrite.rewrittenArgs);
-
-  SmallVector<std::string, 32> dispatchArgsStorage;
-  ArrayRef<std::string> dispatchArgs = rewrite.rewrittenArgs;
-  if (rewrite.nativeGlobalFilterPrequalify) {
-    if (runNativeMatrixGlobalFilterPrequalify(argv0, rewrite,
-                                              dispatchArgsStorage) != 0)
-      return 1;
-    dispatchArgs = dispatchArgsStorage;
-  }
-
-  auto scriptPath = resolveScriptPath(argv0, "run_mutation_matrix.sh");
-  if (!scriptPath) {
-    errs() << "circt-mut: unable to locate script 'run_mutation_matrix.sh'.\n";
-    errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
-              " utils scripts.\n";
-    return 1;
-  }
-
-  SmallVector<StringRef, 32> rewrittenArgsRef;
-  for (const std::string &arg : dispatchArgs)
-    rewrittenArgsRef.push_back(arg);
-  int rc = dispatchToScript(*scriptPath, rewrittenArgsRef);
-  if (rc != 0)
-    return rc;
-
-  if (!rewrite.nativeGlobalFilterPrequalify)
-    return 0;
-
+static int
+annotateMatrixResultsFromPrequalifySummary(ArrayRef<std::string> dispatchArgs) {
   std::string outDir = "mutation-matrix-results";
   if (auto v = getLastOptionValue(dispatchArgs, "--out-dir"))
     outDir = *v;
@@ -5182,6 +5141,51 @@ static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   outs() << "native_matrix_prequalify_results_missing_lanes\t"
          << missingSummaryLaneRows << "\n";
   return 0;
+}
+
+static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
+  MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
+  if (!rewrite.ok) {
+    errs() << rewrite.error << "\n";
+    return 1;
+  }
+
+  SmallVector<std::string, 32> dispatchArgsStorage;
+  ArrayRef<std::string> dispatchArgs = rewrite.rewrittenArgs;
+  if (rewrite.nativeGlobalFilterPrequalify) {
+    if (runNativeMatrixGlobalFilterPrequalify(argv0, rewrite,
+                                              dispatchArgsStorage) != 0)
+      return 1;
+    dispatchArgs = dispatchArgsStorage;
+  }
+
+  if (rewrite.nativeMatrixDispatch) {
+    int rc = runNativeMatrixDispatch(argv0, dispatchArgs);
+    if (rc != 0)
+      return rc;
+    if (!rewrite.nativeGlobalFilterPrequalify)
+      return 0;
+    return annotateMatrixResultsFromPrequalifySummary(dispatchArgs);
+  }
+
+  auto scriptPath = resolveScriptPath(argv0, "run_mutation_matrix.sh");
+  if (!scriptPath) {
+    errs() << "circt-mut: unable to locate script 'run_mutation_matrix.sh'.\n";
+    errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+              " utils scripts.\n";
+    return 1;
+  }
+
+  SmallVector<StringRef, 32> rewrittenArgsRef;
+  for (const std::string &arg : dispatchArgs)
+    rewrittenArgsRef.push_back(arg);
+  int rc = dispatchToScript(*scriptPath, rewrittenArgsRef);
+  if (rc != 0)
+    return rc;
+
+  if (!rewrite.nativeGlobalFilterPrequalify)
+    return 0;
+  return annotateMatrixResultsFromPrequalifySummary(dispatchArgs);
 }
 
 struct InitOptions {

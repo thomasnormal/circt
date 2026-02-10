@@ -1,4 +1,27 @@
-// RUN: rm -rf %t && mkdir -p %t && printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\n' > %t/lanes.tsv
-// RUN: not circt-mut matrix --native-matrix-dispatch --native-global-filter-prequalify --lanes-tsv %t/lanes.tsv 2>&1 | FileCheck %s
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho MATRIX_SCRIPT_SHOULD_NOT_RUN >> %t/matrix_invoked\nexit 77\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwork_dir=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --work-dir) work_dir=\"$2\"; shift 2 ;;\n    --work-dir=*) work_dir=\"${1#*=}\"; shift ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$work_dir\"\nprintf \"mutation_coverage_percent\\t42.00\\n\" > \"$work_dir/metrics.tsv\"\nprintf \"{}\" > \"$work_dir/summary.json\"\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_EQ\n2 M_PROP\n' > %t/mutations.txt
+// RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\n{\n  echo \"// design: $design\"\n  echo \"// spec: $spec\"\n} > \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif grep -q \"spec: M_EQ\" \"$MUTANT_DESIGN\"; then\n  echo NOT_PROPAGATED\n  exit 0\nfi\necho PROPAGATED\nexit 1\n' > %t/fake-global-cmd.sh
+// RUN: chmod +x %t/fake-global-cmd.sh
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --native-global-filter-prequalify --lanes-tsv %t/lanes.tsv --out-dir %t/out --create-mutated-script %t/fake-create-mutated.sh --default-formal-global-propagate-cmd "bash %t/fake-global-cmd.sh" > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+// RUN: test ! -e %t/matrix_invoked
 //
-// CHECK: circt-mut matrix: --native-matrix-dispatch cannot be combined with --native-global-filter-prequalify yet.
+// LOG-DAG: native_matrix_prequalify_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_results_annotated_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_results_missing_lanes{{[[:space:]]+}}0
+//
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}exit_code{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status{{[[:space:]]}}lane_dir{{[[:space:]]}}metrics_file{{[[:space:]]}}summary_json{{[[:space:]]}}config_error_code{{[[:space:]]}}config_error_reason{{[[:space:]]}}prequalify_summary_present{{[[:space:]]}}prequalify_total_mutants{{[[:space:]]}}prequalify_not_propagated_mutants{{[[:space:]]}}prequalify_propagated_mutants
+// RESULTS: lane1{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}42.00{{[[:space:]]}}PASS{{[[:space:]]}}{{.*}}{{[[:space:]]}}{{.*}}metrics.tsv{{[[:space:]]}}{{.*}}summary.json{{[[:space:]]}}-{{[[:space:]]}}-{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}1{{[[:space:]]}}1
