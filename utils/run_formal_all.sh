@@ -494,7 +494,7 @@ Options:
                          (required when yosys/tests/sva/LEC lane runs)
   --require-explicit-sv-tests-filters
                          Deprecated no-op (explicit lane filters are now
-                         always required for selected non-OpenTitan BMC/LEC lanes)
+                         always required for selected BMC/LEC/OpenTitan lanes)
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
                          non-sv-tests BMC suite runs (sv-tests BMC lanes
                          already force SMT-LIB mode for semantic parity)
@@ -2001,16 +2001,16 @@ BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_ACCEPT_XPROP_ONLY=0
-SV_TESTS_BMC_TAG_REGEX="${SV_TESTS_BMC_TAG_REGEX:-}"
-SV_TESTS_BMC_TEST_FILTER="${SV_TESTS_BMC_TEST_FILTER:-}"
-SV_TESTS_LEC_TAG_REGEX="${SV_TESTS_LEC_TAG_REGEX:-}"
-SV_TESTS_LEC_TEST_FILTER="${SV_TESTS_LEC_TEST_FILTER:-}"
-SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX="${SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX:-}"
-SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER="${SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER:-}"
-VERILATOR_BMC_TEST_FILTER="${VERILATOR_BMC_TEST_FILTER:-}"
-VERILATOR_LEC_TEST_FILTER="${VERILATOR_LEC_TEST_FILTER:-}"
-YOSYS_BMC_TEST_FILTER="${YOSYS_BMC_TEST_FILTER:-}"
-YOSYS_LEC_TEST_FILTER="${YOSYS_LEC_TEST_FILTER:-}"
+SV_TESTS_BMC_TAG_REGEX=""
+SV_TESTS_BMC_TEST_FILTER=""
+SV_TESTS_LEC_TAG_REGEX=""
+SV_TESTS_LEC_TEST_FILTER=""
+SV_TESTS_BMC_UVM_SEMANTICS_TAG_REGEX=""
+SV_TESTS_BMC_UVM_SEMANTICS_TEST_FILTER=""
+VERILATOR_BMC_TEST_FILTER=""
+VERILATOR_LEC_TEST_FILTER=""
+YOSYS_BMC_TEST_FILTER=""
+YOSYS_LEC_TEST_FILTER=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
