@@ -14,8 +14,10 @@
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 // RUN: FileCheck %s --check-prefix=LANES < %t/out/native_global_filter_prequalify_lanes.tsv
 // RUN: FileCheck %s --check-prefix=PAIR < %t/out/lane1/native_global_filter_prequalify.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/native_matrix_prequalify_summary.tsv
 //
 // LOG-DAG: native_matrix_prequalify_lanes_tsv{{[[:space:]]+}}{{.*}}native_global_filter_prequalify_lanes.tsv
+// LOG-DAG: native_matrix_prequalify_summary_tsv{{[[:space:]]+}}{{.*}}native_matrix_prequalify_summary.tsv
 // LOG-DAG: native_matrix_prequalify_lanes{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_prequalify_summary_lanes{{[[:space:]]+}}1
 // LOG-DAG: native_matrix_prequalify_summary_missing_lanes{{[[:space:]]+}}0
@@ -32,3 +34,6 @@
 // PAIR: mutation_id{{.*}}propagation
 // PAIR: 1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated
 // PAIR: 2{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_propagated
+
+// SUMMARY: lane_id{{[[:space:]]}}pair_file{{[[:space:]]}}log_file{{[[:space:]]}}has_summary{{[[:space:]]}}prequalify_total_mutants
+// SUMMARY: lane1{{[[:space:]]}}{{.*}}native_global_filter_prequalify.tsv{{[[:space:]]}}{{.*}}native_global_filter_prequalify.log{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}1{{[[:space:]]}}1

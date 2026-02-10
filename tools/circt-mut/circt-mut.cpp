@@ -3819,6 +3819,25 @@ static int runNativeMatrixGlobalFilterPrequalify(
                                             /*KeepEmpty=*/true);
   std::vector<std::string> rewrittenLines;
   rewrittenLines.reserve(rawLines.size());
+  struct LanePrequalifySummaryRow {
+    std::string laneID;
+    std::string pairFile;
+    std::string logFile;
+    bool hasSummary = false;
+    uint64_t totalMutants = 0;
+    uint64_t notPropagatedMutants = 0;
+    uint64_t propagatedMutants = 0;
+    uint64_t createMutatedErrorMutants = 0;
+    uint64_t probeErrorMutants = 0;
+    uint64_t cmdTokenNotPropagatedMutants = 0;
+    uint64_t cmdTokenPropagatedMutants = 0;
+    uint64_t cmdRCNotPropagatedMutants = 0;
+    uint64_t cmdRCPropagatedMutants = 0;
+    uint64_t cmdTimeoutPropagatedMutants = 0;
+    uint64_t cmdErrorMutants = 0;
+  };
+  std::vector<LanePrequalifySummaryRow> laneSummaryRows;
+  laneSummaryRows.reserve(rawLines.size());
   uint64_t prequalifiedLaneCount = 0;
   uint64_t prequalifySummaryLaneCount = 0;
   uint64_t prequalifySummaryMissingLaneCount = 0;
@@ -3872,6 +3891,12 @@ static int runNativeMatrixGlobalFilterPrequalify(
                       uint64_t &dst) {
     if (auto it = metrics.find(key); it != metrics.end())
       dst += it->second;
+  };
+  auto getMetric = [](const StringMap<uint64_t> &metrics,
+                      StringRef key) -> uint64_t {
+    if (auto it = metrics.find(key); it != metrics.end())
+      return it->second;
+    return 0;
   };
 
   for (size_t lineNo = 0; lineNo < rawLines.size(); ++lineNo) {
@@ -4150,6 +4175,22 @@ static int runNativeMatrixGlobalFilterPrequalify(
               prequalifyCmdTimeoutPropagatedMutants);
     addMetric(laneMetrics, "prequalify_cmd_error_mutants",
               prequalifyCmdErrorMutants);
+    laneSummaryRows.push_back(LanePrequalifySummaryRow{
+        laneID,
+        lanePairFile,
+        lanePrequalifyLog,
+        laneMetrics.find("prequalify_total_mutants") != laneMetrics.end(),
+        getMetric(laneMetrics, "prequalify_total_mutants"),
+        getMetric(laneMetrics, "prequalify_not_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_create_mutated_error_mutants"),
+        getMetric(laneMetrics, "prequalify_probe_error_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_token_not_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_token_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_rc_not_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_rc_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_timeout_propagated_mutants"),
+        getMetric(laneMetrics, "prequalify_cmd_error_mutants")});
 
     if (cols.size() <= ColReusePairFile)
       cols.resize(ColReusePairFile + 1);
@@ -4188,6 +4229,46 @@ static int runNativeMatrixGlobalFilterPrequalify(
   }
   lanesOut.close();
 
+  std::string summaryPath =
+      joinPath2(cfg.outDir, "native_matrix_prequalify_summary.tsv");
+  std::error_code summaryEC;
+  raw_fd_ostream summaryOut(summaryPath, summaryEC, sys::fs::OF_Text);
+  if (summaryEC) {
+    errs() << "circt-mut matrix: failed to write native prequalify summary: "
+           << summaryPath << ": " << summaryEC.message() << "\n";
+    return 1;
+  }
+  summaryOut << "lane_id\tpair_file\tlog_file\thas_summary\t"
+             << "prequalify_total_mutants\t"
+             << "prequalify_not_propagated_mutants\t"
+             << "prequalify_propagated_mutants\t"
+             << "prequalify_create_mutated_error_mutants\t"
+             << "prequalify_probe_error_mutants\t"
+             << "prequalify_cmd_token_not_propagated_mutants\t"
+             << "prequalify_cmd_token_propagated_mutants\t"
+             << "prequalify_cmd_rc_not_propagated_mutants\t"
+             << "prequalify_cmd_rc_propagated_mutants\t"
+             << "prequalify_cmd_timeout_propagated_mutants\t"
+             << "prequalify_cmd_error_mutants\n";
+  for (const auto &row : laneSummaryRows) {
+    summaryOut << row.laneID << '\t' << row.pairFile << '\t' << row.logFile
+               << '\t' << (row.hasSummary ? "1" : "0") << '\t';
+    if (row.hasSummary)
+      summaryOut << row.totalMutants;
+    else
+      summaryOut << '-';
+    summaryOut << '\t' << row.notPropagatedMutants << '\t'
+               << row.propagatedMutants << '\t'
+               << row.createMutatedErrorMutants << '\t' << row.probeErrorMutants
+               << '\t' << row.cmdTokenNotPropagatedMutants << '\t'
+               << row.cmdTokenPropagatedMutants << '\t'
+               << row.cmdRCNotPropagatedMutants << '\t'
+               << row.cmdRCPropagatedMutants << '\t'
+               << row.cmdTimeoutPropagatedMutants << '\t' << row.cmdErrorMutants
+               << '\n';
+  }
+  summaryOut.close();
+
   dispatchArgs.clear();
   bool replacedLanesArg = false;
   for (size_t i = 0; i < rewrite.rewrittenArgs.size(); ++i) {
@@ -4215,6 +4296,7 @@ static int runNativeMatrixGlobalFilterPrequalify(
 
   outs() << "native_matrix_prequalify_lanes_tsv\t" << rewrittenLanesPath
          << "\n";
+  outs() << "native_matrix_prequalify_summary_tsv\t" << summaryPath << "\n";
   outs() << "native_matrix_prequalify_lanes\t" << prequalifiedLaneCount << "\n";
   outs() << "native_matrix_prequalify_summary_lanes\t"
          << prequalifySummaryLaneCount << "\n";
@@ -6029,6 +6111,155 @@ static bool collectMatrixReport(
   for (const char *key : kExtraMetricKeys)
     rows.emplace_back((Twine("matrix.") + key + "_sum").str(),
                       std::to_string(extraMetricSums[key]));
+
+  SmallString<256> nativeSummaryPath(matrixOutDir);
+  sys::path::append(nativeSummaryPath, "native_matrix_prequalify_summary.tsv");
+  rows.emplace_back("matrix.native_prequalify_summary_file",
+                    std::string(nativeSummaryPath.str()));
+  uint64_t nativeSummaryFileExists = sys::fs::exists(nativeSummaryPath) ? 1 : 0;
+  rows.emplace_back("matrix.native_prequalify_summary_file_exists",
+                    std::to_string(nativeSummaryFileExists));
+
+  uint64_t nativeSummaryLanes = 0;
+  uint64_t nativeSummaryMissingLanes = 0;
+  uint64_t nativeSummaryInvalidValues = 0;
+  uint64_t nativeTotalMutants = 0;
+  uint64_t nativeNotPropagatedMutants = 0;
+  uint64_t nativePropagatedMutants = 0;
+  uint64_t nativeCreateMutatedErrorMutants = 0;
+  uint64_t nativeProbeErrorMutants = 0;
+  uint64_t nativeCmdTokenNotPropagatedMutants = 0;
+  uint64_t nativeCmdTokenPropagatedMutants = 0;
+  uint64_t nativeCmdRCNotPropagatedMutants = 0;
+  uint64_t nativeCmdRCPropagatedMutants = 0;
+  uint64_t nativeCmdTimeoutPropagatedMutants = 0;
+  uint64_t nativeCmdErrorMutants = 0;
+  if (nativeSummaryFileExists) {
+    auto summaryBufferOrErr = MemoryBuffer::getFile(nativeSummaryPath);
+    if (!summaryBufferOrErr) {
+      error = (Twine("circt-mut report: unable to read native matrix "
+                     "prequalify summary file: ") +
+               nativeSummaryPath)
+                  .str();
+      return false;
+    }
+    SmallVector<StringRef, 256> summaryLines;
+    summaryBufferOrErr.get()->getBuffer().split(summaryLines, '\n',
+                                                /*MaxSplit=*/-1,
+                                                /*KeepEmpty=*/false);
+    if (!summaryLines.empty()) {
+      splitTSVLine(summaryLines.front().rtrim("\r"), fields);
+      StringMap<size_t> summaryColumns;
+      for (size_t i = 0; i < fields.size(); ++i)
+        summaryColumns[fields[i].trim()] = i;
+
+      auto getSummaryColumn = [&](StringRef name,
+                                  size_t &dst) -> bool {
+        auto it = summaryColumns.find(name);
+        if (it == summaryColumns.end()) {
+          error = (Twine("circt-mut report: missing required native "
+                         "matrix prequalify summary column: ") +
+                   name + " in " + nativeSummaryPath)
+                      .str();
+          return false;
+        }
+        dst = it->second;
+        return true;
+      };
+      size_t totalCol = 0, notPropCol = 0, propCol = 0, createErrCol = 0,
+             probeErrCol = 0, cmdTokenNotPropCol = 0, cmdTokenPropCol = 0,
+             cmdRCNotPropCol = 0, cmdRCPropCol = 0, cmdTimeoutPropCol = 0,
+             cmdErrCol = 0;
+      if (!getSummaryColumn("prequalify_total_mutants", totalCol) ||
+          !getSummaryColumn("prequalify_not_propagated_mutants", notPropCol) ||
+          !getSummaryColumn("prequalify_propagated_mutants", propCol) ||
+          !getSummaryColumn("prequalify_create_mutated_error_mutants",
+                            createErrCol) ||
+          !getSummaryColumn("prequalify_probe_error_mutants", probeErrCol) ||
+          !getSummaryColumn("prequalify_cmd_token_not_propagated_mutants",
+                            cmdTokenNotPropCol) ||
+          !getSummaryColumn("prequalify_cmd_token_propagated_mutants",
+                            cmdTokenPropCol) ||
+          !getSummaryColumn("prequalify_cmd_rc_not_propagated_mutants",
+                            cmdRCNotPropCol) ||
+          !getSummaryColumn("prequalify_cmd_rc_propagated_mutants",
+                            cmdRCPropCol) ||
+          !getSummaryColumn("prequalify_cmd_timeout_propagated_mutants",
+                            cmdTimeoutPropCol) ||
+          !getSummaryColumn("prequalify_cmd_error_mutants", cmdErrCol))
+        return false;
+
+      auto addSummaryMetric = [&](ArrayRef<StringRef> summaryFields, size_t col,
+                                  uint64_t &dst) {
+        if (col >= summaryFields.size())
+          return;
+        StringRef value = summaryFields[col].trim();
+        if (value.empty() || value == "-")
+          return;
+        uint64_t parsed = 0;
+        if (value.getAsInteger(10, parsed)) {
+          ++nativeSummaryInvalidValues;
+          return;
+        }
+        dst += parsed;
+      };
+
+      for (size_t lineNo = 1; lineNo < summaryLines.size(); ++lineNo) {
+        StringRef summaryLine = summaryLines[lineNo].rtrim("\r");
+        if (summaryLine.trim().empty())
+          continue;
+        splitTSVLine(summaryLine, fields);
+        ++nativeSummaryLanes;
+        if (totalCol >= fields.size() || fields[totalCol].trim().empty() ||
+            fields[totalCol].trim() == "-")
+          ++nativeSummaryMissingLanes;
+        addSummaryMetric(fields, totalCol, nativeTotalMutants);
+        addSummaryMetric(fields, notPropCol, nativeNotPropagatedMutants);
+        addSummaryMetric(fields, propCol, nativePropagatedMutants);
+        addSummaryMetric(fields, createErrCol, nativeCreateMutatedErrorMutants);
+        addSummaryMetric(fields, probeErrCol, nativeProbeErrorMutants);
+        addSummaryMetric(fields, cmdTokenNotPropCol,
+                         nativeCmdTokenNotPropagatedMutants);
+        addSummaryMetric(fields, cmdTokenPropCol,
+                         nativeCmdTokenPropagatedMutants);
+        addSummaryMetric(fields, cmdRCNotPropCol, nativeCmdRCNotPropagatedMutants);
+        addSummaryMetric(fields, cmdRCPropCol, nativeCmdRCPropagatedMutants);
+        addSummaryMetric(fields, cmdTimeoutPropCol,
+                         nativeCmdTimeoutPropagatedMutants);
+        addSummaryMetric(fields, cmdErrCol, nativeCmdErrorMutants);
+      }
+    }
+  }
+  rows.emplace_back("matrix.native_prequalify_summary_lanes",
+                    std::to_string(nativeSummaryLanes));
+  rows.emplace_back("matrix.native_prequalify_summary_missing_lanes",
+                    std::to_string(nativeSummaryMissingLanes));
+  rows.emplace_back("matrix.native_prequalify_invalid_metric_values",
+                    std::to_string(nativeSummaryInvalidValues));
+  rows.emplace_back("matrix.native_prequalify_total_mutants_sum",
+                    std::to_string(nativeTotalMutants));
+  rows.emplace_back("matrix.native_prequalify_not_propagated_mutants_sum",
+                    std::to_string(nativeNotPropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_propagated_mutants_sum",
+                    std::to_string(nativePropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_create_mutated_error_mutants_sum",
+                    std::to_string(nativeCreateMutatedErrorMutants));
+  rows.emplace_back("matrix.native_prequalify_probe_error_mutants_sum",
+                    std::to_string(nativeProbeErrorMutants));
+  rows.emplace_back(
+      "matrix.native_prequalify_cmd_token_not_propagated_mutants_sum",
+      std::to_string(nativeCmdTokenNotPropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_cmd_token_propagated_mutants_sum",
+                    std::to_string(nativeCmdTokenPropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_cmd_rc_not_propagated_mutants_sum",
+                    std::to_string(nativeCmdRCNotPropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_cmd_rc_propagated_mutants_sum",
+                    std::to_string(nativeCmdRCPropagatedMutants));
+  rows.emplace_back(
+      "matrix.native_prequalify_cmd_timeout_propagated_mutants_sum",
+      std::to_string(nativeCmdTimeoutPropagatedMutants));
+  rows.emplace_back("matrix.native_prequalify_cmd_error_mutants_sum",
+                    std::to_string(nativeCmdErrorMutants));
   return true;
 }
 
