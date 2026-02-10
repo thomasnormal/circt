@@ -6,8 +6,13 @@
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$'
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=CASES < %t/out/sv-tests-bmc-semantic-buckets.tsv
+// RUN: FileCheck %s --check-prefix=MAP < %t/out/bmc-semantic-bucket-case-map.tsv
 //
 // SUMMARY: sv-tests{{[[:space:]]+}}BMC{{.*}}bmc_semantic_bucket_fail_like_cases=3{{[[:space:]]+}}bmc_semantic_bucket_classified_cases=2{{[[:space:]]+}}bmc_semantic_bucket_tagged_cases=1{{[[:space:]]+}}bmc_semantic_bucket_regex_cases=1{{[[:space:]]+}}bmc_semantic_bucket_disable_iff_cases=1{{.*}}bmc_semantic_bucket_sampled_value_cases=1{{.*}}bmc_semantic_bucket_unclassified_cases=1
 // CASES: FAIL{{[[:space:]]+}}regex_case_iff{{[[:space:]]+}}/tests/regex.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}disable_iff{{[[:space:]]+}}regex
 // CASES: FAIL{{[[:space:]]+}}tagged_case{{[[:space:]]+}}/tests/tagged.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}sampled_value{{[[:space:]]+}}tagged
 // CASES: FAIL{{[[:space:]]+}}unknown_case{{[[:space:]]+}}/tests/unknown.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}unclassified{{[[:space:]]+}}unclassified
+// MAP: status{{[[:space:]]+}}case_id{{[[:space:]]+}}path{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}semantic_bucket{{[[:space:]]+}}source
+// MAP: FAIL{{[[:space:]]+}}regex_case_iff{{[[:space:]]+}}/tests/regex.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}disable_iff{{[[:space:]]+}}regex
+// MAP: FAIL{{[[:space:]]+}}tagged_case{{[[:space:]]+}}/tests/tagged.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}sampled_value{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}unknown_case{{[[:space:]]+}}/tests/unknown.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}unclassified{{[[:space:]]+}}unclassified

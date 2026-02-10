@@ -640,6 +640,12 @@ See CHANGELOG.md on recent progress.
     where `source` is `tagged`, `regex`, or `unclassified`.
     - This gives direct machine-readable bucket-to-case joins for closure
       planning and strict-gate investigation without re-parsing logs.
+81. `run_formal_all.sh` now emits a merged cross-lane BMC semantic case map:
+    `bmc-semantic-bucket-case-map.tsv` with a stable tabular schema:
+    `(status, case_id, path, suite, mode, semantic_bucket, source)`.
+    - This unifies sv-tests / verilator / yosys semantic fail-like attribution
+      into one artifact for bucket-priority closure planning and CI trend
+      ingestion.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
