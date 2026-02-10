@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 994 - February 10, 2026
+
+### `circt-mut report`: Matrix-Basic Compare Gates Skip-Lane Drift
+
+1. Extended `formal-regression-matrix-basic` policy in
+   `tools/circt-mut/circt-mut.cpp` with compare-delta enforcement:
+   - `matrix.lanes_skip delta <= 0`
+2. This closes the remaining compare-governance gap: matrix basic profile now
+   flags skip-lane regressions in baseline comparisons (not only in strict
+   value gates or trend profiles).
+3. Added/updated regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-basic-skip-delta-fail.test`
+   - updated `test/Tools/circt-mut-report-policy-matrix-basic-drift-gate.test`
+     baseline to include `matrix.lanes_skip`.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (65/65)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (193/193)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-basic-skip-compare-20260210 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile for
+    `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known): AVIP compile `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 993 - February 10, 2026
 
 ### `circt-mut report`: Trend Policies Gate Skip-Lane Drift
