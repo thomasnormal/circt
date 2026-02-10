@@ -8152,8 +8152,13 @@ append_bmc_abstraction_provenance() {
     return
   fi
   while IFS= read -r line; do
-    local token="${line#*BMC_PROVENANCE_LLHD_INTERFACE }"
-    if [[ "$token" == "$line" || -z "$token" ]]; then
+    local token=""
+    if [[ "$line" == *"BMC_PROVENANCE_LLHD_INTERFACE "* ]]; then
+      token="${line#*BMC_PROVENANCE_LLHD_INTERFACE }"
+    elif [[ "$line" == *"BMC_PROVENANCE_LLHD_PROCESS "* ]]; then
+      token="process ${line#*BMC_PROVENANCE_LLHD_PROCESS }"
+    fi
+    if [[ -z "$token" ]]; then
       continue
     fi
     printf "%s:%s\t%s\t%s\n" "$case_id" "$mode" "$case_path" "$token" \

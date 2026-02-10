@@ -18,6 +18,8 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Support/raw_ostream.h"
+#include <string>
 #include <utility>
 
 using namespace mlir;
@@ -32,6 +34,11 @@ namespace circt {
 } // namespace circt
 
 namespace {
+static constexpr const char *kBMCAbstractedLLHDProcessResultsAttr =
+    "circt.bmc_abstracted_llhd_process_results";
+static constexpr const char *kBMCAbstractedLLHDProcessResultDetailsAttr =
+    "circt.bmc_abstracted_llhd_process_result_details";
+
 struct BlockGuardInfo {
   Value condition;
   bool negate = false;
@@ -172,6 +179,7 @@ struct StripLLHDProcessesPass
         }
         DenseMap<Value, Value> signalInputs;
         int64_t abstractedProcessResultCount = 0;
+        SmallVector<Attribute> abstractedProcessResultDetails;
         auto getSignalName = [](Value signal) -> StringRef {
           if (auto sig = signal.getDefiningOp<SignalOp>()) {
             if (auto nameAttr = sig.getNameAttr())
@@ -664,15 +672,23 @@ struct StripLLHDProcessesPass
 
         for (Value result : process.getResults()) {
           bool needsAbstraction = false;
+          StringRef abstractionReason = "unknown";
+          std::string abstractionSignal;
+          Location abstractionLoc = process.getLoc();
           SmallVector<DriveOp> droppableResultDrives;
           for (OpOperand &use : result.getUses()) {
             auto drv = dyn_cast<DriveOp>(use.getOwner());
             if (!drv) {
               needsAbstraction = true;
+              abstractionReason = "non_drive_use";
+              abstractionLoc = use.getOwner()->getLoc();
               break;
             }
             if (hasObservableSignalUse(drv.getSignal(), drv)) {
               needsAbstraction = true;
+              abstractionReason = "observable_signal_use";
+              abstractionSignal = getSignalName(drv.getSignal()).str();
+              abstractionLoc = drv.getLoc();
               break;
             }
             droppableResultDrives.push_back(drv);
@@ -687,6 +703,33 @@ struct StripLLHDProcessesPass
               addInputPort(StringAttr::get(hwModule.getContext(), name),
                            result.getType());
           result.replaceAllUsesWith(newInput.second);
+          Builder builder(hwModule.getContext());
+          SmallVector<NamedAttribute> attrs{
+              builder.getNamedAttr("name", newInput.first),
+              builder.getNamedAttr(
+                  "base", StringAttr::get(hwModule.getContext(),
+                                          "llhd_process_result")),
+              builder.getNamedAttr("type", TypeAttr::get(result.getType())),
+              builder.getNamedAttr(
+                  "reason",
+                  StringAttr::get(hwModule.getContext(), abstractionReason)),
+          };
+          if (auto opResult = dyn_cast<OpResult>(result))
+            attrs.push_back(builder.getNamedAttr(
+                "result", builder.getI64IntegerAttr(opResult.getResultNumber())));
+          if (!abstractionSignal.empty())
+            attrs.push_back(builder.getNamedAttr(
+                "signal", StringAttr::get(hwModule.getContext(),
+                                          abstractionSignal)));
+          std::string locStr;
+          llvm::raw_string_ostream os(locStr);
+          abstractionLoc.print(os);
+          os.flush();
+          if (!locStr.empty())
+            attrs.push_back(builder.getNamedAttr(
+                "loc", StringAttr::get(hwModule.getContext(), locStr)));
+          abstractedProcessResultDetails.push_back(
+              DictionaryAttr::get(hwModule.getContext(), attrs));
           ++abstractedProcessResultCount;
         }
         process.erase();
@@ -694,11 +737,16 @@ struct StripLLHDProcessesPass
 
         if (abstractedProcessResultCount > 0) {
           hwModule->setAttr(
-              "circt.bmc_abstracted_llhd_process_results",
+              kBMCAbstractedLLHDProcessResultsAttr,
               IntegerAttr::get(IntegerType::get(hwModule.getContext(), 32),
                                abstractedProcessResultCount));
+          if (!abstractedProcessResultDetails.empty())
+            hwModule->setAttr(kBMCAbstractedLLHDProcessResultDetailsAttr,
+                              ArrayAttr::get(hwModule.getContext(),
+                                             abstractedProcessResultDetails));
         } else {
-          hwModule->removeAttr("circt.bmc_abstracted_llhd_process_results");
+          hwModule->removeAttr(kBMCAbstractedLLHDProcessResultsAttr);
+          hwModule->removeAttr(kBMCAbstractedLLHDProcessResultDetailsAttr);
         }
 
         SmallVector<InstanceOp> instances;

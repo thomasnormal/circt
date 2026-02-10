@@ -390,6 +390,29 @@ See CHANGELOG.md on recent progress.
     - LEC strict no-waiver posture is in place, but process-result abstraction
       provenance is still count-only and should be upgraded to the same
       source-path token model.
+45. Process-result provenance closure landed (February 10, 2026):
+    - `strip-llhd-processes` now emits structured
+      `circt.bmc_abstracted_llhd_process_result_details`
+      (`name`, `base`, `type`, `reason`, `result`, optional `signal`, `loc`)
+      for each abstracted process result.
+    - `lower-to-bmc` now propagates this detail array as
+      `bmc_abstracted_llhd_process_result_details` and emits machine-readable
+      warning tokens:
+      `BMC_PROVENANCE_LLHD_PROCESS reason=... result=... signal=... name=...`.
+    - Existing BMC abstraction drift gate now covers both interface and
+      process provenance via the unified token stream.
+46. Updated formal limitations and long-term build targets:
+    - BMC semantic gaps remain in the three `sv-tests` fail cases
+      (`16.10--property-local-var-fail`,
+      `16.10--sequence-local-var-fail`,
+      `16.15--property-disable-iff-fail`) and corresponding UVM-positive
+      semantics where LLHD process abstraction is still active.
+    - LEC strict lanes are green, but 4-state diagnostic depth is still
+      limited by process/interface abstraction provenance not yet being
+      correlated into a single source-path chain in user-facing reports.
+    - Next high-ROI feature: add provenance allowlist/prefix controls in
+      `run_formal_all.sh` so known abstraction classes can be scoped while
+      still failing on newly introduced semantic-risk tokens.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
