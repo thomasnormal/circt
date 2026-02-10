@@ -18,7 +18,8 @@
      preserving current deterministic fallback behavior.
 4. Updated fingerprint test expectations:
    - `test/Tools/run-formal-all-bmc-ir-check-fingerprints.test` now validates
-     both `ir_check_keys` and `ir_check_key_modes`.
+     both `ir_check_keys` and `ir_check_key_modes`, including mixed
+     `label` + `fingerprint` mode rows.
 
 ### Tests and Validation
 
