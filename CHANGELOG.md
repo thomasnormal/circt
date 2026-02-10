@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 852 - February 10, 2026
+
+### Native Cover Prequalification Handoff in `circt-mut`
+
+1. Extended `circt-mut cover` with native campaign-level global-filter
+   prequalification:
+   - `--native-global-filter-prequalify`
+   - optional `--native-global-filter-prequalify-pair-file <path>`
+2. Native prequalification path now:
+   - reads `--mutations-file`,
+   - materializes mutants with `--create-mutated-script`,
+   - runs built-in circt-lec/circt-bmc/chain global-filter classification per
+     mutant, and
+   - emits a reuse-compatible pair file (`test_id=-`) consumed by
+     `run_mutation_cover.sh --reuse-pair-file`.
+3. Added strict option-contract validation for prequalification mode:
+   - requires `--mutations-file`,
+   - rejects `--generate-mutations`,
+   - rejects explicit `--reuse-pair-file`,
+   - rejects `--formal-global-propagate-cmd`,
+   - requires built-in global filter modes.
+4. Fixed prequalify-specific diagnostics ordering so missing
+   `--mutations-file` in prequalify mode reports the intended targeted error
+   (instead of the generic cover source error).
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-dispatch.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-missing-mutations-file.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-missing-filter.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-reuse-conflict.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-generate-unsupported.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-cmd-unsupported.test`
+- Updated docs/planning:
+  - `README.md` (native prequalify usage + MCY/Certitude comparison mapping)
+  - `docs/FormalRegression.md` (migration note + workflow comparison)
+  - `PROJECT_PLAN.md` (marks native prequalify handoff as landed in `circt-mut`
+    track and updates next steps)
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-prequalify-*.test`: PASS (6/6)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test`: PASS (35/35)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (129/129)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-prequalify --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 851 - February 10, 2026
 
 ### Native Global-Filter Probe in `circt-mut cover`
