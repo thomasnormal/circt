@@ -654,7 +654,7 @@ Execution controls:
   - `--formal-global-propagate-circt-lec [path]`
   - `--formal-global-propagate-circt-lec-args "<args>"`
   - `--formal-global-propagate-c1 <module>` / `--formal-global-propagate-c2 <module>`
-  - `--formal-global-propagate-z3 <path>`
+  - `--formal-global-propagate-z3 <path|auto>`
   - `--formal-global-propagate-assume-known-inputs`
   - `--formal-global-propagate-accept-xprop-only`
   This mode classifies by `circt-lec` output tokens:
@@ -667,7 +667,7 @@ Execution controls:
   - `--formal-global-propagate-bmc-bound <n>`
   - `--formal-global-propagate-bmc-module <name>`
   - `--formal-global-propagate-bmc-run-smtlib`
-  - `--formal-global-propagate-bmc-z3 <path>`
+  - `--formal-global-propagate-bmc-z3 <path|auto>`
   - `--formal-global-propagate-bmc-assume-known-inputs`
   - `--formal-global-propagate-bmc-ignore-asserts-until <n>`
   This mode compares BMC outcomes between original and mutant:
@@ -681,6 +681,7 @@ Execution controls:
   - cross-run optimization (when `--reuse-cache-dir` is enabled): original
     BMC cache entries are hydrated from and published to
     `<reuse-cache-dir>/global_bmc_orig_cache`.
+  - for `z3` options, `auto` resolves from `PATH`.
   - cache bounds can be applied by entry count, byte footprint, and entry age.
 - Built-in chained circt-lec/circt-bmc global filter:
   - `--formal-global-propagate-circt-chain lec-then-bmc|bmc-then-lec|consensus|auto`
@@ -922,7 +923,7 @@ Script preflight now validates:
   `run_mutation_cover.sh --formal-global-propagate-c1`.
 - `--default-formal-global-propagate-c2 <name>`: default
   `run_mutation_cover.sh --formal-global-propagate-c2`.
-- `--default-formal-global-propagate-z3 <path>`: default
+- `--default-formal-global-propagate-z3 <path|auto>`: default
   `run_mutation_cover.sh --formal-global-propagate-z3`.
 - `--default-formal-global-propagate-assume-known-inputs`: default
   `run_mutation_cover.sh --formal-global-propagate-assume-known-inputs`.
@@ -943,7 +944,7 @@ Script preflight now validates:
   `run_mutation_cover.sh --formal-global-propagate-bmc-module`.
 - `--default-formal-global-propagate-bmc-run-smtlib`: default
   `run_mutation_cover.sh --formal-global-propagate-bmc-run-smtlib`.
-- `--default-formal-global-propagate-bmc-z3 <path>`: default
+- `--default-formal-global-propagate-bmc-z3 <path|auto>`: default
   `run_mutation_cover.sh --formal-global-propagate-bmc-z3`.
 - `--default-formal-global-propagate-bmc-assume-known-inputs`: default
   `run_mutation_cover.sh --formal-global-propagate-bmc-assume-known-inputs`.

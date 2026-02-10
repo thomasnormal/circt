@@ -377,6 +377,9 @@ global filters:
 - then from `PATH`
 - then from `./build/bin` in this CIRCT checkout
 - you can still override with explicit paths.
+For Z3 options (`--formal-global-propagate-z3`,
+`--formal-global-propagate-bmc-z3`, matrix default variants), use `auto` to
+resolve from `PATH`.
 `circt-mut cover` now performs this built-in-tool resolution natively and
 rewrites bare `--formal-global-propagate-circt-lec` /
 `--formal-global-propagate-circt-bmc` to explicit executables before dispatch,
@@ -454,10 +457,10 @@ numeric/cache controls (`--formal-global-propagate-*_timeout-seconds`,
 `--bmc-orig-cache-max-*`, `--bmc-orig-cache-eviction-policy`).
 For cover mode, non-zero timeout settings with an active global filter now
 also require a resolvable `timeout` executable in the current `PATH`.
-Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
-options for built-in filters (`--formal-global-propagate-z3`,
-`--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
-if unresolved.
+Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve Z3 options
+for built-in filters (`--formal-global-propagate-z3`,
+`--formal-global-propagate-bmc-z3`, and default matrix variants). Use explicit
+paths or `auto` (PATH lookup); unresolved toolchains fail fast.
 `circt-mut cover` also pre-resolves `--mutations-yosys`, and native
 `circt-mut generate` now fail-fast resolves `--yosys` before execution and
 validates `--mode` / `--mode-count(s)` / `--mode-weight(s)` names against the

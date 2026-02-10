@@ -503,7 +503,9 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       return true;
     };
-    auto resolveWithRequiredValue = [&](StringRef flag) -> bool {
+    auto resolveWithRequiredValue =
+        [&](StringRef flag,
+            std::optional<StringRef> autoToolName = std::nullopt) -> bool {
       std::string requested;
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos) {
@@ -515,7 +517,24 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         result.error = (Twine("circt-mut cover: missing value for ") + flag).str();
         return false;
       }
-      auto resolved = resolveToolPath(requested);
+      std::optional<std::string> resolved;
+      if (requested == "auto") {
+        if (!autoToolName) {
+          result.error = (Twine("circt-mut cover: invalid value for ") + flag +
+                          ": auto")
+                             .str();
+          return false;
+        }
+        resolved = resolveToolPathFromEnvPath(*autoToolName);
+        if (!resolved) {
+          result.error = (Twine("circt-mut cover: unable to resolve ") + flag +
+                          " executable: auto (searched PATH).")
+                             .str();
+          return false;
+        }
+      } else {
+        resolved = resolveToolPath(requested);
+      }
       if (!resolved) {
         result.error = (Twine("circt-mut cover: unable to resolve ") + flag +
                         " executable: " + requested)
@@ -545,13 +564,13 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
     if (arg == "--formal-global-propagate-z3" ||
         arg.starts_with("--formal-global-propagate-z3=")) {
-      if (!resolveWithRequiredValue("--formal-global-propagate-z3"))
+      if (!resolveWithRequiredValue("--formal-global-propagate-z3", "z3"))
         return result;
       continue;
     }
     if (arg == "--formal-global-propagate-bmc-z3" ||
         arg.starts_with("--formal-global-propagate-bmc-z3=")) {
-      if (!resolveWithRequiredValue("--formal-global-propagate-bmc-z3"))
+      if (!resolveWithRequiredValue("--formal-global-propagate-bmc-z3", "z3"))
         return result;
       continue;
     }
@@ -1132,11 +1151,11 @@ static bool preflightMatrixLaneTools(
     bool useBMCFilter = !effectiveBMC.empty();
     if (useLECFilter &&
         !resolveLaneTool(laneGlobalFilterZ3, defaults.globalFilterZ3,
-                         "global_propagate_z3", "", /*allowAuto=*/false))
+                         "global_propagate_z3", "z3", /*allowAuto=*/true))
       return false;
     if (useBMCFilter &&
         !resolveLaneTool(laneGlobalFilterBMCZ3, defaults.globalFilterBMCZ3,
-                         "global_propagate_bmc_z3", "", /*allowAuto=*/false))
+                         "global_propagate_bmc_z3", "z3", /*allowAuto=*/true))
       return false;
     if (!validateRegex(laneGlobalFilterTimeoutSeconds,
                        defaults.globalFilterTimeoutSeconds, Regex("^[0-9]+$"),
@@ -1444,8 +1463,9 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       return true;
     };
-    auto resolveWithRequiredValue = [&](StringRef flag,
-                                        std::string *resolvedOut) -> bool {
+    auto resolveWithRequiredValue =
+        [&](StringRef flag, std::string *resolvedOut,
+            std::optional<StringRef> autoToolName = std::nullopt) -> bool {
       std::string requested;
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos) {
@@ -1458,7 +1478,24 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
             (Twine("circt-mut matrix: missing value for ") + flag).str();
         return false;
       }
-      auto resolved = resolveToolPath(requested);
+      std::optional<std::string> resolved;
+      if (requested == "auto") {
+        if (!autoToolName) {
+          result.error =
+              (Twine("circt-mut matrix: invalid value for ") + flag + ": auto")
+                  .str();
+          return false;
+        }
+        resolved = resolveToolPathFromEnvPath(*autoToolName);
+        if (!resolved) {
+          result.error = (Twine("circt-mut matrix: unable to resolve ") + flag +
+                          " executable: auto (searched PATH).")
+                             .str();
+          return false;
+        }
+      } else {
+        resolved = resolveToolPath(requested);
+      }
       if (!resolved) {
         result.error = (Twine("circt-mut matrix: unable to resolve ") + flag +
                         " executable: " + requested)
@@ -1493,14 +1530,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     if (arg == "--default-formal-global-propagate-z3" ||
         arg.starts_with("--default-formal-global-propagate-z3=")) {
       if (!resolveWithRequiredValue("--default-formal-global-propagate-z3",
-                                    &defaults.globalFilterZ3))
+                                    &defaults.globalFilterZ3, "z3"))
         return result;
       continue;
     }
     if (arg == "--default-formal-global-propagate-bmc-z3" ||
         arg.starts_with("--default-formal-global-propagate-bmc-z3=")) {
       if (!resolveWithRequiredValue("--default-formal-global-propagate-bmc-z3",
-                                    &defaults.globalFilterBMCZ3))
+                                    &defaults.globalFilterBMCZ3, "z3"))
         return result;
       continue;
     }
