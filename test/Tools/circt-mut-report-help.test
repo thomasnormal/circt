@@ -8,6 +8,8 @@
 // CHECK: --matrix-out-dir
 // CHECK: --compare
 // CHECK: --compare-history-latest
+// CHECK: --history
+// CHECK: --history-bootstrap
 // CHECK: --trend-history
 // CHECK: --trend-window
 // CHECK: --policy-profile

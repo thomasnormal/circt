@@ -137,6 +137,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --compare FILE           Compare against baseline report TSV\n";
   os << "  --compare-history-latest FILE\n";
   os << "                           Compare against latest snapshot in history TSV\n";
+  os << "  --history FILE           Shorthand for compare-latest + trend + append history\n";
+  os << "  --history-bootstrap      Allow missing --history file by skipping compare/trend gates on bootstrap run\n";
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --policy-profile NAME    Apply built-in report policy profile\n";
@@ -5277,6 +5279,8 @@ struct ReportOptions {
   std::string matrixOutDir;
   std::string compareFile;
   std::string compareHistoryLatestFile;
+  std::string historyFile;
+  bool historyBootstrap = false;
   std::string trendHistoryFile;
   uint64_t trendWindowRuns = 0;
   SmallVector<std::string, 4> policyProfiles;
@@ -7018,6 +7022,17 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.compareHistoryLatestFile = v->str();
       continue;
     }
+    if (arg == "--history" || arg.starts_with("--history=")) {
+      auto v = consumeValue(i, arg, "--history");
+      if (!v)
+        return result;
+      result.opts.historyFile = v->str();
+      continue;
+    }
+    if (arg == "--history-bootstrap") {
+      result.opts.historyBootstrap = true;
+      continue;
+    }
     if (arg == "--trend-history" || arg.starts_with("--trend-history=")) {
       auto v = consumeValue(i, arg, "--trend-history");
       if (!v)
@@ -7161,6 +7176,15 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
                    "are mutually exclusive";
     return result;
   }
+  if (!result.opts.historyFile.empty()) {
+    if (result.opts.compareFile.empty() &&
+        result.opts.compareHistoryLatestFile.empty())
+      result.opts.compareHistoryLatestFile = result.opts.historyFile;
+    if (result.opts.trendHistoryFile.empty())
+      result.opts.trendHistoryFile = result.opts.historyFile;
+    if (result.opts.appendHistoryFile.empty())
+      result.opts.appendHistoryFile = result.opts.historyFile;
+  }
   if (!result.opts.policyProfiles.empty()) {
     SmallVector<std::string, 4> uniqueProfiles;
     StringSet<> seen;
@@ -7286,6 +7310,9 @@ static int runNativeReport(const ReportOptions &opts) {
 
   StringMap<double> numericDeltas;
   StringMap<double> trendDeltas;
+  bool skipCompareGatesForBootstrap = false;
+  bool skipTrendGatesForBootstrap = false;
+  bool historyBootstrapActivated = false;
   if (!opts.compareFile.empty()) {
     std::string baselinePath = resolveRelativeTo(opts.projectDir, opts.compareFile);
     if (!sys::fs::exists(baselinePath)) {
@@ -7302,41 +7329,65 @@ static int runNativeReport(const ReportOptions &opts) {
     std::string historyPath =
         resolveRelativeTo(opts.projectDir, opts.compareHistoryLatestFile);
     if (!sys::fs::exists(historyPath)) {
-      errs() << "circt-mut report: compare history file not found: "
-             << historyPath << "\n";
-      return 1;
+      if (opts.historyBootstrap) {
+        historyBootstrapActivated = true;
+        skipCompareGatesForBootstrap = true;
+        rows.emplace_back("history.bootstrap", "1");
+        rows.emplace_back("history.bootstrap.compare", "1");
+        rows.emplace_back("history.bootstrap.compare_file", historyPath);
+      } else {
+        errs() << "circt-mut report: compare history file not found: "
+               << historyPath << "\n";
+        return 1;
+      }
     }
-    StringMap<std::string> baselineValues;
-    uint64_t baselineRunID = 0;
-    if (!loadLatestHistorySnapshot(historyPath, baselineRunID, baselineValues,
-                                   error)) {
-      errs() << error << "\n";
-      return 1;
+    if (!skipCompareGatesForBootstrap) {
+      StringMap<std::string> baselineValues;
+      uint64_t baselineRunID = 0;
+      if (!loadLatestHistorySnapshot(historyPath, baselineRunID, baselineValues,
+                                     error)) {
+        errs() << error << "\n";
+        return 1;
+      }
+      std::string baselineLabel =
+          (Twine(historyPath) + "#run_id=" + Twine(baselineRunID)).str();
+      appendReportComparisonRows(rows, baselineValues, baselineLabel, rows,
+                                 numericDeltas);
+      rows.emplace_back("compare.history_baseline_run_id",
+                        std::to_string(baselineRunID));
     }
-    std::string baselineLabel =
-        (Twine(historyPath) + "#run_id=" + Twine(baselineRunID)).str();
-    appendReportComparisonRows(rows, baselineValues, baselineLabel, rows,
-                               numericDeltas);
-    rows.emplace_back("compare.history_baseline_run_id",
-                      std::to_string(baselineRunID));
   }
   if (!opts.trendHistoryFile.empty()) {
     std::string historyPath = resolveRelativeTo(opts.projectDir, opts.trendHistoryFile);
     if (!sys::fs::exists(historyPath)) {
-      errs() << "circt-mut report: trend history file not found: " << historyPath
-             << "\n";
-      return 1;
+      if (opts.historyBootstrap) {
+        historyBootstrapActivated = true;
+        skipTrendGatesForBootstrap = true;
+        rows.emplace_back("history.bootstrap", "1");
+        rows.emplace_back("history.bootstrap.trend", "1");
+        rows.emplace_back("history.bootstrap.trend_file", historyPath);
+      } else {
+        errs() << "circt-mut report: trend history file not found: "
+               << historyPath << "\n";
+        return 1;
+      }
     }
-    std::vector<HistorySnapshot> snapshots;
-    if (!loadHistorySnapshots(historyPath, snapshots, error)) {
-      errs() << error << "\n";
-      return 1;
+    if (!skipTrendGatesForBootstrap) {
+      std::vector<HistorySnapshot> snapshots;
+      if (!loadHistorySnapshots(historyPath, snapshots, error)) {
+        errs() << error << "\n";
+        return 1;
+      }
+      appendTrendRows(rows, snapshots, historyPath, opts.trendWindowRuns, rows,
+                      trendDeltas);
     }
-    appendTrendRows(rows, snapshots, historyPath, opts.trendWindowRuns, rows,
-                    trendDeltas);
   }
 
   if (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty()) {
+    if (skipCompareGatesForBootstrap) {
+      rows.emplace_back("compare.gate_status", "bootstrap_skipped");
+      rows.emplace_back("compare.gate_reason", "missing_history_bootstrap");
+    } else {
     SmallVector<std::string, 8> failures;
     auto evaluateRule = [&](const DeltaGateRule &rule, bool isUpperBound) -> bool {
       auto it = numericDeltas.find(rule.key);
@@ -7375,6 +7426,7 @@ static int runNativeReport(const ReportOptions &opts) {
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;
+    }
   }
   if (!opts.failIfValueGtRules.empty() || !opts.failIfValueLtRules.empty()) {
     SmallVector<std::string, 8> failures;
@@ -7428,6 +7480,10 @@ static int runNativeReport(const ReportOptions &opts) {
   }
   if (!opts.failIfTrendDeltaGtRules.empty() ||
       !opts.failIfTrendDeltaLtRules.empty()) {
+    if (skipTrendGatesForBootstrap) {
+      rows.emplace_back("trend.gate_status", "bootstrap_skipped");
+      rows.emplace_back("trend.gate_reason", "missing_history_bootstrap");
+    } else {
     SmallVector<std::string, 8> failures;
     auto evaluateTrendRule = [&](const DeltaGateRule &rule,
                                  bool isUpperBound) -> bool {
@@ -7468,6 +7524,7 @@ static int runNativeReport(const ReportOptions &opts) {
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;
+    }
   }
   if (opts.failOnPrequalifyDrift) {
     if (!(opts.mode == "matrix" || opts.mode == "all")) {
@@ -7516,6 +7573,8 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("history.appended_run_id", std::to_string(nextRunID));
     rows.emplace_back("history.appended_timestamp_utc", timestampUTC);
   }
+  if (historyBootstrapActivated)
+    rows.emplace_back("history.bootstrap_active", "1");
 
   std::string outFile;
   if (!opts.outFile.empty())
