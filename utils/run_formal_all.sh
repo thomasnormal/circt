@@ -7076,6 +7076,7 @@ if not path.exists():
     raise SystemExit(0)
 
 tokens = set()
+records = 0
 with path.open(encoding="utf-8") as f:
     for line in f:
         line = line.rstrip("\n")
@@ -7087,8 +7088,16 @@ with path.open(encoding="utf-8") as f:
         token = parts[2].strip()
         if token:
             tokens.add(token)
+            records += 1
 
-print(f"bmc_abstraction_provenance_tokens={len(tokens)}")
+print(
+    " ".join(
+        [
+            f"bmc_abstraction_provenance_tokens={len(tokens)}",
+            f"bmc_abstraction_provenance_records={records}",
+        ]
+    )
+)
 PY
 }
 
@@ -10802,6 +10811,21 @@ for key, current_row in summary.items():
                         f"required_tagged={required_tagged}, window={baseline_window})"
                     )
         if fail_on_new_bmc_abstraction_provenance:
+            baseline_provenance_record_values = []
+            for counts in parsed_counts:
+                if "bmc_abstraction_provenance_records" in counts:
+                    baseline_provenance_record_values.append(
+                        int(counts["bmc_abstraction_provenance_records"])
+                    )
+            if baseline_provenance_record_values:
+                baseline_provenance_records = min(baseline_provenance_record_values)
+                current_provenance_records = int(
+                    current_counts.get("bmc_abstraction_provenance_records", 0)
+                )
+                if current_provenance_records > baseline_provenance_records:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_abstraction_provenance_records increased ({baseline_provenance_records} -> {current_provenance_records}, window={baseline_window})"
+                    )
             baseline_provenance_raw = [
                 row.get("bmc_abstraction_provenance") for row in compare_rows
             ]
