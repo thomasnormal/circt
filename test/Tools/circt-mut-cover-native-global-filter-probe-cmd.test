@@ -1,0 +1,19 @@
+// RUN: rm -rf %t && mkdir -p %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf 'module top; endmodule\n' > %t/orig.il
+// RUN: printf 'module top; endmodule\n' > %t/mut_eq.il
+// RUN: printf 'module top; endmodule\n' > %t/mut_prop.il
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho ORIG_DESIGN=\"$ORIG_DESIGN\"\necho MUTANT_DESIGN=\"$MUTANT_DESIGN\"\necho MUTATION_ID=\"$MUTATION_ID\"\necho MUTATION_SPEC=\"$MUTATION_SPEC\"\nif [[ \"$MUTANT_DESIGN\" == *mut_eq.il ]]; then\n  echo NOT_PROPAGATED\n  exit 0\nfi\necho PROPAGATED\nexit 1\n' > %t/fake-cmd.sh
+// RUN: chmod +x %t/fake-cmd.sh
+// RUN: PATH=%t/bin:/usr/bin:/bin circt-mut cover --design %t/orig.il --native-global-filter-probe-mutant %t/mut_eq.il --native-global-filter-probe-log %t/probe_eq.log --formal-global-propagate-cmd 'bash %t/fake-cmd.sh' > %t/out_eq.txt
+// RUN: PATH=%t/bin:/usr/bin:/bin circt-mut cover --design %t/orig.il --native-global-filter-probe-mutant %t/mut_prop.il --native-global-filter-probe-log %t/probe_prop.log --formal-global-propagate-cmd 'bash %t/fake-cmd.sh' > %t/out_prop.txt
+// RUN: FileCheck %s --check-prefix=EQ < %t/out_eq.txt
+// RUN: FileCheck %s --check-prefix=PROP < %t/out_prop.txt
+// RUN: grep -q '^MUTATION_ID=-$' %t/probe_eq.log
+// RUN: grep -q '^MUTATION_SPEC=-$' %t/probe_eq.log
+//
+// EQ: classification{{[[:space:]]+}}not_propagated
+// EQ: global_filter_log{{[[:space:]]+}}[[LOG:.*probe_eq.log]]
+//
+// PROP: classification{{[[:space:]]+}}propagated
+// PROP: global_filter_log{{[[:space:]]+}}[[LOG:.*probe_prop.log]]
