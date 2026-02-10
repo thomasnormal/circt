@@ -109,8 +109,19 @@ utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opent
 Use the mutation harness to classify injected faults into:
 `not_activated`, `not_propagated`, `propagated_not_detected`, and `detected`.
 
-Preferred frontend: `circt-mut` (`cover`, `matrix`, `generate`).
+Preferred frontend: `circt-mut` (`init`, `cover`, `matrix`, `generate`).
 Legacy `utils/run_mutation_*.sh` entrypoints remain supported.
+
+Bootstrap a project template:
+
+```bash
+circt-mut init --project-dir /path/to/mut-campaign
+```
+
+This creates:
+- `circt-mut.toml` with baseline cover/matrix settings
+- `tests.tsv` template
+- `lanes.tsv` template
 
 Basic usage:
 
@@ -140,6 +151,27 @@ circt-mut cover \
 
 The commands below provide practical mapping between this harness, MCY, and a
 Certitude-style commercial flow.
+
+0. Bootstrap campaign project
+
+`circt-mut`:
+
+```bash
+circt-mut init --project-dir /path/to/mut-campaign
+```
+
+Equivalent MCY flow:
+
+```bash
+cd /path/to/mcy_project
+mcy init
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```bash
+certitude_init -out /path/to/mut-campaign
+```
 
 1. Single campaign
 

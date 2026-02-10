@@ -1,0 +1,24 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: circt-mut init --project-dir %t/proj > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: test -f %t/proj/circt-mut.toml
+// RUN: test -f %t/proj/tests.tsv
+// RUN: test -f %t/proj/lanes.tsv
+// RUN: FileCheck %s --check-prefix=CFG < %t/proj/circt-mut.toml
+// RUN: FileCheck %s --check-prefix=LANE < %t/proj/lanes.tsv
+//
+// LOG: Initialized circt-mut project:
+// LOG: Config: {{.*}}circt-mut.toml
+// LOG: Tests manifest template: {{.*}}tests.tsv
+// LOG: Lanes template: {{.*}}lanes.tsv
+//
+// CFG: [cover]
+// CFG: design = "design.il"
+// CFG: mutations_file = "mutations.txt"
+// CFG: tests_manifest = "tests.tsv"
+// CFG: formal_global_propagate_circt_chain = "auto"
+// CFG: [matrix]
+// CFG: lanes_tsv = "lanes.tsv"
+// CFG: default_formal_global_propagate_circt_chain = "auto"
+//
+// LANE: lane1{{.*}}design.il{{.*}}mutations.txt{{.*}}tests.tsv

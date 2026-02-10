@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 821 - February 10, 2026
+
+### Native `circt-mut init` Project Bootstrap
+
+1. Added a native `circt-mut init` subcommand to bootstrap mutation campaign
+   projects in an MCY/Certitude-style workflow:
+   - creates `circt-mut.toml` with baseline `cover`/`matrix` defaults.
+   - creates `tests.tsv` template and `lanes.tsv` template.
+   - supports path overrides:
+     - `--project-dir`
+     - `--design`
+     - `--mutations-file`
+     - `--tests-manifest`
+     - `--lanes-tsv`
+     - `--cover-work-dir`
+     - `--matrix-out-dir`
+   - protects existing files by default; `--force` enables overwrite.
+2. Updated top-level help to advertise the new `init` workflow.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-init-help.test`
+  - `test/Tools/circt-mut-init-basic.test`
+  - `test/Tools/circt-mut-init-overwrite-guard.test`
+- Updated:
+  - `test/Tools/circt-mut-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-help.test test/Tools/circt-mut-init-help.test test/Tools/circt-mut-init-basic.test test/Tools/circt-mut-init-overwrite-guard.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (88/88)
+  - note: `test/Tools/run-mutation-matrix-schedule-cache-aware.test` showed one transient ordering failure on first run, then passed on immediate rerun.
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: PASS (117/117)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-init --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 820 - February 10, 2026
 
 ### Native Timeout Tool Preflight for `circt-mut` Cover/Matrix

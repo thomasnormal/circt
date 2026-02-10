@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: printf 'sentinel\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut init --project-dir %t/proj > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log.txt
+// RUN: grep -q '^sentinel$' %t/proj/circt-mut.toml
+// RUN: circt-mut init --project-dir %t/proj --force > %t/force.log
+// RUN: test ! "$(grep -x 'sentinel' %t/proj/circt-mut.toml || true)"
+// RUN: FileCheck %s --check-prefix=FORCE < %t/force.log
+//
+// ERR: circt-mut init: file exists: {{.*}}circt-mut.toml (use --force to overwrite).
+// FORCE: Initialized circt-mut project:

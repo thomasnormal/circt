@@ -195,12 +195,24 @@ Build the tools:
 ninja -C build circt-mut circt-bmc circt-lec circt-verilog
 ```
 
-Preferred frontend: `circt-mut` (subcommands: `cover`, `matrix`, `generate`).
+Preferred frontend: `circt-mut` (subcommands: `init`, `cover`, `matrix`,
+`generate`).
 Legacy script entrypoints under `utils/` remain supported for compatibility.
 `circt-mut generate` now has a native execution path for core generation
 options, including native generated-mutation caching via `--cache-dir`.
 Unsupported future options still fall back to the script backend during
 migration.
+
+Bootstrap a project template (MCY/Certitude-style campaign scaffold):
+
+```sh
+circt-mut init --project-dir mut-campaign
+```
+
+This writes:
+- `mut-campaign/circt-mut.toml` (cover/matrix defaults)
+- `mut-campaign/tests.tsv` (test manifest template)
+- `mut-campaign/lanes.tsv` (matrix lane template)
 
 Run a single mutation campaign:
 
@@ -316,6 +328,27 @@ Mutation materialization is built in by default via
 if you need MCY/external compatibility behavior.
 
 Command mapping by workflow:
+
+0. Bootstrap campaign project
+
+`circt-mut`:
+
+```sh
+circt-mut init --project-dir /path/to/mut-campaign
+```
+
+Equivalent `mcy` flow:
+
+```sh
+cd /path/to/mcy_project
+mcy init
+```
+
+Equivalent Certitude-style flow (schematic):
+
+```sh
+certitude_init -out /path/to/mut-campaign
+```
 
 1. Single mutation campaign
 

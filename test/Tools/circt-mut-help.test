@@ -4,6 +4,7 @@
 // CHECK: Usage:
 // CHECK: circt-mut <subcommand> [args...]
 // CHECK: Subcommands:
+// CHECK: init
 // CHECK: cover
 // CHECK: matrix
 // CHECK: generate

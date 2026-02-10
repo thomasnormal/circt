@@ -1,0 +1,9 @@
+// RUN: circt-mut init --help | FileCheck %s
+
+// CHECK: usage: circt-mut init [options]
+// CHECK: --project-dir DIR
+// CHECK: --design FILE
+// CHECK: --mutations-file FILE
+// CHECK: --tests-manifest FILE
+// CHECK: --lanes-tsv FILE
+// CHECK: --force
