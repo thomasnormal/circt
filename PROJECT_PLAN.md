@@ -156,6 +156,8 @@ See CHANGELOG.md on recent progress.
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
   - Improve 4-state/X-prop semantic alignment and diagnostics.
+  - Keep optional absolute no-drop gates available for closure runs:
+    `--fail-on-any-bmc-drop-remarks`, `--fail-on-any-lec-drop-remarks`.
   - Syntax-tree completeness gaps to close next:
     - LLHD signal/ref lowering still has unsupported probe/drive/cast patterns
       that currently fail with explicit diagnostics (`StripLLHDInterfaceSignals.cpp`).
@@ -1179,3 +1181,12 @@ See CHANGELOG.md on recent progress.
       not dropped-syntax case/reason artifacts.
     - Drop reasons are still log-derived; long-term target remains
       first-class lowering provenance tags.
+22. Absolute no-drop closure gate landed (February 10, 2026):
+    - `run_formal_all.sh` now supports:
+      `--fail-on-any-bmc-drop-remarks`,
+      `--fail-on-any-lec-drop-remarks`.
+    - These fail the run if current `*_drop_remark_cases` is non-zero,
+      regardless of baseline drift.
+23. Remaining policy decision:
+    decide when to make absolute no-drop gating default in strict CI
+    versus opt-in for targeted closure runs.

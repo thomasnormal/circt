@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 935 - February 10, 2026
+
+### Formal No-Drop Closure: Absolute Zero-Drop Gates (BMC + LEC)
+
+1. Extended `utils/run_formal_all.sh` with absolute no-drop strict-gate knobs:
+   - `--fail-on-any-bmc-drop-remarks`
+   - `--fail-on-any-lec-drop-remarks`
+2. Semantics of new knobs:
+   - fail the run when current `bmc_drop_remark_cases > 0` for any `BMC*` lane
+   - fail the run when current `lec_drop_remark_cases > 0` for any `LEC*` lane
+   - independent of baseline drift (complements existing baseline-delta checks).
+3. Added regression tests:
+   - `test/Tools/run-formal-all-strict-gate-bmc-drop-remark-any.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-drop-remark-any.test`
+   - `test/Tools/run-formal-all-help.test` updated for option surface.
+4. Validation:
+   - `bash -n utils/run_formal_all.sh`
+   - `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-any.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-any.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons-opentitan-strict.test`
+     -> `6 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate*drop*.test`
+     -> `9 passed`.
+   - External sanity:
+     - `verilator-verification/BMC` with local baseline + `--fail-on-any-bmc-drop-remarks` -> pass (drop count stays `0`).
+     - `verilator-verification/LEC` with local baseline + `--fail-on-any-lec-drop-remarks` -> pass (drop count stays `0`).
+
 ## Iteration 934 - February 10, 2026
 
 ### OpenTitan LEC No-Drop Parity + LEC_STRICT Gate Coverage
