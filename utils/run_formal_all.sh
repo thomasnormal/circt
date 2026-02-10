@@ -61,6 +61,13 @@ Options:
   --fail-on-any-lec-drop-remarks
                          Fail when any LEC lane reports
                          `lec_drop_remark_cases > 0` in the current run
+  --fail-on-new-lec-counter KEY
+                         Fail when LEC summary counter KEY increases vs baseline
+                         for any `LEC*` lane (repeatable)
+  --fail-on-new-lec-counter-prefix PREFIX
+                         Fail when any LEC summary counter starting with PREFIX
+                         increases vs baseline for any `LEC*` lane
+                         (repeatable)
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1759,6 +1766,8 @@ FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
 FAIL_ON_ANY_LEC_DROP_REMARKS=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
+declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
+declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -2082,6 +2091,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_ANY_BMC_DROP_REMARKS=1; shift ;;
     --fail-on-any-lec-drop-remarks)
       FAIL_ON_ANY_LEC_DROP_REMARKS=1; shift ;;
+    --fail-on-new-lec-counter)
+      FAIL_ON_NEW_LEC_COUNTER_KEYS+=("$2"); shift 2 ;;
+    --fail-on-new-lec-counter-prefix)
+      FAIL_ON_NEW_LEC_COUNTER_PREFIXES+=("$2"); shift 2 ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -4103,6 +4116,8 @@ dedupe_array() {
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES
 dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES
+dedupe_array FAIL_ON_NEW_LEC_COUNTER_KEYS
+dedupe_array FAIL_ON_NEW_LEC_COUNTER_PREFIXES
 
 for xprop_key in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}"; do
   if [[ ! "$xprop_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
@@ -4122,6 +4137,18 @@ for xprop_key_prefix in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@
     exit 1
   fi
 done
+for lec_key in "${FAIL_ON_NEW_LEC_COUNTER_KEYS[@]}"; do
+  if [[ ! "$lec_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-lec-counter: expected [a-z][a-z0-9_]*, got '$lec_key'" >&2
+    exit 1
+  fi
+done
+for lec_prefix in "${FAIL_ON_NEW_LEC_COUNTER_PREFIXES[@]}"; do
+  if [[ ! "$lec_prefix" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "invalid --fail-on-new-lec-counter-prefix: expected [a-z][a-z0-9_]*, got '$lec_prefix'" >&2
+    exit 1
+  fi
+done
 OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[*]}")"
@@ -4133,6 +4160,14 @@ fi
 OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV=""
 if [[ "${#FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[@]}" -gt 0 ]]; then
   OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES[*]}")"
+fi
+LEC_COUNTER_KEYS_CSV=""
+if [[ "${#FAIL_ON_NEW_LEC_COUNTER_KEYS[@]}" -gt 0 ]]; then
+  LEC_COUNTER_KEYS_CSV="$(IFS=,; echo "${FAIL_ON_NEW_LEC_COUNTER_KEYS[*]}")"
+fi
+LEC_COUNTER_PREFIXES_CSV=""
+if [[ "${#FAIL_ON_NEW_LEC_COUNTER_PREFIXES[@]}" -gt 0 ]]; then
+  LEC_COUNTER_PREFIXES_CSV="$(IFS=,; echo "${FAIL_ON_NEW_LEC_COUNTER_PREFIXES[*]}")"
 fi
 if [[ "$OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT" -gt 1 ]]; then
   echo "Use only one of --opentitan-e2e-lec-x-optimistic or --opentitan-e2e-lec-strict-x." >&2
@@ -7005,6 +7040,61 @@ summarize_lec_drop_remark_log() {
   echo "lec_drop_remark_cases=${drop_hits}"
 }
 
+summarize_lec_case_file() {
+  local case_file="$1"
+  if [[ ! -s "$case_file" ]]; then
+    echo ""
+    return 0
+  fi
+  LEC_CASE_FILE="$case_file" python3 - <<'PY'
+import os
+import re
+from collections import defaultdict
+from pathlib import Path
+
+path = Path(os.environ["LEC_CASE_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+def normalize(token: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "_", token.lower()).strip("_")
+    if not value:
+        value = "unknown"
+    return value
+
+counts = defaultdict(int)
+rows = 0
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        if not parts:
+            continue
+        status = normalize(parts[0].strip())
+        rows += 1
+        counts["lec_cases"] += 1
+        counts[f"lec_status_{status}_cases"] += 1
+
+        case_path = parts[2].strip() if len(parts) > 2 else ""
+        if "#" in case_path:
+            maybe_diag = case_path.rsplit("#", 1)[1].strip()
+            if re.fullmatch(r"[A-Z0-9_]+", maybe_diag):
+                diag = normalize(maybe_diag)
+                counts[f"lec_diag_{diag}_cases"] += 1
+                counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
+
+if rows <= 0:
+    print("")
+    raise SystemExit(0)
+
+parts = [f"{key}={counts[key]}" for key in sorted(counts)]
+print(" ".join(parts))
+PY
+}
+
 summarize_opentitan_xprop_file() {
   local xprop_file="$1"
   if [[ ! -s "$xprop_file" ]]; then
@@ -8342,6 +8432,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       if [[ -n "$lec_drop_summary" ]]; then
         summary="${summary} ${lec_drop_summary}"
       fi
+      lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/sv-tests-lec-results.txt")"
+      if [[ -n "$lec_case_summary" ]]; then
+        summary="${summary} ${lec_case_summary}"
+      fi
       record_result_with_summary "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     else
       suite_ec="$(suite_exit_code sv-tests-lec)"
@@ -8441,6 +8535,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       lec_drop_summary="$(summarize_lec_drop_remark_log "$OUT_DIR/verilator-lec.log")"
       if [[ -n "$lec_drop_summary" ]]; then
         summary="${summary} ${lec_drop_summary}"
+      fi
+      lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/verilator-lec-results.txt")"
+      if [[ -n "$lec_case_summary" ]]; then
+        summary="${summary} ${lec_case_summary}"
       fi
       record_result_with_summary "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
@@ -8542,6 +8640,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       if [[ -n "$lec_drop_summary" ]]; then
         summary="${summary} ${lec_drop_summary}"
       fi
+      lec_case_summary="$(summarize_lec_case_file "$OUT_DIR/yosys-lec-results.txt")"
+      if [[ -n "$lec_case_summary" ]]; then
+        summary="${summary} ${lec_case_summary}"
+      fi
       record_result_with_summary "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
@@ -8630,6 +8732,11 @@ PY
   IFS=$'\t' read -r total pass fail <<< "$counts"
 
   local summary="total=${total} pass=${pass} fail=${fail} xfail=0 xpass=0 error=0 skip=0"
+  local lec_case_summary
+  lec_case_summary="$(summarize_lec_case_file "$case_results")"
+  if [[ -n "$lec_case_summary" ]]; then
+    summary="${summary} ${lec_case_summary}"
+  fi
   local xprop_summary
   xprop_summary="$(summarize_opentitan_xprop_file "$xprop_summary_file")"
   if [[ -n "$xprop_summary" ]]; then
@@ -10810,6 +10917,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
+      -n "$LEC_COUNTER_KEYS_CSV" || \
+      -n "$LEC_COUNTER_PREFIXES_CSV" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
@@ -10840,6 +10949,8 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
+  LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
+  LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
@@ -11163,6 +11274,20 @@ fail_on_new_lec_drop_remark_case_reasons = (
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
+)
+lec_counter_keys = sorted(
+    {
+        token.strip()
+        for token in os.environ.get("LEC_COUNTER_KEYS", "").split(",")
+        if token.strip()
+    }
+)
+lec_counter_prefixes = sorted(
+    {
+        token.strip()
+        for token in os.environ.get("LEC_COUNTER_PREFIXES", "").split(",")
+        if token.strip()
+    }
 )
 fail_on_new_bmc_backend_parity_mismatch_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
@@ -11688,6 +11813,40 @@ for key, current_row in summary.items():
                     gate_errors.append(
                         f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
                     )
+        if lec_counter_keys:
+            for counter_key in lec_counter_keys:
+                baseline_values = []
+                for counts in parsed_counts:
+                    if counter_key in counts:
+                        baseline_values.append(int(counts[counter_key]))
+                if not baseline_values:
+                    continue
+                baseline_counter = min(baseline_values)
+                current_counter = int(current_counts.get(counter_key, 0))
+                if current_counter > baseline_counter:
+                    gate_errors.append(
+                        f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window})"
+                    )
+        if lec_counter_prefixes:
+            for counter_prefix in lec_counter_prefixes:
+                candidate_keys = {
+                    key
+                    for key in current_counts.keys()
+                    if key.startswith(counter_prefix)
+                }
+                for counts in parsed_counts:
+                    for key in counts.keys():
+                        if key.startswith(counter_prefix):
+                            candidate_keys.add(key)
+                for counter_key in sorted(candidate_keys):
+                    baseline_counter = min(
+                        int(counts.get(counter_key, 0)) for counts in parsed_counts
+                    )
+                    current_counter = int(current_counts.get(counter_key, 0))
+                    if current_counter > baseline_counter:
+                        gate_errors.append(
+                            f"{suite} {mode}: {counter_key} increased ({baseline_counter} -> {current_counter}, window={baseline_window}, prefix={counter_prefix})"
+                        )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))
         if fail_on_new_e2e_mode_diff_strict_only_fail:

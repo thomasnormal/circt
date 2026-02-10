@@ -172,6 +172,12 @@ See CHANGELOG.md on recent progress.
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
   - Improve 4-state/X-prop semantic alignment and diagnostics.
+  - Keep generic LEC counter drift gates available across all `LEC*` lanes via
+    `--fail-on-new-lec-counter` / `--fail-on-new-lec-counter-prefix`
+    (`lec_status_*`, `lec_diag_*` from case rows).
+  - Remaining diagnostics gap: generic `lec_diag_*` coverage is currently based
+    on `#DIAG` case-path tags; continue migrating toward explicit structured
+    per-case diagnostic fields in runner outputs.
   - Keep optional absolute no-drop gates available for closure runs:
     `--fail-on-any-bmc-drop-remarks`, `--fail-on-any-lec-drop-remarks`.
   - Syntax-tree completeness gaps to close next:

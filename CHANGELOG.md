@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 960 - February 10, 2026
+
+### run_formal_all: Generic LEC Counter Telemetry + Drift Gates
+
+1. Extended `utils/run_formal_all.sh` LEC summary telemetry with generic
+   case-derived counters for all `LEC*` lanes:
+   - `lec_cases`
+   - `lec_status_*_cases`
+   - `lec_diag_*_cases`
+   - `lec_status_*_diag_*_cases`
+2. Added generic strict-gate knobs for LEC counter drift checks:
+   - `--fail-on-new-lec-counter KEY`
+   - `--fail-on-new-lec-counter-prefix PREFIX`
+3. Wired the new counters into all LEC lane summaries:
+   - `sv-tests/LEC`
+   - `verilator-verification/LEC`
+   - `yosys/tests/sva/LEC`
+   - `opentitan/LEC` and `opentitan/LEC_STRICT`
+4. Added argument validation for the new LEC counter gate flags.
+5. Added regression tests:
+   - `test/Tools/run-formal-all-strict-gate-lec-counter.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-counter-invalid.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 6 test/Tools/run-formal-all-strict-gate-lec-counter.test test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test test/Tools/run-formal-all-strict-gate-lec-counter-invalid.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-any.test test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test`: PASS (7/7)
+
 ## Iteration 959 - February 10, 2026
 
 ### `circt-mut report`: Lane Budget Artifact Export for Matrix Governance
