@@ -37,8 +37,10 @@ Options:
                          increases vs baseline
   --fail-on-new-bmc-semantic-bucket-cases
                          Fail when BMC semantic-bucket fail-like case counts
-                         increase vs baseline (disable_iff/local_var/
-                         multiclock/four_state)
+                         increase vs baseline across tracked buckets
+                         (disable_iff/local_var/multiclock/four_state/
+                         sampled_value/property_named/implication_timing/
+                         hierarchical_net)
   --fail-on-new-bmc-semantic-bucket-unclassified-cases
                          Fail when BMC semantic-bucket unclassified fail-like
                          case count increases vs baseline
@@ -10349,6 +10351,10 @@ for key, current_row in summary.items():
                 "bmc_semantic_bucket_local_var_cases",
                 "bmc_semantic_bucket_multiclock_cases",
                 "bmc_semantic_bucket_four_state_cases",
+                "bmc_semantic_bucket_sampled_value_cases",
+                "bmc_semantic_bucket_property_named_cases",
+                "bmc_semantic_bucket_implication_timing_cases",
+                "bmc_semantic_bucket_hierarchical_net_cases",
             ]
             for semantic_key in semantic_bucket_keys:
                 baseline_semantic_values = []

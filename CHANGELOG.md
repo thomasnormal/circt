@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 906 - February 10, 2026
+
+### BMC Hardening: Strict-Gate Coverage for All Semantic Buckets
+
+1. Extended `--fail-on-new-bmc-semantic-bucket-cases` in
+   `utils/run_formal_all.sh` to gate all currently emitted semantic buckets,
+   not only the legacy four.
+2. Newly gated counters under this option now include:
+   - `bmc_semantic_bucket_sampled_value_cases`
+   - `bmc_semantic_bucket_property_named_cases`
+   - `bmc_semantic_bucket_implication_timing_cases`
+   - `bmc_semantic_bucket_hierarchical_net_cases`
+3. Updated option help text to reflect full bucket coverage.
+4. Added regression test for sampled-value drift:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test`
+   - verifies strict gate fails on
+     `bmc_semantic_bucket_sampled_value_cases` increase (`0 -> 1`).
+5. Updated existing strict-gate baseline check to be robust to the expanded
+   summary layout:
+   - `test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-help.test`: PASS
+- Real lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-buckets-allkeys-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/LEC_STRICT$'`
+  - key semantic counters from run:
+    - `sv-tests/BMC`: `fail_like=3`, `tagged=3`, `disable_iff=1`, `local_var=2`, `unclassified=0`
+    - `verilator-verification/BMC`: `fail_like=5`, `tagged=5`, `sampled_value=3`, `property_named=2`, `unclassified=0`
+    - `yosys/tests/sva/BMC`: `fail_like=6`, `tagged=6`, `disable_iff=2`, `four_state=1`, `sampled_value=1`, `implication_timing=2`, `hierarchical_net=1`, `unclassified=0`
+    - `opentitan/LEC_STRICT`: `pass=1`, `fail=0`, `error=0`.
+
+
 ## Iteration 904 - February 10, 2026
 
 ### LEC Hardening: Generic Strict X-PROP Key-Prefix Drift Gates
