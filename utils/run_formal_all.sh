@@ -55,6 +55,12 @@ Options:
   --fail-on-new-lec-drop-remark-case-reasons
                          Fail when LEC dropped-syntax affected case+reason
                          tuples increase vs baseline
+  --fail-on-any-bmc-drop-remarks
+                         Fail when any BMC lane reports
+                         `bmc_drop_remark_cases > 0` in the current run
+  --fail-on-any-lec-drop-remarks
+                         Fail when any LEC lane reports
+                         `lec_drop_remark_cases > 0` in the current run
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1722,10 +1728,12 @@ FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=0
+FAIL_ON_ANY_BMC_DROP_REMARKS=0
 BMC_DROP_REMARK_PATTERN="${BMC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 FAIL_ON_NEW_LEC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=0
 FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
+FAIL_ON_ANY_LEC_DROP_REMARKS=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
@@ -2037,6 +2045,10 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1; shift ;;
     --fail-on-new-lec-drop-remark-case-reasons)
       FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1; shift ;;
+    --fail-on-any-bmc-drop-remarks)
+      FAIL_ON_ANY_BMC_DROP_REMARKS=1; shift ;;
+    --fail-on-any-lec-drop-remarks)
+      FAIL_ON_ANY_LEC_DROP_REMARKS=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -10575,9 +10587,11 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
+      "$FAIL_ON_ANY_BMC_DROP_REMARKS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
+      "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
@@ -10603,9 +10617,11 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" \
+  FAIL_ON_ANY_BMC_DROP_REMARKS="$FAIL_ON_ANY_BMC_DROP_REMARKS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASES="$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
+  FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
@@ -10915,6 +10931,9 @@ fail_on_new_bmc_drop_remark_case_ids = (
 fail_on_new_bmc_drop_remark_case_reasons = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS", "0") == "1"
 )
+fail_on_any_bmc_drop_remarks = (
+    os.environ.get("FAIL_ON_ANY_BMC_DROP_REMARKS", "0") == "1"
+)
 fail_on_new_lec_drop_remark_cases = (
     os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASES", "0") == "1"
 )
@@ -10923,6 +10942,9 @@ fail_on_new_lec_drop_remark_case_ids = (
 )
 fail_on_new_lec_drop_remark_case_reasons = (
     os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS", "0") == "1"
+)
+fail_on_any_lec_drop_remarks = (
+    os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
 )
 fail_on_new_bmc_backend_parity_mismatch_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
@@ -11220,6 +11242,16 @@ for key, current_row in summary.items():
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        current_drop_remark = int(
+            current_counts.get(
+                "bmc_drop_remark_cases",
+                len(current_bmc_drop_remark_cases.get(key, set())),
+            )
+        )
+        if fail_on_any_bmc_drop_remarks and current_drop_remark > 0:
+            gate_errors.append(
+                f"{suite} {mode}: bmc_drop_remark_cases must be zero (current={current_drop_remark})"
+            )
         if fail_on_new_bmc_timeout_cases:
             baseline_timeout_values = []
             for counts in parsed_counts:
@@ -11253,9 +11285,6 @@ for key, current_row in summary.items():
                     )
             if baseline_drop_remark_values:
                 baseline_drop_remark = min(baseline_drop_remark_values)
-                current_drop_remark = int(
-                    current_counts.get("bmc_drop_remark_cases", 0)
-                )
                 if current_drop_remark > baseline_drop_remark:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
@@ -11418,6 +11447,16 @@ for key, current_row in summary.items():
                     )
     if mode.startswith("LEC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
+        current_drop_remark = int(
+            current_counts.get(
+                "lec_drop_remark_cases",
+                len(current_lec_drop_remark_cases.get(key, set())),
+            )
+        )
+        if fail_on_any_lec_drop_remarks and current_drop_remark > 0:
+            gate_errors.append(
+                f"{suite} {mode}: lec_drop_remark_cases must be zero (current={current_drop_remark})"
+            )
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
             for counts in parsed_counts:
@@ -11427,9 +11466,6 @@ for key, current_row in summary.items():
                     )
             if baseline_drop_remark_values:
                 baseline_drop_remark = min(baseline_drop_remark_values)
-                current_drop_remark = int(
-                    current_counts.get("lec_drop_remark_cases", 0)
-                )
                 if current_drop_remark > baseline_drop_remark:
                     gate_errors.append(
                         f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
