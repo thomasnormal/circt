@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 902 - February 10, 2026
+
+### BMC Semantic-Closure Milestone: Zero Unclassified Fail-Like Rows
+
+1. Expanded semantic tag coverage in yosys BMC map:
+   - `utils/yosys-sva-bmc-semantic-tags.tsv` now includes:
+     - `basic01  implication_timing`
+     - `basic02  implication_timing`
+     - `extnets  hierarchical_net`
+2. Extended BMC semantic-bucket classifier in `utils/run_formal_all.sh` with
+   two new explicit-tag buckets:
+   - `implication_timing`
+   - `hierarchical_net`
+   - plus counters:
+     - `bmc_semantic_bucket_implication_timing_cases`
+     - `bmc_semantic_bucket_hierarchical_net_cases`
+3. Updated explicit-tag and default-map integration tests:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+   - `test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test`
+4. Result:
+   - active fail-like rows are now fully bucket-classified in all core BMC
+     lanes (`sv-tests`, `verilator-verification`, `yosys/tests/sva`).
+
+### Tests and Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-yosys-unclassified-zero-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key counters:
+    - `sv-tests/BMC`: `unclassified_cases=0`
+    - `verilator-verification/BMC`: `unclassified_cases=0`
+    - `yosys/tests/sva/BMC`: `unclassified_cases=0`
+  - additional yosys bucket signal:
+    - `disable_iff_cases=2`
+    - `four_state_cases=1`
+    - `sampled_value_cases=1`
+    - `implication_timing_cases=2`
+    - `hierarchical_net_cases=1`
+  - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 901 - February 10, 2026
 
 ### BMC Semantic-Closure Coverage Expansion: Yosys Disable-Iff + Sampled Seeds

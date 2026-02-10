@@ -2,3 +2,6 @@
 sva_not	disable_iff
 counter	disable_iff,sampled_value
 sva_value_change_sim	four_state
+basic01	implication_timing
+basic02	implication_timing
+extnets	hierarchical_net
