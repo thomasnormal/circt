@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 883 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Provenance Token Prioritization
+
+1. Added token-level aggregation report for BMC abstraction provenance:
+   - file:
+     - `utils/run_formal_all.sh`
+   - new report:
+     - `bmc-abstraction-provenance-token-summary.tsv`
+   - report aggregates per `(suite, mode, provenance_token)`:
+     - total case count
+     - fail-like case count
+     - non-fail-like case count
+     - fail-like and non-fail-like case ID lists
+2. Integrated summary output signal:
+   - formal summary now prints token-summary path when data rows are present.
+3. Kept case-level report as source data:
+   - `bmc-abstraction-provenance-case-map.tsv` remains emitted and now feeds
+     token-level prioritization directly.
+
+### Tests and Validation
+
+- Script syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- BMC lanes run with token summary generation:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-provenance-token-summary-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - status unchanged:
+    - `sv-tests/BMC`: `23/26`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+  - token summary outcome:
+    - both observed `sv-tests/BMC` process tokens are fully fail-like
+      (`fail_like_cases=3`, `non_fail_like_cases=0`), aligning with the
+      three known failing semantic-closure cases.
+- OpenTitan LEC sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-token-summary-20260210 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 882 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Provenance Case Correlation

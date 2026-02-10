@@ -6719,13 +6719,15 @@ PY
 generate_bmc_abstraction_provenance_case_map() {
   local out_dir="$1"
   local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
-  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" python3 - <<'PY'
+  local token_summary_file="$out_dir/bmc-abstraction-provenance-token-summary.tsv"
+  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" python3 - <<'PY'
 import csv
 import os
 from pathlib import Path
 
 out_dir = Path(os.environ["OUT_DIR"])
 case_map_path = Path(os.environ["CASE_MAP_FILE"])
+token_summary_path = Path(os.environ["TOKEN_SUMMARY_FILE"])
 
 sources = [
     (
@@ -6806,6 +6808,35 @@ def resolve_status(suite: str, mode: str, case_id: str, case_path: str) -> str:
             return next(iter(statuses))
     return "UNKNOWN"
 
+rows = []
+token_buckets = {}
+for key in sorted(token_rows.keys()):
+    suite, mode, case_id, case_path = key
+    tokens = sorted(token_rows[key])
+    status = resolve_status(suite, mode, case_id, case_path)
+    fail_like = status in fail_like_statuses
+    rows.append(
+        (
+            suite,
+            mode,
+            case_id,
+            status,
+            "1" if fail_like else "0",
+            case_path,
+            str(len(tokens)),
+            ";".join(tokens),
+        )
+    )
+    for token in tokens:
+        bucket_key = (suite, mode, token)
+        bucket = token_buckets.setdefault(
+            bucket_key, {"fail_like": set(), "non_fail_like": set()}
+        )
+        if fail_like:
+            bucket["fail_like"].add(case_id)
+        else:
+            bucket["non_fail_like"].add(case_id)
+
 case_map_path.parent.mkdir(parents=True, exist_ok=True)
 with case_map_path.open("w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f, delimiter="\t")
@@ -6821,20 +6852,38 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
             "provenance_tokens",
         ]
     )
-    for key in sorted(token_rows.keys()):
-        suite, mode, case_id, case_path = key
-        tokens = sorted(token_rows[key])
-        status = resolve_status(suite, mode, case_id, case_path)
+    for row in rows:
+        writer.writerow(row)
+
+token_summary_path.parent.mkdir(parents=True, exist_ok=True)
+with token_summary_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t")
+    writer.writerow(
+        [
+            "suite",
+            "mode",
+            "provenance_token",
+            "total_cases",
+            "fail_like_cases",
+            "non_fail_like_cases",
+            "fail_like_case_ids",
+            "non_fail_like_case_ids",
+        ]
+    )
+    for key in sorted(token_buckets.keys()):
+        suite, mode, token = key
+        fail_like_cases = sorted(token_buckets[key]["fail_like"])
+        non_fail_like_cases = sorted(token_buckets[key]["non_fail_like"])
         writer.writerow(
             [
                 suite,
                 mode,
-                case_id,
-                status,
-                "1" if status in fail_like_statuses else "0",
-                case_path,
-                str(len(tokens)),
-                ";".join(tokens),
+                token,
+                str(len(fail_like_cases) + len(non_fail_like_cases)),
+                str(len(fail_like_cases)),
+                str(len(non_fail_like_cases)),
+                ";".join(fail_like_cases),
+                ";".join(non_fail_like_cases),
             ]
         )
 PY
@@ -7543,6 +7592,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-abstraction-provenance-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-case-map.tsv")" -gt 1 ]]; then
     echo "BMC abstraction provenance case map: $OUT_DIR/bmc-abstraction-provenance-case-map.tsv"
+  fi
+  if [[ -f "$OUT_DIR/bmc-abstraction-provenance-token-summary.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-token-summary.tsv")" -gt 1 ]]; then
+    echo "BMC abstraction provenance token summary: $OUT_DIR/bmc-abstraction-provenance-token-summary.tsv"
   fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"

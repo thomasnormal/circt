@@ -444,6 +444,20 @@ See CHANGELOG.md on recent progress.
     - Next long-term feature target: push correlation one step deeper from
       case-level to assertion/sequence-level attribution so solver witnesses
       can be tied directly to specific semantic lowering paths.
+51. Token-level provenance prioritization landed (February 10, 2026):
+    - `run_formal_all.sh` now emits
+      `bmc-abstraction-provenance-token-summary.tsv` per run, aggregating
+      each provenance token into fail-like vs non-fail-like case counts and
+      case ID lists.
+    - This directly surfaces token classes that are failure-dominant and
+      therefore highest priority for semantic-closure work.
+52. Updated closure guidance from current token summary:
+    - Current `sv-tests/BMC` token summary shows both active process
+      provenance tokens (`observable_signal_use` on `clk`) are
+      `fail_like_cases=3`, `non_fail_like_cases=0`.
+    - Next feature build should therefore target eliminating or refining this
+      specific abstraction class in local-var/`disable iff` lowering paths
+      before broadening to secondary buckets.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
