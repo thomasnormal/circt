@@ -6,6 +6,7 @@
 // CHECK: Subcommands:
 // CHECK: init
 // CHECK: run
+// CHECK: report
 // CHECK: cover
 // CHECK: matrix
 // CHECK: generate

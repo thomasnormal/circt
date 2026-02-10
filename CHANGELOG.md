@@ -1,5 +1,52 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 823 - February 10, 2026
+
+### Native `circt-mut report` Campaign Aggregation
+
+1. Added native `circt-mut report` for campaign-level aggregation:
+   - `circt-mut report --project-dir <dir> --mode cover|matrix|all`
+   - optional `--out <file>` writes machine-readable `key<TAB>value` TSV.
+2. Report path resolution model:
+   - defaults to `<project-dir>/out/cover` and `<project-dir>/out/matrix`
+   - reads overrides from `circt-mut.toml` (`[cover].work_dir`,
+     `[matrix].out_dir`)
+   - CLI overrides via `--cover-work-dir` / `--matrix-out-dir`.
+3. Coverage and matrix rollups:
+   - cover: reads `metrics.tsv` and emits core mutation bucket + coverage keys.
+   - matrix: reads `results.tsv`, computes lane pass/fail/gate counts and
+     aggregates per-lane mutant metrics from lane `metrics.tsv`.
+4. Added fallback lane metric lookup (`<matrix-out-dir>/<lane_id>/metrics.tsv`)
+   when `results.tsv` omits `metrics_file` or sets it to `-`.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-help.test`
+  - `test/Tools/circt-mut-report-cover-basic.test`
+  - `test/Tools/circt-mut-report-matrix-basic.test`
+  - `test/Tools/circt-mut-report-all-config-out.test`
+  - `test/Tools/circt-mut-report-cover-missing-metrics.test`
+- Updated:
+  - `test/Tools/circt-mut-help.test` (`report` subcommand listed)
+  - `README.md` (`report` usage + MCY/Certitude comparison mapping)
+  - `docs/FormalRegression.md` (`report` usage + workflow comparison)
+  - `PROJECT_PLAN.md` (native mutation CLI next-step ordering updated)
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-help.test test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-cover-basic.test test/Tools/circt-mut-report-matrix-basic.test test/Tools/circt-mut-report-all-config-out.test test/Tools/circt-mut-report-cover-missing-metrics.test`: PASS (6/6)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (97/97)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 822 - February 10, 2026
 
 ### Native `circt-mut run` Config-Consume Flow

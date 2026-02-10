@@ -1,0 +1,19 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/custom/cover %t/proj/custom/matrix/laneA
+// RUN: printf '[cover]\nwork_dir = "custom/cover"\n[matrix]\nout_dir = "custom/matrix"\n' > %t/proj/circt-mut.toml
+// RUN: printf 'total_mutants\t3\nrelevant_mutants\t2\ndetected_mutants\t1\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\nmutation_coverage_percent\t50.00\n' > %t/proj/custom/cover/metrics.tsv
+// RUN: printf 'total_mutants\t3\nrelevant_mutants\t2\ndetected_mutants\t1\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\n' > %t/proj/custom/matrix/laneA/metrics.tsv
+// RUN: printf 'lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\nlaneA\tPASS\t0\t50.00\tPASS\t%t/proj/custom/matrix/laneA\t-\t-\tdisabled\t0\t0\t0\t0\t0\n' > %t/proj/custom/matrix/results.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode all --out reports/campaign.tsv > %t/stdout.txt
+// RUN: FileCheck %s --check-prefix=STDOUT < %t/stdout.txt
+// RUN: FileCheck %s --check-prefix=OUTFILE < %t/proj/reports/campaign.tsv
+
+// STDOUT: report.mode{{[[:space:]]}}all
+// STDOUT: cover.work_dir{{[[:space:]]}}{{.*}}/custom/cover
+// STDOUT: matrix.out_dir{{[[:space:]]}}{{.*}}/custom/matrix
+// STDOUT: report.file{{[[:space:]]}}{{.*}}/reports/campaign.tsv
+
+// OUTFILE: key{{[[:space:]]}}value
+// OUTFILE: report.mode{{[[:space:]]}}all
+// OUTFILE: cover.detected_mutants{{[[:space:]]}}1
+// OUTFILE: matrix.lanes_total{{[[:space:]]}}1
+// OUTFILE: matrix.detected_mutants_sum{{[[:space:]]}}1

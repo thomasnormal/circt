@@ -30,6 +30,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -48,6 +49,7 @@ static void printHelp(raw_ostream &os) {
   os << "Subcommands:\n";
   os << "  init      Initialize a mutation campaign project template\n";
   os << "  run       Run campaign from circt-mut.toml project config\n";
+  os << "  report    Aggregate campaign metrics from cover/matrix outputs\n";
   os << "  cover     Run mutation coverage flow (run_mutation_cover.sh)\n";
   os << "  matrix    Run mutation lane matrix flow (run_mutation_matrix.sh)\n";
   os << "  generate  Generate mutation lists (native path; script fallback)\n\n";
@@ -56,6 +58,7 @@ static void printHelp(raw_ostream &os) {
   os << "Examples:\n";
   os << "  circt-mut init --project-dir mut-campaign\n";
   os << "  circt-mut run --project-dir mut-campaign --mode all\n";
+  os << "  circt-mut report --project-dir mut-campaign --mode all\n";
   os << "  circt-mut cover --help\n";
   os << "  circt-mut matrix --lanes-tsv lanes.tsv --out-dir out\n";
   os << "  circt-mut generate --design design.v --out mutations.txt\n";
@@ -111,6 +114,18 @@ static void printRunHelp(raw_ostream &os) {
   os << "  --project-dir DIR        Project root directory (default: .)\n";
   os << "  --config FILE            Config file path (default: <project-dir>/circt-mut.toml)\n";
   os << "  --mode MODE              cover|matrix|all (default: all)\n";
+  os << "  -h, --help               Show help\n";
+}
+
+static void printReportHelp(raw_ostream &os) {
+  os << "usage: circt-mut report [options]\n\n";
+  os << "Options:\n";
+  os << "  --project-dir DIR        Project root directory (default: .)\n";
+  os << "  --config FILE            Config file path (default: <project-dir>/circt-mut.toml)\n";
+  os << "  --mode MODE              cover|matrix|all (default: all)\n";
+  os << "  --cover-work-dir DIR     Override cover work directory\n";
+  os << "  --matrix-out-dir DIR     Override matrix output directory\n";
+  os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
 
@@ -1889,6 +1904,525 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
   return runMatrixFromConfig();
 }
 
+struct ReportOptions {
+  std::string projectDir = ".";
+  std::string configPath;
+  bool configExplicit = false;
+  std::string mode = "all";
+  std::string coverWorkDir;
+  std::string matrixOutDir;
+  std::string outFile;
+};
+
+struct ReportParseResult {
+  bool ok = false;
+  bool showHelp = false;
+  std::string error;
+  ReportOptions opts;
+};
+
+static std::string rewriteErrorPrefix(StringRef error, StringRef oldPrefix,
+                                      StringRef newPrefix) {
+  if (!error.starts_with(oldPrefix))
+    return error.str();
+  return (Twine(newPrefix) + error.drop_front(oldPrefix.size())).str();
+}
+
+static void splitTSVLine(StringRef line, SmallVectorImpl<StringRef> &fields) {
+  fields.clear();
+  while (true) {
+    size_t tabPos = line.find('\t');
+    if (tabPos == StringRef::npos) {
+      fields.push_back(line);
+      return;
+    }
+    fields.push_back(line.substr(0, tabPos));
+    line = line.substr(tabPos + 1);
+  }
+}
+
+static std::string resolveRelativeTo(StringRef baseDir, StringRef path) {
+  if (path.empty())
+    return std::string(path);
+  if (sys::path::is_absolute(path))
+    return std::string(path);
+  SmallString<256> joined(baseDir);
+  sys::path::append(joined, path);
+  return std::string(joined.str());
+}
+
+static bool parseKeyValueTSV(StringRef path, StringMap<std::string> &values,
+                             std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read file: ") + path).str();
+    return false;
+  }
+
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.rtrim("\r").trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    size_t tabPos = line.find('\t');
+    if (tabPos == StringRef::npos)
+      continue;
+    StringRef key = line.substr(0, tabPos).trim();
+    StringRef value = line.substr(tabPos + 1).trim();
+    if (key.empty() || key == "metric")
+      continue;
+    values[key] = value.str();
+  }
+  return true;
+}
+
+static void appendMetricRow(std::vector<std::pair<std::string, std::string>> &rows,
+                            StringRef prefix,
+                            const StringMap<std::string> &metrics, StringRef key,
+                            StringRef fallback = "-") {
+  auto it = metrics.find(key);
+  if (it == metrics.end() || it->second.empty()) {
+    rows.emplace_back((Twine(prefix) + "." + key).str(), fallback.str());
+    return;
+  }
+  rows.emplace_back((Twine(prefix) + "." + key).str(), it->second);
+}
+
+static std::optional<double> parseOptionalDouble(StringRef value) {
+  value = value.trim();
+  if (value.empty() || value == "-")
+    return std::nullopt;
+  std::string tmp = value.str();
+  char *end = nullptr;
+  double parsed = std::strtod(tmp.c_str(), &end);
+  if (end == tmp.c_str() || !end || *end != '\0')
+    return std::nullopt;
+  return parsed;
+}
+
+static std::string formatDouble2(double value) {
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "%.2f", value);
+  return std::string(buffer);
+}
+
+static bool collectCoverReport(StringRef coverWorkDir,
+                               std::vector<std::pair<std::string, std::string>> &rows,
+                               std::string &error) {
+  SmallString<256> metricsPath(coverWorkDir);
+  sys::path::append(metricsPath, "metrics.tsv");
+  if (!sys::fs::exists(metricsPath)) {
+    error = (Twine("circt-mut report: cover metrics file not found: ") +
+             metricsPath)
+                .str();
+    return false;
+  }
+
+  StringMap<std::string> metrics;
+  if (!parseKeyValueTSV(metricsPath, metrics, error))
+    return false;
+
+  rows.emplace_back("cover.work_dir", std::string(coverWorkDir));
+  rows.emplace_back("cover.metrics_file", std::string(metricsPath.str()));
+  appendMetricRow(rows, "cover", metrics, "total_mutants");
+  appendMetricRow(rows, "cover", metrics, "relevant_mutants");
+  appendMetricRow(rows, "cover", metrics, "detected_mutants");
+  appendMetricRow(rows, "cover", metrics, "propagated_not_detected_mutants");
+  appendMetricRow(rows, "cover", metrics, "not_propagated_mutants");
+  appendMetricRow(rows, "cover", metrics, "not_activated_mutants");
+  appendMetricRow(rows, "cover", metrics, "errors");
+  appendMetricRow(rows, "cover", metrics, "mutation_coverage_percent");
+  appendMetricRow(rows, "cover", metrics, "global_filtered_not_propagated_mutants");
+  return true;
+}
+
+static bool collectMatrixReport(
+    StringRef matrixOutDir, std::vector<std::pair<std::string, std::string>> &rows,
+    std::string &error) {
+  SmallString<256> resultsPath(matrixOutDir);
+  sys::path::append(resultsPath, "results.tsv");
+  if (!sys::fs::exists(resultsPath)) {
+    error = (Twine("circt-mut report: matrix results file not found: ") +
+             resultsPath)
+                .str();
+    return false;
+  }
+
+  auto bufferOrErr = MemoryBuffer::getFile(resultsPath);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read matrix results file: ") +
+             resultsPath)
+                .str();
+    return false;
+  }
+
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  if (lines.empty()) {
+    error = (Twine("circt-mut report: empty matrix results file: ") + resultsPath)
+                .str();
+    return false;
+  }
+
+  SmallVector<StringRef, 32> fields;
+  splitTSVLine(lines.front().rtrim("\r"), fields);
+  StringMap<size_t> colIndex;
+  for (size_t i = 0; i < fields.size(); ++i)
+    colIndex[fields[i].trim()] = i;
+
+  auto requireCol = [&](StringRef name, size_t &dst) -> bool {
+    auto it = colIndex.find(name);
+    if (it == colIndex.end()) {
+      error = (Twine("circt-mut report: missing required matrix results column: ") +
+               name + " in " + resultsPath)
+                  .str();
+      return false;
+    }
+    dst = it->second;
+    return true;
+  };
+
+  size_t laneIDCol = 0, statusCol = 0, coverageCol = 0, gateCol = 0;
+  if (!requireCol("lane_id", laneIDCol) || !requireCol("status", statusCol) ||
+      !requireCol("coverage_percent", coverageCol) ||
+      !requireCol("gate_status", gateCol))
+    return false;
+  size_t metricsCol = static_cast<size_t>(-1);
+  if (auto it = colIndex.find("metrics_file"); it != colIndex.end())
+    metricsCol = it->second;
+
+  uint64_t lanesTotal = 0;
+  uint64_t lanesPass = 0;
+  uint64_t lanesFail = 0;
+  uint64_t gatePass = 0;
+  uint64_t gateFail = 0;
+  uint64_t lanesWithMetrics = 0;
+  uint64_t lanesMissingMetrics = 0;
+  uint64_t invalidMetricValues = 0;
+  uint64_t totalMutantsSum = 0;
+  uint64_t relevantMutantsSum = 0;
+  uint64_t detectedMutantsSum = 0;
+  uint64_t propagatedNotDetectedMutantsSum = 0;
+  uint64_t notPropagatedMutantsSum = 0;
+  uint64_t notActivatedMutantsSum = 0;
+  uint64_t errorsSum = 0;
+  double coverageSum = 0.0;
+  uint64_t coverageCount = 0;
+
+  auto addMetric = [&](const StringMap<std::string> &metrics, StringRef key,
+                       uint64_t &accumulator) {
+    auto it = metrics.find(key);
+    if (it == metrics.end() || it->second.empty())
+      return;
+    uint64_t parsed = 0;
+    if (StringRef(it->second).trim().getAsInteger(10, parsed)) {
+      ++invalidMetricValues;
+      return;
+    }
+    accumulator += parsed;
+  };
+
+  for (size_t lineNo = 1; lineNo < lines.size(); ++lineNo) {
+    StringRef line = lines[lineNo].rtrim("\r");
+    if (line.trim().empty())
+      continue;
+    splitTSVLine(line, fields);
+
+    auto getField = [&](size_t idx) -> StringRef {
+      if (idx >= fields.size())
+        return StringRef();
+      return fields[idx].trim();
+    };
+
+    ++lanesTotal;
+    StringRef laneID = getField(laneIDCol);
+    StringRef status = getField(statusCol);
+    StringRef gate = getField(gateCol);
+    if (status == "PASS")
+      ++lanesPass;
+    else
+      ++lanesFail;
+    if (gate == "PASS")
+      ++gatePass;
+    else if (gate == "FAIL")
+      ++gateFail;
+
+    if (auto coverage = parseOptionalDouble(getField(coverageCol))) {
+      coverageSum += *coverage;
+      ++coverageCount;
+    }
+
+    std::string metricsPath;
+    if (metricsCol != static_cast<size_t>(-1)) {
+      StringRef metricsValue = getField(metricsCol);
+      if (!metricsValue.empty() && metricsValue != "-")
+        metricsPath = resolveRelativeTo(matrixOutDir, metricsValue);
+    }
+    if (metricsPath.empty() && !laneID.empty()) {
+      SmallString<256> fallbackPath(matrixOutDir);
+      sys::path::append(fallbackPath, laneID, "metrics.tsv");
+      metricsPath = std::string(fallbackPath.str());
+    }
+    if (metricsPath.empty() || !sys::fs::exists(metricsPath)) {
+      ++lanesMissingMetrics;
+      continue;
+    }
+
+    StringMap<std::string> metrics;
+    if (!parseKeyValueTSV(metricsPath, metrics, error))
+      return false;
+    ++lanesWithMetrics;
+    addMetric(metrics, "total_mutants", totalMutantsSum);
+    addMetric(metrics, "relevant_mutants", relevantMutantsSum);
+    addMetric(metrics, "detected_mutants", detectedMutantsSum);
+    addMetric(metrics, "propagated_not_detected_mutants",
+              propagatedNotDetectedMutantsSum);
+    addMetric(metrics, "not_propagated_mutants", notPropagatedMutantsSum);
+    addMetric(metrics, "not_activated_mutants", notActivatedMutantsSum);
+    addMetric(metrics, "errors", errorsSum);
+  }
+
+  rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
+  rows.emplace_back("matrix.results_file", std::string(resultsPath.str()));
+  rows.emplace_back("matrix.lanes_total", std::to_string(lanesTotal));
+  rows.emplace_back("matrix.lanes_pass", std::to_string(lanesPass));
+  rows.emplace_back("matrix.lanes_fail", std::to_string(lanesFail));
+  rows.emplace_back("matrix.gate_pass", std::to_string(gatePass));
+  rows.emplace_back("matrix.gate_fail", std::to_string(gateFail));
+  rows.emplace_back("matrix.lanes_with_metrics", std::to_string(lanesWithMetrics));
+  rows.emplace_back("matrix.lanes_missing_metrics",
+                    std::to_string(lanesMissingMetrics));
+  rows.emplace_back("matrix.invalid_metric_values",
+                    std::to_string(invalidMetricValues));
+  rows.emplace_back("matrix.total_mutants_sum", std::to_string(totalMutantsSum));
+  rows.emplace_back("matrix.relevant_mutants_sum",
+                    std::to_string(relevantMutantsSum));
+  rows.emplace_back("matrix.detected_mutants_sum",
+                    std::to_string(detectedMutantsSum));
+  rows.emplace_back(
+      "matrix.propagated_not_detected_mutants_sum",
+      std::to_string(propagatedNotDetectedMutantsSum));
+  rows.emplace_back("matrix.not_propagated_mutants_sum",
+                    std::to_string(notPropagatedMutantsSum));
+  rows.emplace_back("matrix.not_activated_mutants_sum",
+                    std::to_string(notActivatedMutantsSum));
+  rows.emplace_back("matrix.errors_sum", std::to_string(errorsSum));
+  rows.emplace_back(
+      "matrix.coverage_percent_avg",
+      coverageCount ? formatDouble2(coverageSum / static_cast<double>(coverageCount))
+                    : std::string("-"));
+  return true;
+}
+
+static bool writeReportFile(
+    StringRef path, ArrayRef<std::pair<std::string, std::string>> rows,
+    std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code dirEC = sys::fs::create_directories(parent);
+    if (dirEC) {
+      error = (Twine("circt-mut report: failed to create output directory: ") +
+               parent + ": " + dirEC.message())
+                  .str();
+      return false;
+    }
+  }
+
+  std::error_code ec;
+  raw_fd_ostream os(path, ec, sys::fs::OF_Text);
+  if (ec) {
+    error = (Twine("circt-mut report: failed to open --out file: ") + path +
+             ": " + ec.message())
+                .str();
+    return false;
+  }
+  os << "key\tvalue\n";
+  for (const auto &row : rows)
+    os << row.first << "\t" << row.second << "\n";
+  return true;
+}
+
+static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
+  ReportParseResult result;
+
+  auto consumeValue = [&](size_t &index, StringRef arg,
+                          StringRef optName) -> std::optional<StringRef> {
+    size_t eqPos = arg.find('=');
+    if (eqPos != StringRef::npos) {
+      StringRef value = arg.substr(eqPos + 1);
+      if (value.empty()) {
+        result.error =
+            (Twine("circt-mut report: missing value for ") + optName).str();
+        return std::nullopt;
+      }
+      return value;
+    }
+    if (index + 1 >= args.size()) {
+      result.error =
+          (Twine("circt-mut report: missing value for ") + optName).str();
+      return std::nullopt;
+    }
+    return args[++index];
+  };
+
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == "-h" || arg == "--help") {
+      result.showHelp = true;
+      result.ok = true;
+      return result;
+    }
+    if (arg == "--project-dir" || arg.starts_with("--project-dir=")) {
+      auto v = consumeValue(i, arg, "--project-dir");
+      if (!v)
+        return result;
+      result.opts.projectDir = v->str();
+      continue;
+    }
+    if (arg == "--config" || arg.starts_with("--config=")) {
+      auto v = consumeValue(i, arg, "--config");
+      if (!v)
+        return result;
+      result.opts.configPath = v->str();
+      result.opts.configExplicit = true;
+      continue;
+    }
+    if (arg == "--mode" || arg.starts_with("--mode=")) {
+      auto v = consumeValue(i, arg, "--mode");
+      if (!v)
+        return result;
+      result.opts.mode = v->str();
+      continue;
+    }
+    if (arg == "--cover-work-dir" || arg.starts_with("--cover-work-dir=")) {
+      auto v = consumeValue(i, arg, "--cover-work-dir");
+      if (!v)
+        return result;
+      result.opts.coverWorkDir = v->str();
+      continue;
+    }
+    if (arg == "--matrix-out-dir" || arg.starts_with("--matrix-out-dir=")) {
+      auto v = consumeValue(i, arg, "--matrix-out-dir");
+      if (!v)
+        return result;
+      result.opts.matrixOutDir = v->str();
+      continue;
+    }
+    if (arg == "--out" || arg.starts_with("--out=")) {
+      auto v = consumeValue(i, arg, "--out");
+      if (!v)
+        return result;
+      result.opts.outFile = v->str();
+      continue;
+    }
+
+    if (arg.starts_with("-")) {
+      result.error = (Twine("circt-mut report: unknown option: ") + arg).str();
+      return result;
+    }
+    result.error = (Twine("circt-mut report: unexpected positional argument: ") +
+                    arg)
+                       .str();
+    return result;
+  }
+
+  if (result.opts.mode != "cover" && result.opts.mode != "matrix" &&
+      result.opts.mode != "all") {
+    result.error =
+        (Twine("circt-mut report: invalid --mode value: ") + result.opts.mode +
+         " (expected cover|matrix|all)")
+            .str();
+    return result;
+  }
+
+  result.ok = true;
+  return result;
+}
+
+static int runNativeReport(const ReportOptions &opts) {
+  SmallString<256> defaultCover(opts.projectDir);
+  sys::path::append(defaultCover, "out", "cover");
+  SmallString<256> defaultMatrix(opts.projectDir);
+  sys::path::append(defaultMatrix, "out", "matrix");
+
+  std::string coverWorkDir = std::string(defaultCover.str());
+  std::string matrixOutDir = std::string(defaultMatrix.str());
+
+  SmallString<256> configPath;
+  if (opts.configPath.empty()) {
+    configPath = opts.projectDir;
+    sys::path::append(configPath, "circt-mut.toml");
+  } else if (sys::path::is_absolute(opts.configPath)) {
+    configPath = opts.configPath;
+  } else {
+    configPath = opts.projectDir;
+    sys::path::append(configPath, opts.configPath);
+  }
+
+  bool haveConfig = sys::fs::exists(configPath);
+  if (opts.configExplicit && !haveConfig) {
+    errs() << "circt-mut report: config file not found: " << configPath << "\n";
+    return 1;
+  }
+
+  if (haveConfig) {
+    RunConfigValues cfg;
+    std::string error;
+    if (!parseRunConfigFile(configPath, cfg, error)) {
+      errs() << rewriteErrorPrefix(error, "circt-mut run:", "circt-mut report:")
+             << "\n";
+      return 1;
+    }
+    if (auto it = cfg.cover.find("work_dir");
+        it != cfg.cover.end() && !it->second.empty())
+      coverWorkDir = resolveRelativeTo(opts.projectDir, it->second);
+    if (auto it = cfg.matrix.find("out_dir");
+        it != cfg.matrix.end() && !it->second.empty())
+      matrixOutDir = resolveRelativeTo(opts.projectDir, it->second);
+  }
+
+  if (!opts.coverWorkDir.empty())
+    coverWorkDir = resolveRelativeTo(opts.projectDir, opts.coverWorkDir);
+  if (!opts.matrixOutDir.empty())
+    matrixOutDir = resolveRelativeTo(opts.projectDir, opts.matrixOutDir);
+
+  std::vector<std::pair<std::string, std::string>> rows;
+  rows.emplace_back("report.mode", opts.mode);
+  std::string error;
+  if (opts.mode == "cover" || opts.mode == "all") {
+    if (!collectCoverReport(coverWorkDir, rows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+  }
+  if (opts.mode == "matrix" || opts.mode == "all") {
+    if (!collectMatrixReport(matrixOutDir, rows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+  }
+
+  std::string outFile;
+  if (!opts.outFile.empty())
+    outFile = resolveRelativeTo(opts.projectDir, opts.outFile);
+  if (!outFile.empty()) {
+    if (!writeReportFile(outFile, rows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    rows.emplace_back("report.file", outFile);
+  }
+
+  outs() << "key\tvalue\n";
+  for (const auto &row : rows)
+    outs() << row.first << "\t" << row.second << "\n";
+  return 0;
+}
+
 static void splitCSV(StringRef csv, SmallVectorImpl<std::string> &out) {
   SmallVector<StringRef, 8> parts;
   csv.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -2896,6 +3430,23 @@ int main(int argc, char **argv) {
       return 0;
     }
     return runNativeRun(argv[0], parseResult.opts);
+  }
+
+  if (firstArg == "report") {
+    SmallVector<StringRef, 16> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+
+    ReportParseResult parseResult = parseReportArgs(forwardedArgs);
+    if (!parseResult.ok) {
+      errs() << parseResult.error << "\n";
+      return 1;
+    }
+    if (parseResult.showHelp) {
+      printReportHelp(outs());
+      return 0;
+    }
+    return runNativeReport(parseResult.opts);
   }
 
   if (firstArg == "generate") {

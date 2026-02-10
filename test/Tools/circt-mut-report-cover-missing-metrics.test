@@ -1,0 +1,4 @@
+// RUN: rm -rf %t && mkdir -p %t/proj
+// RUN: not circt-mut report --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+
+// CHECK: circt-mut report: cover metrics file not found:
