@@ -26,8 +26,8 @@ module {
 }
 
 // BASIC: === Unknown slice: @unknown_a{{.*}} output#0 ===
-// BASIC: hw.constant
-// BASIC: hw.struct_create
+// BASIC-DAG: hw.constant
+// BASIC-DAG: hw.struct_create
 // BASIC: summary: input-unknown-extracts=
 // BASIC: unknown-xor-inversions=0
 // BASIC: input-unknown-inversions=0

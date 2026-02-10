@@ -283,6 +283,20 @@ See CHANGELOG.md on recent progress.
       that SAT witnesses may be spurious when this abstraction is active.
     - Purpose: make semantic-risk boundaries explicit while continuing closure
       on local-var/`disable iff`/multiclock buckets.
+30. LEC X-prop diagnostic hardening (February 10, 2026):
+    - `circt-lec --diagnose-xprop` / `--accept-xprop-only` now emit explicit
+      machine-readable recheck status:
+      `LEC_DIAG_ASSUME_KNOWN_RESULT=<UNSAT|SAT|UNKNOWN>`.
+    - This improves strict/no-waiver triage by distinguishing true XPROP_ONLY
+      mismatches (`UNSAT` under assume-known-inputs) from persistent
+      mismatches (`SAT`/`UNKNOWN`).
+31. Current LEC blocker surfaced in OpenTitan rerun (February 10, 2026):
+    - `opentitan/LEC` and `opentitan/LEC_STRICT` currently fail in a fresh
+      LEC-only cadence with:
+      `operand #0 does not dominate this use` in generated
+      `aes_sbox_lec.mlir` (`llvm.alloca`/`aes_pkg::aes_mvm` path).
+    - `sv-tests`, `verilator-verification`, and `yosys/tests/sva` LEC lanes
+      remain green; investigation needed for OpenTitan-specific IR shape.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

@@ -1029,6 +1029,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
     auto token = selectedRun->token;
     bool acceptedXPropOnly = false;
     std::optional<bool> xpropOnly;
+    std::optional<std::string> assumeKnownResultToken;
     if ((diagnoseXProp || acceptXPropOnly) && token &&
         (*token == "sat" || *token == "unknown")) {
       auto smtAssumeKnownPath = insertAssumeKnownInputs(smtPath);
@@ -1037,6 +1038,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
         Z3Run diagRun;
         if (failed(runZ3(*smtAssumeKnownPath, /*requestModel=*/false, diagRun)))
           return failure();
+        if (diagRun.token)
+          assumeKnownResultToken = StringRef(*diagRun.token).upper();
         if (diagRun.token && *diagRun.token == "unsat") {
           xpropOnly = true;
         } else if (diagRun.token && (*diagRun.token == "sat" ||
@@ -1131,6 +1134,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
       if (acceptedXPropOnly) {
         outputFile.value()->os() << "c1 == c2\n";
         outputFile.value()->os() << "LEC_RESULT=EQ\n";
+        if (assumeKnownResultToken)
+          outputFile.value()->os() << "LEC_DIAG_ASSUME_KNOWN_RESULT="
+                                   << *assumeKnownResultToken << "\n";
         outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
         llvm::errs()
             << "note: accepting XPROP_ONLY mismatch (--accept-xprop-only): "
@@ -1141,6 +1147,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
         outputFile.value()->os() << "c1 != c2\n";
         outputFile.value()->os()
             << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
+        if (assumeKnownResultToken)
+          outputFile.value()->os() << "LEC_DIAG_ASSUME_KNOWN_RESULT="
+                                   << *assumeKnownResultToken << "\n";
         if (xpropOnly && *xpropOnly) {
           outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
           llvm::errs() << "note: LEC mismatch only exists when 4-state inputs "

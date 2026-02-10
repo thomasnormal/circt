@@ -22,7 +22,9 @@ hw.module @modB(in %fs: !hw.struct<value: i8, unknown: i8>, out out: i1) {
 // CHECK: fs = value=8'h00 unknown=8'h01
 // CHECK: c1 == c2
 // CHECK: LEC_RESULT=EQ
+// CHECK: LEC_DIAG_ASSUME_KNOWN_RESULT=UNSAT
 // CHECK: LEC_DIAG=XPROP_ONLY
 
 // FAIL: c1 == c2
 // FAIL: LEC_RESULT=EQ
+// FAIL: LEC_DIAG_ASSUME_KNOWN_RESULT=UNSAT
