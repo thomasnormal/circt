@@ -15,13 +15,16 @@ module {
     llhd.drv %sig, %p#0 after %t0 if %p#1 : !hw.struct<value: i1, unknown: i1>
     hw.output
   }
-  // CHECK: hw.module @top
-  // CHECK: llhd_process_result
+  // CHECK-LABEL: hw.module @top
+  // CHECK-SAME: in %llhd_process_result
+  // CHECK-SAME: in %llhd_process_result_0
+  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 2 : i32
   // CHECK: llhd.drv
   // CHECK-NOT: llhd.process
-  // CHECK-EXT: hw.module @top
+  // CHECK-EXT-LABEL: hw.module @top
   // CHECK-EXT-NOT: llhd.process
-  // CHECK: hw.module @assert_proc
+  // CHECK-LABEL: hw.module @assert_proc
+  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 1 : i32
   // CHECK: llhd.prb
   // CHECK: hw.struct_extract
   // CHECK: verif.assert
@@ -42,10 +45,10 @@ module {
     hw.output
   }
 
-  // CHECK: hw.module @assert_entry_proc
+  // CHECK-LABEL: hw.module @assert_entry_proc
   // CHECK: verif.assert
   // CHECK-NOT: llhd.process
-  // CHECK-EXT: hw.module @assert_entry_proc
+  // CHECK-EXT-LABEL: hw.module @assert_entry_proc
   // CHECK-EXT: verif.assert
   // CHECK-EXT-NOT: llhd.process
   hw.module @assert_entry_proc() {
@@ -57,10 +60,10 @@ module {
     hw.output
   }
 
-  // CHECK: hw.module @clocked_assert_proc
+  // CHECK-LABEL: hw.module @clocked_assert_proc
   // CHECK: verif.clocked_assert
   // CHECK-NOT: llhd.process
-  // CHECK-EXT: hw.module @clocked_assert_proc
+  // CHECK-EXT-LABEL: hw.module @clocked_assert_proc
   // CHECK-EXT: verif.clocked_assert
   // CHECK-EXT-NOT: llhd.process
   hw.module @clocked_assert_proc(in %clk : i1) {
@@ -74,10 +77,11 @@ module {
     hw.output
   }
 
-  // CHECK: hw.module @child
-  // CHECK: llhd_process_result
-  // CHECK: llhd_process_result_0
-  // CHECK: hw.module @parent
+  // CHECK-LABEL: hw.module @child
+  // CHECK-SAME: in %llhd_process_result
+  // CHECK-SAME: in %llhd_process_result_0
+  // CHECK-SAME: circt.bmc_abstracted_llhd_process_results = 2 : i32
+  // CHECK-LABEL: hw.module @parent
   // CHECK: hw.instance "u" @child(in: %{{.*}}, llhd_process_result: %{{.*}}, llhd_process_result_0: %{{.*}}) -> ()
   hw.module @child(in %in : !hw.struct<value: i1, unknown: i1>) {
     %true = hw.constant true

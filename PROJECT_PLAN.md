@@ -274,6 +274,15 @@ See CHANGELOG.md on recent progress.
     - `circt-bmc` LLHD pipeline now runs `strip-llhd-processes` after LLHD
       lowering/simplification passes (instead of before), so reducible process
       semantics are preserved as far as possible before fallback abstraction.
+29. LLHD abstraction observability hardening (February 10, 2026):
+    - `strip-llhd-processes` now tags modules with
+      `circt.bmc_abstracted_llhd_process_results = <count>` when process
+      results are abstracted to unconstrained inputs.
+    - `lower-to-bmc` now propagates this to
+      `verif.bmc` as `bmc_abstracted_llhd_process_results` and emits a warning
+      that SAT witnesses may be spurious when this abstraction is active.
+    - Purpose: make semantic-risk boundaries explicit while continuing closure
+      on local-var/`disable iff`/multiclock buckets.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
