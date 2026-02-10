@@ -181,20 +181,26 @@ See CHANGELOG.md on recent progress.
       `scf.if` is accepted.
     - sv-tests BMC/LEC harnesses now auto-resolve UVM path to
       `lib/Runtime/uvm-core/src` (fallback), not only legacy `.../uvm`.
-14. Current expanded-candidate status (February 10, 2026):
-    - 5/6 pass for the UVM semantic candidate set above under BMC.
-    - Remaining reproducer: `16.15--property-iff-uvm-fail` fails in
-      LLVM translation with `builtin.unrealized_conversion_cast` around
-      4-state `hw.struct` lowering (`X`/`Z` semantic path), now a prioritized
-      BMC closure item.
+14. Current expanded-candidate status (February 10, 2026 revalidation):
+    - With `FORCE_BMC=1 ALLOW_MULTI_CLOCK=1`, the 6-test UVM semantic
+      candidate set above is currently `0/6 pass` (`error=6`).
+    - All six fail with the same backend issue:
+      LLVM translation failure on `builtin.unrealized_conversion_cast`
+      rooted at 4-state `hw.struct_create` bridging in BMC lowering.
 15. SMTLIB hardening status (February 10, 2026):
-    - `convert-verif-to-smt(for-smtlib-export=true)` now emits an explicit
-      capability diagnostic when `verif.bmc` regions still contain LLVM ops,
-      instead of generic legalization failure.
-16. Next closure feature for this bucket:
-    - lower/eliminate mixed concrete (`i1`) <-> symbolic (`!smt.bv<1>`) bridge
-      casts in BMC circuit lowering for UVM `disable iff` fail-path tests
-      (`16.15--property-iff-uvm-fail` class).
+    - `convert-verif-to-smt(for-smtlib-export=true)` emits an explicit
+      capability diagnostic when `verif.bmc` regions still contain LLVM ops.
+    - The same 6-test candidate set in SMTLIB mode currently fails fast with
+      that explicit guard (`for-smtlib-export ... found 'llvm.mlir.undef'`),
+      confirming this unsupported path is not JIT-only.
+16. Harness/orchestrator hardening (February 10, 2026):
+    - `utils/run_formal_all.sh` now has first-class
+      `--bmc-allow-multi-clock` control and forwards it to all BMC lanes
+      (`sv-tests`, `verilator-verification`, `yosys/tests/sva`) so
+      multiclock closure cadence is script-native.
+17. Next closure feature for this bucket:
+    - legalize/eliminate mixed concrete (`i1`) <-> symbolic (`!smt.bv<1>`)
+      bridge casts from 4-state `hw.struct` paths in BMC lowering.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

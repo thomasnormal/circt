@@ -368,6 +368,7 @@ Options:
   --exclude-lane-regex REGEX
                          Skip lanes whose lane-id matches REGEX
   --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in suite runs
+  --bmc-allow-multi-clock Add --allow-multi-clock to BMC runs
   --bmc-assume-known-inputs  Add --assume-known-inputs to BMC runs
   --lec-assume-known-inputs  Add --assume-known-inputs to LEC runs
   --lec-accept-xprop-only    Treat XPROP_ONLY mismatches as equivalent in LEC runs
@@ -1834,6 +1835,7 @@ OPENTITAN_E2E_INCLUDE_MASKED=0
 OPENTITAN_E2E_LEC_X_MODE="xopt"
 OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=0
 BMC_RUN_SMTLIB=0
+BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
 LEC_ASSUME_KNOWN_INPUTS=0
 LEC_ACCEPT_XPROP_ONLY=0
@@ -1900,6 +1902,8 @@ while [[ $# -gt 0 ]]; do
       AVIP_GLOB="$2"; shift 2 ;;
     --bmc-run-smtlib)
       BMC_RUN_SMTLIB=1; shift ;;
+    --bmc-allow-multi-clock)
+      BMC_ALLOW_MULTI_CLOCK=1; shift ;;
     --bmc-assume-known-inputs)
       BMC_ASSUME_KNOWN_INPUTS=1; shift ;;
     --lec-assume-known-inputs)
@@ -5693,6 +5697,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_compat_policy_version=%s\n" "$LANE_STATE_COMPAT_POLICY_VERSION"
     printf "script_sha256=%s\n" "$script_sha"
     printf "bmc_run_smtlib=%s\n" "$BMC_RUN_SMTLIB"
+    printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
     printf "lec_assume_known_inputs=%s\n" "$LEC_ASSUME_KNOWN_INPUTS"
     printf "lec_accept_xprop_only=%s\n" "$LEC_ACCEPT_XPROP_ONLY"
@@ -5808,6 +5813,7 @@ compute_lane_state_config_hash() {
     printf "lane_state_ed25519_cert_subject_regex=%s\n" "$LANE_STATE_MANIFEST_ED25519_CERT_SUBJECT_REGEX"
     printf "test_filter=%s\n" "${TEST_FILTER:-}"
     printf "bmc_smoke_only=%s\n" "${BMC_SMOKE_ONLY:-}"
+    printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "lec_smoke_only=%s\n" "${LEC_SMOKE_ONLY:-}"
     printf "circt_bmc_args=%s\n" "${CIRCT_BMC_ARGS:-}"
     printf "circt_lec_args=%s\n" "${CIRCT_LEC_ARGS:-}"
@@ -6702,6 +6708,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       Z3_BIN="$Z3_BIN" \
       utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
@@ -6755,6 +6762,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       Z3_BIN="$Z3_BIN" \
       utils/run_verilator_verification_circt_bmc.sh "$VERILATOR_DIR" || true
@@ -6811,6 +6819,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     # override from the user (--bmc-assume-known-inputs flag).
     yosys_bmc_env=(OUT="$OUT_DIR/yosys-bmc-results.txt"
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+      ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
       yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
