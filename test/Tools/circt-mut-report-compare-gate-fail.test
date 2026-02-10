@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t1\npropagated_not_detected_mutants\t4\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t20.00\nglobal_filter_timeout_mutants\t5\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'key\tvalue\ncover.detected_mutants\t4\ncover.global_filter_timeout_mutants\t1\n' > %t/proj/baseline.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode cover --compare baseline.tsv --fail-if-delta-lt cover.detected_mutants=-1 --fail-if-delta-gt cover.global_filter_timeout_mutants=2 2>&1 | FileCheck %s
+//
+// CHECK-DAG: compare.gate_rules_total{{[[:space:]]}}2
+// CHECK-DAG: compare.gate_failure_count{{[[:space:]]}}2
+// CHECK-DAG: compare.gate_status{{[[:space:]]}}fail
+// CHECK-DAG: compare.gate_failure_1
+// CHECK-DAG: compare.gate_failure_2

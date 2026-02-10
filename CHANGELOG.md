@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 827 - February 10, 2026
+
+### `circt-mut report` Delta-Gate Regression Thresholds
+
+1. Extended native compare mode with explicit delta-threshold gates:
+   - `--fail-if-delta-gt <metric>=<number>`
+   - `--fail-if-delta-lt <metric>=<number>`
+2. Gate rules evaluate numeric compare deltas (`diff.<metric>.delta`) and emit
+   machine-readable gate telemetry:
+   - `compare.gate_rules_total`
+   - `compare.gate_failure_count`
+   - `compare.gate_status` (`pass`/`fail`)
+   - `compare.gate_failure_<n>` details for failing rules.
+3. Gate failures now return process exit code `2`, enabling CI policy checks
+   without custom post-processing scripts.
+4. Added explicit diagnostics for invalid gate rules and missing numeric delta
+   keys (including missing/non-numeric baseline overlap).
+5. Gate options now require explicit compare input:
+   - `--fail-if-delta-gt` / `--fail-if-delta-lt` reject runs without
+     `--compare`.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-compare-gate-fail.test`
+  - `test/Tools/circt-mut-report-compare-gate-missing-key.test`
+  - `test/Tools/circt-mut-report-compare-gate-invalid-rule.test`
+  - `test/Tools/circt-mut-report-compare-gate-requires-compare.test`
+- Updated:
+  - `test/Tools/circt-mut-report-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report*.test test/Tools/circt-mut-help.test`: PASS (12/12)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (107/107)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report-gates --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 826 - February 10, 2026
 
 ### `circt-mut report --compare` Baseline Diff Mode
