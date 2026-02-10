@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/proj1 %t/proj2
+//
+// RUN: printf '[cover]\ndesign = "d.il"\nmutations_file = "m.txt"\ntests_manifest = "t.tsv"\nwork_dir = "out/cover"\nformal_global_propagate_assume_known_inputs = "maybe"\n' > %t/proj1/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj1 --mode cover > %t/log1.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR1 < %t/log1.txt
+//
+// ERR1: circt-mut run: invalid boolean [cover] key 'formal_global_propagate_assume_known_inputs' value 'maybe'
+//
+// RUN: printf '[cover]\ndesign = "d.il"\nmutations_file = "m.txt"\ntests_manifest = "t.tsv"\nwork_dir = "out/cover"\nformal_global_propagate_bmc_run_smtlib = "maybe"\n' > %t/proj2/circt-mut.toml
+// RUN: not circt-mut run --project-dir %t/proj2 --mode cover > %t/log2.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR2 < %t/log2.txt
+//
+// ERR2: circt-mut run: invalid boolean [cover] key 'formal_global_propagate_bmc_run_smtlib' value 'maybe'
