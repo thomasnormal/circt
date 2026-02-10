@@ -574,6 +574,15 @@ LogicalResult SimulationContext::initialize(
       return failure();
   }
 
+  // Finalize initialization: execute global constructors (UVM init) AFTER all
+  // modules' module-level ops have run. This ensures that hdl_top's initial
+  // blocks (which call config_db::set) complete before hvl_top's UVM
+  // build_phase (which calls config_db::get) starts.
+  if (llhdInterpreter) {
+    if (failed(llhdInterpreter->finalizeInit()))
+      return failure();
+  }
+
   if (traceAll || !traceSignals.empty())
     registerRequestedTraces();
 
