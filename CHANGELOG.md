@@ -1,5 +1,29 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 903 - February 10, 2026
+
+### LEC Hardening: Prefix-Based Strict X-PROP Counter Drift Gates
+
+1. Extended OpenTitan strict LEC X-prop strict-gate controls in
+   `utils/run_formal_all.sh`:
+   - added repeatable CLI option:
+     `--fail-on-new-opentitan-lec-strict-xprop-counter-prefix <prefix>`
+   - strict gate now checks all summary counters matching each prefix and
+     fails on any increase vs baseline window.
+2. This closes a drift gap where newly introduced X-prop counters could evade
+   gating when only explicit key lists were configured.
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter-prefix.test`
+   - verifies baseline-update + strict-gate failure when a new prefixed counter
+     appears and increases (`0 -> 9`).
+4. Updated option help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter-prefix.test`: PASS
+
 ## Iteration 902 - February 10, 2026
 
 ### BMC Semantic-Closure Milestone: Zero Unclassified Fail-Like Rows

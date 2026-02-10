@@ -9,6 +9,7 @@
 // CHECK: --fail-on-new-bmc-semantic-bucket-unclassified-cases
 // CHECK: --fail-on-bmc-semantic-tagged-cases-regression
 // CHECK: --fail-on-new-opentitan-lec-strict-xprop-counter
+// CHECK: --fail-on-new-opentitan-lec-strict-xprop-counter-prefix
 // CHECK: --bmc-allow-multi-clock
 // CHECK: --with-opentitan-lec-strict
 // CHECK: --opentitan-lec-impl-filter

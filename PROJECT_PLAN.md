@@ -788,11 +788,16 @@ See CHANGELOG.md on recent progress.
     tracking (for example
     `xprop_impl_aes_sbox_canright_counter_input_unknown_extracts`) so parity
     regressions can be attributed and gated at implementation granularity.
-40. BMC lane summaries in `run_formal_all.sh` now include case-derived drift
+40. Strict OpenTitan LEC counter gating now also supports prefix-based drift
+    enforcement via
+    `--fail-on-new-opentitan-lec-strict-xprop-counter-prefix <prefix>`,
+    so newly introduced strict-lane X-prop counters cannot bypass drift gates
+    by appearing under previously unseen keys.
+41. BMC lane summaries in `run_formal_all.sh` now include case-derived drift
     counters when detailed case files are available:
     - `bmc_timeout_cases`
     - `bmc_unknown_cases`
-41. Strict-gate now supports explicit BMC drift gates:
+42. Strict-gate now supports explicit BMC drift gates:
     - `--fail-on-new-bmc-timeout-cases`
     - `--fail-on-new-bmc-unknown-cases`
     and enables both by default under `--strict-gate`.
