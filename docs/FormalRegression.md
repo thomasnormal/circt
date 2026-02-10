@@ -515,6 +515,8 @@ Execution controls:
     `--default-formal-global-propagate-circt-chain`) before script dispatch.
   - default generated-mutation Yosys option is now pre-resolved natively:
     `--default-mutations-yosys`.
+  - default generated-mutation seed is now configurable/validated natively:
+    `--default-mutations-seed`.
   - generated lanes in `--lanes-tsv` now get native preflight validation for
     lane `mutations_yosys` executables (with default/`yosys` fallback).
   - generated lanes now also get native allocation preflight for effective
@@ -869,6 +871,8 @@ Execution controls:
   `run_mutation_cover.sh --mutations-cfg` for generated-mutation lanes.
 - `--default-mutations-select <csv>`: default
   `run_mutation_cover.sh --mutations-select` for generated-mutation lanes.
+- `--default-mutations-seed <n>`: default
+  `run_mutation_cover.sh --mutations-seed` for generated-mutation lanes.
 - `--default-mutations-yosys <path>`: default
   `run_mutation_cover.sh --mutations-yosys` for generated-mutation lanes.
 - `--default-formal-global-propagate-cmd <cmd>`: default
