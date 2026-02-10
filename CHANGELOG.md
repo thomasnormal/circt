@@ -1,5 +1,58 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 871 - February 10, 2026
+
+### BMC Semantic Closure: Implication Delay Hardening + LLHD Abstraction Triage
+
+1. Fixed delayed-implication tautology folding in `LTLToCore`:
+   - file:
+     - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+   - changed implication lowering to use `createOrFold<comb::OrOp>` for both:
+     - implication safety (`!antecedent || consequent.safety`)
+     - implication final check (`!seen || consequent.finalCheck`)
+   - this prevents non-canonical "logically true" consequent expressions from
+     being shifted as non-constants at top-level sampled clock boundaries.
+2. Added regression:
+   - `test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+   - checks:
+     - `@(posedge clk) 1'b1 |-> ##1 1'b1` => `BMC_RESULT=UNSAT`
+     - `@(posedge clk) 1'b1 |-> ##4 1'b1` => `BMC_RESULT=UNSAT`
+3. Hardened LLHD pipeline ordering in `circt-bmc`:
+   - file:
+     - `tools/circt-bmc/circt-bmc.cpp`
+   - moved `strip-llhd-processes` to run after LLHD lowering/simplification
+     passes so reducible LLHD process semantics are preserved before fallback
+     abstraction.
+4. Semantic-closure triage result:
+   - 6-case UVM semantic set remains `pass=1 fail=5 error=0` after the
+     pipeline-order hardening:
+     - FAIL:
+       `16.10--property-local-var-uvm`,
+       `16.10--sequence-local-var-uvm`,
+       `16.11--sequence-subroutine-uvm`,
+       `16.13--sequence-multiclock-uvm`,
+       `16.15--property-iff-uvm`
+     - PASS:
+       `16.15--property-iff-uvm-fail`
+5. Root-cause evidence for remaining BMC semantic mismatches:
+   - minimal deterministic reproducer:
+     `/tmp/min-local-var-direct.sv` still reports `BMC_RESULT=SAT`.
+   - emitted BMC IR shows unconstrained dynamic LLHD abstraction channels:
+     `smt.declare_fun "llhd_process_result*"` feeding `bmc_circuit`, enabling
+     spurious SAT witnesses.
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-bmc`: PASS
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS
+- sv-tests BMC revalidation:
+  - `OUT=/tmp/sv-tests-bmc-uvm6-postreorder-20260210.txt INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 TEST_FILTER='^(16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm|16\\.15--property-iff-uvm-fail|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm)$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: `total=6 pass=1 fail=5 error=0`.
+  - baseline lane:
+    `OUT=/tmp/sv-tests-bmc-baseline-postreorder-20260210.txt ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`: `total=26 pass=23 fail=3 error=0` (stable).
+
 ## Iteration 870 - February 10, 2026
 
 ### BMC Semantic Closure: `disable iff` Constant-Guard Fix
