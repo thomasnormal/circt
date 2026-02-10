@@ -7590,6 +7590,47 @@ with token_summary_path.open("w", newline="", encoding="utf-8") as f:
 PY
 }
 
+generate_bmc_semantic_bucket_case_map() {
+  local out_dir="$1"
+  OUT_DIR="$out_dir" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+case_map_path = out_dir / "bmc-semantic-bucket-case-map.tsv"
+sources = [
+    out_dir / "sv-tests-bmc-semantic-buckets.tsv",
+    out_dir / "sv-tests-bmc-uvm-semantics-semantic-buckets.tsv",
+    out_dir / "verilator-bmc-semantic-buckets.tsv",
+    out_dir / "yosys-bmc-semantic-buckets.tsv",
+]
+
+rows = []
+for path in sources:
+    if not path.exists():
+        continue
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            rows.append(parts[:7])
+
+rows.sort(key=lambda r: (r[3], r[4], r[1], r[2], r[5], r[6], r[0]))
+case_map_path.parent.mkdir(parents=True, exist_ok=True)
+with case_map_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+    writer.writerow(
+        ["status", "case_id", "path", "suite", "mode", "semantic_bucket", "source"]
+    )
+    writer.writerows(rows)
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -8365,6 +8406,7 @@ if [[ "$WITH_AVIP" == "1" ]]; then
 fi
 
 generate_bmc_abstraction_provenance_case_map "$OUT_DIR"
+generate_bmc_semantic_bucket_case_map "$OUT_DIR"
 
 summary_txt="$OUT_DIR/summary.txt"
 {
@@ -8399,6 +8441,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv")" -gt 1 ]]; then
     echo "BMC abstraction provenance IR check attribution: $OUT_DIR/bmc-abstraction-provenance-ir-check-attribution.tsv"
+  fi
+  if [[ -f "$OUT_DIR/bmc-semantic-bucket-case-map.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/bmc-semantic-bucket-case-map.tsv")" -gt 1 ]]; then
+    echo "BMC semantic bucket case map: $OUT_DIR/bmc-semantic-bucket-case-map.tsv"
   fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"

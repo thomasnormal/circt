@@ -1,5 +1,38 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 909 - February 10, 2026
+
+### BMC Hardening: Merged Cross-Lane Semantic Case Map
+
+1. Added merged BMC semantic bucket case-map generation in
+   `utils/run_formal_all.sh`:
+   - new artifact: `bmc-semantic-bucket-case-map.tsv`
+   - source inputs:
+     - `sv-tests-bmc-semantic-buckets.tsv`
+     - `sv-tests-bmc-uvm-semantics-semantic-buckets.tsv`
+     - `verilator-bmc-semantic-buckets.tsv`
+     - `yosys-bmc-semantic-buckets.tsv`
+2. Output schema:
+   - `status`, `case_id`, `path`, `suite`, `mode`, `semantic_bucket`, `source`
+   - includes header and stable sorted row order.
+3. This closes a workflow gap by unifying semantic-bucket case attribution
+   across BMC lanes into one machine-readable artifact for closure planning.
+4. Updated tests:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+     now checks `bmc-semantic-bucket-case-map.tsv`.
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-case-export-mixed-sources.test`
+     now checks merged map output and row shape.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-bmc-semantic-bucket-case-export-mixed-sources.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-cases-sampled-value.test`: PASS
+- Real lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-semantic-bucket-case-map-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/LEC_STRICT$'`
+  - `bmc-semantic-bucket-case-map.tsv`: 16 lines
+    (header + 15 case rows = 3 sv-tests + 5 verilator + 7 yosys).
+
+
 ## Iteration 908 - February 10, 2026
 
 ### BMC Hardening: Per-Case Semantic-Bucket Export Artifacts

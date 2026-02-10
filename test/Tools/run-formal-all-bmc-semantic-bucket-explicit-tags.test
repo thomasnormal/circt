@@ -6,6 +6,7 @@
 // RUN: cd %t && utils/run_formal_all.sh --out-dir %t/out --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex '^sv-tests/BMC$'
 // RUN: FileCheck %s < %t/out/summary.tsv
 // RUN: FileCheck %s --check-prefix=CASES < %t/out/sv-tests-bmc-semantic-buckets.tsv
+// RUN: FileCheck %s --check-prefix=MAP < %t/out/bmc-semantic-bucket-case-map.tsv
 //
 // CHECK: sv-tests{{[[:space:]]+}}BMC{{.*}}bmc_semantic_bucket_fail_like_cases=6{{[[:space:]]+}}bmc_semantic_bucket_classified_cases=6{{[[:space:]]+}}bmc_semantic_bucket_tagged_cases=6{{[[:space:]]+}}bmc_semantic_bucket_regex_cases=0{{[[:space:]]+}}bmc_semantic_bucket_disable_iff_cases=1{{[[:space:]]+}}bmc_semantic_bucket_local_var_cases=0{{[[:space:]]+}}bmc_semantic_bucket_multiclock_cases=1{{[[:space:]]+}}bmc_semantic_bucket_four_state_cases=1{{[[:space:]]+}}bmc_semantic_bucket_sampled_value_cases=1{{[[:space:]]+}}bmc_semantic_bucket_property_named_cases=1{{[[:space:]]+}}bmc_semantic_bucket_implication_timing_cases=1{{[[:space:]]+}}bmc_semantic_bucket_hierarchical_net_cases=1{{[[:space:]]+}}bmc_semantic_bucket_unclassified_cases=0
 // CASES: FAIL{{[[:space:]]+}}case_a{{[[:space:]]+}}/tests/generic_a.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}disable_iff{{[[:space:]]+}}tagged
@@ -15,3 +16,11 @@
 // CASES: FAIL{{[[:space:]]+}}case_d{{[[:space:]]+}}/tests/generic_d.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}property_named{{[[:space:]]+}}tagged
 // CASES: FAIL{{[[:space:]]+}}case_e{{[[:space:]]+}}/tests/generic_e.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}implication_timing{{[[:space:]]+}}tagged
 // CASES: FAIL{{[[:space:]]+}}case_f{{[[:space:]]+}}/tests/generic_f.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}hierarchical_net{{[[:space:]]+}}tagged
+// MAP: status{{[[:space:]]+}}case_id{{[[:space:]]+}}path{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}semantic_bucket{{[[:space:]]+}}source
+// MAP: FAIL{{[[:space:]]+}}case_a{{[[:space:]]+}}/tests/generic_a.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}disable_iff{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_a{{[[:space:]]+}}/tests/generic_a.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}multiclock{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_b{{[[:space:]]+}}/tests/generic_b.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}four_state{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_c{{[[:space:]]+}}/tests/generic_c.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}sampled_value{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_d{{[[:space:]]+}}/tests/generic_d.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}property_named{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_e{{[[:space:]]+}}/tests/generic_e.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}implication_timing{{[[:space:]]+}}tagged
+// MAP: FAIL{{[[:space:]]+}}case_f{{[[:space:]]+}}/tests/generic_f.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}hierarchical_net{{[[:space:]]+}}tagged
