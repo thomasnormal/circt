@@ -1074,8 +1074,27 @@ static bool preflightMatrixLaneTools(
          hasNonZeroDecimalValue(effectiveBMCTimeoutSeconds)))
       needsTimeoutTool = true;
 
-    bool autoGenerateLane =
-        mutationsFile == "-" && !generateCount.empty() && generateCount != "-";
+    bool hasMutationsFile = !mutationsFile.empty() && mutationsFile != "-";
+    bool hasGenerateCount = !generateCount.empty() && generateCount != "-";
+    if (hasMutationsFile && hasGenerateCount) {
+      error =
+          (Twine("Lane mutation source conflict in --lanes-tsv at line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel +
+           "): provide either mutations_file or generate_count, not both.")
+              .str();
+      return false;
+    }
+    if (!hasMutationsFile && !hasGenerateCount) {
+      error = (Twine("Lane mutation source missing in --lanes-tsv at line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel +
+               "): when mutations_file is '-', generate_count is required.")
+                  .str();
+      return false;
+    }
+
+    bool autoGenerateLane = !hasMutationsFile && hasGenerateCount;
     if (!autoGenerateLane)
       continue;
 

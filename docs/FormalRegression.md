@@ -517,6 +517,11 @@ Execution controls:
       must be `NAME=VALUE` with positive integers.
     - effective count/weight controls are mutually exclusive.
     - effective `mutations_mode_counts` totals must match `generate_count`.
+  - lane mutation source consistency is now validated natively:
+    - static lanes require `mutations_file` path with unset `generate_count`.
+    - generated lanes require `mutations_file=-` with positive
+      `generate_count`.
+    - conflicting or missing source combinations fail fast before dispatch.
   - lane-level formal tool fields in `--lanes-tsv` now get native preflight
     validation with effective default fallback:
     `global_propagate_circt_lec`, `global_propagate_circt_bmc`,

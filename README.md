@@ -402,6 +402,10 @@ Generated lanes now also validate:
   (lane override or matrix default)
 - count/weight conflict
 - `mutations_mode_counts` total against `generate_count`.
+Lane mutation source consistency is now also validated natively:
+- static lane: `mutations_file` path with no `generate_count`
+- generated lane: `mutations_file=-` with positive `generate_count`
+- invalid combinations (both source types set, or neither set) now fail fast.
 Lane-level formal tool fields in `--lanes-tsv` now also get native preflight
 validation (`global_propagate_circt_lec`, `global_propagate_circt_bmc`,
 `global_propagate_z3`, `global_propagate_bmc_z3`) with effective default
