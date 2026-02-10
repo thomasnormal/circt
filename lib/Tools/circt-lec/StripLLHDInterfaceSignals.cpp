@@ -2150,8 +2150,6 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                          drivePaths.lookup(driveOp)))
         canInline = false;
     }
-    if (!isLocalSignal && driveOp.getEnable())
-      canInline = false;
     if (!driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>())
       canInline = false;
     Block *block = driveOp->getBlock();
@@ -2323,7 +2321,103 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             });
       }
 
+      auto usesAbstractedProcessResultInput = [&](Value value) -> bool {
+        Value base = unwrapStoredValue(value);
+        auto arg = dyn_cast<BlockArgument>(base);
+        if (!arg)
+          return false;
+        auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+        if (!module || arg.getOwner() != module.getBodyBlock())
+          return false;
+        auto inputNames = module.getInputNames();
+        if (arg.getArgNumber() >= inputNames.size())
+          return false;
+        auto nameAttr = dyn_cast<StringAttr>(inputNames[arg.getArgNumber()]);
+        return nameAttr &&
+               nameAttr.getValue().starts_with("llhd_process_result");
+      };
+      auto isEffectivelyUnconditional = [](llhd::DriveOp drive) -> bool {
+        Value enable = drive.getEnable();
+        if (!enable)
+          return true;
+        return matchPattern(enable, m_One());
+      };
+      bool hasUnconditionalDrive =
+          llvm::any_of(drives, isEffectivelyUnconditional);
+      bool hasConditionalDrive = llvm::any_of(drives, [](llhd::DriveOp drive) {
+        Value enable = drive.getEnable();
+        return enable && !matchPattern(enable, m_One());
+      });
+      bool hasAbstractedProcessResultDrive =
+          llvm::any_of(drives, [&](llhd::DriveOp drive) {
+            return usesAbstractedProcessResultInput(drive.getValue());
+          });
+      // Preserve source-order semantics for procedural default+override patterns
+      // (including abstracted llhd_process_result drives). Modeling these as
+      // concurrent drivers can over-constrain known-high edges in 4-state
+      // clock paths and produce vacuous UNSAT outcomes.
+      bool preferOrderedDriveSemantics =
+          (hasUnconditionalDrive && hasConditionalDrive) ||
+          hasAbstractedProcessResultDrive;
+
       if ((probesAfterDrives || inputsDominateProbe) && firstProbe) {
+        if (preferOrderedDriveSemantics) {
+          Value resolved = sigOp.getInit();
+          for (auto it = singleBlock->begin(); it != singleBlock->end(); ++it) {
+            auto driveOp = dyn_cast<llhd::DriveOp>(&*it);
+            if (!driveOp || driveOp.getSignal() != sigOp.getResult())
+              continue;
+            OpBuilder driveBuilder(driveOp);
+            Value driveValue = unwrapStoredValue(driveOp.getValue());
+            if (!driveValue)
+              return driveOp.emitError("failed to resolve LLHD drive value");
+            Value next = driveValue;
+            auto pathIt = drivePaths.find(driveOp);
+            if (pathIt != drivePaths.end() && !pathIt->second.empty()) {
+              next = updatePath(updatePath, driveBuilder, resolved,
+                                pathIt->second, driveValue, driveOp.getLoc());
+              if (!next)
+                return driveOp.emitError(
+                    "unsupported LLHD drive path update in LEC");
+            }
+            if (Value enable = driveOp.getEnable();
+                enable && !matchPattern(enable, m_One())) {
+              next = comb::MuxOp::create(driveBuilder, driveOp.getLoc(),
+                                         enable, next, resolved);
+            }
+            resolved = next;
+          }
+          if (resolved) {
+            for (auto probe : probes) {
+              OpBuilder probeBuilder(probe);
+              Value replacement =
+                  materializePath(probeBuilder, resolved,
+                                  probePaths.lookup(probe), probe.getLoc());
+              if (!replacement)
+                return probe.emitError("unsupported LLHD probe path in LEC");
+              if (replacement.getType() != probe.getResult().getType())
+                return probe.emitError(
+                    "failed to resolve LLHD multi-drive signal value");
+              probe.getResult().replaceAllUsesWith(replacement);
+              probe.erase();
+            }
+            for (auto drive : drives)
+              drive.erase();
+            for (Operation *refOp : llvm::reverse(derivedRefs)) {
+              if (refOp->use_empty())
+                refOp->erase();
+            }
+            if (sigOp.use_empty()) {
+              Value init = sigOp.getInit();
+              sigOp.erase();
+              if (auto *def = init.getDefiningOp())
+                if (def->use_empty())
+                  def->erase();
+            }
+            return success();
+          }
+        }
+
         SmallVector<Value> driveValues;
         SmallVector<Value> driveEnables;
         SmallVector<unsigned> driveStrength0;
@@ -2519,6 +2613,84 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
 
     if (allDrivesHaveTime && allDrivesSimplePath && allProbesSimplePath) {
       if (resolveEnabledDrives) {
+        auto usesProcessResultInput = [&](Value value) -> bool {
+          Value base = unwrapStoredValue(value);
+          auto arg = dyn_cast<BlockArgument>(base);
+          if (!arg)
+            return false;
+          auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+          if (!module || arg.getOwner() != module.getBodyBlock())
+            return false;
+          auto inputNames = module.getInputNames();
+          if (arg.getArgNumber() >= inputNames.size())
+            return false;
+          auto nameAttr = dyn_cast<StringAttr>(inputNames[arg.getArgNumber()]);
+          return nameAttr &&
+                 nameAttr.getValue().starts_with("llhd_process_result");
+        };
+
+        auto isEffectivelyUnconditional = [](llhd::DriveOp drive) -> bool {
+          Value enable = drive.getEnable();
+          if (!enable)
+            return true;
+          return matchPattern(enable, m_One());
+        };
+        bool hasUnconditionalDrive =
+            llvm::any_of(drives, isEffectivelyUnconditional);
+        bool hasProcessResultDrive = llvm::any_of(drives, [&](llhd::DriveOp d) {
+          return usesProcessResultInput(d.getValue());
+        });
+        // Mixed unconditional+conditional drives typically come from
+        // procedural lowering where the unconditional drive establishes a
+        // default and conditional drives override it. Model this as
+        // source-order last-wins updates instead of concurrent-driver
+        // conflict resolution.
+        if (hasUnconditionalDrive || hasProcessResultDrive) {
+          Value current = sigOp.getInit();
+          for (auto it = singleBlock->begin(); it != singleBlock->end();) {
+            Operation *op = &*it++;
+            if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
+              if (driveOp.getSignal() != sigOp.getResult())
+                continue;
+              Value driveValue = unwrapStoredValue(driveOp.getValue());
+              if (!driveValue)
+                return driveOp.emitError("failed to resolve LLHD drive value");
+              if (Value enable = driveOp.getEnable();
+                  enable && !matchPattern(enable, m_One())) {
+                builder.setInsertionPoint(driveOp);
+                current = builder.createOrFold<comb::MuxOp>(
+                    driveOp.getLoc(), enable, driveValue, current);
+              } else {
+                current = driveValue;
+              }
+              driveOp.erase();
+              continue;
+            }
+            if (auto probe = dyn_cast<llhd::ProbeOp>(op)) {
+              if (probe.getSignal() != sigOp.getResult())
+                continue;
+              if (!current || current.getType() != probe.getResult().getType())
+                return probe.emitError(
+                    "failed to resolve LLHD multi-drive signal value");
+              probe.getResult().replaceAllUsesWith(current);
+              probe.erase();
+              continue;
+            }
+          }
+          for (Operation *refOp : llvm::reverse(derivedRefs)) {
+            if (refOp->use_empty())
+              refOp->erase();
+          }
+          if (sigOp.use_empty()) {
+            Value init = sigOp.getInit();
+            sigOp.erase();
+            if (auto *def = init.getDefiningOp())
+              if (def->use_empty())
+                def->erase();
+          }
+          return success();
+        }
+
         SmallVector<Value> activeValues;
         SmallVector<Value> activeEnables;
         SmallVector<unsigned> activeStrength0;
