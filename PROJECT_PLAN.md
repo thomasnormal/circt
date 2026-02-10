@@ -429,6 +429,21 @@ See CHANGELOG.md on recent progress.
     - Add source-chain correlation in diagnostics (map each process/interface
       provenance token to user-visible assertion/sequence paths) to accelerate
       local-var and `disable iff` mismatch root-cause loops.
+49. BMC provenance case-correlation report landed (February 10, 2026):
+    - `run_formal_all.sh` now emits
+      `bmc-abstraction-provenance-case-map.tsv` per run, joining:
+      suite/mode/case/status/path with aggregated provenance tokens.
+    - Each row includes `is_fail_like` and token cardinality to prioritize
+      semantic closure on fail-like cases first.
+50. Current BMC/LEC limitation snapshot after this landing:
+    - The correlated map confirms all current `sv-tests` BMC fail cases
+      (`16.10--property-local-var-fail`,
+      `16.10--sequence-local-var-fail`,
+      `16.15--property-disable-iff-fail`) share the same process abstraction
+      token class (`observable_signal_use` on `clk`).
+    - Next long-term feature target: push correlation one step deeper from
+      case-level to assertion/sequence-level attribution so solver witnesses
+      can be tied directly to specific semantic lowering paths.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

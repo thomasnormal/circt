@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 882 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Provenance Case Correlation
+
+1. Added a BMC abstraction provenance case map report to formal orchestration:
+   - file:
+     - `utils/run_formal_all.sh`
+   - change:
+     - emit per-run report:
+       `bmc-abstraction-provenance-case-map.tsv`
+     - report joins BMC result status and provenance tokens by
+       `(suite, mode, case_id, case_path)`.
+2. New report schema:
+   - `suite`, `mode`, `case_id`, `status`, `is_fail_like`, `case_path`,
+     `provenance_token_count`, `provenance_tokens`.
+   - includes fallback status matching for `yosys` mode-suffixed case IDs.
+3. Summary output integration:
+   - formal summary now prints the report path when the map has data rows.
+   - header-only maps (e.g., LEC-only runs) no longer produce noisy path lines.
+
+### Tests and Validation
+
+- Script syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- BMC lanes run with report generation:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-provenance-case-map-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - status unchanged:
+    - `sv-tests/BMC`: `23/26`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+  - generated map rows identify current fail-like correlation:
+    - `16.10--property-local-var-fail`
+    - `16.10--sequence-local-var-fail`
+    - `16.15--property-disable-iff-fail`
+    each with `process reason=observable_signal_use ...` token set.
+- OpenTitan LEC sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-case-map-20260210 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 881 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Provenance Allowlist Controls

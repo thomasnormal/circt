@@ -6716,6 +6716,130 @@ print(f"bmc_abstraction_provenance_tokens={len(tokens)}")
 PY
 }
 
+generate_bmc_abstraction_provenance_case_map() {
+  local out_dir="$1"
+  local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
+  OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+case_map_path = Path(os.environ["CASE_MAP_FILE"])
+
+sources = [
+    (
+        "sv-tests",
+        "BMC",
+        out_dir / "sv-tests-bmc-results.txt",
+        out_dir / "sv-tests-bmc-abstraction-provenance.tsv",
+    ),
+    (
+        "verilator-verification",
+        "BMC",
+        out_dir / "verilator-bmc-results.txt",
+        out_dir / "verilator-bmc-abstraction-provenance.tsv",
+    ),
+    (
+        "yosys/tests/sva",
+        "BMC",
+        out_dir / "yosys-bmc-results.txt",
+        out_dir / "yosys-bmc-abstraction-provenance.tsv",
+    ),
+]
+
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
+
+status_by_key = {}
+status_by_path = {}
+for suite, mode, result_path, _ in sources:
+    if not result_path.exists():
+        continue
+    with result_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            status = parts[0].strip().upper()
+            case_id = parts[1].strip()
+            case_path = parts[2].strip()
+            key = (suite, mode, case_id, case_path)
+            status_by_key[key] = status
+            path_key = (suite, mode, case_path)
+            status_by_path.setdefault(path_key, set()).add(status)
+
+token_rows = {}
+for suite, mode, _, provenance_path in sources:
+    if not provenance_path.exists():
+        continue
+    with provenance_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            case_id = parts[0].strip()
+            case_path = parts[1].strip()
+            token = parts[2].strip()
+            if not token:
+                continue
+            key = (suite, mode, case_id, case_path)
+            token_rows.setdefault(key, set()).add(token)
+
+def resolve_status(suite: str, mode: str, case_id: str, case_path: str) -> str:
+    direct = status_by_key.get((suite, mode, case_id, case_path))
+    if direct:
+        return direct
+    if ":" in case_id:
+        base_case = case_id.split(":", 1)[0]
+        base = status_by_key.get((suite, mode, base_case, case_path))
+        if base:
+            return base
+    if case_path:
+        statuses = status_by_path.get((suite, mode, case_path), set())
+        if len(statuses) == 1:
+            return next(iter(statuses))
+    return "UNKNOWN"
+
+case_map_path.parent.mkdir(parents=True, exist_ok=True)
+with case_map_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t")
+    writer.writerow(
+        [
+            "suite",
+            "mode",
+            "case_id",
+            "status",
+            "is_fail_like",
+            "case_path",
+            "provenance_token_count",
+            "provenance_tokens",
+        ]
+    )
+    for key in sorted(token_rows.keys()):
+        suite, mode, case_id, case_path = key
+        tokens = sorted(token_rows[key])
+        status = resolve_status(suite, mode, case_id, case_path)
+        writer.writerow(
+            [
+                suite,
+                mode,
+                case_id,
+                status,
+                "1" if status in fail_like_statuses else "0",
+                case_path,
+                str(len(tokens)),
+                ";".join(tokens),
+            ]
+        )
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -7396,6 +7520,8 @@ if [[ "$WITH_AVIP" == "1" ]]; then
   sort -o "$avip_case_results" "$avip_case_results"
 fi
 
+generate_bmc_abstraction_provenance_case_map "$OUT_DIR"
+
 summary_txt="$OUT_DIR/summary.txt"
 {
   echo "Formal suite summary (${DATE_STR})"
@@ -7414,6 +7540,10 @@ summary_txt="$OUT_DIR/summary.txt"
     fi
     printf "%-28s %-6s %-6s %s\n" "$suite" "$mode" "$status" "$summary"
   done
+  if [[ -f "$OUT_DIR/bmc-abstraction-provenance-case-map.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/bmc-abstraction-provenance-case-map.tsv")" -gt 1 ]]; then
+    echo "BMC abstraction provenance case map: $OUT_DIR/bmc-abstraction-provenance-case-map.tsv"
+  fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"
 
