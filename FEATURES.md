@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 858 | 858 | 0 | **100%** | 912 total, 8 xfail (UVM VIF signal propagation); 0 fail, 0 xpass, 0 timeout, 0 compile_fail |
+| Simulation (full) | 912 | 850 | 0 | **99.9%** | 912 total, 7 xfail (UVM phase sequencing), 1 xpass (uvm_agent_active); 0 fail, 0 timeout |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -29,14 +29,15 @@ repository (1,036 tests across 15 IEEE chapters).
 | Tagged union | 1 | `11.9--tagged_union_*` | Crash/timeout (empty log) |
 | SVA negative tests | 4 | `16.10--*`, `16.15--*` | Crash/timeout (empty log) |
 
-### Simulation: 0 Failures, 0 Unexpected Passes, 0 Timeouts
+### Simulation: 0 Failures, 1 Unexpected Pass, 0 Timeouts
 
-912 tests found, 696 eligible, 696 PASS+XFAIL, 0 FAIL, 0 XPASS, 0 TIMEOUT.
-All tests properly categorized in `utils/sv-tests-sim-expect.txt` (176 entries):
+912 tests found, 850 pass, 0 fail, 61 xfail, 1 xpass (uvm_agent_active).
+All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
 - 7 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
 - 46 `compile-only` (class-only definitions, SVA UVM tests, event sequence controls)
-- 8 `xfail` (all UVM VIF signal propagation issues)
-- 115 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction constraints, rand_mode, resource_db all working)
+- 7 `xfail` (UVM phase sequencing issues — signal resolution fixed)
+- 1 `xpass` (uvm_agent_active — fixed by resolveDrivers + VIF shadow signals)
+- 116 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction constraints, rand_mode, resource_db, uvm_agent_active all working)
 
 ### What's Needed for True 100%
 
@@ -237,3 +238,5 @@ Multi-`--top` infrastructure exists in circt-sim (shared scheduler, shared confi
 | Static rand_mode across instances (18.8) | `rand_mode(0/1)` correctly persists across all instances of a class |
 | Inline variable control (18.11) | Both inline constraint checker and variable control tests now passing |
 | UVM resource_db read_by_name | `uvm_resource_db::read_by_name` intercepted for UVM resource lookup |
+| resolveDrivers() multi-bit fix | Fixed signal resolution for FourStateStruct `hw.struct<value, unknown>`: group drivers by full APInt value instead of just LSB; fixes clock signals never toggling in multi-driver scenarios |
+| VIF shadow signals | Interface field shadow signals: `createInterfaceFieldShadowSignals()` creates per-field signals, store interception drives shadows when memory written, sensitivity expansion adds field signals to process wait lists |

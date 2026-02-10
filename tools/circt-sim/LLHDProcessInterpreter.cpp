@@ -207,6 +207,155 @@ MemoryBlock *LLHDProcessInterpreter::findBlockByAddress(uint64_t addr,
   return nullptr;
 }
 
+void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
+  // For each llhd.sig whose initial value is a pointer (interface instance
+  // pattern), scan GEP uses to discover the interface struct layout, then
+  // create shadow signals for each field. This enables event-driven
+  // sensitivity for processes that read interface fields from memory.
+
+  for (auto &[sigValue, sigId] : valueToSignal) {
+    auto sigOp = sigValue.getDefiningOp<llhd::SignalOp>();
+    if (!sigOp)
+      continue;
+
+    // Check if this signal holds a pointer (interface instance pattern).
+    Type initType = sigOp.getInit().getType();
+    if (!isa<LLVM::LLVMPointerType>(initType))
+      continue;
+
+    // Get the malloc'd address from the moduleInitValueMap.
+    auto addrIt = moduleInitValueMap.find(sigOp.getInit());
+    if (addrIt == moduleInitValueMap.end() || addrIt->second.isX()) {
+      // Also try looking up via the signal's initial value in the scheduler.
+      // The init SSA value may not be in moduleInitValueMap if the sig was
+      // registered during registerSignals (before executeModuleLevelLLVMOps).
+      // In that case, try the scheduler's signal value directly.
+      const auto &sigVal = scheduler.getSignalValue(sigId);
+      if (!sigVal.isUnknown() && sigVal.getWidth() >= 64) {
+        uint64_t ptrAddr = sigVal.getValue();
+        if (ptrAddr != 0) {
+          // Found a non-zero pointer value in the signal. Use it.
+          moduleInitValueMap[sigOp.getInit()] = InterpretedValue(ptrAddr, 64);
+          addrIt = moduleInitValueMap.find(sigOp.getInit());
+        }
+      }
+      if (addrIt == moduleInitValueMap.end() || addrIt->second.isX())
+        continue;
+    }
+    uint64_t mallocAddr = addrIt->second.getUInt64();
+    if (mallocAddr == 0)
+      continue;
+
+    // Scan all GEP operations in the module that use probes of this signal.
+    // We look for patterns like:
+    //   %ptr = llhd.prb %sig : !llvm.ptr
+    //   %field = llvm.getelementptr %ptr[0, N] : ... !llvm.struct<"interface.*", ...>
+    // The GEP's element type tells us the interface struct layout.
+    LLVM::LLVMStructType ifaceStructTy;
+    for (auto *user : sigOp.getResult().getUsers()) {
+      auto probeOp = dyn_cast<llhd::ProbeOp>(user);
+      if (!probeOp)
+        continue;
+      for (auto *probeUser : probeOp.getResult().getUsers()) {
+        auto gepOp = dyn_cast<LLVM::GEPOp>(probeUser);
+        if (!gepOp)
+          continue;
+        if (auto elemTy = gepOp.getElemType()) {
+          if (auto structTy = dyn_cast<LLVM::LLVMStructType>(elemTy)) {
+            if (structTy.getName().starts_with("interface.")) {
+              ifaceStructTy = structTy;
+              break;
+            }
+          }
+        }
+        if (ifaceStructTy)
+          break;
+      }
+      if (ifaceStructTy)
+        break;
+    }
+
+    // Also check through unrealized_conversion_cast → GEP chains
+    // (used when interface ptr is passed through module ports)
+    if (!ifaceStructTy) {
+      for (auto *user : sigOp.getResult().getUsers()) {
+        auto probeOp = dyn_cast<llhd::ProbeOp>(user);
+        if (!probeOp)
+          continue;
+        for (auto *castUser : probeOp.getResult().getUsers()) {
+          auto castOp =
+              dyn_cast<mlir::UnrealizedConversionCastOp>(castUser);
+          if (!castOp)
+            continue;
+          // The cast result may be used as instance operand; check GEPs
+          // from processes in child instances via their probe chains
+          for (auto *castResultUser : castOp.getResult(0).getUsers()) {
+            auto gepOp2 = dyn_cast<LLVM::GEPOp>(castResultUser);
+            if (!gepOp2)
+              continue;
+            if (auto elemTy = gepOp2.getElemType()) {
+              if (auto structTy = dyn_cast<LLVM::LLVMStructType>(elemTy)) {
+                if (structTy.getName().starts_with("interface.")) {
+                  ifaceStructTy = structTy;
+                  break;
+                }
+              }
+            }
+          }
+          if (ifaceStructTy)
+            break;
+        }
+        if (ifaceStructTy)
+          break;
+      }
+    }
+
+    if (!ifaceStructTy)
+      continue;
+
+    // Create shadow signals for each field in the interface struct.
+    auto body = ifaceStructTy.getBody();
+    std::string sigName = signalIdToName.count(sigId)
+                              ? signalIdToName[sigId]
+                              : "iface";
+    unsigned fieldOffset = 0;
+    llvm::SmallVector<SignalId, 4> fieldSignals;
+
+    for (unsigned i = 0; i < body.size(); ++i) {
+      Type fieldType = body[i];
+      unsigned fieldSize = getLLVMTypeSize(fieldType);
+      unsigned fieldBitWidth = getTypeWidth(fieldType);
+
+      std::string fieldSigName =
+          sigName + ".field_" + std::to_string(i);
+      SignalId fieldSigId = scheduler.registerSignal(
+          fieldSigName, fieldBitWidth, getSignalEncoding(fieldType));
+      signalIdToName[fieldSigId] = fieldSigName;
+      signalIdToType[fieldSigId] = fieldType;
+
+      // Initialize with current memory contents.
+      auto blockIt = mallocBlocks.find(mallocAddr);
+      if (blockIt != mallocBlocks.end() &&
+          fieldOffset + fieldSize <= blockIt->second.size) {
+        APInt initVal(fieldBitWidth, 0);
+        for (unsigned b = 0; b < fieldSize && b < 8; ++b) {
+          uint64_t byteVal = blockIt->second.data[fieldOffset + b];
+          initVal |= APInt(fieldBitWidth, byteVal << (b * 8));
+        }
+        scheduler.updateSignal(fieldSigId, SignalValue(initVal));
+      }
+
+      uint64_t fieldAddr = mallocAddr + fieldOffset;
+      interfaceFieldSignals[fieldAddr] = fieldSigId;
+      fieldSignals.push_back(fieldSigId);
+
+      fieldOffset += fieldSize;
+    }
+
+    interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
+  }
+}
+
 void LLHDProcessInterpreter::dumpOpStats(llvm::raw_ostream &os,
                                          size_t topN) const {
   if (opStats.empty())
@@ -368,6 +517,11 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // module-level variables like strings before processes start.
   if (failed(executeModuleLevelLLVMOps(hwModule)))
     return failure();
+
+  // Create shadow signals for interface struct fields. This must happen after
+  // executeModuleLevelLLVMOps (which runs malloc) so that interface pointer
+  // addresses are known.
+  createInterfaceFieldShadowSignals();
 
   inGlobalInit = false;
 
@@ -9829,7 +9983,6 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 
         if (sigId != 0) {
           waitList.addLevel(sigId);
-          LLVM_DEBUG(llvm::dbgs() << "  Waiting on signal " << sigId << "\n");
         } else {
           llvm::SmallVector<SignalId, 4> fallbackSignals;
           collectSignalIds(observed, fallbackSignals);
@@ -9872,18 +10025,28 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
 
     applySelfDrivenFilter(waitList);
 
+    // Expand interface pointer signals to field shadow signals (observed case).
+    if (!interfacePtrToFieldSignals.empty()) {
+      SensitivityList expanded;
+      for (const auto &entry : waitList.getEntries()) {
+        auto fieldIt = interfacePtrToFieldSignals.find(entry.signalId);
+        if (fieldIt != interfacePtrToFieldSignals.end()) {
+          for (SignalId fieldSigId : fieldIt->second)
+            expanded.addLevel(fieldSigId);
+        } else {
+          expanded.addEdge(entry.signalId, entry.edge);
+        }
+      }
+      waitList = std::move(expanded);
+    }
+
     if (!waitList.empty()) {
       if (cacheIt == state.waitSensitivityCache.end())
         state.waitSensitivityCache.try_emplace(waitOp.getOperation(),
                                                waitList.getEntries());
       scheduler.suspendProcessForEvents(procId, waitList);
-      LLVM_DEBUG(llvm::dbgs() << "  Registered for " << waitList.size()
-                              << " signal events\n");
       cacheWaitState(state, scheduler, &waitList, hadDelay);
     } else {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Warning: No signals found in observed list, process "
-                    "will not be triggered by events!\n");
       cacheWaitState(state, scheduler, nullptr, hadDelay);
     }
   }
@@ -9945,6 +10108,25 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       }
 
       applySelfDrivenFilter(waitList);
+
+      // Expand interface pointer signals to their field shadow signals.
+      // When a process is sensitive to an interface pointer signal (which
+      // holds a malloc'd address that never changes), replace it with the
+      // per-field shadow signals so the process wakes on field changes.
+      if (!interfacePtrToFieldSignals.empty()) {
+        SensitivityList expanded;
+        for (const auto &entry : waitList.getEntries()) {
+          auto fieldIt = interfacePtrToFieldSignals.find(entry.signalId);
+          if (fieldIt != interfacePtrToFieldSignals.end()) {
+            for (SignalId fieldSigId : fieldIt->second)
+              expanded.addLevel(fieldSigId);
+          } else {
+            expanded.addEdge(entry.signalId, entry.edge);
+          }
+        }
+        waitList = std::move(expanded);
+      }
+
       if (!waitList.empty())
         state.waitSensitivityCache.try_emplace(waitOp.getOperation(),
                                                waitList.getEntries());
@@ -14113,6 +14295,38 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
       }
     }
   }
+  // Drive interface field shadow signals. When a store targets an address
+  // within a known interface struct, also drive the corresponding shadow
+  // signal so that processes sensitive to the interface field wake up.
+  if (!ptrVal.isX() && !interfaceFieldSignals.empty()) {
+    uint64_t storeAddr = ptrVal.getUInt64();
+    auto fieldIt = interfaceFieldSignals.find(storeAddr);
+    if (fieldIt != interfaceFieldSignals.end()) {
+      SignalId fieldSigId = fieldIt->second;
+      const SignalValue &current = scheduler.getSignalValue(fieldSigId);
+      unsigned targetWidth = current.getWidth();
+
+      InterpretedValue driveVal = storeVal;
+      if (driveVal.isX()) {
+        driveVal = InterpretedValue::makeX(targetWidth);
+      } else if (driveVal.getWidth() != targetWidth) {
+        APInt apVal = driveVal.getAPInt();
+        if (apVal.getBitWidth() < targetWidth)
+          apVal = apVal.zext(targetWidth);
+        else if (apVal.getBitWidth() > targetWidth)
+          apVal = apVal.trunc(targetWidth);
+        driveVal = InterpretedValue(apVal);
+      }
+
+      pendingEpsilonDrives[fieldSigId] = driveVal;
+      scheduler.updateSignal(fieldSigId, driveVal.toSignalValue());
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.store: drove interface shadow signal "
+                 << fieldSigId << " at 0x"
+                 << llvm::format_hex(storeAddr, 16) << "\n");
+    }
+  }
+
   // Check if any processes are waiting on memory events at this location.
   // If the stored value changed, wake those processes.
   checkMemoryEventWaiters();

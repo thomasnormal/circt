@@ -1218,6 +1218,18 @@ private:
   /// Maps base address to size in bytes.
   llvm::DenseMap<uint64_t, size_t> nativeMemoryBlocks;
 
+  /// Interface field shadow signals. When an interface instance is allocated
+  /// (malloc'd struct wrapped in llhd.sig), shadow signals are created for
+  /// each field. This maps (mallocBaseAddr + fieldByteOffset) → SignalId.
+  /// Used to bridge interface memory writes → LLHD signal events so that
+  /// processes reading interface fields via GEP+load get proper sensitivity.
+  llvm::DenseMap<uint64_t, SignalId> interfaceFieldSignals;
+
+  /// Maps interface pointer signal ID → list of shadow field signal IDs.
+  /// Used during sensitivity derivation: when a process probes an interface
+  /// pointer signal, its field shadow signals are added to the sensitivity.
+  llvm::DenseMap<SignalId, llvm::SmallVector<SignalId, 4>> interfacePtrToFieldSignals;
+
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.
   llvm::DenseSet<uint64_t> validAssocArrayAddresses;
@@ -1332,6 +1344,12 @@ private:
 
   /// Rebuild the address range index from globalAddresses and mallocBlocks.
   void rebuildAddrRangeIndex();
+
+  /// Create shadow LLHD signals for interface struct fields.
+  /// Called after module-level ops are executed, when interface malloc addresses
+  /// are known. Scans for llhd.sig ops whose init is a malloc'd pointer and
+  /// creates per-field shadow signals based on GEP usage patterns.
+  void createInterfaceFieldShadowSignals();
 
   /// Find a global or malloc memory block by address using the range index.
   /// Returns the MemoryBlock pointer and sets offset, or nullptr if not found.
