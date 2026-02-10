@@ -519,12 +519,21 @@ void LowerToBMCPass::runOnOperation() {
   auto abstractedProcessResults =
       hwModule->getAttrOfType<IntegerAttr>(
           "circt.bmc_abstracted_llhd_process_results");
+  auto abstractedInterfaceInputs =
+      hwModule->getAttrOfType<IntegerAttr>(
+          "circt.bmc_abstracted_llhd_interface_inputs");
   if (abstractedProcessResults && abstractedProcessResults.getInt() > 0) {
     hwModule.emitWarning()
         << "LLHD process abstraction introduced "
         << abstractedProcessResults.getInt()
         << " unconstrained process-result input(s); SAT witnesses may be "
            "spurious";
+  }
+  if (abstractedInterfaceInputs && abstractedInterfaceInputs.getInt() > 0) {
+    hwModule.emitWarning()
+        << "LLHD interface stripping introduced "
+        << abstractedInterfaceInputs.getInt()
+        << " unconstrained interface input(s); SAT witnesses may be spurious";
   }
   if (numRegs && initialValues) {
     for (auto value : initialValues) {
@@ -1345,6 +1354,9 @@ void LowerToBMCPass::runOnOperation() {
   if (abstractedProcessResults && abstractedProcessResults.getInt() > 0)
     bmcOp->setAttr("bmc_abstracted_llhd_process_results",
                    abstractedProcessResults);
+  if (abstractedInterfaceInputs && abstractedInterfaceInputs.getInt() > 0)
+    bmcOp->setAttr("bmc_abstracted_llhd_interface_inputs",
+                   abstractedInterfaceInputs);
   auto inputNames = hwModule.getInputNames();
   if (!inputNames.empty())
     bmcOp->setAttr("bmc_input_names", builder.getArrayAttr(inputNames));

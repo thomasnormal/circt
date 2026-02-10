@@ -119,4 +119,27 @@ module {
     llhd.drv %cycle, %p#0 after %t0 : i32
     hw.output
   }
+
+  // CHECK-LABEL: hw.module @dead_result_helper_process
+  // CHECK-NOT: llhd_process_result
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
+  // CHECK-NOT: llhd.process
+  hw.module @dead_result_helper_process() {
+    %false = hw.constant false
+    %t0 = llhd.constant_time <0ns, 0d, 1e>
+    %src = llhd.sig %false : i1
+    %sink = llhd.sig %false : i1
+    %p:1 = llhd.process -> i1 {
+      cf.br ^bb1(%false : i1)
+    ^bb1(%v: i1):
+      llhd.wait yield (%v : i1), delay %t0, ^bb1
+    }
+    llhd.drv %src, %p#0 after %t0 : i1
+    llhd.process {
+      %probe = llhd.prb %src : i1
+      llhd.drv %sink, %probe after %t0 : i1
+      llhd.halt
+    }
+    hw.output
+  }
 }

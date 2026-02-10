@@ -320,6 +320,23 @@ See CHANGELOG.md on recent progress.
       next closure target is lowering the residual `llhd.wait yield` process
       result pattern (clock/cycle helper processes) without unconstrained
       primary inputs.
+35. Interface-abstraction diagnostics hardening (February 10, 2026):
+    - `strip-llhd-interface-signals` now records
+      `circt.bmc_abstracted_llhd_interface_inputs = <count>` per `hw.module`
+      whenever LLHD interface stripping introduces unconstrained inputs.
+    - `lower-to-bmc` now propagates this to `verif.bmc` as
+      `bmc_abstracted_llhd_interface_inputs` and emits an explicit warning that
+      SAT witnesses may be spurious.
+36. Remaining near-term formal limitations and next build targets:
+    - BMC: positive-test SAT mismatches still cluster in local-var /
+      multiclock / `disable iff` UVM semantics where residual interface
+      abstraction (`_field*` inputs) can over-approximate environment behavior.
+    - LEC: strict/no-waiver lanes are green, but 4-state diagnostics still need
+      deeper provenance (which abstracted input and which LLHD store/read path
+      introduced it) to speed root-cause closure.
+    - Next feature for semantic closure cadence:
+      add per-input abstraction provenance metadata and strict drift gates on
+      abstraction-count/provenance deltas in BMC/LEC formal lanes.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
