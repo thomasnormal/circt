@@ -171,6 +171,15 @@ static std::optional<std::string> resolveToolPath(StringRef tool) {
   return std::nullopt;
 }
 
+static std::optional<std::string> resolveToolPathFromEnvPath(StringRef tool) {
+  if (tool.contains('/')) {
+    if (existsAndExecutable(tool))
+      return std::string(tool);
+    return std::nullopt;
+  }
+  return sys::Process::FindInEnvPath("PATH", tool);
+}
+
 static std::optional<std::string>
 resolveCirctToolPathForWorkflow(const char *argv0, StringRef requested,
                                 StringRef toolName, StringRef scriptName) {
@@ -225,6 +234,12 @@ resolveCirctToolPathForWorkflow(const char *argv0, StringRef requested,
       return std::string(sibling.str());
   }
   return std::nullopt;
+}
+
+static bool hasNonZeroDecimalValue(StringRef value) {
+  if (value.empty())
+    return false;
+  return value.find_first_not_of('0') != StringRef::npos;
 }
 
 struct CoverRewriteResult {
@@ -496,6 +511,20 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                           "--bmc-orig-cache-eviction-policy",
                           "lru|fifo|cost-lru"))
     return result;
+  bool hasAnyGlobalFilterMode =
+      hasGlobalFilterCmd || hasGlobalFilterLEC || hasGlobalFilterBMC ||
+      hasGlobalFilterChain;
+  bool needsTimeoutTool =
+      hasAnyGlobalFilterMode &&
+      (hasNonZeroDecimalValue(globalFilterTimeoutSeconds) ||
+       hasNonZeroDecimalValue(globalFilterLECTimeoutSeconds) ||
+       hasNonZeroDecimalValue(globalFilterBMCTimeoutSeconds));
+  if (needsTimeoutTool && !resolveToolPathFromEnvPath("timeout")) {
+    result.error = "circt-mut cover: unable to resolve timeout executable "
+                   "required by --formal-global-propagate-*-timeout-seconds; "
+                   "install coreutils timeout or set PATH.";
+    return result;
+  }
 
   result.ok = true;
   return result;
@@ -533,9 +562,10 @@ struct MatrixLanePreflightDefaults {
   bool failOnErrors = false;
 };
 
-static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
-                                     const MatrixLanePreflightDefaults &defaults,
-                                     std::string &error) {
+static bool preflightMatrixLaneTools(
+    const char *argv0, StringRef lanesTSVPath,
+    const MatrixLanePreflightDefaults &defaults, std::string &error,
+    bool &needsTimeoutTool) {
   auto bufferOrErr = MemoryBuffer::getFile(lanesTSVPath);
   if (!bufferOrErr) {
     error = (Twine("circt-mut matrix: unable to read --lanes-tsv: ") +
@@ -677,6 +707,14 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
         withDefault(laneGlobalFilterBMC, defaults.globalFilterCirctBMC);
     StringRef effectiveChain =
         withDefault(laneGlobalFilterChain, defaults.globalFilterCirctChain);
+    StringRef effectiveTimeoutSeconds = withDefault(
+        laneGlobalFilterTimeoutSeconds, defaults.globalFilterTimeoutSeconds);
+    StringRef effectiveLECTimeoutSeconds =
+        withDefault(laneGlobalFilterLECTimeoutSeconds,
+                    defaults.globalFilterLECTimeoutSeconds);
+    StringRef effectiveBMCTimeoutSeconds =
+        withDefault(laneGlobalFilterBMCTimeoutSeconds,
+                    defaults.globalFilterBMCTimeoutSeconds);
 
     if (!effectiveChain.empty()) {
       if (effectiveChain != "lec-then-bmc" && effectiveChain != "bmc-then-lec" &&
@@ -807,6 +845,14 @@ static bool preflightMatrixLaneTools(const char *argv0, StringRef lanesTSVPath,
       return false;
     if (!parseGateOverride(laneFailOnErrors, "fail_on_errors"))
       return false;
+    bool hasAnyEffectiveGlobalFilterMode =
+        !effectiveCmd.empty() || !effectiveLEC.empty() || !effectiveBMC.empty() ||
+        !effectiveChain.empty();
+    if (hasAnyEffectiveGlobalFilterMode &&
+        (hasNonZeroDecimalValue(effectiveTimeoutSeconds) ||
+         hasNonZeroDecimalValue(effectiveLECTimeoutSeconds) ||
+         hasNonZeroDecimalValue(effectiveBMCTimeoutSeconds)))
+      needsTimeoutTool = true;
 
     bool autoGenerateLane =
         mutationsFile == "-" && !generateCount.empty() && generateCount != "-";
@@ -1171,10 +1217,27 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                             "--default-bmc-orig-cache-eviction-policy",
                             "lru|fifo|cost-lru"))
     return result;
+  bool hasAnyDefaultGlobalFilterMode =
+      hasDefaultGlobalFilterCmd || hasDefaultGlobalFilterLEC ||
+      hasDefaultGlobalFilterBMC || hasDefaultGlobalFilterChain;
+  bool needsTimeoutTool =
+      hasAnyDefaultGlobalFilterMode &&
+      (hasNonZeroDecimalValue(defaults.globalFilterTimeoutSeconds) ||
+       hasNonZeroDecimalValue(defaults.globalFilterLECTimeoutSeconds) ||
+       hasNonZeroDecimalValue(defaults.globalFilterBMCTimeoutSeconds));
 
+  bool laneNeedsTimeoutTool = false;
   if (!lanesTSVPath.empty() &&
-      !preflightMatrixLaneTools(argv0, lanesTSVPath, defaults, result.error))
+      !preflightMatrixLaneTools(argv0, lanesTSVPath, defaults, result.error,
+                                laneNeedsTimeoutTool))
     return result;
+  if ((needsTimeoutTool || laneNeedsTimeoutTool) &&
+      !resolveToolPathFromEnvPath("timeout")) {
+    result.error = "circt-mut matrix: unable to resolve timeout executable "
+                   "required by non-zero global formal timeout settings; "
+                   "install coreutils timeout or set PATH.";
+    return result;
+  }
 
   result.ok = true;
   return result;
