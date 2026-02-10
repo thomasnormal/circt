@@ -1,5 +1,59 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 867 - February 10, 2026
+
+### `circt-mut` Cmd-Mode Telemetry: Source Attribution for Probe/Prequalify
+
+1. Extended cmd-mode result telemetry in `tools/circt-mut/circt-mut.cpp`:
+   - `ProbeRawResult` now carries a cmd source classification.
+   - cmd-mode classification source values are now explicit:
+     - `token_not_propagated`
+     - `token_propagated`
+     - `rc0`
+     - `rc1`
+     - `timeout`
+     - `error`
+     - `exec_error`
+2. Native probe cmd telemetry:
+   - `circt-mut cover --native-global-filter-probe-mutant ... --formal-global-propagate-cmd ...`
+     now emits:
+     - `global_filter_cmd_source`.
+3. Native prequalification cmd telemetry:
+   - pair-row `note` now includes cmd source attribution:
+     - `global_filter_cmd_source=<source>`
+   - `--native-global-filter-prequalify-only` now emits cmd-source counters:
+     - `prequalify_cmd_token_not_propagated_mutants`
+     - `prequalify_cmd_token_propagated_mutants`
+     - `prequalify_cmd_rc_not_propagated_mutants`
+     - `prequalify_cmd_rc_propagated_mutants`
+     - `prequalify_cmd_timeout_propagated_mutants`
+     - `prequalify_cmd_error_mutants`
+
+### Tests and Documentation
+
+- Added test:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-only-cmd-telemetry.test`
+- Updated tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-cmd.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-cmd.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-probe-*.test test/Tools/circt-mut-cover-native-global-filter-prequalify*-cmd*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-prequalify-cmd-telemetry --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 866 - February 10, 2026
 
 ### `circt-mut` Native Probe: `--formal-global-propagate-cmd` Parity

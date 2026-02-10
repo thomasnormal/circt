@@ -1021,6 +1021,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
 struct ProbeRawResult {
   std::string state;
   int rc = -1;
+  std::string source;
 };
 
 struct CoverGlobalFilterProbeConfig {
@@ -1052,6 +1053,7 @@ struct CoverGlobalFilterProbeConfig {
 struct CoverGlobalFilterProbeOutcome {
   std::string classification;
   int finalRC = -1;
+  std::string cmdSource;
 };
 
 static std::string shellQuote(StringRef value) {
@@ -1179,7 +1181,7 @@ static ProbeRawResult runCoverGlobalFilterCmdRaw(
                                             timeoutSeconds, design,
                                             mutantDesign, mutationID,
                                             mutationSpec, rc, error))
-    return ProbeRawResult{"error", rc};
+    return ProbeRawResult{"error", rc, "exec_error"};
 
   std::string logText = readTextFileOrEmpty(logPath);
   Regex notPropagatedToken("(^|[^[:alnum:]_])NOT_PROPAGATED([^[:alnum:]_]|$)",
@@ -1187,16 +1189,16 @@ static ProbeRawResult runCoverGlobalFilterCmdRaw(
   Regex propagatedToken("(^|[^[:alnum:]_])PROPAGATED([^[:alnum:]_]|$)",
                         Regex::IgnoreCase);
   if (notPropagatedToken.match(logText))
-    return ProbeRawResult{"not_propagated", rc};
+    return ProbeRawResult{"not_propagated", rc, "token_not_propagated"};
   if (propagatedToken.match(logText))
-    return ProbeRawResult{"propagated", rc};
+    return ProbeRawResult{"propagated", rc, "token_propagated"};
   if (timeoutSeconds > 0 && isTimeoutExitCode(rc))
-    return ProbeRawResult{"propagated", rc};
+    return ProbeRawResult{"propagated", rc, "timeout"};
   if (rc == 0)
-    return ProbeRawResult{"not_propagated", rc};
+    return ProbeRawResult{"not_propagated", rc, "rc0"};
   if (rc == 1)
-    return ProbeRawResult{"propagated", rc};
-  return ProbeRawResult{"error", rc};
+    return ProbeRawResult{"propagated", rc, "rc1"};
+  return ProbeRawResult{"error", rc, "error"};
 }
 
 static std::string readTextFileOrEmpty(StringRef path) {
@@ -1616,6 +1618,7 @@ static bool executeNativeCoverGlobalFilterProbe(
     CoverGlobalFilterProbeOutcome &outcome, std::string &error) {
   std::string classification;
   int finalRC = -1;
+  std::string cmdSource;
 
   auto classifyLEC = [&](StringRef state) {
     if (state == "eq")
@@ -1650,6 +1653,7 @@ static bool executeNativeCoverGlobalFilterProbe(
     else
       classification = "error";
     finalRC = cmdRaw.rc;
+    cmdSource = cmdRaw.source;
   } else if (!cfg.globalFilterChain.empty()) {
     if (cfg.globalFilterLEC.empty() || cfg.globalFilterBMC.empty()) {
       error = "circt-mut cover: probe chain mode requires both "
@@ -1749,6 +1753,7 @@ static bool executeNativeCoverGlobalFilterProbe(
 
   outcome.classification = classification;
   outcome.finalRC = finalRC;
+  outcome.cmdSource = cmdSource;
   return true;
 }
 
@@ -1773,6 +1778,8 @@ static int runNativeCoverGlobalFilterProbe(const CoverRewriteResult &rewrite) {
 
   outs() << "classification\t" << outcome.classification << "\n";
   outs() << "global_filter_rc\t" << outcome.finalRC << "\n";
+  if (!outcome.cmdSource.empty())
+    outs() << "global_filter_cmd_source\t" << outcome.cmdSource << "\n";
   outs() << "global_filter_log\t" << cfg.logFile << "\n";
   return outcome.classification == "error" ? 1 : 0;
 }
@@ -2262,6 +2269,7 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     std::string propagation = "propagated";
     int propagateRC = -1;
     std::string note = "global_filter_propagated;native_prequalify=1";
+    std::string cmdSource;
     bool createMutatedError = false;
     bool probeError = false;
   };
@@ -2344,13 +2352,22 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
           result.propagation = "not_propagated";
           result.propagateRC = cmdOutcome.rc;
           result.note = "global_filter_not_propagated;native_prequalify=1";
+          result.cmdSource = cmdOutcome.source;
+          if (!result.cmdSource.empty())
+            result.note += ";global_filter_cmd_source=" + result.cmdSource;
         } else if (cmdOutcome.state == "propagated") {
           result.propagation = "propagated";
           result.propagateRC = cmdOutcome.rc;
+          result.cmdSource = cmdOutcome.source;
+          if (!result.cmdSource.empty())
+            result.note += ";global_filter_cmd_source=" + result.cmdSource;
         } else {
           result.propagation = "propagated";
           result.propagateRC = cmdOutcome.rc;
           result.note += ";native_prequalify_probe_error=1";
+          result.cmdSource = cmdOutcome.source;
+          if (!result.cmdSource.empty())
+            result.note += ";global_filter_cmd_source=" + result.cmdSource;
           result.probeError = true;
         }
       } else {
@@ -2418,6 +2435,12 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
   uint64_t prequalifyPropagatedMutants = 0;
   uint64_t prequalifyCreateMutatedErrorMutants = 0;
   uint64_t prequalifyProbeErrorMutants = 0;
+  uint64_t prequalifyCmdTokenNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdTokenPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCNotPropagatedMutants = 0;
+  uint64_t prequalifyCmdRCPropagatedMutants = 0;
+  uint64_t prequalifyCmdTimeoutPropagatedMutants = 0;
+  uint64_t prequalifyCmdErrorMutants = 0;
   for (const PrequalifyRowResult &result : rowResults) {
     if (result.propagation == "not_propagated")
       ++prequalifyNotPropagatedMutants;
@@ -2427,6 +2450,18 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
       ++prequalifyCreateMutatedErrorMutants;
     if (result.probeError)
       ++prequalifyProbeErrorMutants;
+    if (result.cmdSource == "token_not_propagated")
+      ++prequalifyCmdTokenNotPropagatedMutants;
+    else if (result.cmdSource == "token_propagated")
+      ++prequalifyCmdTokenPropagatedMutants;
+    else if (result.cmdSource == "rc0")
+      ++prequalifyCmdRCNotPropagatedMutants;
+    else if (result.cmdSource == "rc1")
+      ++prequalifyCmdRCPropagatedMutants;
+    else if (result.cmdSource == "timeout")
+      ++prequalifyCmdTimeoutPropagatedMutants;
+    else if (result.cmdSource == "error" || result.cmdSource == "exec_error")
+      ++prequalifyCmdErrorMutants;
   }
 
   std::error_code pairEC;
@@ -2455,6 +2490,18 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     outs() << "prequalify_create_mutated_error_mutants\t"
            << prequalifyCreateMutatedErrorMutants << "\n";
     outs() << "prequalify_probe_error_mutants\t" << prequalifyProbeErrorMutants
+           << "\n";
+    outs() << "prequalify_cmd_token_not_propagated_mutants\t"
+           << prequalifyCmdTokenNotPropagatedMutants << "\n";
+    outs() << "prequalify_cmd_token_propagated_mutants\t"
+           << prequalifyCmdTokenPropagatedMutants << "\n";
+    outs() << "prequalify_cmd_rc_not_propagated_mutants\t"
+           << prequalifyCmdRCNotPropagatedMutants << "\n";
+    outs() << "prequalify_cmd_rc_propagated_mutants\t"
+           << prequalifyCmdRCPropagatedMutants << "\n";
+    outs() << "prequalify_cmd_timeout_propagated_mutants\t"
+           << prequalifyCmdTimeoutPropagatedMutants << "\n";
+    outs() << "prequalify_cmd_error_mutants\t" << prequalifyCmdErrorMutants
            << "\n";
     return 0;
   }

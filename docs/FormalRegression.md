@@ -552,6 +552,9 @@ Execution controls:
     circt-lec/circt-bmc/chain classification on a single mutant and
     prints `classification`, `global_filter_rc`, and `global_filter_log`
     without launching test execution.
+    In cmd mode it also prints `global_filter_cmd_source`
+    (`token_not_propagated`, `token_propagated`, `rc0`, `rc1`, `timeout`,
+    `error`, `exec_error`).
   - native campaign prequalification mode is now available for command-mode
     and built-in formal filters:
     `--native-global-filter-prequalify`
@@ -564,6 +567,13 @@ Execution controls:
   - `--native-global-filter-prequalify-only` runs the same native batch
     classification but skips test dispatch and prints prequalification summary
     counters (`prequalify_*`) to stdout.
+    For cmd mode this includes source attribution counters:
+    `prequalify_cmd_token_not_propagated_mutants`,
+    `prequalify_cmd_token_propagated_mutants`,
+    `prequalify_cmd_rc_not_propagated_mutants`,
+    `prequalify_cmd_rc_propagated_mutants`,
+    `prequalify_cmd_timeout_propagated_mutants`,
+    and `prequalify_cmd_error_mutants`.
   - native prequalification now honors `--jobs <N>` for parallel per-mutant
     classification in both dispatch and prequalify-only modes while preserving
     deterministic pair-row output order.

@@ -412,6 +412,10 @@ Probe mode reports `classification` (`not_propagated` or `propagated`) plus
 `global_filter_rc` and `global_filter_log`. It supports
 `--formal-global-propagate-cmd` and built-in
 circt-lec/circt-bmc/chain modes.
+In cmd mode it also reports:
+- `global_filter_cmd_source`
+  (`token_not_propagated`, `token_propagated`, `rc0`, `rc1`, `timeout`,
+  `error`, `exec_error`).
 For campaign-scale global relevance prequalification, `circt-mut cover` now
 also supports:
 
@@ -443,6 +447,13 @@ To run prequalification without launching dynamic tests, use:
 - `--native-global-filter-prequalify-only`
   (emits pair-file + prequalify summary to stdout, no script dispatch;
   also honors `--jobs`).
+For cmd-mode prequalification, summary output now includes cmd-source counters:
+- `prequalify_cmd_token_not_propagated_mutants`
+- `prequalify_cmd_token_propagated_mutants`
+- `prequalify_cmd_rc_not_propagated_mutants`
+- `prequalify_cmd_rc_propagated_mutants`
+- `prequalify_cmd_timeout_propagated_mutants`
+- `prequalify_cmd_error_mutants`
 
 Current scope limits:
 - cannot be combined with explicit `--reuse-pair-file`.
