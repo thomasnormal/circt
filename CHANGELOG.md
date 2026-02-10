@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 885 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: IR-Check Attribution
+
+1. Added IR-level check attribution export in BMC lane harnesses:
+   - files:
+     - `utils/run_sv_tests_circt_bmc.sh`
+     - `utils/run_verilator_verification_circt_bmc.sh`
+     - `utils/run_yosys_sva_circt_bmc.sh`
+   - new optional output:
+     - `BMC_CHECK_ATTRIBUTION_OUT`
+   - each script now extracts per-case check signatures from generated MLIR:
+     - check index
+     - check kind (`verif.assert`, `verif.clocked_assert`, ...)
+     - normalized check snippet
+2. Extended orchestrator attribution reports with IR checks:
+   - file:
+     - `utils/run_formal_all.sh`
+   - new report:
+     - `bmc-abstraction-provenance-ir-check-attribution.tsv`
+   - extended report columns in:
+     - `bmc-abstraction-provenance-case-map.tsv`
+     - `bmc-abstraction-provenance-assertion-attribution.tsv`
+     with:
+     - `ir_check_count`
+     - `ir_check_kinds`
+     - `ir_check_sites`
+3. Summary output integration:
+   - formal summary now prints IR-check attribution report path when data rows
+     are present.
+
+### Tests and Validation
+
+- Script syntax:
+  - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`: PASS
+- BMC lanes run with IR-check attribution:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-ir-check-attribution-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+  - status unchanged:
+    - `sv-tests/BMC`: `23/26`
+    - `verilator-verification/BMC`: `12/17`
+    - `yosys/tests/sva/BMC`: `7/14`
+  - IR-check attribution confirms remaining `sv-tests` fail-like cases each
+    map to a single `verif.clocked_assert` check plus shared process
+    abstraction provenance tokens.
+- OpenTitan LEC sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-ir-check-attribution-20260210 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 884 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Assertion-Level Provenance Attribution

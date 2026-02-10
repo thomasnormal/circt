@@ -35,6 +35,7 @@ SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
+BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE:-}"
@@ -8166,6 +8167,40 @@ append_bmc_abstraction_provenance() {
   done < "$bmc_log"
 }
 
+append_bmc_check_attribution() {
+  local case_id="$1"
+  local mode="$2"
+  local case_path="$3"
+  local mlir_file="$4"
+  if [[ -z "$BMC_CHECK_ATTRIBUTION_OUT" || ! -s "$mlir_file" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r idx kind snippet; do
+    if [[ -z "$idx" || -z "$kind" || -z "$snippet" ]]; then
+      continue
+    fi
+    printf "%s:%s\t%s\t%s\t%s\t%s\n" \
+      "$case_id" "$mode" "$case_path" "$idx" "$kind" "$snippet" \
+      >> "$BMC_CHECK_ATTRIBUTION_OUT"
+  done < <(
+    awk '
+      /verif\.(clocked_assert|assert|clocked_assume|assume|clocked_cover|cover)/ {
+        idx++
+        kind = "verif.unknown"
+        if (match($0, /verif\.[A-Za-z_]+/))
+          kind = substr($0, RSTART, RLENGTH)
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        if (length(line) > 200)
+          line = substr(line, 1, 197) "..."
+        printf "%d\t%s\t%s\n", idx, kind, line
+      }
+    ' "$mlir_file"
+  )
+}
+
 run_case() {
   local sv="$1"
   local mode="$2"
@@ -8219,6 +8254,7 @@ run_case() {
     read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
     bmc_args+=("${extra_bmc_args[@]}")
   fi
+  append_bmc_check_attribution "$base" "$mode" "$sv" "$mlir"
   out=""
   if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" \
       2> "$bmc_log")"; then
@@ -8299,6 +8335,9 @@ fi
 
 if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
   sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
+fi
+if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
+  sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
 fi
 
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then

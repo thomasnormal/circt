@@ -29,6 +29,7 @@ BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
+BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
 # Setting this to 1 would cause false SKIP results for otherwise valid tests.
@@ -125,6 +126,39 @@ append_bmc_abstraction_provenance() {
     printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$token" \
       >> "$BMC_ABSTRACTION_PROVENANCE_OUT"
   done < "$bmc_log"
+}
+
+append_bmc_check_attribution() {
+  local case_id="$1"
+  local case_path="$2"
+  local mlir_file="$3"
+  if [[ -z "$BMC_CHECK_ATTRIBUTION_OUT" || ! -s "$mlir_file" ]]; then
+    return
+  fi
+  while IFS=$'\t' read -r idx kind snippet; do
+    if [[ -z "$idx" || -z "$kind" || -z "$snippet" ]]; then
+      continue
+    fi
+    printf "%s\t%s\t%s\t%s\t%s\n" \
+      "$case_id" "$case_path" "$idx" "$kind" "$snippet" \
+      >> "$BMC_CHECK_ATTRIBUTION_OUT"
+  done < <(
+    awk '
+      /verif\.(clocked_assert|assert|clocked_assume|assume|clocked_cover|cover)/ {
+        idx++
+        kind = "verif.unknown"
+        if (match($0, /verif\.[A-Za-z_]+/))
+          kind = substr($0, RSTART, RLENGTH)
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        if (length(line) > 200)
+          line = substr(line, 1, 197) "..."
+        printf "%d\t%s\t%s\n", idx, kind, line
+      }
+    ' "$mlir_file"
+  )
 }
 
 detect_top() {
@@ -242,6 +276,7 @@ for suite in "${suites[@]}"; do
       read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
       bmc_args+=("${extra_bmc_args[@]}")
     fi
+    append_bmc_check_attribution "$base" "$sv" "$mlir"
     out=""
     if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
       bmc_status=0
@@ -341,6 +376,9 @@ done
 sort "$results_tmp" > "$OUT"
 if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
   sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
+fi
+if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
+  sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
 fi
 
 echo "verilator-verification summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"

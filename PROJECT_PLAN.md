@@ -470,6 +470,20 @@ See CHANGELOG.md on recent progress.
       yet guaranteed one-to-one with final lowered `verif.*` checks.
     - Next long-term feature should add lowered-op stable IDs (or source loc
       propagation) so witness/provenance can be tied to exact backend checks.
+55. IR-check attribution landed (February 10, 2026):
+    - BMC lane scripts now emit per-case IR check signatures from generated
+      MLIR (`verif.assert` / `verif.clocked_assert` / assume / cover ops).
+    - `run_formal_all.sh` now emits
+      `bmc-abstraction-provenance-ir-check-attribution.tsv` and extends case/
+      assertion attribution reports with:
+      `ir_check_count`, `ir_check_kinds`, `ir_check_sites`.
+56. Updated long-term closure focus after IR-check attribution:
+    - The three remaining `sv-tests` BMC fail cases now correlate to a single
+      `verif.clocked_assert` IR check each plus the same process abstraction
+      token class (`observable_signal_use` on `clk`).
+    - Next long-term feature target is stable lowered-check IDs propagated into
+      BMC diagnostics so SAT witnesses/provenance can reference exact backend
+      check IDs across pipeline stages.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
