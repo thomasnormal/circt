@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 921 - February 10, 2026
+
+### BMC Tooling Hardening: Fix `--print-counterexample` Dominance Failure
+
+1. Updated `lib/Conversion/SMTToZ3LLVM/LowerSMTToZ3LLVM.cpp`:
+   - `CheckOpLowering` now filters tracked model declarations to values that
+     dominate the `smt.check` operation before emitting `Z3_model_eval` calls.
+   - Added a dominance helper for both `BlockArgument` and op-result values.
+2. Root issue addressed:
+   - with `--print-counterexample` (`print-model-inputs=true`), loop/CFG
+     lowering could leave tracked declaration values that no longer dominated
+     the check-site print blocks, producing verifier failures:
+     `operand #N does not dominate this use`.
+3. Regression hardening:
+   - extended `test/Tools/circt-bmc/sva-stateful-probe-order-unsat-e2e.sv`
+     with a JIT `--print-counterexample` RUN line and `PRINTCE` check.
+4. Validation:
+   - reproducer now succeeds:
+     `circt-verilog ... assert_changed.sv | circt-bmc --emit-llvm --print-counterexample ...`
+   - stateful regression still proves:
+     `BMC_RESULT=UNSAT` for normal JIT, JIT+`--print-counterexample`, and SMT-LIB.
+   - counterexample formatting suite remains green:
+     7/7 pass across
+     `bmc-run-smtlib-sat-counterexample*` activity/mixed/witness tests.
+
 ## Iteration 920 - February 10, 2026
 
 ### BMC Semantic Closure: Preserve Stateful LLHD Probe Semantics

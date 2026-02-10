@@ -22,6 +22,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/StringMap.h"
@@ -862,6 +863,25 @@ struct YieldOpLowering : public SMTLoweringPattern<YieldOp> {
 struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
   using SMTLoweringPattern::SMTLoweringPattern;
 
+  static bool valueDominatesOperation(Value value, Operation *user,
+                                      DominanceInfo &dom) {
+    if (!value || !user)
+      return false;
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      Block *argBlock = blockArg.getOwner();
+      Block *userBlock = user->getBlock();
+      if (argBlock == userBlock)
+        return true;
+      return dom.dominates(argBlock, userBlock);
+    }
+    if (auto *defOp = value.getDefiningOp()) {
+      if (defOp->getBlock() == user->getBlock())
+        return defOp->isBeforeInBlock(user);
+      return dom.dominates(defOp, user);
+    }
+    return false;
+  }
+
   LogicalResult
   matchAndRewrite(CheckOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
@@ -877,9 +897,14 @@ struct CheckOpLowering : public SMTLoweringPattern<CheckOp> {
     SmallVector<ModelDeclInfo> modelDecls;
     llvm::StringMap<unsigned> nameCounts;
     if (options.printModelInputs) {
+      DominanceInfo dom(op->getParentOfType<func::FuncOp>());
       if (modelPrintTracker)
         if (Block *scope = getEnclosingFunctionEntryBlock(op))
           for (const auto &decl : modelPrintTracker->getDecls(scope)) {
+            // Declarations can be moved into loop/header CFG blocks after SCF
+            // lowering. Only print values that still dominate this check site.
+            if (!valueDominatesOperation(decl.value, op, dom))
+              continue;
             modelDecls.push_back({decl.prefix, decl.ordinal, decl.value});
             nameCounts[llvm::StringRef(decl.prefix)] += 1;
           }

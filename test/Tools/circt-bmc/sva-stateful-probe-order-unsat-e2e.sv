@@ -2,6 +2,9 @@
 // RUN:   circt-bmc -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat - | \
 // RUN:   FileCheck %s --check-prefix=JIT
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
+// RUN:   circt-bmc -b 8 --ignore-asserts-until=0 --print-counterexample --module=sva_stateful_probe_order_unsat - | \
+// RUN:   FileCheck %s --check-prefix=PRINTCE
+// RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
 // RUN:   circt-bmc --run-smtlib -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat - | \
 // RUN:   FileCheck %s --check-prefix=SMTLIB
 // REQUIRES: slang
@@ -31,4 +34,5 @@ module sva_stateful_probe_order_unsat(input logic clk);
 endmodule
 
 // JIT: BMC_RESULT=UNSAT
+// PRINTCE: BMC_RESULT=UNSAT
 // SMTLIB: BMC_RESULT=UNSAT
