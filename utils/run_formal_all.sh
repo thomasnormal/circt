@@ -6746,6 +6746,7 @@ bucket_case_sets = {
     "local_var": set(),
     "multiclock": set(),
     "four_state": set(),
+    "sampled_value": set(),
 }
 all_fail_like_cases = set()
 tagged_cases = 0
@@ -6772,6 +6773,11 @@ bucket_aliases = {
     "xprop": "four_state",
     "x_prop": "four_state",
     "x-prop": "four_state",
+    "sampled_value": "sampled_value",
+    "sampledvalue": "sampled_value",
+    "sampled-value": "sampled_value",
+    "value_change": "sampled_value",
+    "value-change": "sampled_value",
 }
 
 def normalize_bucket_token(token: str):
@@ -6866,6 +6872,7 @@ parts = [
     f"bmc_semantic_bucket_local_var_cases={len(bucket_case_sets['local_var'])}",
     f"bmc_semantic_bucket_multiclock_cases={len(bucket_case_sets['multiclock'])}",
     f"bmc_semantic_bucket_four_state_cases={len(bucket_case_sets['four_state'])}",
+    f"bmc_semantic_bucket_sampled_value_cases={len(bucket_case_sets['sampled_value'])}",
     f"bmc_semantic_bucket_unclassified_cases={unclassified_cases}",
 ]
 print(" ".join(parts))

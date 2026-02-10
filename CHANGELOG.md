@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 899 - February 10, 2026
+
+### BMC Semantic-Closure Coverage Expansion: Sampled-Value Bucket + Verilator Seeds
+
+1. Extended BMC semantic-bucket classifier in `utils/run_formal_all.sh` with a
+   new explicit-tag bucket:
+   - `sampled_value`
+   - new summary counter:
+     `bmc_semantic_bucket_sampled_value_cases`.
+2. Added sampled-value aliases for explicit tags:
+   - `sampled_value`, `sampled-value`, `sampledvalue`,
+     `value_change`, `value-change`.
+3. Seeded active verilator fail-like sampled-value cases:
+   - `utils/verilator-bmc-semantic-tags.tsv` now includes:
+     - `assert_changed  sampled_value`
+     - `assert_fell     sampled_value`
+     - `assert_stable   sampled_value`
+4. Updated semantic bucket regression tests:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+     now checks sampled-value explicit-tag classification.
+   - `test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test`
+     now covers both `disable_iff` and `sampled_value` forwarding paths.
+
+### Tests and Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test test/Tools/run-verilator-verification-circt-bmc-semantic-tag-map.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-sampled-bucket-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key deltas:
+    - `verilator-verification/BMC`: `classified_cases=3`,
+      `tagged_cases=3`, `sampled_value_cases=3`,
+      `unclassified_cases=2` (improved from 5).
+    - `sv-tests/BMC`: unchanged (`unclassified_cases=0`)
+    - `yosys/tests/sva/BMC`: unchanged (`tagged_cases=1`,
+      `four_state_cases=1`, `unclassified_cases=5`)
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 898 - February 10, 2026
 
 ### BMC Semantic-Closure Coverage Expansion: Verilator Disable-Iff Seed

@@ -139,9 +139,11 @@ See CHANGELOG.md on recent progress.
     new fail-like rows cannot silently bypass bucket tracking.
   - Remaining harness limitation:
     `verilator-verification/BMC` has an initial `disable iff` seed
-    (`assert_named_without_parenthesis`) but active fail-like rows are still
-    unseeded/unclassified; `yosys/tests/sva/BMC` has initial 4-state seed
-    coverage (`sva_value_change_sim`) but remains only partially seeded.
+    (`assert_named_without_parenthesis`) plus sampled-value seeds
+    (`assert_changed`, `assert_fell`, `assert_stable`), but 2 active fail-like
+    rows remain unclassified (`assert_named`, `assert_named_typed`);
+    `yosys/tests/sva/BMC` has initial 4-state seed coverage
+    (`sva_value_change_sim`) but remains only partially seeded.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
