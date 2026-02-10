@@ -1,5 +1,32 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 904 - February 10, 2026
+
+### LEC Hardening: Generic Strict X-PROP Key-Prefix Drift Gates
+
+1. Extended OpenTitan strict LEC X-prop strict-gate controls in
+   `utils/run_formal_all.sh` with a generic repeatable option:
+   - `--fail-on-new-opentitan-lec-strict-xprop-key-prefix <prefix>`
+2. Behavior:
+   - strict gate now fails when any OpenTitan `LEC_STRICT` summary key
+     starting with the prefix increases vs baseline, including newly introduced
+     keys.
+   - This generalizes beyond counters to class-level diagnostics and statuses
+     (for example `xprop_diag_*`, `xprop_result_*`, `xprop_status_*`).
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix.test`
+   - verifies a new diag key (`xprop_diag_custom_diag`) is caught as drift.
+4. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix.test`: PASS
+- Real lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-strict-keyprefix-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`
+  - `opentitan/LEC_STRICT`: `total=1 pass=1 fail=0 error=0`.
+
 ## Iteration 903 - February 10, 2026
 
 ### LEC Hardening: Prefix-Based Strict X-PROP Counter Drift Gates
