@@ -28,6 +28,7 @@ BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
 # Setting this to 1 would cause false SKIP results for otherwise valid tests.
@@ -102,6 +103,23 @@ is_xfail() {
     return 1
   fi
   grep -Fxq "$name" "$XFAILS"
+}
+
+append_bmc_abstraction_provenance() {
+  local case_id="$1"
+  local case_path="$2"
+  local bmc_log="$3"
+  if [[ -z "$BMC_ABSTRACTION_PROVENANCE_OUT" || ! -s "$bmc_log" ]]; then
+    return
+  fi
+  while IFS= read -r line; do
+    local token="${line#*BMC_PROVENANCE_LLHD_INTERFACE }"
+    if [[ "$token" == "$line" || -z "$token" ]]; then
+      continue
+    fi
+    printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$token" \
+      >> "$BMC_ABSTRACTION_PROVENANCE_OUT"
+  done < "$bmc_log"
 }
 
 detect_top() {
@@ -225,6 +243,7 @@ for suite in "${suites[@]}"; do
     else
       bmc_status=$?
     fi
+    append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"
     if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
         grep -q "no property provided to check in module" "$bmc_log"; then
       result="SKIP"
@@ -315,6 +334,9 @@ for suite in "${suites[@]}"; do
 done
 
 sort "$results_tmp" > "$OUT"
+if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
+  sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
+fi
 
 echo "verilator-verification summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
 echo "results: $OUT"

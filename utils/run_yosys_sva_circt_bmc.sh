@@ -34,6 +34,7 @@ CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE:-}"
@@ -8142,6 +8143,24 @@ report_skipped_case() {
   fi
 }
 
+append_bmc_abstraction_provenance() {
+  local case_id="$1"
+  local mode="$2"
+  local case_path="$3"
+  local bmc_log="$4"
+  if [[ -z "$BMC_ABSTRACTION_PROVENANCE_OUT" || ! -s "$bmc_log" ]]; then
+    return
+  fi
+  while IFS= read -r line; do
+    local token="${line#*BMC_PROVENANCE_LLHD_INTERFACE }"
+    if [[ "$token" == "$line" || -z "$token" ]]; then
+      continue
+    fi
+    printf "%s:%s\t%s\t%s\n" "$case_id" "$mode" "$case_path" "$token" \
+      >> "$BMC_ABSTRACTION_PROVENANCE_OUT"
+  done < "$bmc_log"
+}
+
 run_case() {
   local sv="$1"
   local mode="$2"
@@ -8202,6 +8221,7 @@ run_case() {
   else
     bmc_status=$?
   fi
+  append_bmc_abstraction_provenance "$base" "$mode" "$sv" "$bmc_log"
   if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
       grep -q "no property provided to check in module" "$bmc_log"; then
     report_skipped_case "$base" "$mode" "$(case_profile)" "no-property"
@@ -8270,6 +8290,10 @@ fi
 
 if [[ -n "$EXPECT_OBSERVED_FILE" || -n "$EXPECT_REGEN_FILE" ]]; then
   emit_observed_outputs
+fi
+
+if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
+  sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
 fi
 
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then
