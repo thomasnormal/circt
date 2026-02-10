@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 849 - February 10, 2026
+
+### Z3 `auto` Resolution for Mutation Formal Filters
+
+1. Extended `utils/run_mutation_cover.sh` Z3 option handling so:
+   - `--formal-global-propagate-z3 auto`
+   - `--formal-global-propagate-bmc-z3 auto`
+   resolve `z3` from `PATH` instead of being treated as a literal executable
+   name.
+2. Extended native `circt-mut` preflight/rewrite for cover/matrix:
+   - `circt-mut cover` now accepts `auto` for
+     `--formal-global-propagate-z3` and
+     `--formal-global-propagate-bmc-z3`.
+   - `circt-mut matrix` now accepts `auto` for
+     `--default-formal-global-propagate-z3` and
+     `--default-formal-global-propagate-bmc-z3`.
+3. Extended matrix lane preflight tool resolution:
+   - lane/default `global_propagate_z3` and `global_propagate_bmc_z3`
+     now accept `auto` (PATH lookup), matching cover/default behavior.
+
+### Tests and Documentation
+
+- Added script-path regression tests:
+  - `test/Tools/run-mutation-cover-global-circt-lec-z3-auto-path.test`
+  - `test/Tools/run-mutation-cover-global-circt-bmc-z3-auto-path.test`
+- Added native `circt-mut` regression tests:
+  - `test/Tools/circt-mut-cover-global-z3-auto.test`
+  - `test/Tools/circt-mut-cover-global-z3-auto-missing.test`
+  - `test/Tools/circt-mut-matrix-global-z3-auto.test`
+  - `test/Tools/circt-mut-matrix-global-z3-auto-missing.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-global-z3*.test test/Tools/circt-mut-matrix-global-z3*.test test/Tools/run-mutation-cover-global-circt-*z3-auto-path.test`: PASS (10/10)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (92/92)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-z3-auto-resolution --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 848 - February 10, 2026
 
 ### Matrix Lane `CONFIG_ERROR` Diagnostics (`run_mutation_matrix.sh`)

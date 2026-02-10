@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t/prefix/bin %t/prefix/share/circt/utils
+// RUN: cp "$(command -v circt-mut)" %t/prefix/bin/circt-mut
+// RUN: chmod +x %t/prefix/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n' > %t/prefix/bin/z3
+// RUN: chmod +x %t/prefix/bin/z3
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/prefix/share/circt/utils/run_mutation_cover.sh
+// RUN: chmod +x %t/prefix/share/circt/utils/run_mutation_cover.sh
+// RUN: printf '1 M\n' > %t/mutations.txt
+// RUN: PATH="%t/prefix/bin:/usr/bin:/bin" %t/prefix/bin/circt-mut cover --mutations-file %t/mutations.txt --formal-global-propagate-z3 auto --formal-global-propagate-bmc-z3 auto > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: ARG:--formal-global-propagate-z3
+// CHECK-NEXT: ARG:[[Z3:.*prefix/bin/z3]]
+// CHECK: ARG:--formal-global-propagate-bmc-z3
+// CHECK-NEXT: ARG:[[Z3]]

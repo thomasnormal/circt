@@ -76,8 +76,9 @@ Optional:
                              circt-lec -c1 module name (default: top)
   --formal-global-propagate-c2 NAME
                              circt-lec -c2 module name (default: top)
-  --formal-global-propagate-z3 PATH
-                             Optional z3 path passed to circt-lec --z3-path
+  --formal-global-propagate-z3 PATH|auto
+                             Optional z3 path passed to circt-lec --z3-path.
+                             Use 'auto' to resolve z3 from PATH.
   --formal-global-propagate-assume-known-inputs
                              Pass --assume-known-inputs to circt-lec global
                              propagation filter
@@ -104,8 +105,9 @@ Optional:
                              circt-bmc --module name (default: top)
   --formal-global-propagate-bmc-run-smtlib
                              Pass --run-smtlib to circt-bmc global filter
-  --formal-global-propagate-bmc-z3 PATH
-                             Optional z3 path passed to circt-bmc --z3-path
+  --formal-global-propagate-bmc-z3 PATH|auto
+                             Optional z3 path passed to circt-bmc --z3-path.
+                             Use 'auto' to resolve z3 from PATH.
   --formal-global-propagate-bmc-assume-known-inputs
                              Pass --assume-known-inputs to circt-bmc global
                              filter
@@ -530,6 +532,15 @@ resolve_circt_tool_path() {
   resolve_tool_path "$requested"
 }
 
+resolve_z3_path() {
+  local requested="$1"
+  if [[ "$requested" == "auto" ]]; then
+    resolve_tool_path "z3"
+    return
+  fi
+  resolve_tool_path "$requested"
+}
+
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
   if ! FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC_RESOLVED="$(resolve_circt_tool_path "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" "circt-lec")"; then
     echo "Unable to resolve --formal-global-propagate-circt-lec executable: $FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC (searched repo build/bin, install-tree sibling bin, and PATH)." >&2
@@ -537,8 +548,12 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_LEC" ]]; then
   fi
 fi
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_Z3" ]]; then
-  if ! FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_Z3")"; then
-    echo "Unable to resolve --formal-global-propagate-z3 executable: $FORMAL_GLOBAL_PROPAGATE_Z3" >&2
+  if ! FORMAL_GLOBAL_PROPAGATE_Z3_RESOLVED="$(resolve_z3_path "$FORMAL_GLOBAL_PROPAGATE_Z3")"; then
+    if [[ "$FORMAL_GLOBAL_PROPAGATE_Z3" == "auto" ]]; then
+      echo "Unable to resolve --formal-global-propagate-z3 executable: auto (searched PATH)." >&2
+    else
+      echo "Unable to resolve --formal-global-propagate-z3 executable: $FORMAL_GLOBAL_PROPAGATE_Z3" >&2
+    fi
     exit 1
   fi
 fi
@@ -549,8 +564,12 @@ if [[ -n "$FORMAL_GLOBAL_PROPAGATE_CIRCT_BMC" ]]; then
   fi
 fi
 if [[ -n "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3" ]]; then
-  if ! FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED="$(resolve_tool_path "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3")"; then
-    echo "Unable to resolve --formal-global-propagate-bmc-z3 executable: $FORMAL_GLOBAL_PROPAGATE_BMC_Z3" >&2
+  if ! FORMAL_GLOBAL_PROPAGATE_BMC_Z3_RESOLVED="$(resolve_z3_path "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3")"; then
+    if [[ "$FORMAL_GLOBAL_PROPAGATE_BMC_Z3" == "auto" ]]; then
+      echo "Unable to resolve --formal-global-propagate-bmc-z3 executable: auto (searched PATH)." >&2
+    else
+      echo "Unable to resolve --formal-global-propagate-bmc-z3 executable: $FORMAL_GLOBAL_PROPAGATE_BMC_Z3" >&2
+    fi
     exit 1
   fi
 fi

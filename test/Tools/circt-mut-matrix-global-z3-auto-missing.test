@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/prefix/bin %t/prefix/share/circt/utils %t/empty
+// RUN: cp "$(command -v circt-mut)" %t/prefix/bin/circt-mut
+// RUN: chmod +x %t/prefix/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/prefix/share/circt/utils/run_mutation_matrix.sh
+// RUN: chmod +x %t/prefix/share/circt/utils/run_mutation_matrix.sh
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: not env PATH=%t/empty %t/prefix/bin/circt-mut matrix --lanes-tsv %t/lanes.tsv --default-formal-global-propagate-z3 auto > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: circt-mut matrix: unable to resolve --default-formal-global-propagate-z3 executable: auto (searched PATH).
