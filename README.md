@@ -243,6 +243,8 @@ circt-mut report --project-dir mut-campaign --mode all --out reports/campaign.ts
 `<project-dir>/out/matrix` defaults), then emits key-value summaries for:
 - cover mutation buckets and coverage.
 - matrix lane pass/fail/gate status and aggregated per-lane mutant metrics.
+ - formal-global-filter telemetry aggregation (timeouts, unknown outcomes,
+   chain fallback counters, runtime/run counters, and BMC orig-cache counters).
 
 Run a single mutation campaign:
 
