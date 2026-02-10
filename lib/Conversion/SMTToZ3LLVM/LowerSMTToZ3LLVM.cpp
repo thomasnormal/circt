@@ -1409,6 +1409,49 @@ struct IntAbsOpLowering : public SMTLoweringPattern<IntAbsOp> {
   }
 };
 
+/// Lower bridge casts from concrete integer values to `smt.bv` into direct Z3
+/// numeral construction, producing an AST pointer.
+struct IntegerToBVCastLowering
+    : public SMTLoweringPattern<UnrealizedConversionCastOp> {
+  using SMTLoweringPattern::SMTLoweringPattern;
+  using OpAdaptor = typename SMTLoweringPattern<
+      UnrealizedConversionCastOp>::OpAdaptor;
+
+  LogicalResult
+  matchAndRewrite(UnrealizedConversionCastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const final {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return failure();
+
+    auto intTy = dyn_cast<IntegerType>(op.getInputs()[0].getType());
+    auto bvTy = dyn_cast<smt::BitVectorType>(op.getOutputs()[0].getType());
+    if (!intTy || !bvTy)
+      return failure();
+    if (intTy.getWidth() != bvTy.getWidth() || bvTy.getWidth() > 64)
+      return failure();
+
+    Value integerValue = adaptor.getInputs()[0];
+    auto adaptedIntTy = dyn_cast<IntegerType>(integerValue.getType());
+    if (!adaptedIntTy)
+      return failure();
+
+    Location loc = op.getLoc();
+    Value valueI64 = integerValue;
+    if (adaptedIntTy.getWidth() < 64) {
+      valueI64 = LLVM::ZExtOp::create(rewriter, loc, rewriter.getI64Type(),
+                                      integerValue);
+    } else if (adaptedIntTy.getWidth() > 64) {
+      return failure();
+    }
+
+    Value bvSort = buildSort(rewriter, loc, op.getOutputs()[0].getType());
+    Value ast = buildPtrAPICall(rewriter, loc, "Z3_mk_unsigned_int64",
+                                {valueI64, bvSort});
+    rewriter.replaceOp(op, ast);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1638,8 +1681,8 @@ void circt::populateSMTToZ3LLVMConversionPatterns(
   // information.
   patterns.add<DeclareFunOpLowering, CheckOpLowering>(
       converter, patterns.getContext(), globals, options, modelPrintTracker);
-  patterns.add<BVConstantOpLowering, AssertOpLowering, ResetOpLowering,
-               PushOpLowering, PopOpLowering,
+  patterns.add<BVConstantOpLowering, IntegerToBVCastLowering,
+               AssertOpLowering, ResetOpLowering, PushOpLowering, PopOpLowering,
                SolverOpLowering, ApplyFuncOpLowering, YieldOpLowering,
                RepeatOpLowering, ExtractOpLowering, BoolConstantOpLowering,
                IntConstantOpLowering, ArrayBroadcastOpLowering, BVCmpOpLowering,
@@ -1725,6 +1768,13 @@ void LowerSMTToZ3LLVMPass::runOnOperation() {
   LLVMConversionTarget target(getContext());
   target.addLegalOp<mlir::ModuleOp>();
   target.addLegalOp<scf::YieldOp>();
+  target.addDynamicallyLegalOp<UnrealizedConversionCastOp>(
+      [](UnrealizedConversionCastOp op) {
+        if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+          return true;
+        return !(isa<IntegerType>(op.getInputs()[0].getType()) &&
+                 isa<smt::BitVectorType>(op.getOutputs()[0].getType()));
+      });
 
   if (failed(applyFullConversion(getOperation(), target, std::move(patterns))))
     return signalPassFailure();

@@ -201,6 +201,22 @@ See CHANGELOG.md on recent progress.
 17. Next closure feature for this bucket:
     - legalize/eliminate mixed concrete (`i1`) <-> symbolic (`!smt.bv<1>`)
       bridge casts from 4-state `hw.struct` paths in BMC lowering.
+18. Bridge-cast lowering progress (February 10, 2026):
+    - `LowerSMTToZ3LLVM` now lowers `builtin.unrealized_conversion_cast`
+      from concrete integers (`iN`) to `!smt.bv<N>` directly to
+      `Z3_mk_unsigned_int64` (for `N<=64`), with conversion tests.
+19. Remaining prioritized blocker in this bucket:
+    - reverse bridge materialization (`!llvm.ptr` -> `!smt.bv<1>` -> `i1`)
+      still appears on 4-state UVM paths and currently blocks the 6-case
+      multiclock/local-var/`disable iff` candidate set (`pass=0 error=6`).
+20. Feasibility check (February 10, 2026):
+    direct reuse of `circt-lec` LLHD interface-stripping passes in the BMC
+    pipeline is not drop-in; the attempt fails with
+    `LLHD operations are not supported by circt-lec` in current BMC flow.
+21. Next closure implementation target:
+    build a BMC-native LLHD/interface-storage elimination step for 4-state
+    bridge paths (`smt.bv` <-> `i1` round-trips) before SMT-to-Z3 LLVM
+    lowering, with focused regression on the 6-case UVM candidate set.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
