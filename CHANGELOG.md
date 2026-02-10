@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 923 - February 10, 2026
+
+### BMC/LEC Syntax-Tree Completeness Audit (Formal Closure Backlog)
+
+1. Audited current BMC/LEC formal lowering surfaces for explicit
+   unsupported-syntax diagnostics and hard-fail boundaries.
+2. Confirmed concrete BMC closure gaps still present:
+   - `lib/Tools/circt-bmc/LowerToBMC.cpp`:
+     clock inputs nested in `hw.struct` are rejected.
+   - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`:
+     SMT-LIB export still rejects LLVM ops inside `verif.bmc` regions.
+   - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`:
+     register init-value lowering remains constrained to accepted typed attrs.
+3. Confirmed concrete LEC closure gaps still present:
+   - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+     multiple LLHD signal/ref probe/drive/cast paths still emit unsupported
+     diagnostics and fail.
+   - `lib/Tools/circt-lec/LowerLECLLVM.cpp`:
+     unsupported LLVM struct conversion paths still fail.
+4. Updated `PROJECT_PLAN.md` with these syntax-tree completeness items as
+   prioritized near-term formal closure targets.
+
 ## Iteration 922 - February 10, 2026
 
 ### BMC Semantic-Closure Hardening: Provenance Volume Drift Gate

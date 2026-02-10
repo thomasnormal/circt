@@ -145,10 +145,22 @@ See CHANGELOG.md on recent progress.
     (`unclassified_cases=0` in the latest full lane sweep).
   - Remaining closure gap is now semantic correctness (reducing fail-like rows
     themselves), not bucket attribution coverage.
+  - Syntax-tree completeness gaps to close next:
+    - BMC: support clock fields nested inside `hw.struct` inputs instead of
+      hard-failing (`LowerToBMC.cpp`).
+    - BMC SMT-LIB export: remove residual LLVM-in-`verif.bmc` dependency so
+      `for-smtlib-export` no longer rejects LLVM ops in BMC regions.
+    - BMC: widen register-initial-value lowering beyond current typed-attr
+      constraints where feasible (`VerifToSMT.cpp`).
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
   - Improve 4-state/X-prop semantic alignment and diagnostics.
+  - Syntax-tree completeness gaps to close next:
+    - LLHD signal/ref lowering still has unsupported probe/drive/cast patterns
+      that currently fail with explicit diagnostics (`StripLLHDInterfaceSignals.cpp`).
+    - LLVM struct conversion still has unsupported lowering edges in some paths
+      (`LowerLECLLVM.cpp`).
 - DevEx/CI:
   - Promote lane-state inspector to required pre-resume CI gate.
   - Add per-lane historical trend dashboards and automatic anomaly detection.
