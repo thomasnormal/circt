@@ -1,0 +1,23 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout_dir="mutation-matrix-results"\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    --out-dir) out_dir="$2"; shift 2 ;;&\n    --out-dir=*) out_dir="${1#*=}"; shift ;;&\n    *) shift ;;&\n  esac\ndone\nmkdir -p "$out_dir"\n{\n  echo "lane_id\tstatus\tcoverage_percent\tgate_status"\n  echo "lane1\tPASS\t10.0\tPASS"\n  echo "lane_extra\tPASS\t20.0\tPASS"\n} > "$out_dir/results.tsv"\nfor a in "$@"; do\n  echo "ARG:$a"\ndone\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_EQ\n2 M_UNKNOWN\n' > %t/mutations.txt
+// RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -i) in="$2"; shift 2 ;;&\n    -o) out="$2"; shift 2 ;;&\n    -d) design="$2"; shift 2 ;;&\n    *) shift ;;&\n  esac\ndone\nspec=$(sed -n "1p" "$in" | cut -d" " -f2-)\n{\n  echo "// design: $design"\n  echo "// spec: $spec"\n} > "$out"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmutant="${@: -1}"\nif grep -q "spec: M_EQ" "$mutant"; then\n  echo LEC_RESULT=EQ\nelse\n  echo LEC_RESULT=UNKNOWN\nfi\n' > %t/fake-circt-lec.sh
+// RUN: chmod +x %t/fake-circt-lec.sh
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv %t/lanes.tsv --out-dir %t/out --native-global-filter-prequalify --create-mutated-script %t/fake-create-mutated.sh --default-formal-global-propagate-circt-lec %t/fake-circt-lec.sh > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+//
+// LOG-DAG: native_matrix_prequalify_results_tsv{{[[:space:]]+}}{{.*}}/out/results.tsv
+// LOG-DAG: native_matrix_prequalify_results_annotated_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_results_missing_lanes{{[[:space:]]+}}1
+//
+// RESULTS: lane_id{{[[:space:]]}}status{{[[:space:]]}}coverage_percent{{[[:space:]]}}gate_status{{[[:space:]]}}prequalify_summary_present{{[[:space:]]}}prequalify_total_mutants{{[[:space:]]}}prequalify_not_propagated_mutants{{[[:space:]]}}prequalify_propagated_mutants
+// RESULTS: lane1{{[[:space:]]}}PASS{{[[:space:]]}}10.0{{[[:space:]]}}PASS{{[[:space:]]}}1{{[[:space:]]}}2{{[[:space:]]}}0{{[[:space:]]}}2
+// RESULTS: lane_extra{{[[:space:]]}}PASS{{[[:space:]]}}20.0{{[[:space:]]}}PASS{{[[:space:]]}}0{{[[:space:]]}}-{{[[:space:]]}}0{{[[:space:]]}}0
