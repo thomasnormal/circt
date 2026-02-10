@@ -40,6 +40,9 @@ Options:
   --fail-on-new-bmc-drop-remark-cases
                          Fail when BMC dropped-syntax remark count
                          (`bmc_drop_remark_cases`) increases vs baseline
+  --fail-on-new-bmc-drop-remark-case-ids
+                         Fail when BMC dropped-syntax affected case IDs
+                         increase vs baseline
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1705,6 +1708,7 @@ FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
+FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
 BMC_DROP_REMARK_PATTERN="${BMC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
@@ -2006,6 +2010,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-cases)
       FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1; shift ;;
+    --fail-on-new-bmc-drop-remark-case-ids)
+      FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -3858,6 +3864,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -7895,14 +7902,17 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
   else
     sv_bmc_provenance_file="$OUT_DIR/sv-tests-bmc-abstraction-provenance.tsv"
     sv_bmc_check_attribution_file="$OUT_DIR/sv-tests-bmc-check-attribution.tsv"
+    sv_bmc_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-drop-remark-cases.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
+    : > "$sv_bmc_drop_remark_cases_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
+      BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -7972,13 +7982,16 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_results_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-results.txt"
     sv_bmc_uvm_semantics_provenance_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv"
     sv_bmc_uvm_semantics_check_attribution_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-check-attribution.tsv"
+    sv_bmc_uvm_semantics_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
+    : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env OUT="$sv_bmc_uvm_semantics_results_file" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_uvm_semantics_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
+      BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
@@ -8052,12 +8065,15 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
   else
     verilator_bmc_provenance_file="$OUT_DIR/verilator-bmc-abstraction-provenance.tsv"
     verilator_bmc_check_attribution_file="$OUT_DIR/verilator-bmc-check-attribution.tsv"
+    verilator_bmc_drop_remark_cases_file="$OUT_DIR/verilator-bmc-drop-remark-cases.tsv"
     : > "$verilator_bmc_provenance_file"
     : > "$verilator_bmc_check_attribution_file"
+    : > "$verilator_bmc_drop_remark_cases_file"
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
+      BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -8129,8 +8145,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
   else
     yosys_bmc_provenance_file="$OUT_DIR/yosys-bmc-abstraction-provenance.tsv"
     yosys_bmc_check_attribution_file="$OUT_DIR/yosys-bmc-check-attribution.tsv"
+    yosys_bmc_drop_remark_cases_file="$OUT_DIR/yosys-bmc-drop-remark-cases.tsv"
     : > "$yosys_bmc_provenance_file"
     : > "$yosys_bmc_check_attribution_file"
+    : > "$yosys_bmc_drop_remark_cases_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -8140,6 +8158,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
       BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
+      BMC_DROP_REMARK_CASES_OUT="$yosys_bmc_drop_remark_cases_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
@@ -10160,6 +10179,31 @@ def collect_bmc_abstraction_provenance(out_dir: Path):
                 provenance.setdefault(key, set()).add(token)
     return {key: ";".join(sorted(values)) for key, values in provenance.items()}
 
+def collect_bmc_drop_remark_cases(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-drop-remark-cases.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-drop-remark-cases.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-drop-remark-cases.tsv"),
+    ]
+    cases = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    cases.setdefault(key, set()).add(case_id)
+    return {key: ";".join(sorted(values)) for key, values in cases.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -10186,6 +10230,7 @@ def compute_pass_rate(total: int, passed: int, xfail: int, skipped: int) -> floa
 
 failure_cases = collect_failure_cases(out_dir, rows)
 bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
+bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
 
 baseline = {}
 if baseline_path.exists():
@@ -10219,6 +10264,7 @@ if baseline_path.exists():
                 'result': row.get('result', ''),
                 'failure_cases': row.get('failure_cases', ''),
                 'bmc_abstraction_provenance': row.get('bmc_abstraction_provenance', ''),
+                'bmc_drop_remark_case_ids': row.get('bmc_drop_remark_case_ids', ''),
             }
 
 for row in rows:
@@ -10246,6 +10292,7 @@ for row in rows:
         'result': row['summary'],
         'failure_cases': failure_cases.get((row['suite'], row['mode']), ''),
         'bmc_abstraction_provenance': bmc_abstraction_provenance.get((row['suite'], row['mode']), ''),
+        'bmc_drop_remark_case_ids': bmc_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -10267,6 +10314,7 @@ with baseline_path.open('w', newline='') as f:
             'result',
             'failure_cases',
             'bmc_abstraction_provenance',
+            'bmc_drop_remark_case_ids',
         ],
         delimiter='\t',
     )
@@ -10325,6 +10373,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
@@ -10348,6 +10397,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
@@ -10496,6 +10546,31 @@ def collect_bmc_abstraction_provenance(out_dir: Path):
                     provenance.setdefault(key, set()).add(token)
     return provenance
 
+def collect_bmc_drop_remark_cases(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-drop-remark-cases.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-drop-remark-cases.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-drop-remark-cases.tsv"),
+    ]
+    cases = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    cases.setdefault(key, set()).add(case_id)
+    return cases
+
 summary = {}
 with summary_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -10505,6 +10580,9 @@ with summary_path.open() as f:
 
 current_failure_cases = collect_failure_cases(Path(os.environ["OUT_DIR"]), summary)
 current_bmc_abstraction_provenance = collect_bmc_abstraction_provenance(
+    Path(os.environ["OUT_DIR"])
+)
+current_bmc_drop_remark_cases = collect_bmc_drop_remark_cases(
     Path(os.environ["OUT_DIR"])
 )
 
@@ -10530,6 +10608,9 @@ fail_on_new_bmc_unknown_cases = (
 )
 fail_on_new_bmc_drop_remark_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASES", "0") == "1"
+)
+fail_on_new_bmc_drop_remark_case_ids = (
+    os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS", "0") == "1"
 )
 fail_on_new_bmc_backend_parity_mismatch_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
@@ -10730,6 +10811,28 @@ for key, current_row in summary.items():
                     sample += ", ..."
                 gate_errors.append(
                     f"{suite} {mode}: new failure cases observed (baseline={len(baseline_case_set)} current={len(current_case_set)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_bmc_drop_remark_case_ids and mode.startswith("BMC"):
+        baseline_drop_case_ids_raw = [
+            row.get("bmc_drop_remark_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_drop_case_ids_raw):
+            baseline_drop_case_set = set()
+            for raw in baseline_drop_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_drop_case_set.add(token)
+            current_drop_case_set = current_bmc_drop_remark_cases.get(key, set())
+            new_drop_cases = sorted(current_drop_case_set - baseline_drop_case_set)
+            if new_drop_cases:
+                sample = ", ".join(new_drop_cases[:3])
+                if len(new_drop_cases) > 3:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new dropped-syntax cases observed (baseline={len(baseline_drop_case_set)} current={len(current_drop_case_set)}, window={baseline_window}): {sample}"
                 )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))

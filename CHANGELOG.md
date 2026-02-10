@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 930 - February 10, 2026
+
+### BMC Strict-Gate Hardening: Per-Case Drop-Remark Drift Gate
+
+1. Added per-case dropped-syntax artifact support to BMC runners:
+   - `utils/run_sv_tests_circt_bmc.sh`:
+     new `BMC_DROP_REMARK_CASES_OUT` export + deduplicated case tracking.
+   - `utils/run_verilator_verification_circt_bmc.sh`:
+     new `BMC_DROP_REMARK_CASES_OUT` export + deduplicated case tracking.
+   - `utils/run_yosys_sva_circt_bmc.sh`:
+     new `BMC_DROP_REMARK_CASES_OUT` export, with per-test dedup across
+     `pass`/`fail` mode runs.
+2. Updated `utils/run_formal_all.sh`:
+   - wires lane-local drop-case artifacts for all BMC lanes:
+     `sv-tests/BMC`, `sv-tests-uvm/BMC_SEMANTICS`,
+     `verilator-verification/BMC`, `yosys/tests/sva/BMC`.
+   - baseline updates now persist case-level drop telemetry in new column:
+     `bmc_drop_remark_case_ids`.
+   - added strict-gate option:
+     `--fail-on-new-bmc-drop-remark-case-ids`.
+   - `--strict-gate` now enables this case-ID drift gate by default.
+3. Added/updated regressions:
+   - `test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-ids.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test`
+     (now checks `BMC_DROP_REMARK_CASES_OUT` artifact rows)
+   - `test/Tools/run-yosys-sva-bmc-drop-remarks.test`
+     (now checks `BMC_DROP_REMARK_CASES_OUT` artifact rows + dedup line count)
+4. Validation:
+   - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-ids.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test test/Tools/run-yosys-sva-bmc-drop-remarks.test`
+     -> `5 passed`.
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate*.test`
+     -> `26 passed`.
+   - real focused lane sweeps:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-caseids-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+       -> both lanes emit `*drop-remark-cases.tsv` artifacts and report
+          `bmc_drop_remark_cases=0`.
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-caseids-sv-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+       -> `sv-tests/BMC total=26 pass=26 fail=0 bmc_drop_remark_cases=0`.
+
 ## Iteration 929 - February 10, 2026
 
 ### BMC No-Drop Hardening: Structured Drop-Remark Telemetry in Verilator/Yosys Runners
