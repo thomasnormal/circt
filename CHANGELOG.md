@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 993 - February 10, 2026
+
+### `circt-mut report`: Trend Policies Gate Skip-Lane Drift
+
+1. Extended matrix trend policy bundles in
+   `tools/circt-mut/circt-mut.cpp` to treat growing skip-lane counts as
+   regressions:
+   - `formal-regression-matrix-trend`
+   - `formal-regression-matrix-trend-guard`
+   - `formal-regression-matrix-lane-trend-nightly`
+   - `formal-regression-matrix-lane-trend-strict`
+2. Added trend gate rule in each profile:
+   - `matrix.lanes_skip trend_delta <= 0`
+3. This closes a governance gap where stop-on-fail skip rows were visible in
+   single-run strict value gates but not enforced in trend-based policy
+   workflows.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-trend-skip-delta-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-trend-guard-skip-delta-fail.test`
+   - updated `test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-fail.test`
+     to include `matrix.lanes_skip` history input for complete trend key
+     coverage.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (64/64)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (192/192)
+- External filtered formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-trend-skip-policy-20260210 ...`
+  - PASS: `sv-tests` BMC/LEC (filtered-empty), `verilator-verification` BMC/LEC,
+    `yosys/tests/sva` BMC/LEC, `opentitan` LEC, AVIP compile for
+    `ahb/apb/axi4/i2s/i3c/jtag/spi`
+  - FAIL (known): AVIP compile `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 992 - February 10, 2026
 
 ### `circt-mut report`: Strict Matrix Policies Gate `SKIP` Lanes
