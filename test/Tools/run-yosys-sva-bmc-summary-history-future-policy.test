@@ -22,7 +22,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE=%t/history.tsv \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events.jsonl \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out 2> %t/run.err
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out 2> %t/run.err
 
 // RUN: cat %t/run.err | FileCheck %s --check-prefix=WARNERR
 // RUN: sed 's/\t/|/g' %t/history.tsv | FileCheck %s --check-prefix=TSV
@@ -35,7 +35,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_FUTURE_POLICY=bogus \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADPOLICY
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADPOLICY
 
 // WARNERR: warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_TSV_FILE
 // WARNERR: warning: generated_at_utc exceeds YOSYS_SVA_MODE_SUMMARY_HISTORY_MAX_FUTURE_SKEW_SECS in YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE

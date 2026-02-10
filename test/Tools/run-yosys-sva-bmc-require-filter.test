@@ -1,0 +1,4 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: not env -u TEST_FILTER %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s
+//
+// CHECK: must set TEST_FILTER explicitly (no default filter)

@@ -3,10 +3,10 @@
 // RUN: printf 'a\tpass\tknown\txfail\nb\tpass\tknown\txfail\nc\tpass\tknown\tfail\n' > %t/new.txt
 // RUN: env EXPECT_FILE=%t/new.txt EXPECT_DIFF_BASELINE=%t/base.txt XFAIL_FILE=/dev/null \
 // RUN:   EXPECT_DIFF_FAIL_ON_CHANGE=0 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s
 // RUN: not env EXPECT_FILE=%t/new.txt EXPECT_DIFF_BASELINE=%t/base.txt XFAIL_FILE=/dev/null \
 // RUN:   EXPECT_DIFF_FAIL_ON_CHANGE=1 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=FAILON
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=FAILON
 
 // CHECK: expect-diff summary: added=1, removed=1, changed=1
 // CHECK: EXPECT_DIFF_ADDED: c|pass|known -> fail

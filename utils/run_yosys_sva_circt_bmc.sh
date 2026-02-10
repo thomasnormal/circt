@@ -38,6 +38,7 @@ KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
+BMC_DROP_REMARK_REASONS_OUT="${BMC_DROP_REMARK_REASONS_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_TSV_FILE="${YOSYS_SVA_MODE_SUMMARY_TSV_FILE:-}"
 YOSYS_SVA_MODE_SUMMARY_JSON_FILE="${YOSYS_SVA_MODE_SUMMARY_JSON_FILE:-}"
@@ -139,6 +140,11 @@ if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   exit 1
 fi
 
+if [[ -z "$TEST_FILTER" ]]; then
+  echo "must set TEST_FILTER explicitly (no default filter)" >&2
+  exit 1
+fi
+
 tmpdir="$(mktemp -d)"
 if [[ -n "$OUT" ]]; then
   mkdir -p "$(dirname "$OUT")"
@@ -184,6 +190,7 @@ declare -A regen_override_cases
 declare -A suite_tests
 declare -A semantic_tags_by_case
 declare -A drop_remark_seen_cases
+declare -A drop_remark_seen_case_reasons
 declare -a addrow_filter_source_patterns=()
 declare -a addrow_filter_key_patterns=()
 declare -a addrow_filter_row_patterns=()
@@ -8112,6 +8119,36 @@ record_drop_remark_case() {
   if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
     return
   fi
+  while IFS= read -r reason; do
+    if [[ -z "$reason" ]]; then
+      continue
+    fi
+    local reason_key="${case_id}|${reason}"
+    if [[ -n "${drop_remark_seen_case_reasons["$reason_key"]+x}" ]]; then
+      continue
+    fi
+    drop_remark_seen_case_reasons["$reason_key"]=1
+    if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+      printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$BMC_DROP_REMARK_REASONS_OUT"
+    fi
+  done < <(
+    awk -v pattern="$DROP_REMARK_PATTERN" '
+      index($0, pattern) {
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
+          line = substr(line, RLENGTH + 1)
+        sub(/^[Ww]arning:[[:space:]]*/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        gsub(/[0-9]+/, "<n>", line)
+        gsub(/;/, ",", line)
+        if (length(line) > 240)
+          line = substr(line, 1, 240)
+        print line
+      }
+    ' "$verilog_log" | sort -u
+  )
   if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
     return
   fi
@@ -8428,6 +8465,9 @@ if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; the
 fi
 if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
   sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" && -f "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_REASONS_OUT" "$BMC_DROP_REMARK_REASONS_OUT"
 fi
 
 if [[ "$EXPECT_LINT" == "1" ]] && [[ "$EXPECT_LINT_FAIL_ON_ISSUES" == "1" ]] && ((lint_issues > 0)); then

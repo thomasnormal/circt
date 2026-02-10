@@ -6,7 +6,7 @@
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 OUT=%t/out.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
 // RUN: FileCheck %s --check-prefix=RUNOUT < %t/run.out
 // RUN: cat %t/out.tsv | FileCheck %s --check-prefix=OUTTSV
 

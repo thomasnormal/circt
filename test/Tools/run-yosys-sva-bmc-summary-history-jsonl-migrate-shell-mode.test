@@ -15,7 +15,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-new \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_MIGRATION_MODE=shell \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_JSONL_FILE=%t/history.jsonl \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out
 
 // RUN: cat %t/history.jsonl | FileCheck %s --check-prefix=JSONL
 

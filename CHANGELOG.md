@@ -1,5 +1,62 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 983 - February 10, 2026
+
+### `circt-mut matrix`: Native Dispatch Lane-Filter Parity
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` with
+   lane-selection parity for:
+   - `--include-lane-regex`
+   - `--exclude-lane-regex`
+2. Added native regex validation with explicit diagnostics:
+   - invalid include/exclude regex now fails immediately with
+     `circt-mut matrix: invalid --{include,exclude}-lane-regex: ...`.
+3. Applied filtering before lane accounting/dispatch so native `results.tsv`
+   and telemetry reflect only selected lanes.
+4. Added regression tests:
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-filter.test`
+   - `test/Tools/circt-mut-matrix-native-dispatch-lane-filter-invalid.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch*.test`: PASS (6/6)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-*.test`: PASS (49/49)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (186/186)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-lane-filters-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*'`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator BMC/LEC PASS, yosys BMC/LEC PASS, opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
+## Iteration 982 - February 10, 2026
+
+### `yosys/tests/sva` BMC: Enforce Explicit Caller Filter Contract
+
+1. Enforced explicit `TEST_FILTER` in `utils/run_yosys_sva_circt_bmc.sh`:
+   - empty filter now fails fast with:
+     `must set TEST_FILTER explicitly (no default filter)`.
+2. Added dedicated regression coverage:
+   - `test/Tools/run-yosys-sva-bmc-require-filter.test`.
+3. Migrated direct lit callers to pass explicit filters:
+   - updated all `run-yosys-sva-bmc-*.test` and
+     `circt-bmc/yosys-sva-*.mlir` invocations to set
+     `TEST_FILTER='.*'` explicitly.
+4. Updated planning state:
+   - `PROJECT_PLAN.md` caller-owned filter hardening now records
+     `yosys/tests/sva` BMC/LEC direct runners as fully on explicit-filter
+     contract.
+
+### Tests and Validation
+
+- `bash -n utils/run_yosys_sva_circt_bmc.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-yosys-sva-bmc-require-filter.test`: PASS (1/1)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-yosys-sva-bmc-*.test test/Tools/circt-bmc/yosys-sva-*.mlir`: PASS (54/54)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-*.test`: PASS (74/74)
+- External smoke:
+  - `utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    fails with required-filter diagnostic.
+  - `TEST_FILTER=basic02 BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`:
+    PASS (`failures=0`, `drop_remark_cases=0`).
+
 ## Iteration 981 - February 10, 2026
 
 ### `circt-mut matrix`: Native Dispatch Gate-Override Parity

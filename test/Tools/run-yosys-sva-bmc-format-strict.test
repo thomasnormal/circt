@@ -11,7 +11,7 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run \
 // RUN:   EXPECT_FORMAT_FILES=XFAIL_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
 // RUN: sed 's/\t/|/g' %t/unfixable.tsv | FileCheck %s --check-prefix=UNFIX
 
 // CHECK: EXPECT_FORMAT: mode=dry-run file={{.*xfail.txt}} rows=0 malformed=1 changed=0 malformed_suggested=0 malformed_fixed=0 malformed_unfixable=1

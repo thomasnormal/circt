@@ -7,15 +7,17 @@
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 BMC_DROP_REMARK_CASES_OUT=%t/drop.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.log
+// RUN:   BMC_DROP_REMARK_REASONS_OUT=%t/reasons.tsv \
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.log
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
 // RUN: FileCheck %s --check-prefix=DROPPED < %t/drop.tsv
+// RUN: FileCheck %s --check-prefix=REASON < %t/reasons.tsv
 // RUN: test "$(wc -l < %t/drop.tsv)" -eq 1
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 FAIL_ON_DROP_REMARKS=1 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/gate.log 2>&1
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/gate.log 2>&1
 // RUN: FileCheck %s --check-prefix=GATE < %t/gate.log
 //
 // SUMMARY: PASS(pass): simple
@@ -23,5 +25,6 @@
 // SUMMARY: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
 // SUMMARY: yosys dropped-syntax summary: drop_remark_cases=1
 // DROPPED: simple{{[[:space:]]+}}{{.*}}simple.sv
+// REASON: simple{{[[:space:]]+}}{{.*}}simple.sv{{[[:space:]]+}}unsupported construct will be dropped during lowering
 // GATE: yosys dropped-syntax summary: drop_remark_cases=1
 // GATE: FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=1

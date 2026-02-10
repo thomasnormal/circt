@@ -16,7 +16,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=dry-run \
 // RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/dry.diff \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
 // RUN: FileCheck %s --check-prefix=DRYOUT < %t/dry.out
 // RUN: sed 's/\t/|/g' %t/expect-dry.txt | FileCheck %s --check-prefix=DRYFILE
 // RUN: sed 's/\t/|/g' %t/dry.diff | FileCheck %s --check-prefix=DRYDIFF
@@ -26,7 +26,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_APPLY_MODE=apply \
 // RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply.diff \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
 // RUN: FileCheck %s --check-prefix=APPLYOUT < %t/apply.out
 // RUN: sed 's/\t/|/g' %t/expect-apply.txt | FileCheck %s --check-prefix=APPLYFILE
 // RUN: sed 's/\t/|/g' %t/apply.diff | FileCheck %s --check-prefix=APPLYDIFF
@@ -38,7 +38,7 @@
 // RUN:   EXPECT_LINT_APPLY_ACTIONS=drop-row,set-row,add-row \
 // RUN:   EXPECT_LINT_APPLY_ADDROW_FILTER_FILE=%t/addrow-deny.tsv \
 // RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply-add-deny.diff \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-deny.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-deny.out
 // RUN: FileCheck %s --check-prefix=DENYOUT < %t/apply-add-deny.out
 // RUN: sed 's/\t/|/g' %t/expect-apply-add-deny.txt | FileCheck %s --check-prefix=DENYFILE
 // RUN: sed 's/\t/|/g' %t/apply-add-deny.diff | FileCheck %s --check-prefix=DENYDIFF
@@ -50,7 +50,7 @@
 // RUN:   EXPECT_LINT_APPLY_ACTIONS=drop-row,set-row,add-row \
 // RUN:   EXPECT_LINT_APPLY_ADDROW_FILTER_FILE=%t/addrow-allow.tsv \
 // RUN:   EXPECT_LINT_APPLY_DIFF_FILE=%t/apply-add-allow.diff \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-allow.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply-add-allow.out
 // RUN: FileCheck %s --check-prefix=ALLOWOUT < %t/apply-add-allow.out
 // RUN: sed 's/\t/|/g' %t/expect-apply-add-allow.txt | FileCheck %s --check-prefix=ALLOWFILE
 // RUN: sed 's/\t/|/g' %t/apply-add-allow.diff | FileCheck %s --check-prefix=ALLOWDIFF

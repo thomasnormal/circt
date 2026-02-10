@@ -4,7 +4,7 @@
 // RUN: env EXPECT_FILE=%t/new.txt EXPECT_DIFF_BASELINE=%t/base.txt XFAIL_FILE=/dev/null \
 // RUN:   EXPECT_DIFF_TSV_FILE=%t/diff.tsv EXPECT_DIFF_JSON_FILE=%t/diff.json \
 // RUN:   EXPECT_DIFF_FAIL_ON_CHANGE=0 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/diff.tsv | FileCheck %s --check-prefix=TSV
 // RUN: cat %t/diff.json | FileCheck %s --check-prefix=JSON
 

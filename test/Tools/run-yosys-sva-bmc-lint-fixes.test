@@ -9,7 +9,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_FAIL_ON_ISSUES=1 \
 // RUN:   EXPECT_LINT_FIXES_FILE=%t/fixes.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.txt
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.txt
 // RUN: FileCheck %s --check-prefix=OUT < %t/out.txt
 // RUN: sed 's/\t/|/g' %t/fixes.tsv | FileCheck %s --check-prefix=FIX
 

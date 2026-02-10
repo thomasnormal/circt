@@ -10,7 +10,7 @@
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE= \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
 
 // CHECK: EFAIL(pass): simple [known]
 // CHECK: PASS(fail): simple

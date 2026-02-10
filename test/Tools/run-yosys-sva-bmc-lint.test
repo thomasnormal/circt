@@ -5,7 +5,7 @@
 // RUN: not env EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
 // RUN:   EXPECT_REGEN_OVERRIDE_FILE=%t/overrides.txt EXPECT_LINT=1 \
 // RUN:   EXPECT_LINT_FAIL_ON_ISSUES=1 EXPECT_LINT_FILE=%t/lint.log \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t/empty | FileCheck %s --check-prefix=OUT
 // RUN: cat %t/lint.log | FileCheck %s --check-prefix=LOG
 
 // OUT-DAG: EXPECT_LINT(conflict): {{.*expect.txt}} row redefines ghost|pass|known: pass -> xfail

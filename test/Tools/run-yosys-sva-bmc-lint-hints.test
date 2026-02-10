@@ -9,7 +9,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_FAIL_ON_ISSUES=1 \
 // RUN:   EXPECT_LINT_HINTS_FILE=%t/hints.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/hints.tsv | FileCheck %s --check-prefix=HINT
 
 // OUT-DAG: EXPECT_LINT(unknown-test): EXPECT_FILE references missing test 'ghost' via key ghost|pass|known

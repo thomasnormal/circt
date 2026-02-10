@@ -12,7 +12,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_RUN_ID=run-1 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_TSV_FILE=%t/summary.tsv \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_JSON_FILE=%t/summary.json \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/summary.tsv | FileCheck %s --check-prefix=TSV
 // RUN: cat %t/summary.json | FileCheck %s --check-prefix=JSON
 

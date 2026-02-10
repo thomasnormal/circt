@@ -13,7 +13,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=dry-run EXPECT_FORMAT_FILES=XFAIL_FILE \
 // RUN:   EXPECT_FORMAT_MALFORMED_FIX_FILE=%t/dry-fixes.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/dry.out
 // RUN: FileCheck %s --check-prefix=DRYOUT < %t/dry.out
 // RUN: sed 's/\t/|/g' %t/malformed-dry.txt | FileCheck %s --check-prefix=DRYFILE
 // RUN: sed 's/\t/|/g' %t/dry-fixes.tsv | FileCheck %s --check-prefix=DRYFIX
@@ -23,7 +23,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=apply EXPECT_FORMAT_FILES=XFAIL_FILE \
 // RUN:   EXPECT_FORMAT_REWRITE_MALFORMED=1 EXPECT_FORMAT_MALFORMED_FIX_FILE=%t/apply-fixes.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
 // RUN: FileCheck %s --check-prefix=APPLYOUT < %t/apply.out
 // RUN: sed 's/\t/|/g' %t/malformed-apply.txt | FileCheck %s --check-prefix=APPLYFILE
 // RUN: sed 's/\t/|/g' %t/apply-fixes.tsv | FileCheck %s --check-prefix=APPLYFIX

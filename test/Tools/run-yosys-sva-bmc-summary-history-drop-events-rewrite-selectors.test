@@ -17,7 +17,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX='^target$' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/rewrite.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/rewrite.out
 // RUN: cat %t/drop-events.jsonl | FileCheck %s --check-prefix=SELECTOR
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-regex.jsonl
@@ -28,7 +28,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-regex.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX='(' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADREGEX
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADREGEX
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy-old","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"1999-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-time-window.jsonl
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy-new","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2001-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-time-window.jsonl
@@ -42,7 +42,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN='2000-01-01T00:00:00Z' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/time-window.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/time-window.out
 // RUN: cat %t/drop-events-time-window.jsonl | FileCheck %s --check-prefix=TIMEWINDOW
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-time-selector.jsonl
@@ -53,7 +53,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-time-selector.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN='bad' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADTIME
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADTIME
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-time-window.jsonl
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -64,7 +64,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MIN='2100-01-01T00:00:00Z' \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_ROW_GENERATED_AT_UTC_MAX='2000-01-01T00:00:00Z' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADWINDOW
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADWINDOW
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-schema-v1","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-v1.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-schema-selector.jsonl
 // RUN: printf '{"schema_version":"2","event_id":"drop-schema-v2","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-v2.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-schema-selector.jsonl
@@ -78,7 +78,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX='^2$' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/schema-selector.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/schema-selector.out
 // RUN: cat %t/drop-events-schema-selector.jsonl | FileCheck %s --check-prefix=SCHEMASEL
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-file-a","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-a.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-file-selector.jsonl
@@ -93,7 +93,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX='legacy-b\.tsv$' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-selector.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-selector.out
 // RUN: cat %t/drop-events-file-selector.jsonl | FileCheck %s --check-prefix=FILESEL
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-schema-selector-regex.jsonl
@@ -104,7 +104,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-schema-selector-regex.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_REGEX='(' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMAREGEX
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMAREGEX
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-history-file-selector-regex.jsonl
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -114,7 +114,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-history-file-selector-regex.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_REGEX='(' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADFILEREGEX
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADFILEREGEX
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-schema-list-v1","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-v1.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-schema-list-selector.jsonl
 // RUN: printf '{"schema_version":"2","event_id":"drop-schema-list-v2","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-v2.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-schema-list-selector.jsonl
@@ -128,7 +128,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST='2' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/schema-list-selector.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/schema-list-selector.out
 // RUN: cat %t/drop-events-schema-list-selector.jsonl | FileCheck %s --check-prefix=SCHEMALIST
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-file-list-a","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-a.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-file-list-selector.jsonl
@@ -143,7 +143,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST='legacy-b.tsv' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-list-selector.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-list-selector.out
 // RUN: cat %t/drop-events-file-list-selector.jsonl | FileCheck %s --check-prefix=FILELIST
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-schema-list-selector.jsonl
@@ -154,7 +154,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-schema-list-selector.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST='2,,3' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMALIST
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSCHEMALIST
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-file-list-comma","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy,comma.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-file-list-quoted-selector.jsonl
 // RUN: printf '{"schema_version":"1","event_id":"drop-file-list-other","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-other.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"same","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' >> %t/drop-events-file-list-quoted-selector.jsonl
@@ -168,7 +168,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_EVENT_ID_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_ID_METADATA_POLICY=rewrite \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST='"legacy,comma.tsv"' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-list-quoted-selector.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/file-list-quoted-selector.out
 // RUN: cat %t/drop-events-file-list-quoted-selector.jsonl | FileCheck %s --check-prefix=FILELISTQUOTED
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-file-list-malformed.jsonl
@@ -179,7 +179,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-file-list-malformed.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_HISTORY_FILE_LIST='"legacy.tsv' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADFILELISTMALFORMED
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADFILELISTMALFORMED
 
 // RUN: printf '{"schema_version":"2","event_id":"drop-any-mode-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy-any.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"not-target","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}\n' > %t/drop-events-any-mode.jsonl
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -194,7 +194,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_RUN_ID_REGEX='^target$' \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SCHEMA_VERSION_LIST='2' \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE='any' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/any-mode.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/any-mode.out
 // RUN: cat %t/drop-events-any-mode.jsonl | FileCheck %s --check-prefix=ANYMODE
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-legacy","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy"}\n' > %t/drop-events-bad-selector-mode.jsonl
@@ -205,7 +205,7 @@
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events-bad-selector-mode.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_REWRITE_SELECTOR_MODE='bogus' \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSELECTORMODE
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADSELECTORMODE
 
 // SELECTOR: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"target","id_hash_mode":"crc32","id_hash_algorithm":"crc32","id_hash_version":1}
 // SELECTOR: {"schema_version":"1","event_id":"drop-legacy-keep","generated_at_utc":"1970-01-01T00:00:00Z","reason":"max_entries","history_file":"legacy.tsv","history_format":"tsv","line":2,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"keep","id_hash_mode":"cksum","id_hash_algorithm":"cksum","id_hash_version":1}
