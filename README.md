@@ -252,11 +252,16 @@ Matrix default numeric/cache options now also fail fast natively:
 `--default-formal-global-propagate-bmc-ignore-asserts-until`,
 `--default-bmc-orig-cache-max-*`, and
 `--default-bmc-orig-cache-eviction-policy`.
+When effective matrix global-filter mode + timeout settings are non-zero
+(defaults or lane overrides), `circt-mut matrix` now also fail-fast checks
+that `timeout` is resolvable from the current `PATH`.
 `circt-mut cover` now also fail-fast validates its corresponding formal
 numeric/cache controls (`--formal-global-propagate-*_timeout-seconds`,
 `--formal-global-propagate-bmc-bound`,
 `--formal-global-propagate-bmc-ignore-asserts-until`,
 `--bmc-orig-cache-max-*`, `--bmc-orig-cache-eviction-policy`).
+For cover mode, non-zero timeout settings with an active global filter now
+also require a resolvable `timeout` executable in the current `PATH`.
 Both `circt-mut cover` and `circt-mut matrix` now also pre-resolve explicit Z3
 options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast

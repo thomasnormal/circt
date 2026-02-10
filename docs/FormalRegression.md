@@ -300,6 +300,9 @@ Execution controls:
     `--bmc-orig-cache-max-entries`, `--bmc-orig-cache-max-bytes`,
     `--bmc-orig-cache-max-age-seconds`,
     `--bmc-orig-cache-eviction-policy`.
+  - when any non-zero timeout is configured with an active cover global filter
+    mode, `circt-mut` now also fail-fast validates `timeout` availability from
+    the current `PATH`.
 - `circt-mut matrix` migration note:
   - default built-in global-filter options are now pre-resolved/validated
     natively (`--default-formal-global-propagate-circt-lec`,
@@ -337,6 +340,9 @@ Execution controls:
     `--default-bmc-orig-cache-max-bytes`,
     `--default-bmc-orig-cache-max-age-seconds`,
     `--default-bmc-orig-cache-eviction-policy`.
+  - when any effective matrix timeout is non-zero (default or lane override)
+    with an active effective global filter mode, `circt-mut` now fail-fast
+    validates `timeout` availability from the current `PATH`.
   - explicit default Z3 options are pre-resolved natively:
     `--default-formal-global-propagate-z3`,
     `--default-formal-global-propagate-bmc-z3`.
