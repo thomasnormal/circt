@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\n' > %t/lanes.tsv
+// RUN: not circt-mut matrix --native-matrix-dispatch --lanes-tsv %t/lanes.tsv --include-lane-regex '[bad' 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut matrix: invalid --include-lane-regex: [bad

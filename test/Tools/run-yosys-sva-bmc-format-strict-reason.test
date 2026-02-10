@@ -13,7 +13,7 @@
 // RUN:   EXPECT_FORMAT_FILES=XFAIL_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
 // RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER=syntax-* \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-nomatch.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=NOMATCH
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=NOMATCH
 // RUN: sed 's/\t/|/g' %t/unfixable-nomatch.tsv | FileCheck %s --check-prefix=NOMATCH-UNFIX
 
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -23,7 +23,7 @@
 // RUN:   EXPECT_FORMAT_FILES=XFAIL_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
 // RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_REASON_FILTER=semantic-invalid-* \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-match.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=MATCH
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=MATCH
 // RUN: sed 's/\t/|/g' %t/unfixable-match.tsv | FileCheck %s --check-prefix=MATCH-UNFIX
 
 // NOMATCH: EXPECT_FORMAT_STRICT: unfixable_total=1 scoped=0 fail=0 policy=custom file_filter=* profile_filter=* reason_filter=syntax-* severity_filter=*

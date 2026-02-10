@@ -13,7 +13,7 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/drop-events.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out 2> %t/run.err
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/run.out 2> %t/run.err
 //
 // RUN: cat %t/drop-events.jsonl | FileCheck %s --check-prefix=MIGRATE
 //
@@ -24,7 +24,7 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/bad-drop-events.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BAD
 
 // RUN: printf '{"schema_version":"1","event_id":"drop-1","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy","id_hash_algorithm":"sha256"}\n' > %t/bad-drop-events-idalgo.jsonl
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -33,7 +33,7 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_JSONL_FILE=%t/bad-drop-events-idalgo.jsonl \
 // RUN:   YOSYS_SVA_MODE_SUMMARY_HISTORY_DROP_EVENTS_LOCK_BACKEND=none \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADIDALGO
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t 2>&1 | FileCheck %s --check-prefix=BADIDALGO
 //
 // MIGRATE: {"schema_version":"1","event_id":"drop-{{[0-9]+}}","generated_at_utc":"1970-01-01T00:00:00Z","reason":"future_skew","history_file":"legacy.tsv","history_format":"tsv","line":1,"row_generated_at_utc":"2099-01-01T00:00:00Z","run_id":"legacy","id_hash_mode":"{{(cksum|crc32|unavailable)}}","id_hash_algorithm":"{{(cksum|crc32|unavailable)}}","id_hash_version":{{[0-9]+}},"producer":"legacy-tool","detail":{"ticket":7}}
 //

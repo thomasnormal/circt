@@ -10,7 +10,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_FORMAT_MODE=apply \
 // RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/apply.out
 // RUN: FileCheck %s --check-prefix=OUT < %t/apply.out
 // RUN: sed 's/\t/|/g' %t/expect-apply.txt | FileCheck %s --check-prefix=FILE
 

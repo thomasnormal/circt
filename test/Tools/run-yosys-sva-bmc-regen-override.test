@@ -12,7 +12,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 EXPECT_REGEN_FILE=%t/regen.tsv \
 // RUN:   EXPECT_REGEN_OVERRIDE_FILE=%t/overrides.txt \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/regen.tsv | FileCheck %s --check-prefix=REGEN
 
 // OUT: XFAIL(pass): simple [known]

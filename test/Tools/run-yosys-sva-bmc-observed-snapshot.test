@@ -11,7 +11,7 @@
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=0 EXPECT_OBSERVED_FILE=%t/observed.tsv \
 // RUN:   EXPECT_REGEN_FILE=%t/regen.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/observed.tsv | FileCheck %s --check-prefix=OBS
 // RUN: sed 's/\t/|/g' %t/regen.tsv | FileCheck %s --check-prefix=REGEN
 

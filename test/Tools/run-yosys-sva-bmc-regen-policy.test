@@ -12,7 +12,7 @@
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_OBSERVED_FILE=%t/observed.tsv \
 // RUN:   EXPECT_REGEN_FILE=%t/regen.tsv EXPECT_OBSERVED_INCLUDE_SKIPPED=1 \
 // RUN:   EXPECT_REGEN_FAIL_POLICY=fail EXPECT_REGEN_SKIP_POLICY=xfail \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=OUT
 // RUN: sed 's/\t/|/g' %t/observed.tsv | FileCheck %s --check-prefix=OBS
 // RUN: sed 's/\t/|/g' %t/regen.tsv | FileCheck %s --check-prefix=REGEN
 

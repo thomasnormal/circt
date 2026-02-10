@@ -8,7 +8,7 @@
 // RUN:   Z3_LIB=/dev/null EXPECT_FILE=%t/expect.txt XFAIL_FILE=/dev/null \
 // RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
 // RUN:   SKIP_FAIL_WITHOUT_MACRO=1 EXPECT_LINT=1 EXPECT_LINT_FAIL_ON_ISSUES=1 \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
 
 // CHECK: EXPECT_LINT(shadowed): EXPECT_FILE wildcard key *|*|* is never selected for suite matrix
 // CHECK: EXPECT_LINT_SUMMARY: issues=1

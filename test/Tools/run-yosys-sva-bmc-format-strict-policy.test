@@ -12,7 +12,7 @@
 // RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
 // RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY=error-only \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-error.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=ERRORPOL
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=ERRORPOL
 // RUN: sed 's/\t/|/g' %t/unfixable-error.tsv | FileCheck %s --check-prefix=ERRORPOL-UNFIX
 
 // RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
@@ -22,7 +22,7 @@
 // RUN:   EXPECT_FORMAT_FILES=EXPECT_FILE EXPECT_FORMAT_FAIL_ON_UNFIXABLE=1 \
 // RUN:   EXPECT_FORMAT_FAIL_ON_UNFIXABLE_POLICY=semantic-only \
 // RUN:   EXPECT_FORMAT_UNFIXABLE_FILE=%t/unfixable-semantic.tsv \
-// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=SEMPOL
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s --check-prefix=SEMPOL
 // RUN: sed 's/\t/|/g' %t/unfixable-semantic.tsv | FileCheck %s --check-prefix=SEMPOL-UNFIX
 
 // ERRORPOL: EXPECT_FORMAT_STRICT: unfixable_total=2 scoped=1 fail=1 policy=error-only file_filter=* profile_filter=* reason_filter=* severity_filter=error

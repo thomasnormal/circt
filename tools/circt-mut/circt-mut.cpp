@@ -4760,6 +4760,28 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t lanePass = 0;
   uint64_t laneFail = 0;
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
+  std::optional<Regex> includeLaneRegex;
+  std::optional<Regex> excludeLaneRegex;
+  if (auto v = getLastOptionValue(args, "--include-lane-regex")) {
+    Regex r(*v);
+    std::string regexError;
+    if (!r.isValid(regexError)) {
+      errs() << "circt-mut matrix: invalid --include-lane-regex: " << *v
+             << " (" << regexError << ")\n";
+      return 1;
+    }
+    includeLaneRegex = std::move(r);
+  }
+  if (auto v = getLastOptionValue(args, "--exclude-lane-regex")) {
+    Regex r(*v);
+    std::string regexError;
+    if (!r.isValid(regexError)) {
+      errs() << "circt-mut matrix: invalid --exclude-lane-regex: " << *v
+             << " (" << regexError << ")\n";
+      return 1;
+    }
+    excludeLaneRegex = std::move(r);
+  }
   StringMap<uint64_t> gateCounts;
 
   auto maybeAddArg = [](SmallVectorImpl<std::string> &cmd, StringRef flag,
@@ -4806,6 +4828,10 @@ static int runNativeMatrixDispatch(const char *argv0,
              << (lineNo + 1) << ".\n";
       return 1;
     }
+    if (includeLaneRegex && !includeLaneRegex->match(laneID))
+      continue;
+    if (excludeLaneRegex && excludeLaneRegex->match(laneID))
+      continue;
 
     ++laneTotal;
     std::string laneDesign = trimmedColumn(cols, ColDesign).str();
