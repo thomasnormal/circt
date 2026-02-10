@@ -1069,6 +1069,43 @@ void LowerToBMCPass::runOnOperation() {
         auto name = chooseClockName(idx);
         newClocks[idx] = hwModule.prependInput(name, clockTy).second;
       }
+      // Prepending derived clock inputs shifts existing input arg indices.
+      // Keep bmc_reg_clock_sources.arg_index aligned with the new numbering so
+      // downstream multi-clock mapping stays valid.
+      if (auto regClockSources =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        SmallVector<Attribute> remappedSources;
+        remappedSources.reserve(regClockSources.size());
+        for (auto attr : regClockSources) {
+          auto dict = dyn_cast<DictionaryAttr>(attr);
+          if (!dict) {
+            remappedSources.push_back(attr);
+            continue;
+          }
+          auto argIndexAttr =
+              dyn_cast_or_null<IntegerAttr>(dict.get("arg_index"));
+          if (!argIndexAttr) {
+            remappedSources.push_back(attr);
+            continue;
+          }
+          SmallVector<NamedAttribute> fields;
+          fields.reserve(dict.size());
+          for (auto named : dict) {
+            if (named.getName().strref() == "arg_index") {
+              unsigned shifted =
+                  argIndexAttr.getValue().getZExtValue() + newClocks.size();
+              fields.push_back(builder.getNamedAttr(
+                  "arg_index", builder.getI32IntegerAttr(shifted)));
+            } else {
+              fields.push_back(named);
+            }
+          }
+          remappedSources.push_back(builder.getDictionaryAttr(fields));
+        }
+        hwModule->setAttr("bmc_reg_clock_sources",
+                          builder.getArrayAttr(remappedSources));
+      }
+
       auto inputNamesAfter = hwModule.getInputNames();
       SmallVector<StringAttr> actualClockNames;
       actualClockNames.reserve(clockInputs.size());

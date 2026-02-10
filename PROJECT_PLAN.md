@@ -230,6 +230,22 @@ See CHANGELOG.md on recent progress.
       `16.13--sequence-multiclock-uvm` fails with multi-clock metadata
       legalization (`bmc_reg_clocks` / `bmc_reg_clock_sources`) and is now the
       primary multiclock closure item.
+23. Multi-clock metadata closure progress (February 10, 2026):
+    - `lower-to-bmc` now remaps `bmc_reg_clock_sources.arg_index` when derived
+      clock inputs are prepended.
+    - New regression test:
+      `test/Tools/circt-bmc/lower-to-bmc-reg-clock-sources-shift.mlir`.
+    - `16.13--sequence-multiclock-uvm` no longer fails with metadata
+      legalization diagnostics and now reaches solver semantics
+      (`BMC_RESULT=SAT`).
+24. Updated 6-case semantic-candidate status after metadata fix:
+    - `FORCE_BMC=1 ALLOW_MULTI_CLOCK=1` set is now `pass=1 fail=5 error=0`.
+    - Remaining positive-test semantic mismatches (all currently SAT):
+      `16.10--property-local-var-uvm`,
+      `16.10--sequence-local-var-uvm`,
+      `16.11--sequence-subroutine-uvm`,
+      `16.13--sequence-multiclock-uvm`,
+      `16.15--property-iff-uvm`.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
