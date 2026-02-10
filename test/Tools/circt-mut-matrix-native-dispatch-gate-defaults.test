@@ -1,0 +1,21 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'echo MATRIX_SCRIPT_SHOULD_NOT_RUN\nexit 77\n' >> %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwork_dir=\"\"\nfor a in \"$@\"; do\n  echo \"ARG:$a\"\n  case \"$a\" in\n    --work-dir=*) work_dir=\"${a#*=}\" ;;\n  esac\ndone\nif [[ -z \"$work_dir\" ]]; then\n  while [[ $# -gt 0 ]]; do\n    case \"$1\" in\n      --work-dir) work_dir=\"$2\"; shift 2 ;;\n      *) shift ;;\n    esac\n  done\nfi\nmkdir -p \"$work_dir\"\nprintf \"mutation_coverage_percent\\t50.00\\n\" > \"$work_dir/metrics.tsv\"\nprintf \"{}\" > \"$work_dir/summary.json\"\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M1\n' > %t/mutations.txt
+// RUN: printf 't\tbash -c true\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --native-matrix-dispatch --lanes-tsv %t/lanes.tsv --out-dir %t/out --skip-baseline --fail-on-undetected --fail-on-errors > %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=ARGS < %t/out/lane1/native_matrix_lane.log
+//
+// LOG-DAG: native_matrix_dispatch_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_dispatch_pass{{[[:space:]]+}}1
+//
+// ARGS: ARG:--skip-baseline
+// ARGS: ARG:--fail-on-undetected
+// ARGS: ARG:--fail-on-errors
