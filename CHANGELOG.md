@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 881 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Provenance Allowlist Controls
+
+1. Added strict-gate allowlist controls for BMC abstraction provenance:
+   - file:
+     - `utils/run_formal_all.sh`
+   - new CLI:
+     - `--bmc-abstraction-provenance-allowlist-file FILE`
+   - allowlist format per non-comment line:
+     - `exact:<token>` (or bare token)
+     - `prefix:<prefix>`
+     - `regex:<pattern>`
+2. Extended strict gate logic for `--fail-on-new-bmc-abstraction-provenance`:
+   - new tokens are now filtered by allowlist before triggering gate failure.
+   - gate failure message now reports allowlisted suppression count when
+     applicable.
+3. Added input validation:
+   - allowlist file must be readable when provided.
+   - invalid regex entries fail fast with file/line diagnostics.
+
+### Tests and Validation
+
+- Script syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Strict-gate negative/positive proof with temp baseline:
+  1. Build baseline:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-provenance-allowlist-20260210 --baseline-file /tmp/formal-bmc-provenance-allowlist-20260210-baselines.tsv --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$' --update-baselines --baseline-window 1`
+  2. Force provenance delta by clearing baseline provenance column for
+     `sv-tests/BMC`.
+  3. Strict gate without allowlist:
+     - `--strict-gate --fail-on-new-bmc-abstraction-provenance`
+     - result: FAIL (`RC_NO_ALLOW=1`) with new process-token diagnostics.
+  4. Strict gate with allowlist:
+     - add `--bmc-abstraction-provenance-allowlist-file /tmp/formal-bmc-provenance-allowlist-20260210.allow`
+     - result: PASS (`RC_WITH_ALLOW=0`).
+- OpenTitan LEC sanity:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-allowlist-20260210 --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 880 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Process-Result Provenance

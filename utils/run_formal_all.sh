@@ -35,6 +35,13 @@ Options:
   --fail-on-new-bmc-abstraction-provenance
                          Fail when BMC abstraction provenance tokens increase
                          vs baseline
+  --bmc-abstraction-provenance-allowlist-file FILE
+                         Optional allowlist file for BMC abstraction
+                         provenance strict-gate filtering.
+                         Format per non-comment line:
+                           exact:<token>  (or bare token)
+                           prefix:<prefix>
+                           regex:<pattern>
   --fail-on-new-e2e-mode-diff-strict-only-fail
                          Fail when OpenTitan E2E mode-diff strict_only_fail
                          count increases vs baseline
@@ -1655,6 +1662,7 @@ FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
+BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE=""
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
@@ -1936,6 +1944,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-bmc-abstraction-provenance)
       FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=1; shift ;;
+    --bmc-abstraction-provenance-allowlist-file)
+      BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$2"; shift 2 ;;
     --fail-on-new-e2e-mode-diff-strict-only-fail)
       FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
     --fail-on-new-e2e-mode-diff-status-diff)
@@ -3699,6 +3709,10 @@ if [[ -n "$PRUNE_EXPECTED_FAILURES_FILE" && ! -r "$PRUNE_EXPECTED_FAILURES_FILE"
 fi
 if [[ -n "$EXPECTED_FAILURES_FILE" && ! -r "$EXPECTED_FAILURES_FILE" ]]; then
   echo "expected-failures file not readable: $EXPECTED_FAILURES_FILE" >&2
+  exit 1
+fi
+if [[ -n "$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" && ! -r "$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" ]]; then
+  echo "BMC abstraction provenance allowlist file not readable: $BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_UNEXPECTED_FAILURE_CASES" == "1" && -z "$EXPECTED_FAILURE_CASES_FILE" ]]; then
@@ -9024,6 +9038,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
+  BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
@@ -9219,6 +9234,61 @@ opentitan_lec_strict_xprop_counter_keys = [
 strict_gate = os.environ.get("STRICT_GATE", "0") == "1"
 baseline_window = int(os.environ.get("BASELINE_WINDOW", "1"))
 baseline_window_days = int(os.environ.get("BASELINE_WINDOW_DAYS", "0"))
+bmc_abstraction_provenance_allowlist_file = os.environ.get(
+    "BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE", ""
+).strip()
+
+bmc_abstraction_provenance_allow_exact = set()
+bmc_abstraction_provenance_allow_prefix = []
+bmc_abstraction_provenance_allow_regex = []
+if bmc_abstraction_provenance_allowlist_file:
+    allowlist_path = Path(bmc_abstraction_provenance_allowlist_file)
+    if not allowlist_path.exists():
+        raise SystemExit(
+            f"BMC abstraction provenance allowlist file not found: {allowlist_path}"
+        )
+    with allowlist_path.open() as f:
+        for lineno, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            kind = "exact"
+            payload = line
+            if ":" in line:
+                maybe_kind, maybe_payload = line.split(":", 1)
+                if maybe_kind in {"exact", "prefix", "regex"}:
+                    kind = maybe_kind
+                    payload = maybe_payload.strip()
+            if not payload:
+                raise SystemExit(
+                    f"BMC abstraction provenance allowlist line {lineno} is empty after '{kind}:' in {allowlist_path}"
+                )
+            if kind == "exact":
+                bmc_abstraction_provenance_allow_exact.add(payload)
+            elif kind == "prefix":
+                bmc_abstraction_provenance_allow_prefix.append(payload)
+            elif kind == "regex":
+                try:
+                    bmc_abstraction_provenance_allow_regex.append(re.compile(payload))
+                except re.error as exc:
+                    raise SystemExit(
+                        f"BMC abstraction provenance allowlist invalid regex at {allowlist_path}:{lineno}: {exc}"
+                    )
+            else:
+                raise SystemExit(
+                    f"BMC abstraction provenance allowlist unsupported entry kind '{kind}' at {allowlist_path}:{lineno}"
+                )
+
+def is_allowed_bmc_abstraction_provenance_token(token: str) -> bool:
+    if token in bmc_abstraction_provenance_allow_exact:
+        return True
+    for prefix in bmc_abstraction_provenance_allow_prefix:
+        if token.startswith(prefix):
+            return True
+    for pattern in bmc_abstraction_provenance_allow_regex:
+        if pattern.search(token):
+            return True
+    return False
 
 gate_errors = []
 for key, current_row in summary.items():
@@ -9351,13 +9421,26 @@ for key, current_row in summary.items():
                 current_provenance_set = current_bmc_abstraction_provenance.get(
                     key, set()
                 )
-                new_tokens = sorted(current_provenance_set - baseline_provenance_set)
+                raw_new_tokens = sorted(
+                    current_provenance_set - baseline_provenance_set
+                )
+                new_tokens = [
+                    token
+                    for token in raw_new_tokens
+                    if not is_allowed_bmc_abstraction_provenance_token(token)
+                ]
                 if new_tokens:
                     sample = ", ".join(new_tokens[:3])
                     if len(new_tokens) > 3:
                         sample += ", ..."
+                    allowlisted = len(raw_new_tokens) - len(new_tokens)
+                    allowlisted_suffix = (
+                        f", allowlisted={allowlisted}"
+                        if allowlisted > 0
+                        else ""
+                    )
                     gate_errors.append(
-                        f"{suite} {mode}: new abstraction provenance tokens observed (baseline={len(baseline_provenance_set)} current={len(current_provenance_set)}, window={baseline_window}): {sample}"
+                        f"{suite} {mode}: new abstraction provenance tokens observed (baseline={len(baseline_provenance_set)} current={len(current_provenance_set)}{allowlisted_suffix}, window={baseline_window}): {sample}"
                     )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))

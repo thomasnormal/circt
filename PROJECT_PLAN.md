@@ -413,6 +413,22 @@ See CHANGELOG.md on recent progress.
     - Next high-ROI feature: add provenance allowlist/prefix controls in
       `run_formal_all.sh` so known abstraction classes can be scoped while
       still failing on newly introduced semantic-risk tokens.
+47. Provenance allowlist controls landed (February 10, 2026):
+    - `run_formal_all.sh` now supports
+      `--bmc-abstraction-provenance-allowlist-file <FILE>` for strict-gate
+      filtering of known-safe abstraction tokens.
+    - Allowlist format supports:
+      `exact:<token>` (or bare token), `prefix:<prefix>`, `regex:<pattern>`.
+    - `--fail-on-new-bmc-abstraction-provenance` now fails only on
+      non-allowlisted token deltas, preserving regression sensitivity while
+      avoiding noisy re-fails on known legacy abstractions.
+48. Updated near-term closure priorities:
+    - Continue semantic closure on the three failing `sv-tests` BMC cases
+      with provenance evidence now separating known abstraction classes from
+      genuinely new risk.
+    - Add source-chain correlation in diagnostics (map each process/interface
+      provenance token to user-visible assertion/sequence paths) to accelerate
+      local-var and `disable iff` mismatch root-cause loops.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
