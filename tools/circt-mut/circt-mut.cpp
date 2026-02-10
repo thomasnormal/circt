@@ -6599,6 +6599,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
     appendUniqueRule(opts.failIfValueGtRules,
@@ -6641,6 +6642,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendUniqueRule(opts.failIfValueGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
     appendUniqueRule(opts.failIfValueGtRules,
