@@ -4102,6 +4102,10 @@ if [[ -n "$REFRESH_EXPECTED_FAILURE_CASES_DEFAULT_EXPIRES_ON" ]]; then
     exit 1
   fi
 fi
+if [[ "$STRICT_GATE_NO_DROP_REMARKS" == "1" && "$STRICT_GATE" != "1" ]]; then
+  echo "--strict-gate-no-drop-remarks requires --strict-gate" >&2
+  exit 1
+fi
 
 if [[ -z "$CIRCT_VERILOG_BIN_AVIP" ]]; then
   CIRCT_VERILOG_BIN_AVIP="$CIRCT_VERILOG_BIN"

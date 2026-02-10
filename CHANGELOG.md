@@ -1,5 +1,22 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 986 - February 10, 2026
+
+### `run_formal_all`: Guard Strict No-Drop Option Against Silent No-Op
+
+1. Hardened `utils/run_formal_all.sh` option semantics:
+   - `--strict-gate-no-drop-remarks` now requires `--strict-gate`.
+   - using it alone now fails fast with:
+     `--strict-gate-no-drop-remarks requires --strict-gate`.
+2. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-no-drop-remarks-requires-strict.test`.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-strict-gate-no-drop-remarks*.test test/Tools/run-formal-all-help.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-*.test`: PASS (76/76)
+
 ## Iteration 985 - February 10, 2026
 
 ### `circt-mut matrix`: Combined Native Prequalify + Native Dispatch
