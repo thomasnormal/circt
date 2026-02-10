@@ -1,5 +1,5 @@
 // RUN: rm -rf %t
-// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys %t/opentitan
 // RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
 // RUN: chmod +x %t/utils/run_formal_all.sh
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-bmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=BMC
@@ -9,6 +9,11 @@
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-vlec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^verilator-verification/LEC$"' 2>&1 | FileCheck %s --check-prefix=VLEC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ybmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^yosys/tests/sva/BMC$"' 2>&1 | FileCheck %s --check-prefix=YBMC
 // RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ylec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^yosys/tests/sva/LEC$"' 2>&1 | FileCheck %s --check-prefix=YLEC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC$"' 2>&1 | FileCheck %s --check-prefix=OTLEC
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-otlec-strict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-lec-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/LEC_STRICT$"' 2>&1 | FileCheck %s --check-prefix=OTLECSTRICT
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E$"' 2>&1 | FileCheck %s --check-prefix=OTE2E
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e-strict --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E_STRICT$"' 2>&1 | FileCheck %s --check-prefix=OTE2ESTRICT
+// RUN: not sh -c 'cd %t && utils/run_formal_all.sh --out-dir %t/out-ote2e-diff --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --with-opentitan-e2e --with-opentitan-e2e-strict --opentitan %t/opentitan --circt-verilog-opentitan /bin/true --include-lane-regex "^opentitan/E2E_MODE_DIFF$"' 2>&1 | FileCheck %s --check-prefix=OTE2EDIFF
 //
 // BMC: sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or --sv-tests-bmc-test-filter
 // LEC: sv-tests/LEC requires explicit filter: set --sv-tests-lec-tag-regex or --sv-tests-lec-test-filter
@@ -17,3 +22,8 @@
 // VLEC: verilator-verification/LEC requires explicit filter: set --verilator-lec-test-filter
 // YBMC: yosys/tests/sva/BMC requires explicit filter: set --yosys-bmc-test-filter
 // YLEC: yosys/tests/sva/LEC requires explicit filter: set --yosys-lec-test-filter
+// OTLEC: opentitan/LEC requires explicit filter: set --opentitan-lec-impl-filter
+// OTLECSTRICT: opentitan/LEC_STRICT requires explicit filter: set --opentitan-lec-impl-filter
+// OTE2E: opentitan/E2E requires explicit filter: set --opentitan-e2e-impl-filter
+// OTE2ESTRICT: opentitan/E2E_STRICT requires explicit filter: set --opentitan-e2e-impl-filter
+// OTE2EDIFF: opentitan/E2E_MODE_DIFF requires explicit filter: set --opentitan-e2e-impl-filter
