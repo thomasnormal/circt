@@ -10,6 +10,7 @@
 // CHECK: --compare-history-latest
 // CHECK: --history
 // CHECK: --history-bootstrap
+// CHECK: --history-max-runs
 // CHECK: --trend-history
 // CHECK: --trend-window
 // CHECK: --policy-profile
