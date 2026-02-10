@@ -525,6 +525,9 @@ circt-mut matrix \
 
 Lane TSVs can now override strict matrix gates per lane via tail columns:
 `skip_baseline`, `fail_on_undetected`, `fail_on_errors`.
+`utils/run_mutation_matrix.sh` now also pre-validates default generated-mutation
+mode/profile/allocation options, and marks malformed generated lane mutation
+config as `CONFIG_ERROR` before launching per-lane cover runs.
 
 Mutation materialization is built in by default via
 `utils/create_mutated_yosys.sh`. Override with `--create-mutated-script` only

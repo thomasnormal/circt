@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: not %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --default-mutations-modes bogus 2>&1 | FileCheck %s
+//
+// CHECK: Invalid --default-mutations-modes mode: bogus (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect).

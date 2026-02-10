@@ -891,6 +891,12 @@ Execution controls:
   `run_mutation_cover.sh --mutations-seed` for generated-mutation lanes.
 - `--default-mutations-yosys <path>`: default
   `run_mutation_cover.sh --mutations-yosys` for generated-mutation lanes.
+Script preflight now validates:
+- default generated mode/profile/allocation config
+  (`--default-mutations-modes`, `--default-mutations-profiles`,
+  `--default-mutations-mode-counts`, `--default-mutations-mode-weights`).
+- generated lane mutation config before dispatch, marking malformed lanes as
+  `CONFIG_ERROR` without launching `run_mutation_cover.sh`.
 - `--default-formal-global-propagate-cmd <cmd>`: default
   `run_mutation_cover.sh --formal-global-propagate-cmd` for lanes without a
   lane-specific global filter command.

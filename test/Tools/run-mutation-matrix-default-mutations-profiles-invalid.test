@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: not %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --default-mutations-profiles bad-profile 2>&1 | FileCheck %s
+//
+// CHECK: Invalid --default-mutations-profiles profile: bad-profile (expected arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none).
