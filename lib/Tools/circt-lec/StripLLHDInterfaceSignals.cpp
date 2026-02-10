@@ -52,10 +52,13 @@ struct FieldAccess {
 };
 
 static constexpr StringLiteral kLECLocalSignalAttr = "lec.local";
+static constexpr StringLiteral kBMCAbstractedLLHDInterfaceInputsAttr =
+    "circt.bmc_abstracted_llhd_interface_inputs";
 
 struct ModuleState {
   Namespace ns;
   unsigned insertIndex = 0;
+  unsigned abstractedInterfaceInputCount = 0;
 
   explicit ModuleState(hw::HWModuleOp module) {
     for (auto nameAttr : module.getModuleType().getInputNames())
@@ -69,6 +72,7 @@ struct ModuleState {
 
   Value addInput(hw::HWModuleOp module, StringRef baseName, Type type) {
     auto name = ns.newName(baseName);
+    ++abstractedInterfaceInputCount;
     return module
         .insertInput(insertIndex++, StringAttr::get(module.getContext(), name),
                      type)
@@ -3492,6 +3496,20 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
   for (auto timeOp : times)
     if (timeOp->use_empty())
       timeOp.erase();
+
+  for (auto &[op, state] : moduleStates) {
+    auto hwModule = dyn_cast<hw::HWModuleOp>(op);
+    if (!hwModule)
+      continue;
+    if (state.abstractedInterfaceInputCount > 0) {
+      hwModule->setAttr(
+          kBMCAbstractedLLHDInterfaceInputsAttr,
+          IntegerAttr::get(IntegerType::get(module.getContext(), 32),
+                           state.abstractedInterfaceInputCount));
+    } else {
+      hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputsAttr);
+    }
+  }
 
   bool hasLLHD = false;
   module.walk([&](Operation *op) {

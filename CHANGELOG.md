@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 876 - February 10, 2026
+
+### BMC/LEC Hardening: LLHD Abstraction Risk Visibility + Dead-Use Pruning
+
+1. Hardened LLHD process-result observability to reduce avoidable abstraction:
+   - file:
+     - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+   - change:
+     - signal uses inside helper `llhd.process` regions that contain no
+       assert/assume/cover ops are no longer treated as observable uses when
+       deciding whether process results must be abstracted.
+     - this allows dropping dead process-result-driven signal paths instead of
+       introducing unconstrained `llhd_process_result*` inputs.
+2. Added a focused regression for helper-process dead-use pruning:
+   - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+   - new case:
+     - `@dead_result_helper_process`
+3. Added LLHD interface abstraction counting and propagation:
+   - files:
+     - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+   - changes:
+     - interface stripping now records
+       `circt.bmc_abstracted_llhd_interface_inputs=<count>` on `hw.module`.
+     - `lower-to-bmc` now emits a warning when this count is non-zero and
+       propagates it to `verif.bmc` as
+       `bmc_abstracted_llhd_interface_inputs=<count>`.
+4. Added regression coverage for the new interface abstraction metadata:
+   - `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
+   - `test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`
+
+### Tests and Validation
+
+- Build:
+  - `ninja -C build circt-opt circt-bmc circt-lec`: PASS
+- Targeted lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/strip-llhd-processes.mlir test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`: PASS
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`: PASS
+- Full tool lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc`: PASS (`273` discovered, `125` passed, `10` XFAIL, `138` unsupported).
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec`: PASS (`130` discovered, `108` passed, `3` XFAIL, `19` unsupported).
+- Formal cadence snapshot:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-lec-20260210-interface-attr --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - results:
+    - `sv-tests/BMC`: `23/26` (same 3 fail IDs: `16.10--property-local-var-fail`, `16.10--sequence-local-var-fail`, `16.15--property-disable-iff-fail`)
+    - `verilator-verification/BMC`: `12/17` (same 5 assert-value-change fail IDs)
+    - `yosys/tests/sva/BMC`: `7/14` (`5` fail, `2` skip; unchanged summary)
+    - `opentitan/LEC`: `1/1` PASS
+    - `opentitan/LEC_STRICT`: `1/1` PASS
+
 ## Iteration 875 - February 10, 2026
 
 ### BMC Hardening: Prune Dead LLHD Process-Result Abstraction

@@ -156,6 +156,20 @@ struct StripLLHDProcessesPass
         SmallVector<ProcessOp> processes;
         hwModule.walk(
             [&](ProcessOp process) { processes.push_back(process); });
+        DenseMap<Operation *, bool> processContainsAssertLike;
+        for (auto process : processes) {
+          bool hasAssertLike = false;
+          process.walk([&](Operation *op) {
+            if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp,
+                    verif::ClockedAssertOp, verif::ClockedAssumeOp,
+                    verif::ClockedCoverOp>(op)) {
+              hasAssertLike = true;
+              return WalkResult::interrupt();
+            }
+            return WalkResult::advance();
+          });
+          processContainsAssertLike[process.getOperation()] = hasAssertLike;
+        }
         DenseMap<Value, Value> signalInputs;
         int64_t abstractedProcessResultCount = 0;
         auto getSignalName = [](Value signal) -> StringRef {
@@ -544,31 +558,35 @@ struct StripLLHDProcessesPass
               driveValueTypes[drvOp.getSignal()] = drvOp.getValue().getType();
           });
 
-        auto hasExternalDriver = [&](Value signal) -> bool {
-          for (auto *user : signal.getUsers()) {
-            auto drv = dyn_cast<DriveOp>(user);
-            if (!drv)
-              continue;
-            if (!drv->getParentOfType<ProcessOp>())
-              return true;
-          }
-          return false;
-        };
-        auto hasObservableSignalUse = [&](Value signal, DriveOp ignoredDrive) {
-          for (auto *user : signal.getUsers()) {
-            if (ignoredDrive && user == ignoredDrive.getOperation())
-              continue;
-            if (auto probe = dyn_cast<ProbeOp>(user)) {
-              if (!probe.getResult().use_empty())
+          auto hasExternalDriver = [&](Value signal) -> bool {
+            for (auto *user : signal.getUsers()) {
+              auto drv = dyn_cast<DriveOp>(user);
+              if (!drv)
+                continue;
+              if (!drv->getParentOfType<ProcessOp>())
                 return true;
-              continue;
             }
-            if (isa<DriveOp>(user))
-              continue;
-            return true;
-          }
-          return false;
-        };
+            return false;
+          };
+          auto hasObservableSignalUse = [&](Value signal, DriveOp ignoredDrive) {
+            for (auto *user : signal.getUsers()) {
+              if (ignoredDrive && user == ignoredDrive.getOperation())
+                continue;
+              if (auto userProcess = user->getParentOfType<ProcessOp>()) {
+                if (!processContainsAssertLike[userProcess.getOperation()])
+                  continue;
+              }
+              if (auto probe = dyn_cast<ProbeOp>(user)) {
+                if (!probe.getResult().use_empty())
+                  return true;
+                continue;
+              }
+              if (isa<DriveOp>(user))
+                continue;
+              return true;
+            }
+            return false;
+          };
 
         if (!dynamicDrives.empty()) {
           auto isZeroTimeConst = [](Value time) -> bool {
