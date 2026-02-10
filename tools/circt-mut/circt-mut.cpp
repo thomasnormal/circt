@@ -381,6 +381,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   CoverRewriteResult result;
   bool hasMutationsFile = false;
   bool hasGenerateMutations = false;
+  bool wantsHelp = false;
   std::string generateMutations;
   std::string mutationsModeCounts;
   std::string mutationsModeWeights;
@@ -493,6 +494,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
     if (arg == "--mutations-file" || arg.starts_with("--mutations-file="))
       hasMutationsFile = true;
+    if (arg == "-h" || arg == "--help")
+      wantsHelp = true;
     if (arg == "--generate-mutations" ||
         arg.starts_with("--generate-mutations=")) {
       hasGenerateMutations = true;
@@ -739,6 +742,11 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     result.error = "circt-mut cover: unable to resolve timeout executable "
                    "required by --formal-global-propagate-*-timeout-seconds; "
                    "install coreutils timeout or set PATH.";
+    return result;
+  }
+  if (!wantsHelp && !hasMutationsFile && !hasGenerateMutations) {
+    result.error = "circt-mut cover: requires either --mutations-file or "
+                   "--generate-mutations.";
     return result;
   }
 

@@ -385,6 +385,9 @@ It also runs native global-filter preflight checks:
 - validates `--formal-global-propagate-circt-chain` mode values
 - auto-injects LEC/BMC built-in tools for chain mode when omitted
 - rejects conflicting non-chain global filter mode combinations early.
+Cover mutation source consistency is now also validated natively:
+- exactly one of `--mutations-file` or `--generate-mutations` must be set
+- conflicting or missing source configuration fails fast.
 For generated-mutation cover runs, native preflight now also validates:
 - `--generate-mutations` as a positive integer
 - `--mutations-mode-counts` / `--mutations-mode-weights` entry syntax

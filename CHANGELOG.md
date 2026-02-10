@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 840 - February 10, 2026
+
+### Cover Mutation-Source Consistency Preflight (`circt-mut`)
+
+1. Extended native `circt-mut cover` preflight with explicit mutation-source
+   consistency checks:
+   - exactly one of `--mutations-file` or `--generate-mutations` must be set
+   - conflicting or missing source configuration now fails fast
+2. Kept existing preflight ordering so specific tool/global-filter diagnostics
+   (e.g., Z3/tool resolution, chain-mode conflicts, timeout validation) remain
+   unchanged and are still reported when present.
+3. Updated rewrite-oriented tests to provide a minimal mutation source so they
+   continue exercising resolution behavior rather than source-missing errors.
+
+### Tests and Documentation
+
+- Added native regression tests:
+  - `test/Tools/circt-mut-cover-mutation-source-conflict-native.test`
+  - `test/Tools/circt-mut-cover-mutation-source-missing-native.test`
+- Updated existing rewrite tests:
+  - `test/Tools/circt-mut-cover-global-circt-tools-auto.test`
+  - `test/Tools/circt-mut-cover-global-circt-chain-auto-implicit-tools.test`
+  - `test/Tools/circt-mut-cover-global-z3-rewrite.test`
+  - `test/Tools/circt-mut-cover-mutations-yosys-rewrite.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-mutation-source-*.test test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (49/49)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-cover-source-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 839 - February 10, 2026
 
 ### Matrix Lane Mutation-Source Consistency Preflight (`circt-mut`)
