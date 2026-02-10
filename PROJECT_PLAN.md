@@ -806,11 +806,18 @@ See CHANGELOG.md on recent progress.
     policy gates on class-level diagnostics (`xprop_diag_*`,
     `xprop_result_*`, `xprop_status_*`, or implementation-specific prefixes)
     without enumerating each concrete key.
-42. BMC lane summaries in `run_formal_all.sh` now include case-derived drift
+42. `--strict-gate` now auto-enables strict OpenTitan LEC key-prefix drift
+    checks when `--with-opentitan-lec-strict` is active:
+    `xprop_diag_*`, `xprop_status_*`, `xprop_result_*`,
+    and `xprop_counter_*`.
+    - This turns strict-mode LEC X-prop drift detection on by default instead
+      of requiring extra per-run flags, while retaining explicit override
+      options for narrower or broader policies.
+43. BMC lane summaries in `run_formal_all.sh` now include case-derived drift
     counters when detailed case files are available:
     - `bmc_timeout_cases`
     - `bmc_unknown_cases`
-43. Strict-gate now supports explicit BMC drift gates:
+44. Strict-gate now supports explicit BMC drift gates:
     - `--fail-on-new-bmc-timeout-cases`
     - `--fail-on-new-bmc-unknown-cases`
     and enables both by default under `--strict-gate`.

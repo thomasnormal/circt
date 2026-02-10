@@ -18,6 +18,10 @@ Options:
   --update-baselines     Update baseline file and PROJECT_PLAN.md table
   --fail-on-diff         Fail if results differ from baseline file
   --strict-gate          Fail on new fail/error/xpass and pass-rate regression vs baseline
+                         Also enables OpenTitan strict LEC X-prop key-prefix
+                         drift checks (`xprop_diag_`, `xprop_status_`,
+                         `xprop_result_`, `xprop_counter_`) when
+                         `--with-opentitan-lec-strict` is active.
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
   --baseline-window-days N
@@ -3839,7 +3843,38 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1
+  if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
+    FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES+=(
+      "xprop_diag_"
+      "xprop_status_"
+      "xprop_result_"
+      "xprop_counter_"
+    )
+  fi
 fi
+
+dedupe_array() {
+  local -n arr_ref="$1"
+  local -A seen=()
+  local -a unique=()
+  local item=""
+  for item in "${arr_ref[@]}"; do
+    if [[ -z "$item" ]]; then
+      continue
+    fi
+    if [[ -n "${seen[$item]+x}" ]]; then
+      continue
+    fi
+    seen[$item]=1
+    unique+=("$item")
+  done
+  arr_ref=("${unique[@]}")
+}
+
+dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS
+dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_PREFIXES
+dedupe_array FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES
+
 for xprop_key in "${FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_COUNTER_KEYS[@]}"; do
   if [[ ! "$xprop_key" =~ ^[a-z][a-z0-9_]*$ ]]; then
     echo "invalid --fail-on-new-opentitan-lec-strict-xprop-counter: expected [a-z][a-z0-9_]*, got '$xprop_key'" >&2
