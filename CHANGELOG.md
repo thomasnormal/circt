@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 910 - February 10, 2026
+
+### LEC Hardening: Assume-Known Attribution + Merged XPROP Case Map
+
+1. Extended OpenTitan LEC X-prop row emission in
+   `utils/run_opentitan_circt_lec.py` to include
+   `LEC_DIAG_ASSUME_KNOWN_RESULT` as an explicit per-case field when present.
+2. Extended `summarize_opentitan_xprop_file` in `utils/run_formal_all.sh` to
+   aggregate the new signal:
+   - `xprop_assume_known_result_<token>`
+   - `xprop_impl_<impl>_assume_known_result_<token>`
+3. Added merged OpenTitan XPROP diagnostics artifact:
+   - `opentitan-lec-xprop-case-map.tsv`
+   - merges `opentitan-lec-xprop-summary.tsv` and
+     `opentitan-lec-strict-xprop-summary.tsv`
+   - schema:
+     `status, implementation, mode, diag, lec_result, counters, log_dir,
+     assume_known_result, source_file`
+4. Summary output now reports the merged map path when non-empty.
+5. Added/updated regression coverage:
+   - `test/Tools/run-opentitan-lec-xprop-summary.test`
+   - `test/Tools/run-formal-all-opentitan-lec-xprop-summary.test`
+   - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-assume-known-prefix.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `python3 -m py_compile utils/run_opentitan_circt_lec.py`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-assume-known-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix-defaults.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test`: PASS
+- Focused real lane check:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-xprop-assume-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --opentitan-lec-impl-filter 'canright'`
+  - result: `opentitan/LEC_STRICT` PASS; merged artifact emitted with header
+    (`opentitan-lec-xprop-case-map.tsv`).
+
 ## Iteration 909 - February 10, 2026
 
 ### BMC Hardening: Merged Cross-Lane Semantic Case Map

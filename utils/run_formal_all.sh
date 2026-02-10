@@ -6731,6 +6731,9 @@ with path.open(encoding="utf-8") as f:
         diag = normalize(parts[3].strip())
         result = normalize(parts[4].strip())
         counters = parts[5].strip()
+        assume_known_result = ""
+        if len(parts) >= 8:
+            assume_known_result = normalize(parts[7].strip())
         rows += 1
         counts[f"xprop_impl_{impl}_cases"] += 1
         counts[f"xprop_impl_{impl}_status_{status}"] += 1
@@ -6739,6 +6742,9 @@ with path.open(encoding="utf-8") as f:
         counts[f"xprop_status_{status}"] += 1
         counts[f"xprop_diag_{diag}"] += 1
         counts[f"xprop_result_{result}"] += 1
+        if assume_known_result:
+            counts[f"xprop_impl_{impl}_assume_known_result_{assume_known_result}"] += 1
+            counts[f"xprop_assume_known_result_{assume_known_result}"] += 1
         if counters:
             for item in counters.split(","):
                 item = item.strip()
@@ -7631,6 +7637,59 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
 PY
 }
 
+generate_opentitan_xprop_case_map() {
+  local out_dir="$1"
+  OUT_DIR="$out_dir" python3 - <<'PY'
+import csv
+import os
+from pathlib import Path
+
+out_dir = Path(os.environ["OUT_DIR"])
+case_map_path = out_dir / "opentitan-lec-xprop-case-map.tsv"
+sources = [
+    out_dir / "opentitan-lec-xprop-summary.tsv",
+    out_dir / "opentitan-lec-strict-xprop-summary.tsv",
+]
+
+rows = []
+for path in sources:
+    if not path.exists():
+        continue
+    source_name = path.name
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            assume_known_result = ""
+            if len(parts) >= 8:
+                assume_known_result = parts[7].strip()
+            rows.append(parts[:7] + [assume_known_result, source_name])
+
+rows.sort(key=lambda r: (r[2], r[1], r[0], r[3], r[4], r[6]))
+case_map_path.parent.mkdir(parents=True, exist_ok=True)
+with case_map_path.open("w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+    writer.writerow(
+        [
+            "status",
+            "implementation",
+            "mode",
+            "diag",
+            "lec_result",
+            "counters",
+            "log_dir",
+            "assume_known_result",
+            "source_file",
+        ]
+    )
+    writer.writerows(rows)
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -8407,6 +8466,7 @@ fi
 
 generate_bmc_abstraction_provenance_case_map "$OUT_DIR"
 generate_bmc_semantic_bucket_case_map "$OUT_DIR"
+generate_opentitan_xprop_case_map "$OUT_DIR"
 
 summary_txt="$OUT_DIR/summary.txt"
 {
@@ -8445,6 +8505,10 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-semantic-bucket-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-semantic-bucket-case-map.tsv")" -gt 1 ]]; then
     echo "BMC semantic bucket case map: $OUT_DIR/bmc-semantic-bucket-case-map.tsv"
+  fi
+  if [[ -f "$OUT_DIR/opentitan-lec-xprop-case-map.tsv" ]] && \
+     [[ "$(wc -l < "$OUT_DIR/opentitan-lec-xprop-case-map.tsv")" -gt 1 ]]; then
+    echo "OpenTitan LEC XPROP case map: $OUT_DIR/opentitan-lec-xprop-case-map.tsv"
   fi
   echo "Logs: $OUT_DIR"
 } | tee "$summary_txt"

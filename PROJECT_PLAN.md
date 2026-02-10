@@ -646,6 +646,15 @@ See CHANGELOG.md on recent progress.
     - This unifies sv-tests / verilator / yosys semantic fail-like attribution
       into one artifact for bucket-priority closure planning and CI trend
       ingestion.
+82. OpenTitan LEC X-prop diagnostics now include explicit
+    `LEC_DIAG_ASSUME_KNOWN_RESULT` attribution in both per-case artifacts and
+    summary counters.
+    - `run_formal_all.sh` now emits
+      `opentitan-lec-xprop-case-map.tsv` (merged `LEC` + `LEC_STRICT` rows)
+      with `(status, implementation, mode, diag, lec_result, counters, log_dir,
+      assume_known_result, source_file)`.
+    - This closes a strict/no-waiver triage gap by making 4-state
+      assume-known behavior machine-readable and strict-gate-addressable.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
