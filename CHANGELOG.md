@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 901 - February 10, 2026
+
+### BMC Semantic-Closure Coverage Expansion: Yosys Disable-Iff + Sampled Seeds
+
+1. Expanded yosys BMC semantic-tag map coverage for active fail-like rows:
+   - `utils/yosys-sva-bmc-semantic-tags.tsv` now includes:
+     - `sva_not   disable_iff`
+     - `counter   disable_iff,sampled_value`
+     - existing: `sva_value_change_sim  four_state`.
+2. Updated yosys default-map integration test:
+   - `test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test`
+   - now verifies mixed multi-bucket tag forwarding and classification
+     (`disable_iff + four_state + sampled_value`).
+
+### Tests and Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-yosys-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-yosys-disableiff-seed-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key deltas:
+    - `yosys/tests/sva/BMC`: `classified_cases=3`, `tagged_cases=3`,
+      `disable_iff_cases=2`, `four_state_cases=1`,
+      `sampled_value_cases=1`, `unclassified_cases=3`
+      (improved from 5).
+    - `verilator-verification/BMC`: still fully classified
+      (`unclassified_cases=0`)
+    - `sv-tests/BMC`: unchanged (`unclassified_cases=0`)
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 900 - February 10, 2026
 
 ### BMC Semantic-Closure Coverage Expansion: Named-Property Bucket + Verilator Full Classification

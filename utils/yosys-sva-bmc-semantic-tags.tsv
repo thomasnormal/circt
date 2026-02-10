@@ -1,2 +1,4 @@
 # case_id	semantic_buckets
+sva_not	disable_iff
+counter	disable_iff,sampled_value
 sva_value_change_sim	four_state
