@@ -153,8 +153,6 @@ append_bmc_check_attribution() {
         gsub(/\t/, " ", line)
         sub(/^[[:space:]]+/, "", line)
         gsub(/[[:space:]]+/, " ", line)
-        if (length(line) > 200)
-          line = substr(line, 1, 197) "..."
         printf "%d\t%s\t%s\n", idx, kind, line
       }
     ' "$mlir_file"

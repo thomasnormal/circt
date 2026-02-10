@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 888 - February 10, 2026
+
+### BMC Attribution Fidelity Hardening: Full Check-Text Capture
+
+1. Removed early check-snippet truncation in BMC lane scripts:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   - `BMC_CHECK_ATTRIBUTION_OUT` now preserves full normalized `verif.*`
+     check lines for fingerprint derivation.
+2. Kept report readability bounded in `utils/run_formal_all.sh`:
+   - `ir_check_sites` display snippets are now truncated at report-render time
+     only (200 chars), while `ir_check_fingerprints` continue to hash full
+     normalized check text.
+3. Added regression coverage:
+   - `test/Tools/run-sv-tests-circt-bmc-check-attribution-long-line.test`
+   - validates long check text tail survives in `BMC_CHECK_ATTRIBUTION_OUT`
+     (proves extraction no longer truncates at source).
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-check-attribution-long-line.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-ir-check-fingerprints.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-uvm-semantics-fullcheck-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^sv-tests-uvm/BMC_SEMANTICS$'`
+  - result:
+    - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=6 fail=0 xfail=0 xpass=0 error=0`
+
 ## Iteration 887 - February 10, 2026
 
 ### BMC Semantic-Closure Hardening: Stable IR-Check Fingerprints

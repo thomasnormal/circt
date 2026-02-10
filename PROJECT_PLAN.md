@@ -514,6 +514,15 @@ See CHANGELOG.md on recent progress.
       check IDs propagated through lowering and solver witness diagnostics.
     - Next long-term feature target remains explicit stable check IDs in
       lowering/diagnostics so witness mapping is exact, not heuristic.
+61. IR-check extraction fidelity hardening landed (February 10, 2026):
+    - BMC lane scripts now preserve full normalized `verif.*` check lines in
+      `BMC_CHECK_ATTRIBUTION_OUT` (no early 200-char truncation).
+    - `run_formal_all.sh` now truncates only display rendering for
+      `ir_check_sites` while computing `ir_check_fingerprints` from full check
+      text.
+62. Updated long-term implication:
+    - Fingerprint collision risk from truncated check text is reduced, but true
+      end-to-end check-ID propagation remains the target capability.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
