@@ -1,5 +1,37 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 940 - February 10, 2026
+
+### BMC Syntax Closure: Preserve Built-In Class Methods (No Drop Remark)
+
+1. Updated ImportVerilog class-member lowering to preserve built-in class
+   method declarations instead of silently skipping them:
+   - `lib/Conversion/ImportVerilog/Structure.cpp`
+   - built-in methods without user bodies now go through
+     `context.declareFunction(fn)` and remain in the lowered symbol space.
+2. Removed the generic dropped-syntax remark path for implicit built-in class
+   methods (`"Class builtin functions ... will be dropped during lowering"`).
+3. Added direct regression coverage:
+   - `test/Conversion/ImportVerilog/class-builtin-no-drop.sv`
+   - checks no class-builtin drop remark and verifies
+     `moore.call_pre_randomize` / `moore.randomize` /
+     `moore.call_post_randomize` are still emitted.
+4. Updated drop-remark gate test to the new baseline while preserving positive
+   gate behavior with synthetic injection:
+   - `test/Tools/circt-bmc/sv-tests-drop-remarks-gate.mlir`
+   - real mini UVM case now expects `drop_remark_cases=0`
+   - synthetic wrapper warning still triggers `FAIL_ON_DROP_REMARKS`.
+5. Validation:
+   - `ninja -C build circt-verilog`
+   - `build/bin/llvm-lit -sv test/Conversion/ImportVerilog/class-builtin-no-drop.sv test/Conversion/ImportVerilog/constraint-mode.sv test/Conversion/ImportVerilog/class-randomization.sv test/Conversion/ImportVerilog/axi-vip-compat.sv`
+     -> `4 passed`.
+   - Mini UVM baseline (real tool):
+     - `utils/run_sv_tests_circt_bmc.sh ... TEST_FILTER='uvm-local-var-mini$'`
+       -> `drop_remark_cases=0`
+   - Mini UVM strict gate (synthetic wrapper warning):
+     - `FAIL_ON_DROP_REMARKS=1` with wrapper `CIRCT_VERILOG`
+       -> `drop_remark_cases=1`, gate triggers as expected.
+
 ## Iteration 939 - February 10, 2026
 
 ### BMC Syntax Closure: Side-Effect-Free Explicit Clock Matching
