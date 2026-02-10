@@ -458,6 +458,18 @@ See CHANGELOG.md on recent progress.
     - Next feature build should therefore target eliminating or refining this
       specific abstraction class in local-var/`disable iff` lowering paths
       before broadening to secondary buckets.
+53. Assertion/sequence attribution report landed (February 10, 2026):
+    - `run_formal_all.sh` now emits
+      `bmc-abstraction-provenance-assertion-attribution.tsv`, joining each
+      provenance-correlated case with extracted source assertion/sequence sites
+      (`L<line>:<snippet>`).
+    - This closes the gap between token-level provenance and concrete
+      user-facing property/sequence definitions for triage.
+54. Updated limitations after assertion attribution:
+    - Attribution is currently source-pattern based (SV text extraction), not
+      yet guaranteed one-to-one with final lowered `verif.*` checks.
+    - Next long-term feature should add lowered-op stable IDs (or source loc
+      propagation) so witness/provenance can be tied to exact backend checks.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
