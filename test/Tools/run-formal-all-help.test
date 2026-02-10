@@ -5,6 +5,7 @@
 // CHECK: --fail-on-diff
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
+// CHECK: --fail-on-new-bmc-semantic-bucket-cases
 // CHECK: --fail-on-new-opentitan-lec-strict-xprop-counter
 // CHECK: --bmc-allow-multi-clock
 // CHECK: --with-opentitan-lec-strict

@@ -35,6 +35,10 @@ Options:
   --fail-on-new-bmc-ir-check-fingerprint-cases
                          Fail when BMC fingerprint-fallback IR-check case count
                          increases vs baseline
+  --fail-on-new-bmc-semantic-bucket-cases
+                         Fail when BMC semantic-bucket fail-like case counts
+                         increase vs baseline (disable_iff/local_var/
+                         multiclock/four_state)
   --fail-on-new-bmc-abstraction-provenance
                          Fail when BMC abstraction provenance tokens increase
                          vs baseline
@@ -1668,6 +1672,7 @@ FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
+FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
 BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE=""
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
@@ -1955,6 +1960,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
+    --fail-on-new-bmc-semantic-bucket-cases)
+      FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1; shift ;;
     --fail-on-new-bmc-abstraction-provenance)
       FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=1; shift ;;
     --bmc-abstraction-provenance-allowlist-file)
@@ -3793,6 +3800,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
@@ -6699,6 +6707,76 @@ print(f"bmc_timeout_cases={timeout_cases} bmc_unknown_cases={unknown_cases}")
 PY
 }
 
+summarize_bmc_semantic_bucket_file() {
+  local case_file="$1"
+  if [[ ! -s "$case_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_CASE_FILE="$case_file" python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ["BMC_CASE_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
+bucket_case_sets = {
+    "disable_iff": set(),
+    "local_var": set(),
+    "multiclock": set(),
+    "four_state": set(),
+}
+all_fail_like_cases = set()
+
+disable_iff_re = re.compile(r"(disable[-_ ]iff|(^|[^a-z0-9])iff([^a-z0-9]|$))")
+local_var_re = re.compile(r"(local[-_ ]var|local[-_ ]variable|localvar)")
+multiclock_re = re.compile(r"(multi[-_ ]clock|multiclock)")
+four_state_re = re.compile(r"(xprop|x[-_ ]prop|4[-_ ]state|four[-_ ]state|x[_-]z)")
+
+for line in path.open(encoding="utf-8"):
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    parts = line.split("\t")
+    status = parts[0].strip().upper() if parts else ""
+    if status not in fail_like_statuses:
+        continue
+    case_id = parts[1].strip() if len(parts) > 1 else ""
+    case_path = parts[2].strip() if len(parts) > 2 else ""
+    case_key = (case_id, case_path)
+    all_fail_like_cases.add(case_key)
+    haystack = f"{case_id} {case_path}".lower()
+    if disable_iff_re.search(haystack):
+        bucket_case_sets["disable_iff"].add(case_key)
+    if local_var_re.search(haystack):
+        bucket_case_sets["local_var"].add(case_key)
+    if multiclock_re.search(haystack):
+        bucket_case_sets["multiclock"].add(case_key)
+    if four_state_re.search(haystack):
+        bucket_case_sets["four_state"].add(case_key)
+
+classified_cases = set()
+for values in bucket_case_sets.values():
+    classified_cases.update(values)
+
+unclassified_cases = len(all_fail_like_cases - classified_cases)
+
+parts = [
+    f"bmc_semantic_bucket_fail_like_cases={len(all_fail_like_cases)}",
+    f"bmc_semantic_bucket_disable_iff_cases={len(bucket_case_sets['disable_iff'])}",
+    f"bmc_semantic_bucket_local_var_cases={len(bucket_case_sets['local_var'])}",
+    f"bmc_semantic_bucket_multiclock_cases={len(bucket_case_sets['multiclock'])}",
+    f"bmc_semantic_bucket_four_state_cases={len(bucket_case_sets['four_state'])}",
+    f"bmc_semantic_bucket_unclassified_cases={unclassified_cases}",
+]
+print(" ".join(parts))
+PY
+}
+
 summarize_bmc_abstraction_provenance_file() {
   local provenance_file="$1"
   if [[ ! -s "$provenance_file" ]]; then
@@ -7322,6 +7400,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/sv-tests-bmc-results.txt")"
+      if [[ -n "$bmc_semantic_summary" ]]; then
+        summary="${summary} ${bmc_semantic_summary}"
+      fi
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
@@ -7370,6 +7452,10 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       bmc_case_summary="$(summarize_bmc_case_file "$sv_bmc_uvm_semantics_results_file")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
+      fi
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$sv_bmc_uvm_semantics_results_file")"
+      if [[ -n "$bmc_semantic_summary" ]]; then
+        summary="${summary} ${bmc_semantic_summary}"
       fi
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_uvm_semantics_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
@@ -7439,6 +7525,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
       fi
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/verilator-bmc-results.txt")"
+      if [[ -n "$bmc_semantic_summary" ]]; then
+        summary="${summary} ${bmc_semantic_summary}"
+      fi
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$verilator_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
@@ -7507,6 +7597,14 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
       pass=$((total - failures - skipped))
       summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=${skipped}"
+      bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/yosys-bmc-results.txt")"
+      if [[ -n "$bmc_case_summary" ]]; then
+        summary="${summary} ${bmc_case_summary}"
+      fi
+      bmc_semantic_summary="$(summarize_bmc_semantic_bucket_file "$OUT_DIR/yosys-bmc-results.txt")"
+      if [[ -n "$bmc_semantic_summary" ]]; then
+        summary="${summary} ${bmc_semantic_summary}"
+      fi
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$yosys_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
@@ -9651,6 +9749,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
@@ -9667,6 +9766,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
+  FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
   BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
@@ -9736,6 +9836,7 @@ def compose_case_id(base: str, path: str) -> str:
 def collect_failure_cases(out_dir: Path, summary_rows):
     result_sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-results.txt"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-results.txt"),
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-results.txt"),
         ("verilator-verification", "BMC", out_dir / "verilator-bmc-results.txt"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-results.txt"),
@@ -9785,6 +9886,7 @@ def collect_failure_cases(out_dir: Path, summary_rows):
 def collect_bmc_abstraction_provenance(out_dir: Path):
     sources = [
         ("sv-tests", "BMC", out_dir / "sv-tests-bmc-abstraction-provenance.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv"),
         ("verilator-verification", "BMC", out_dir / "verilator-bmc-abstraction-provenance.tsv"),
         ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-abstraction-provenance.tsv"),
     ]
@@ -9840,6 +9942,9 @@ fail_on_new_bmc_unknown_cases = (
 )
 fail_on_new_bmc_ir_check_fingerprint_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES", "0") == "1"
+)
+fail_on_new_bmc_semantic_bucket_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES", "0") == "1"
 )
 fail_on_new_bmc_abstraction_provenance = (
     os.environ.get("FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE", "0") == "1"
@@ -10052,6 +10157,26 @@ for key, current_row in summary.items():
                 if current_fingerprint_cases > baseline_fingerprint_cases:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_ir_check_key_mode_fingerprint_cases increased ({baseline_fingerprint_cases} -> {current_fingerprint_cases}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_semantic_bucket_cases:
+            semantic_bucket_keys = [
+                "bmc_semantic_bucket_disable_iff_cases",
+                "bmc_semantic_bucket_local_var_cases",
+                "bmc_semantic_bucket_multiclock_cases",
+                "bmc_semantic_bucket_four_state_cases",
+            ]
+            for semantic_key in semantic_bucket_keys:
+                baseline_semantic_values = []
+                for counts in parsed_counts:
+                    if semantic_key in counts:
+                        baseline_semantic_values.append(int(counts[semantic_key]))
+                if not baseline_semantic_values:
+                    continue
+                baseline_semantic = min(baseline_semantic_values)
+                current_semantic = int(current_counts.get(semantic_key, 0))
+                if current_semantic > baseline_semantic:
+                    gate_errors.append(
+                        f"{suite} {mode}: {semantic_key} increased ({baseline_semantic} -> {current_semantic}, window={baseline_window})"
                     )
         if fail_on_new_bmc_abstraction_provenance:
             baseline_provenance_raw = [
