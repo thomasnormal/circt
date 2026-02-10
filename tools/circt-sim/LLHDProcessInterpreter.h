@@ -1337,6 +1337,20 @@ private:
   /// interceptors to associate objections with the correct phase.
   uint64_t currentExecutingPhaseAddr = 0;
 
+  /// Function phase IMP sequencing: tracks which function phase IMP nodes
+  /// have completed their traversal. The UVM phase graph IMP nodes for
+  /// function phases (build, connect, end_of_elaboration, start_of_simulation)
+  /// may not have predecessor relationships set, so we enforce ordering
+  /// natively. Key = phase IMP address, Value = true when completed.
+  std::map<uint64_t, bool> functionPhaseImpCompleted;
+
+  /// Maps phase IMP address to its sequence index.
+  /// build=0, connect=1, end_of_elaboration=2, start_of_simulation=3
+  std::map<uint64_t, int> functionPhaseImpOrder;
+
+  /// Ordered list of function phase IMP addresses (populated at runtime).
+  std::vector<uint64_t> functionPhaseImpSequence;
+
   /// Get or create the per-object RNG for the given object address.
   /// If no RNG exists yet, creates one seeded with the object address.
   std::mt19937 &getObjectRng(uint64_t objAddr) {
