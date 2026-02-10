@@ -3,6 +3,7 @@
 // CHECK: run_formal_all.sh [options]
 // CHECK: --update-baselines
 // CHECK: --fail-on-diff
+// CHECK: --strict-gate-no-drop-remarks
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
 // CHECK: --fail-on-new-lec-drop-remark-cases

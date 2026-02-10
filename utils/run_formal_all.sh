@@ -23,6 +23,11 @@ Options:
                          `xprop_result_`, `xprop_counter_`,
                          `xprop_assume_known_result_`) when
                          `--with-opentitan-lec-strict` is active.
+  --strict-gate-no-drop-remarks
+                         With `--strict-gate`, also require absolute zero
+                         dropped-syntax remarks for BMC and LEC lanes
+                         (`--fail-on-any-bmc-drop-remarks` and
+                         `--fail-on-any-lec-drop-remarks`).
   --baseline-window N    Baseline rows per suite/mode used for gate comparison
                          (default: 1, latest baseline only)
   --baseline-window-days N
@@ -1769,6 +1774,7 @@ Z3_BIN="${Z3_BIN:-}"
 UPDATE_BASELINES=0
 FAIL_ON_DIFF=0
 STRICT_GATE=0
+STRICT_GATE_NO_DROP_REMARKS=0
 BASELINE_WINDOW=1
 BASELINE_WINDOW_DAYS=0
 FAIL_ON_NEW_XPASS=0
@@ -2086,6 +2092,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_DIFF=1; shift ;;
     --strict-gate)
       STRICT_GATE=1; shift ;;
+    --strict-gate-no-drop-remarks)
+      STRICT_GATE_NO_DROP_REMARKS=1; shift ;;
     --baseline-window)
       BASELINE_WINDOW="$2"; shift 2 ;;
     --baseline-window-days)
@@ -4142,6 +4150,10 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E=1
   FAIL_ON_NEW_E2E_MODE_DIFF_MISSING_IN_E2E_STRICT=1
+  if [[ "$STRICT_GATE_NO_DROP_REMARKS" == "1" ]]; then
+    FAIL_ON_ANY_BMC_DROP_REMARKS=1
+    FAIL_ON_ANY_LEC_DROP_REMARKS=1
+  fi
   if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
     FAIL_ON_NEW_OPENTITAN_LEC_STRICT_XPROP_KEY_PREFIXES+=(
       "xprop_diag_"
