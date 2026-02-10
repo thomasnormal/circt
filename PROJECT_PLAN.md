@@ -152,8 +152,9 @@ See CHANGELOG.md on recent progress.
     - BMC: continue the "no implicit drops" audit by ensuring clock/semantic
       matching helpers do not materialize transient IR when comparing syntax
       trees (`LowerToBMC.cpp` now side-effect-free for explicit-clock lookup).
-    - BMC SMT-LIB export: remove residual LLVM-in-`verif.bmc` dependency so
-      `for-smtlib-export` no longer rejects LLVM ops in BMC regions.
+    - BMC SMT-LIB export: live-cone gating now ignores dead LLVM ops in
+      `verif.bmc` regions; remaining closure is to lower/replace *live*
+      unsupported LLVM ops instead of rejecting them.
     - BMC: widen register-initial-value lowering beyond current typed-attr
       constraints where feasible (`VerifToSMT.cpp`).
 - LEC capability closure:

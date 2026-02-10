@@ -55,6 +55,8 @@ using namespace hw;
 
 constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
 
+static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block);
+
 static Value gatePropertyWithEnable(Value property, Value enable, bool isCover,
                                     OpBuilder &builder, Location loc) {
   if (!enable)
@@ -5046,6 +5048,7 @@ struct VerifBoundedModelCheckingOpConversion
         mapping.map(arg, mappedInput);
       }
 
+      auto liveOps = collectSMTLIBLiveOpsInBMCBlock(block);
       for (Operation &nestedOp : block.without_terminator()) {
         // Assert/cover are handled by the BMC conversion, and are erased using
         // the conversion rewriter (which can be deferred). Skip them so we
@@ -5079,6 +5082,8 @@ struct VerifBoundedModelCheckingOpConversion
           }
           continue;
         }
+        if (!liveOps.contains(&nestedOp))
+          continue;
         Operation *cloned = builder.clone(nestedOp, mapping);
         for (auto [oldRes, newRes] :
              llvm::zip(nestedOp.getResults(), cloned->getResults()))
@@ -8409,6 +8414,50 @@ static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
   return failure();
 }
 
+static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
+  DenseSet<Value> visitedValues;
+  DenseSet<Operation *> liveOps;
+  auto markLiveValue = [&](Value value, auto &&markLiveValueRef) -> void {
+    if (!value || !visitedValues.insert(value).second)
+      return;
+    auto *def = value.getDefiningOp();
+    if (!def || def->getBlock() != &block)
+      return;
+    if (liveOps.insert(def).second)
+      for (Value operand : def->getOperands())
+        markLiveValueRef(operand, markLiveValueRef);
+  };
+
+  if (auto yield = dyn_cast<verif::YieldOp>(block.getTerminator()))
+    for (Value operand : yield.getOperands())
+      markLiveValue(operand, markLiveValue);
+
+  // Keep properties and enables in the live roots so unsupported ops that
+  // affect formal checks still produce explicit diagnostics.
+  for (Operation &op : block.without_terminator()) {
+    if (auto assumeOp = dyn_cast<verif::AssumeOp>(op)) {
+      markLiveValue(assumeOp.getProperty(), markLiveValue);
+      if (auto enable = assumeOp.getEnable())
+        markLiveValue(enable, markLiveValue);
+      continue;
+    }
+    if (auto assertOp = dyn_cast<verif::AssertOp>(op)) {
+      markLiveValue(assertOp.getProperty(), markLiveValue);
+      if (auto enable = assertOp.getEnable())
+        markLiveValue(enable, markLiveValue);
+      continue;
+    }
+    if (auto coverOp = dyn_cast<verif::CoverOp>(op)) {
+      markLiveValue(coverOp.getProperty(), markLiveValue);
+      if (auto enable = coverOp.getEnable())
+        markLiveValue(enable, markLiveValue);
+      continue;
+    }
+  }
+
+  return liveOps;
+}
+
 static LogicalResult
 legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   SmallVector<LLVM::ConstantOp> llvmConstants;
@@ -8486,15 +8535,25 @@ void ConvertVerifToSMTPass::runOnOperation() {
             if (failed(legalizeSMTLIBSupportedLLVMOps(bmcOp)))
               return WalkResult::interrupt();
             Operation *unsupportedOp = nullptr;
-            bmcOp->walk([&](Operation *nested) {
-              if (nested == bmcOp.getOperation())
-                return WalkResult::advance();
-              auto *dialect = nested->getDialect();
-              if (!dialect || dialect->getNamespace() != "llvm")
-                return WalkResult::advance();
-              unsupportedOp = nested;
-              return WalkResult::interrupt();
-            });
+            for (Region *region :
+                 {&bmcOp.getInit(), &bmcOp.getLoop(), &bmcOp.getCircuit()}) {
+              for (Block &block : *region) {
+                auto liveOps = collectSMTLIBLiveOpsInBMCBlock(block);
+                for (Operation &nested : block.without_terminator()) {
+                  if (!liveOps.contains(&nested))
+                    continue;
+                  auto *dialect = nested.getDialect();
+                  if (!dialect || dialect->getNamespace() != "llvm")
+                    continue;
+                  unsupportedOp = &nested;
+                  break;
+                }
+                if (unsupportedOp)
+                  break;
+              }
+              if (unsupportedOp)
+                break;
+            }
             if (unsupportedOp) {
               unsupportedOp->emitError(
                   "for-smtlib-export does not support LLVM dialect operations "
