@@ -7322,6 +7322,11 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::string coverWorkDir = std::string(defaultCover.str());
   std::string matrixOutDir = std::string(defaultMatrix.str());
+  std::string compareFile = opts.compareFile;
+  std::string compareHistoryLatestFile = opts.compareHistoryLatestFile;
+  std::string historyFile = opts.historyFile;
+  std::string trendHistoryFile = opts.trendHistoryFile;
+  uint64_t trendWindowRuns = opts.trendWindowRuns;
   std::string appendHistoryFile = opts.appendHistoryFile;
   uint64_t historyMaxRuns = opts.historyMaxRuns;
   bool historyBootstrap = opts.historyBootstrap;
@@ -7362,6 +7367,22 @@ static int runNativeReport(const ReportOptions &opts) {
           it != cfg.report.end() && !it->second.empty())
         appendHistoryFile = it->second;
     }
+    if (historyFile.empty()) {
+      if (auto it = cfg.report.find("history");
+          it != cfg.report.end() && !it->second.empty())
+        historyFile = it->second;
+    }
+    if (trendWindowRuns == 0) {
+      if (auto it = cfg.report.find("trend_window");
+          it != cfg.report.end() && !it->second.empty()) {
+        if (StringRef(it->second).trim().getAsInteger(10, trendWindowRuns)) {
+          errs() << "circt-mut report: invalid [report] key 'trend_window' "
+                    "value '"
+                 << it->second << "' (expected non-negative integer)\n";
+          return 1;
+        }
+      }
+    }
     if (historyMaxRuns == 0) {
       if (auto it = cfg.report.find("history_max_runs");
           it != cfg.report.end() && !it->second.empty()) {
@@ -7393,6 +7414,14 @@ static int runNativeReport(const ReportOptions &opts) {
         }
       }
     }
+  }
+  if (!historyFile.empty()) {
+    if (compareFile.empty() && compareHistoryLatestFile.empty())
+      compareHistoryLatestFile = historyFile;
+    if (trendHistoryFile.empty())
+      trendHistoryFile = historyFile;
+    if (appendHistoryFile.empty())
+      appendHistoryFile = historyFile;
   }
 
   if (!opts.coverWorkDir.empty())
@@ -7445,13 +7474,13 @@ static int runNativeReport(const ReportOptions &opts) {
                       std::to_string(laneBudgetRows.size()));
   }
 
-  if (opts.compareFile.empty() && opts.compareHistoryLatestFile.empty() &&
+  if (compareFile.empty() && compareHistoryLatestFile.empty() &&
       (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty())) {
     errs() << "circt-mut report: --fail-if-delta-gt/--fail-if-delta-lt "
               "require --compare or --compare-history-latest\n";
     return 1;
   }
-  if (opts.trendHistoryFile.empty() &&
+  if (trendHistoryFile.empty() &&
       (!opts.failIfTrendDeltaGtRules.empty() ||
        !opts.failIfTrendDeltaLtRules.empty())) {
     errs() << "circt-mut report: --fail-if-trend-delta-gt/"
@@ -7464,8 +7493,8 @@ static int runNativeReport(const ReportOptions &opts) {
   bool skipCompareGatesForBootstrap = false;
   bool skipTrendGatesForBootstrap = false;
   bool historyBootstrapActivated = false;
-  if (!opts.compareFile.empty()) {
-    std::string baselinePath = resolveRelativeTo(opts.projectDir, opts.compareFile);
+  if (!compareFile.empty()) {
+    std::string baselinePath = resolveRelativeTo(opts.projectDir, compareFile);
     if (!sys::fs::exists(baselinePath)) {
       errs() << "circt-mut report: compare baseline file not found: "
              << baselinePath << "\n";
@@ -7476,9 +7505,9 @@ static int runNativeReport(const ReportOptions &opts) {
       return 1;
     }
   }
-  if (!opts.compareHistoryLatestFile.empty()) {
+  if (!compareHistoryLatestFile.empty()) {
     std::string historyPath =
-        resolveRelativeTo(opts.projectDir, opts.compareHistoryLatestFile);
+        resolveRelativeTo(opts.projectDir, compareHistoryLatestFile);
     if (!sys::fs::exists(historyPath)) {
       if (historyBootstrap) {
         historyBootstrapActivated = true;
@@ -7508,8 +7537,8 @@ static int runNativeReport(const ReportOptions &opts) {
                         std::to_string(baselineRunID));
     }
   }
-  if (!opts.trendHistoryFile.empty()) {
-    std::string historyPath = resolveRelativeTo(opts.projectDir, opts.trendHistoryFile);
+  if (!trendHistoryFile.empty()) {
+    std::string historyPath = resolveRelativeTo(opts.projectDir, trendHistoryFile);
     if (!sys::fs::exists(historyPath)) {
       if (historyBootstrap) {
         historyBootstrapActivated = true;
@@ -7529,7 +7558,7 @@ static int runNativeReport(const ReportOptions &opts) {
         errs() << error << "\n";
         return 1;
       }
-      appendTrendRows(rows, snapshots, historyPath, opts.trendWindowRuns, rows,
+      appendTrendRows(rows, snapshots, historyPath, trendWindowRuns, rows,
                       trendDeltas);
     }
   }
