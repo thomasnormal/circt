@@ -1,5 +1,53 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 837 - February 10, 2026
+
+### Native `circt-mut` Preflight for Generated-Mutation Allocation
+
+1. Hardened native `circt-mut cover` preflight for auto-generated mutation
+   campaigns:
+   - validates `--generate-mutations` as a positive integer
+   - validates `--mutations-mode-counts` / `--mutations-mode-weights` entry
+     syntax (`NAME=VALUE`) and positive integer values
+   - rejects `--mutations-mode-counts` + `--mutations-mode-weights` conflicts
+   - validates mode-count total equals `--generate-mutations`
+2. Hardened native `circt-mut matrix` lane preflight for generated lanes
+   (`mutations_file=-` + `generate_count`):
+   - validates lane `generate_count` as a positive integer
+   - validates effective lane/default `mutations_mode_counts` and
+     `mutations_mode_weights` syntax/value constraints
+   - rejects effective count/weight conflicts
+   - validates effective mode-count total equals lane `generate_count`
+3. These checks fail fast before script dispatch, preventing late shell-stage
+   failures and making generated-lane config errors explicit in CI logs.
+
+### Tests and Documentation
+
+- Added native preflight regression tests:
+  - `test/Tools/circt-mut-cover-generate-count-invalid-native.test`
+  - `test/Tools/circt-mut-cover-generate-mode-counts-total-invalid-native.test`
+  - `test/Tools/circt-mut-cover-generate-mode-allocation-conflict-native.test`
+  - `test/Tools/circt-mut-matrix-lane-generate-count-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-mode-counts-total-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-mode-allocation-conflict-native.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-generate-*.test test/Tools/circt-mut-matrix-lane-generate-count-invalid-native.test test/Tools/circt-mut-matrix-lane-mode-*-invalid-native.test test/Tools/circt-mut-matrix-lane-mode-allocation-conflict-native.test test/Tools/circt-mut-run-cover-generate-config.test test/Tools/circt-mut-run-matrix-config.test`: PASS (8/8)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (40/40)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 836 - February 10, 2026
 
 ### Built-In Fault-Model Mutation Profiles

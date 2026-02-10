@@ -318,6 +318,58 @@ static bool hasNonZeroDecimalValue(StringRef value) {
   return value.find_first_not_of('0') != StringRef::npos;
 }
 
+static bool parsePositiveUIntPreflight(StringRef value, uint64_t &out) {
+  if (value.getAsInteger(10, out))
+    return false;
+  return out > 0;
+}
+
+enum class AllocationParseErrorKind {
+  None,
+  InvalidEntry,
+  InvalidValue,
+};
+
+struct AllocationParseResult {
+  bool enabled = false;
+  uint64_t total = 0;
+  AllocationParseErrorKind errorKind = AllocationParseErrorKind::None;
+  std::string entry;
+  std::string modeName;
+  std::string value;
+};
+
+static AllocationParseResult parseModeAllocationCSV(StringRef csv) {
+  AllocationParseResult result;
+  if (csv.empty())
+    return result;
+  SmallVector<StringRef, 16> entries;
+  csv.split(entries, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef rawEntry : entries) {
+    StringRef entry = rawEntry.trim();
+    if (entry.empty())
+      continue;
+    auto split = entry.split('=');
+    StringRef modeName = split.first.trim();
+    StringRef valueRef = split.second.trim();
+    if (modeName.empty() || valueRef == split.first) {
+      result.errorKind = AllocationParseErrorKind::InvalidEntry;
+      result.entry = entry.str();
+      return result;
+    }
+    uint64_t parsed = 0;
+    if (!parsePositiveUIntPreflight(valueRef, parsed)) {
+      result.errorKind = AllocationParseErrorKind::InvalidValue;
+      result.modeName = modeName.str();
+      result.value = valueRef.str();
+      return result;
+    }
+    result.total += parsed;
+    result.enabled = true;
+  }
+  return result;
+}
+
 struct CoverRewriteResult {
   bool ok = false;
   std::string error;
@@ -327,6 +379,11 @@ struct CoverRewriteResult {
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                                            ArrayRef<StringRef> args) {
   CoverRewriteResult result;
+  bool hasMutationsFile = false;
+  bool hasGenerateMutations = false;
+  std::string generateMutations;
+  std::string mutationsModeCounts;
+  std::string mutationsModeWeights;
   std::string globalFilterTimeoutSeconds;
   std::string globalFilterLECTimeoutSeconds;
   std::string globalFilterBMCTimeoutSeconds;
@@ -434,6 +491,19 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
         return result;
       continue;
     }
+    if (arg == "--mutations-file" || arg.starts_with("--mutations-file="))
+      hasMutationsFile = true;
+    if (arg == "--generate-mutations" ||
+        arg.starts_with("--generate-mutations=")) {
+      hasGenerateMutations = true;
+      generateMutations = valueFromArg().str();
+    }
+    if (arg == "--mutations-mode-counts" ||
+        arg.starts_with("--mutations-mode-counts="))
+      mutationsModeCounts = valueFromArg().str();
+    if (arg == "--mutations-mode-weights" ||
+        arg.starts_with("--mutations-mode-weights="))
+      mutationsModeWeights = valueFromArg().str();
     if (arg == "--formal-global-propagate-cmd" ||
         arg.starts_with("--formal-global-propagate-cmd="))
       hasGlobalFilterCmd = true;
@@ -487,6 +557,76 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
 
     result.rewrittenArgs.push_back(arg.str());
+  }
+
+  if (hasMutationsFile && hasGenerateMutations) {
+    result.error = "circt-mut cover: --mutations-file and --generate-mutations "
+                   "are mutually exclusive.";
+    return result;
+  }
+  if (hasGenerateMutations) {
+    if (generateMutations.empty()) {
+      result.error = "circt-mut cover: missing value for --generate-mutations.";
+      return result;
+    }
+    uint64_t generateCount = 0;
+    if (!parsePositiveUIntPreflight(generateMutations, generateCount)) {
+      result.error = (Twine("circt-mut cover: invalid --generate-mutations "
+                            "value: ") +
+                      generateMutations + " (expected positive integer).")
+                         .str();
+      return result;
+    }
+
+    AllocationParseResult modeCounts =
+        parseModeAllocationCSV(mutationsModeCounts);
+    if (modeCounts.errorKind == AllocationParseErrorKind::InvalidEntry) {
+      result.error =
+          (Twine("circt-mut cover: invalid --mutations-mode-counts entry: ") +
+           modeCounts.entry + " (expected NAME=COUNT).")
+              .str();
+      return result;
+    }
+    if (modeCounts.errorKind == AllocationParseErrorKind::InvalidValue) {
+      result.error = (Twine("circt-mut cover: invalid --mutations-mode-count "
+                            "value for ") +
+                      modeCounts.modeName + ": " + modeCounts.value +
+                      " (expected positive integer).")
+                         .str();
+      return result;
+    }
+
+    AllocationParseResult modeWeights =
+        parseModeAllocationCSV(mutationsModeWeights);
+    if (modeWeights.errorKind == AllocationParseErrorKind::InvalidEntry) {
+      result.error =
+          (Twine("circt-mut cover: invalid --mutations-mode-weights entry: ") +
+           modeWeights.entry + " (expected NAME=WEIGHT).")
+              .str();
+      return result;
+    }
+    if (modeWeights.errorKind == AllocationParseErrorKind::InvalidValue) {
+      result.error = (Twine("circt-mut cover: invalid --mutations-mode-weight "
+                            "value for ") +
+                      modeWeights.modeName + ": " + modeWeights.value +
+                      " (expected positive integer).")
+                         .str();
+      return result;
+    }
+
+    if (modeCounts.enabled && modeWeights.enabled) {
+      result.error = "circt-mut cover: use either --mutations-mode-counts or "
+                     "--mutations-mode-weights, not both.";
+      return result;
+    }
+    if (modeCounts.enabled && modeCounts.total != generateCount) {
+      result.error =
+          (Twine("circt-mut cover: --mutations-mode-counts total (") +
+           Twine(modeCounts.total) + ") must match --generate-mutations (" +
+           Twine(generateCount) + ").")
+              .str();
+      return result;
+    }
   }
 
   if (hasGlobalFilterChain) {
@@ -614,6 +754,8 @@ struct MatrixRewriteResult {
 
 struct MatrixLanePreflightDefaults {
   std::string mutationsYosys;
+  std::string mutationsModeCounts;
+  std::string mutationsModeWeights;
   std::string globalFilterCmd;
   std::string globalFilterTimeoutSeconds;
   std::string globalFilterLECTimeoutSeconds;
@@ -681,6 +823,7 @@ static bool preflightMatrixLaneTools(
     StringRef mutationsFile = getCol(2);
     StringRef generateCount = getCol(7);
     StringRef laneMutationsYosys = getCol(10);
+    StringRef laneMutationsModeCounts = getCol(33);
     StringRef laneGlobalFilterCmd = getCol(14);
     StringRef laneGlobalFilterLEC = getCol(15);
     StringRef laneGlobalFilterBMC = getCol(16);
@@ -703,6 +846,7 @@ static bool preflightMatrixLaneTools(
     StringRef laneGlobalFilterTimeoutSeconds = getCol(42);
     StringRef laneGlobalFilterLECTimeoutSeconds = getCol(43);
     StringRef laneGlobalFilterBMCTimeoutSeconds = getCol(44);
+    StringRef laneMutationsModeWeights = getCol(45);
     std::string laneLabel = laneID.empty() ? "<unknown>" : laneID.str();
 
     auto resolveLaneTool = [&](StringRef laneValue, StringRef defaultValue,
@@ -935,6 +1079,87 @@ static bool preflightMatrixLaneTools(
     if (!autoGenerateLane)
       continue;
 
+    uint64_t laneGenerateCount = 0;
+    if (!parsePositiveUIntPreflight(generateCount, laneGenerateCount)) {
+      error = (Twine("Invalid lane generate_count value in --lanes-tsv at "
+                     "line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + generateCount +
+               " (expected positive integer).")
+                  .str();
+      return false;
+    }
+
+    StringRef effectiveModeCounts =
+        withDefault(laneMutationsModeCounts, defaults.mutationsModeCounts);
+    StringRef effectiveModeWeights =
+        withDefault(laneMutationsModeWeights, defaults.mutationsModeWeights);
+    AllocationParseResult modeCounts =
+        parseModeAllocationCSV(effectiveModeCounts);
+    if (modeCounts.errorKind == AllocationParseErrorKind::InvalidEntry) {
+      error =
+          (Twine("Invalid lane mutations_mode_counts value in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + modeCounts.entry + " (expected NAME=COUNT).")
+              .str();
+      return false;
+    }
+    if (modeCounts.errorKind == AllocationParseErrorKind::InvalidValue) {
+      error =
+          (Twine("Invalid lane mutations_mode_counts value in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + modeCounts.modeName + "=" + modeCounts.value +
+           " (expected NAME=COUNT with positive integer COUNT).")
+              .str();
+      return false;
+    }
+    AllocationParseResult modeWeights =
+        parseModeAllocationCSV(effectiveModeWeights);
+    if (modeWeights.errorKind == AllocationParseErrorKind::InvalidEntry) {
+      error =
+          (Twine("Invalid lane mutations_mode_weights value in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + modeWeights.entry +
+           " (expected NAME=WEIGHT).")
+              .str();
+      return false;
+    }
+    if (modeWeights.errorKind == AllocationParseErrorKind::InvalidValue) {
+      error =
+          (Twine("Invalid lane mutations_mode_weights value in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + modeWeights.modeName + "=" +
+           modeWeights.value +
+           " (expected NAME=WEIGHT with positive integer WEIGHT).")
+              .str();
+      return false;
+    }
+    if (modeCounts.enabled && modeWeights.enabled) {
+      error =
+          (Twine("Lane mutation generation config conflict in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel +
+           "): use only one of mutations_mode_counts or mutations_mode_weights.")
+              .str();
+      return false;
+    }
+    if (modeCounts.enabled && modeCounts.total != laneGenerateCount) {
+      error =
+          (Twine("Lane mutation generation config error in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): mutations_mode_counts total (" +
+           Twine(modeCounts.total) + ") must match generate_count (" +
+           Twine(laneGenerateCount) + ").")
+              .str();
+      return false;
+    }
+
     StringRef requestedYosys = laneMutationsYosys;
     if (requestedYosys.empty() || requestedYosys == "-") {
       if (!defaults.mutationsYosys.empty())
@@ -1090,6 +1315,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.rewrittenArgs.push_back("--default-mutations-yosys");
       result.rewrittenArgs.push_back(*resolved);
       continue;
+    }
+    if (arg == "--default-mutations-mode-counts" ||
+        arg.starts_with("--default-mutations-mode-counts=")) {
+      defaults.mutationsModeCounts = valueFromArg().str();
+    }
+    if (arg == "--default-mutations-mode-weights" ||
+        arg.starts_with("--default-mutations-mode-weights=")) {
+      defaults.mutationsModeWeights = valueFromArg().str();
     }
     if (arg == "--lanes-tsv") {
       if (i + 1 >= args.size()) {

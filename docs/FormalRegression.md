@@ -475,6 +475,15 @@ Execution controls:
     `--formal-global-propagate-z3`, `--formal-global-propagate-bmc-z3`.
   - mutation-generation tool option `--mutations-yosys` is now pre-resolved
     natively for fast-fail diagnostics before dispatch.
+  - generated-mutation allocation controls are now validated natively for
+    cover dispatch:
+    - `--generate-mutations` must be a positive integer.
+    - `--mutations-mode-counts` / `--mutations-mode-weights` entries must be
+      `NAME=VALUE` with positive integers.
+    - `--mutations-mode-counts` and `--mutations-mode-weights` are mutually
+      exclusive.
+    - when mode-counts are used, their total must match
+      `--generate-mutations`.
   - native preflight now validates chain-mode values, injects missing built-in
     LEC/BMC tools for `--formal-global-propagate-circt-chain`, and rejects
     conflicting non-chain global-filter mode combinations before dispatch.
@@ -501,6 +510,13 @@ Execution controls:
     `--default-mutations-yosys`.
   - generated lanes in `--lanes-tsv` now get native preflight validation for
     lane `mutations_yosys` executables (with default/`yosys` fallback).
+  - generated lanes now also get native allocation preflight for effective
+    lane/default generation controls:
+    - `generate_count` must be a positive integer.
+    - effective `mutations_mode_counts` / `mutations_mode_weights` entries
+      must be `NAME=VALUE` with positive integers.
+    - effective count/weight controls are mutually exclusive.
+    - effective `mutations_mode_counts` totals must match `generate_count`.
   - lane-level formal tool fields in `--lanes-tsv` now get native preflight
     validation with effective default fallback:
     `global_propagate_circt_lec`, `global_propagate_circt_bmc`,
