@@ -15,8 +15,8 @@ func.func @for_smtlib_rejects_llvm_ops_in_bmc() -> (i1) {
   }
   circuit {
   ^bb0(%clk: !seq.clock):
-    // expected-error @below {{for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions; found 'llvm.mlir.constant'}}
     %zero = llvm.mlir.constant(0 : i64) : i64
+    // expected-error @below {{for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions; found 'llvm.call'}}
     %ptr = llvm.call @malloc(%zero) : (i64) -> !llvm.ptr
     %cond = builtin.unrealized_conversion_cast %ptr : !llvm.ptr to i1
     verif.assert %cond : i1

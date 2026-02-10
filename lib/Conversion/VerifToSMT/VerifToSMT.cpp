@@ -24,6 +24,7 @@
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Dialect/SMT/IR/SMTTypes.h"
@@ -8408,6 +8409,31 @@ static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
   return failure();
 }
 
+static LogicalResult
+legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
+  SmallVector<LLVM::ConstantOp> llvmConstants;
+  bmcOp->walk(
+      [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
+  for (auto llvmConstant : llvmConstants) {
+    auto ty = llvmConstant.getType();
+    // for-smtlib-export currently supports scalar integer/float constants in
+    // verif.bmc regions; keep other LLVM constants on the generic rejection
+    // path so they remain explicit unsupported-syntax diagnostics.
+    if (!isa<IntegerType, FloatType>(ty))
+      continue;
+    auto typedAttr = dyn_cast<TypedAttr>(llvmConstant.getValue());
+    if (!typedAttr)
+      return llvmConstant.emitOpError(
+          "expected typed value attribute for llvm.mlir.constant");
+    OpBuilder builder(llvmConstant);
+    auto arithConstant =
+        arith::ConstantOp::create(builder, llvmConstant.getLoc(), typedAttr);
+    llvmConstant.replaceAllUsesWith(arithConstant.getResult());
+    llvmConstant.erase();
+  }
+  return success();
+}
+
 void circt::populateVerifToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns, Namespace &names,
     bool risingClocksOnly, bool assumeKnownInputs, bool xOptimisticOutputs,
@@ -8457,6 +8483,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
           if (forSMTLIBExport) {
+            if (failed(legalizeSMTLIBSupportedLLVMOps(bmcOp)))
+              return WalkResult::interrupt();
             Operation *unsupportedOp = nullptr;
             bmcOp->walk([&](Operation *nested) {
               if (nested == bmcOp.getOperation())
