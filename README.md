@@ -238,6 +238,12 @@ These two modes are mutually exclusive and validated natively before dispatch.
   `formal_global_propagate_accept_xprop_only`,
   `formal_global_propagate_bmc_run_smtlib`,
   `formal_global_propagate_bmc_assume_known_inputs`.
+- cover native-prequalify toggle:
+  `native_global_filter_prequalify`.
+`run` also forwards cover native global-filter path options:
+- `native_global_filter_prequalify_pair_file`
+- `native_global_filter_probe_mutant`
+- `native_global_filter_probe_log`.
 
 Aggregate campaign results (cover/matrix/all) into one normalized TSV summary:
 
