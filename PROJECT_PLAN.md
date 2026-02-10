@@ -681,6 +681,21 @@ See CHANGELOG.md on recent progress.
     - Remaining long-term limitation:
       JIT-vs-SMTLIB backend parity is still open and should be tracked as a
       backend correctness hardening item (not a harness attribution gap).
+86. Added optional sv-tests BMC backend parity drift instrumentation in
+    `run_formal_all.sh` (`--sv-tests-bmc-backend-parity`) plus strict-gate
+    drift counter support (`--fail-on-new-bmc-backend-parity-mismatch-cases`).
+    - New artifact:
+      `sv-tests-bmc-backend-parity.tsv` with per-case statuses
+      (`status_smtlib`, `status_jit`) and classification.
+    - Current measured baseline (February 10, 2026):
+      `bmc_backend_parity_mismatch_cases=3`, all
+      `bmc_backend_parity_jit_only_fail_cases=3`, in:
+      `16.10--property-local-var-fail`,
+      `16.10--sequence-local-var-fail`,
+      `16.15--property-disable-iff-fail`.
+    - Near-term closure target:
+      drive this parity mismatch counter to `0` while preserving
+      `sv-tests/BMC` pass on SMT-LIB backend.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
