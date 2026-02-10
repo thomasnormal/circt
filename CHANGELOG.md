@@ -1,5 +1,25 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 970 - February 10, 2026
+
+### `run_formal_all` Lit Migration: Explicit Caller Filters Everywhere
+
+1. Updated `test/Tools/run-formal-all-*.test` callsites to pass explicit lane
+   filters in every `utils/run_formal_all.sh` invocation (except the dedicated
+   negative coverage in
+   `test/Tools/run-formal-all-require-explicit-sv-tests-filters.test`).
+2. This aligns lit coverage with the caller-owned filter policy:
+   no test relies on implicit default lane filters anymore.
+3. Updated
+   `test/Tools/run-formal-all-strict-gate-failure-cases.test` baseline
+   expectations to tolerate the expanded LEC diag columns now present in
+   `summary.tsv` rows.
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv --max-failures=5 test/Tools/run-formal-all-*.test`:
+  PASS (71/71)
+
 ## Iteration 969 - February 10, 2026
 
 ### `run_formal_all`: Explicit Caller Filters for Non-OpenTitan BMC/LEC Lanes

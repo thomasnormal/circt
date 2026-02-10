@@ -200,8 +200,9 @@ See CHANGELOG.md on recent progress.
 - DevEx/CI:
   - Promote lane-state inspector to required pre-resume CI gate.
   - Add per-lane historical trend dashboards and automatic anomaly detection.
-  - Enforce explicit caller-owned lane filters for non-OpenTitan BMC/LEC runs
-    in `run_formal_all.sh`; use `.*` when full-lane sweeps are intentional.
+- Keep explicit caller-owned lane filters for non-OpenTitan BMC/LEC runs in
+  `run_formal_all.sh`; new callsites must pass filters explicitly (`.*` for
+  intentionally full-lane sweeps).
 
 ### BMC Semantic Closure Plan (Next Execution Track)
 1. Target semantics to close:
