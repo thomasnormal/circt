@@ -141,7 +141,9 @@ See CHANGELOG.md on recent progress.
     `verilator-verification/BMC` active fail-like rows are now fully classified
     via explicit semantic tags (sampled-value + named-property buckets), while
     `yosys/tests/sva/BMC` still has only initial 4-state seed coverage
-    (`sva_value_change_sim`) and 5 unclassified fail-like rows.
+    plus seeded `disable iff`/sampled-value coverage
+    (`sva_not`, `counter`, `sva_value_change_sim`) and 3 unclassified
+    fail-like rows.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
