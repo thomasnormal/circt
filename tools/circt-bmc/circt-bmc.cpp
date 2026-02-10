@@ -814,9 +814,6 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
     llhdPrePM.addPass(llhd::createHoistSignalsPass());
     llhdPrePM.addPass(llhd::createDeseqPass());
 
-    // Hoist assertions before LLHD process lowering removes them.
-    pm.addPass(createStripLLHDProcesses());
-
     auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
     llhdPostPM.addPass(llhd::createLowerProcessesPass());
     llhdPostPM.addPass(mlir::createCSEPass());
@@ -838,6 +835,10 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
       llhdPostPM.addPass(mlir::createCSEPass());
       llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     }
+
+    // Preserve LLHD process semantics through lowering and only abstract any
+    // residual process ops that remain after LLHD simplification.
+    pm.addPass(createStripLLHDProcesses());
 
     StripLLHDInterfaceSignalsOptions stripLLHDOpts;
     stripLLHDOpts.strict = false;

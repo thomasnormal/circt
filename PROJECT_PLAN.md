@@ -255,6 +255,25 @@ See CHANGELOG.md on recent progress.
     - Revalidated sv-tests pair:
       `16.15--property-disable-iff` now PASS and
       `16.15--property-disable-iff-fail` now FAIL under BMC.
+26. Implication-delay closure progress (February 10, 2026, current branch):
+    - Fixed implication tautology folding for delayed consequents in
+      `LTLToCore` by using folded OR construction for implication safety/final
+      checks (prevents spurious first-sample failures when consequent is
+      logically true but not yet canonicalized to a constant op).
+    - Added regression:
+      `test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`.
+27. LLHD process-abstraction limitation identified (February 10, 2026):
+    - Remaining 6-case semantic-candidate revalidation stays
+      `pass=1 fail=5 error=0`.
+    - Root cause evidence from minimal reproducer (`/tmp/min-local-var-direct`)
+      and emitted BMC IR:
+      dynamic LLHD process results are abstracted as unconstrained
+      `llhd_process_result*` solver inputs, allowing spurious SAT witnesses for
+      otherwise deterministic assertion checks.
+28. Pipeline hardening landed (February 10, 2026):
+    - `circt-bmc` LLHD pipeline now runs `strip-llhd-processes` after LLHD
+      lowering/simplification passes (instead of before), so reducible process
+      semantics are preserved as far as possible before fallback abstraction.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
