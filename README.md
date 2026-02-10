@@ -531,7 +531,8 @@ Lane TSVs can now override strict matrix gates per lane via tail columns:
 `utils/run_mutation_matrix.sh` now also pre-validates default generated-mutation
 mode/profile/allocation options, and marks malformed generated lane mutation
 config as `CONFIG_ERROR` before launching per-lane cover runs.
-Matrix `results.tsv` now includes `config_error_reason`, making lane
+Matrix `results.tsv` now includes stable `config_error_code` plus
+`config_error_reason`, making lane
 configuration failures directly actionable in CI summaries.
 
 Mutation materialization is built in by default via

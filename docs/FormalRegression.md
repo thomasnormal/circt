@@ -845,11 +845,12 @@ utils/run_mutation_matrix.sh --lanes-tsv /path/to/lanes.tsv --out-dir /tmp/mutat
 Matrix `results.tsv` columns:
 
 ```text
-lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns    generated_mutations_cache_lock_wait_ns    generated_mutations_cache_lock_contended    config_error_reason
+lane_id    status    exit_code    coverage_percent    gate_status    lane_dir    metrics_file    summary_json    generated_mutations_cache_status    generated_mutations_cache_hit    generated_mutations_cache_miss    generated_mutations_cache_saved_runtime_ns    generated_mutations_cache_lock_wait_ns    generated_mutations_cache_lock_contended    config_error_code    config_error_reason
 ```
 
 For `gate_status=CONFIG_ERROR`, `config_error_reason` carries the
-pre-dispatch lane validation failure reason.
+pre-dispatch lane validation failure reason, while `config_error_code` provides
+a stable machine-readable classifier for CI triage.
 
 Matrix gate summary artifact:
 

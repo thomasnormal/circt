@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 850 - February 10, 2026
+
+### Matrix Lane Error Taxonomy (`run_mutation_matrix.sh`)
+
+1. Extended lane status/results export with stable machine-readable
+   `config_error_code` in addition to `config_error_reason`.
+2. Added deterministic `CONFIG_ERROR` codes across lane pre-dispatch checks:
+   - gate override validation
+   - mutation source/reuse file checks
+   - generated-mutation mode/profile/allocation/seed checks
+   - formal timeout/bound/ignore checks
+   - BMC cache bound/policy checks
+3. `results.tsv` now carries:
+   - `config_error_code`
+   - `config_error_reason`
+   enabling strict CI routing by code while preserving human-readable context.
+
+### Tests and Documentation
+
+- Updated regression tests:
+  - `test/Tools/run-mutation-matrix-lane-gate-invalid-value.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-modes-invalid.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-mode-counts-total-invalid.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (63/63)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-config-error-codes --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 849 - February 10, 2026
 
 ### Z3 `auto` Resolution for Mutation Formal Filters
