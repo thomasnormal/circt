@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 887 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: Stable IR-Check Fingerprints
+
+1. Extended BMC provenance attribution schema in `utils/run_formal_all.sh`:
+   - added new column:
+     - `ir_check_fingerprints`
+   - emitted in:
+     - `bmc-abstraction-provenance-case-map.tsv`
+     - `bmc-abstraction-provenance-assertion-attribution.tsv`
+     - `bmc-abstraction-provenance-ir-check-attribution.tsv`
+2. Fingerprint definition:
+   - `chk_<sha1-12>` over normalized lowered check identity:
+     - `<check_kind>\t<normalized_check_snippet>`
+   - purpose:
+     - provide stable-ish check identity across per-run check index churn
+       (`C1`, `C2`, ...) while keeping attribution deterministic.
+3. Added lit regression coverage:
+   - `test/Tools/run-formal-all-bmc-ir-check-fingerprints.test`
+   - validates:
+     - new schema column presence
+     - fingerprint emission for multi-check case rows
+     - integration through formal summary flow.
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-ir-check-fingerprints.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-baselines.test`: PASS
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-uvm-semantics-fingerprints-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --with-sv-tests-uvm-bmc-semantics --include-lane-regex '^sv-tests-uvm/BMC_SEMANTICS$'`
+  - result:
+    - `sv-tests-uvm/BMC_SEMANTICS`: `total=6 pass=6 fail=0 xfail=0 xpass=0 error=0`
+    - attribution rows now include
+      `ir_check_fingerprints=chk_<...>;chk_<...>`.
+
 ## Iteration 886 - February 10, 2026
 
 ### BMC Semantic-Closure Cadence Expansion: Targeted UVM Lane

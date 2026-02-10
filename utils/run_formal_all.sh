@@ -6732,6 +6732,7 @@ generate_bmc_abstraction_provenance_case_map() {
   local ir_check_summary_file="$out_dir/bmc-abstraction-provenance-ir-check-attribution.tsv"
   OUT_DIR="$out_dir" CASE_MAP_FILE="$case_map_file" TOKEN_SUMMARY_FILE="$token_summary_file" ASSERTION_SUMMARY_FILE="$assertion_summary_file" IR_CHECK_SUMMARY_FILE="$ir_check_summary_file" python3 - <<'PY'
 import csv
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -6901,21 +6902,37 @@ def parse_check_index(raw_idx: str) -> int:
     except Exception:
         return 10**9
 
+def compute_ir_check_fingerprint(kind: str, snippet: str) -> str:
+    canonical = f"{kind}\t{compact_line(snippet)}"
+    digest = hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+    return f"chk_{digest[:12]}"
+
 def build_ir_check_fields(entries, max_sites: int = 16):
     if not entries:
-        return ("0", "", "")
+        return ("0", "", "", "")
     ordered = sorted(entries, key=lambda x: (parse_check_index(x[0]), x[1], x[2]))
     kinds = sorted({kind for _, kind, _ in ordered if kind})
+    fingerprints = []
     sites = []
     for idx_raw, kind, snippet in ordered[:max_sites]:
         idx_norm = idx_raw if idx_raw else "?"
+        fingerprint = compute_ir_check_fingerprint(kind, snippet)
+        fingerprints.append(fingerprint)
         site = f"C{idx_norm}:{kind}"
         if snippet:
             site = f"{site}:{snippet}"
         sites.append(site)
     if len(ordered) > max_sites:
+        for _, kind, snippet in ordered[max_sites:]:
+            fingerprints.append(compute_ir_check_fingerprint(kind, snippet))
+    if len(ordered) > max_sites:
         sites.append(f"...(+{len(ordered) - max_sites} more)")
-    return (str(len(ordered)), ";".join(kinds), ";".join(sites))
+    return (
+        str(len(ordered)),
+        ";".join(kinds),
+        ";".join(sites),
+        ";".join(sorted(set(fingerprints))),
+    )
 
 for key in sorted(token_rows.keys()):
     suite, mode, case_id, case_path = key
@@ -6924,7 +6941,7 @@ for key in sorted(token_rows.keys()):
     fail_like = status in fail_like_statuses
     assertion_sites = extract_assertion_sites(case_path)
     assertion_sites_serialized = ";".join(assertion_sites)
-    ir_check_count, ir_check_kinds, ir_check_sites = build_ir_check_fields(
+    ir_check_count, ir_check_kinds, ir_check_sites, ir_check_fingerprints = build_ir_check_fields(
         check_rows.get(key, set())
     )
     rows.append(
@@ -6942,6 +6959,7 @@ for key in sorted(token_rows.keys()):
             "ir_check_count": ir_check_count,
             "ir_check_kinds": ir_check_kinds,
             "ir_check_sites": ir_check_sites,
+            "ir_check_fingerprints": ir_check_fingerprints,
         }
     )
     for token in tokens:
@@ -6972,6 +6990,7 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
             "ir_check_count",
             "ir_check_kinds",
             "ir_check_sites",
+            "ir_check_fingerprints",
         ]
     )
     for row in rows:
@@ -6990,6 +7009,7 @@ with case_map_path.open("w", newline="", encoding="utf-8") as f:
                 row["ir_check_count"],
                 row["ir_check_kinds"],
                 row["ir_check_sites"],
+                row["ir_check_fingerprints"],
             ]
         )
 
@@ -7009,6 +7029,7 @@ with assertion_summary_path.open("w", newline="", encoding="utf-8") as f:
             "ir_check_count",
             "ir_check_kinds",
             "ir_check_sites",
+            "ir_check_fingerprints",
             "provenance_token_count",
             "provenance_tokens",
         ]
@@ -7027,6 +7048,7 @@ with assertion_summary_path.open("w", newline="", encoding="utf-8") as f:
                 row["ir_check_count"],
                 row["ir_check_kinds"],
                 row["ir_check_sites"],
+                row["ir_check_fingerprints"],
                 row["provenance_token_count"],
                 row["provenance_tokens"],
             ]
@@ -7046,6 +7068,7 @@ with ir_check_summary_path.open("w", newline="", encoding="utf-8") as f:
             "ir_check_count",
             "ir_check_kinds",
             "ir_check_sites",
+            "ir_check_fingerprints",
             "provenance_token_count",
             "provenance_tokens",
         ]
@@ -7062,6 +7085,7 @@ with ir_check_summary_path.open("w", newline="", encoding="utf-8") as f:
                 row["ir_check_count"],
                 row["ir_check_kinds"],
                 row["ir_check_sites"],
+                row["ir_check_fingerprints"],
                 row["provenance_token_count"],
                 row["provenance_tokens"],
             ]

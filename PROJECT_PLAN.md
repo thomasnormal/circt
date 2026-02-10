@@ -503,6 +503,17 @@ See CHANGELOG.md on recent progress.
       corpus closure.
     - LEC long-term closure remains focused on strict no-waiver X-prop policy
       and deeper 4-state diagnostic precision.
+59. IR-check attribution hardening landed (February 10, 2026):
+    - `run_formal_all.sh` provenance reports now include
+      `ir_check_fingerprints` (`chk_<sha1-12>`) derived from normalized
+      lowered check kind+snippet.
+    - This provides stable-ish check identity across per-run check reindexing
+      and improves long-term BMC triage/debug joins.
+60. Remaining limitation after fingerprint landing:
+    - Fingerprints are content-based approximations, not first-class backend
+      check IDs propagated through lowering and solver witness diagnostics.
+    - Next long-term feature target remains explicit stable check IDs in
+      lowering/diagnostics so witness mapping is exact, not heuristic.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
