@@ -27,6 +27,26 @@ hw.module @one_reg(in %clk: !seq.clock, in %in0: i32, in %in1: i32, out out: i32
   hw.output %single_reg : i32
 }
 
+// CHECK:  hw.module @folded_initial_expr(in [[CLK:%.+]] : !seq.clock, in [[IN:%.+]] : i32, in [[OLD_REG:%.+]] : i32, out {{.+}} : i32, out {{.+}} : i32) attributes {{{.*}}initial_values = [3 : i32], num_regs = 1 : i32} {
+// CHECK:    [[INITIAL:%.+]] = seq.initial() {
+// CHECK:      [[C1_I32:%.+]] = hw.constant 1 : i32
+// CHECK:      [[C2_I32:%.+]] = hw.constant 2 : i32
+// CHECK:      [[SUM:%.+]] = comb.add [[C1_I32]], [[C2_I32]]
+// CHECK:      seq.yield [[SUM]]
+// CHECK:    }
+// CHECK:    hw.output [[OLD_REG]], [[IN]]
+// CHECK:  }
+hw.module @folded_initial_expr(in %clk: !seq.clock, in %in: i32, out out: i32) {
+  %init = seq.initial () {
+    %c1_i32 = hw.constant 1 : i32
+    %c2_i32 = hw.constant 2 : i32
+    %sum = comb.add %c1_i32, %c2_i32 : i32
+    seq.yield %sum : i32
+  } : () -> !seq.immutable<i32>
+  %reg = seq.compreg %in, %clk initial %init : i32
+  hw.output %reg : i32
+}
+
 // CHECK:  hw.module @two_reg(in [[CLK:%.+]] : !seq.clock, in [[IN0:%.+]] : i32, in [[IN1:%.+]] : i32, in [[OLD_REG0:%.+]] : i32, in [[OLD_REG1:%.+]] : i32, out {{.+}} : i32, out {{.+}} : i32, out {{.+}} : i32) attributes {{{.*}}initial_values = [unit, unit], num_regs = 2 : i32} {
 // CHECK:    [[ADD:%.+]] = comb.add [[IN0]], [[IN1]]
 // CHECK:    hw.output [[OLD_REG1]], [[ADD]], [[OLD_REG0]]

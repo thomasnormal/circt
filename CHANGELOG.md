@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 943 - February 10, 2026
+
+### BMC ExternalizeRegisters Hardening: Fold `seq.initial` Constant Expressions
+
+1. Expanded register-initial-value extraction in
+   `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`:
+   - replaced direct-`hw.constant` only handling with recursive fold-based
+     constant extraction from `seq.initial` yielded values.
+   - accepts constant expressions (e.g. `comb.add` over constants) in
+     `seq.initial`, while still rejecting non-foldable dynamic expressions.
+2. Regression updates:
+   - `test/Tools/circt-bmc/externalize-registers.mlir`:
+     added `@folded_initial_expr` proving folded constant expression initial
+     values are preserved in `initial_values`.
+   - `test/Tools/circt-bmc/externalize-registers-errors.mlir`:
+     updated negative case to a valid non-foldable `seq.initial` producer and
+     updated diagnostic expectation.
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/externalize-registers*.mlir`
+     -> `10 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir test/Tools/circt-bmc/externalize-registers*.mlir`
+     -> `40 passed`, `1 xfail`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-extregs-initfold-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/BMC|verilator-verification/LEC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5` (known baseline),
+          `verilator-verification/LEC pass=17 fail=0`.
+
 ## Iteration 942 - February 10, 2026
 
 ### BMC ExternalizeRegisters Hardening: Reject Only Used Multi-Clock Conflicts
