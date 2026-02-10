@@ -1,0 +1,8 @@
+// REQUIRES: uvm
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16 %t/bin
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.10--uvm-autopath.sv <<\"EOF\"\n/*\n:name: uvm_autopath\n:description: verifies LEC harness auto-resolves default UVM path\n:type: simulation\n:tags: uvm\n:unsynthesizable: 1\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/bin/circt-verilog <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nhw.module @top(out out: i1) attributes {num_regs = 0 : i32, initial_values = []} {\n  %true = hw.constant true\n  hw.output %true : i1\n}\nMLIR\nEOF\nchmod +x %t/bin/circt-verilog\n'
+// RUN: bash -eu -c $'cat > %t/bin/circt-opt <<\"EOF\"\n#!/usr/bin/env bash\nin=\"${@: -1}\"\ncat \"$in\"\nEOF\nchmod +x %t/bin/circt-opt\n'
+// RUN: bash -eu -c $'cat > %t/bin/circt-lec <<\"EOF\"\n#!/usr/bin/env bash\nexit 0\nEOF\nchmod +x %t/bin/circt-lec\n'
+// RUN: env -u UVM_PATH OUT=%t/results.tsv CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 TAG_REGEX='uvm' TEST_FILTER='uvm-autopath' %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests | FileCheck %s
+// CHECK: sv-tests LEC summary: total=1 pass=1 fail=0 error=0 skip={{[0-9]+}}

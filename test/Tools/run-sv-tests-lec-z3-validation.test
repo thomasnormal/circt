@@ -1,0 +1,3 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests
+// RUN: not env Z3_BIN=/definitely/missing /usr/bin/bash %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests 2>&1 | FileCheck %s
+// CHECK: z3 not found or not executable: /definitely/missing

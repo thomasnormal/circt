@@ -50,6 +50,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTDialect.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -1507,7 +1508,8 @@ int main(int argc, char **argv) {
     mlir::cf::ControlFlowDialect,
     mlir::BuiltinDialect,
     mlir::func::FuncDialect,
-    mlir::LLVM::LLVMDialect
+    mlir::LLVM::LLVMDialect,
+    mlir::scf::SCFDialect
   >();
   // clang-format on
   mlir::func::registerInlinerExtension(registry);

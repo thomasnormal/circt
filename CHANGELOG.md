@@ -1,5 +1,88 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 858 - February 10, 2026
+
+### BMC Semantic-Closure Hardening: SCF Registration + UVM Path Resolution
+
+1. Fixed a real BMC semantic-closure blocker in `tools/circt-bmc/circt-bmc.cpp`:
+   - registered `mlir::scf::SCFDialect` in the `circt-bmc` context.
+   - this unblocks UVM-derived MLIR containing `scf.if` from failing at parse
+     time (`Dialect 'scf' not found`).
+2. Hardened sv-tests formal harness UVM path handling:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - default `UVM_PATH` now auto-resolves across:
+     - `lib/Runtime/uvm` (legacy),
+     - `lib/Runtime/uvm-core/src`,
+     - `lib/Runtime/uvm-core`,
+     - `/home/thomas-ahle/uvm-core/src`.
+3. Hardened LEC non-smoke solver setup:
+   - `utils/run_sv_tests_circt_lec.sh` now fail-fast validates `Z3_BIN` for
+     non-smoke mode and errors early on missing/non-executable/non-PATH values.
+   - removes deferred per-test failures caused by unresolved z3 tooling.
+4. Added BMC semantic-closure regression:
+   - `test/Tools/circt-bmc/scf-dialect-registered.mlir`
+   - ensures `circt-bmc` accepts SCF-containing input and reaches BMC lowering.
+5. Added harness hardening regressions:
+   - `test/Tools/run-sv-tests-bmc-uvm-autopath.test`
+   - `test/Tools/run-sv-tests-lec-uvm-autopath.test`
+   - `test/Tools/run-sv-tests-lec-z3-validation.test`
+
+### Validation
+
+- `ninja -C build circt-bmc`: PASS
+- `bash -n utils/run_sv_tests_circt_bmc.sh utils/run_sv_tests_circt_lec.sh`: PASS
+- `python3 build/bin/llvm-lit -sv -j 1 test/Tools/circt-bmc/scf-dialect-registered.mlir test/Tools/run-sv-tests-lec-z3-validation.test test/Tools/run-sv-tests-bmc-uvm-autopath.test test/Tools/run-sv-tests-lec-uvm-autopath.test`: PASS
+  - note: UVM auto-path lit tests are feature-gated (`REQUIRES: uvm`) and were
+    `UNSUPPORTED` in this local run.
+- BMC semantic candidate sweep (with `UVM_PATH` unset):
+  - `OUT=/tmp/bmc-semclosure-candidates-post.tsv INCLUDE_UVM_TAGS=1 TAG_REGEX='(^| )16\\.|(^| )9\\.4\\.4|(^| )uvm-assertions( |$)' TEST_FILTER='16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm|16\\.15--property-iff-uvm-fail|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm' BMC_SMOKE_ONLY=0 BMC_RUN_SMTLIB=0 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - result: `total=6 pass=5 error=1` (`16.15--property-iff-uvm-fail` remains).
+- Remaining failing candidate triage:
+  - `16.15--property-iff-uvm-fail` now fails later in BMC lowering with
+    LLVM translation error around 4-state `hw.struct` /
+    `builtin.unrealized_conversion_cast`, indicating a real 4-state semantic
+    closure gap (not a harness-path or SCF registration issue).
+
+## Iteration 857 - February 10, 2026
+
+### Native Prequalification Parallelism in `circt-mut cover`
+
+1. Optimized native cover global-filter prequalification execution by honoring
+   `--jobs <N>` in native prequalify paths.
+2. Native prequalification now classifies mutants in parallel worker threads
+   while preserving deterministic output ordering in the emitted reuse pair
+   file (`native_global_filter_prequalify.tsv`).
+3. Added strict native prequalify validation for `--jobs`:
+   - `--jobs` must be a positive integer (`0` is rejected with a targeted
+     diagnostic).
+4. Applies to both:
+   - `--native-global-filter-prequalify`
+   - `--native-global-filter-prequalify-only`
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-only-jobs.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-only-jobs-invalid.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-prequalify*.test test/Tools/circt-mut-run-cover-config-native-prequalify*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-prequalify-jobs --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 856 - February 10, 2026
 
 ### Native Formal-Only Batch Mode: `--native-global-filter-prequalify-only`

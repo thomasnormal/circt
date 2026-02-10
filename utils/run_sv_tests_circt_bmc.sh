@@ -42,13 +42,29 @@ DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/sv-tests-bmc-expect.txt}"
-UVM_PATH="${UVM_PATH:-$SCRIPT_DIR/../lib/Runtime/uvm}"
 UVM_TAG_REGEX="${UVM_TAG_REGEX:-(^| )uvm( |$)}"
 INCLUDE_UVM_TAGS="${INCLUDE_UVM_TAGS:-0}"
 TAG_REGEX_EFFECTIVE="$TAG_REGEX"
 if [[ "$INCLUDE_UVM_TAGS" == "1" ]]; then
   TAG_REGEX_EFFECTIVE="($TAG_REGEX_EFFECTIVE)|$UVM_TAG_REGEX"
 fi
+
+resolve_default_uvm_path() {
+  local candidate
+  for candidate in \
+    "$SCRIPT_DIR/../lib/Runtime/uvm" \
+    "$SCRIPT_DIR/../lib/Runtime/uvm-core/src" \
+    "$SCRIPT_DIR/../lib/Runtime/uvm-core" \
+    "/home/thomas-ahle/uvm-core/src"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s\n' "$SCRIPT_DIR/../lib/Runtime/uvm"
+}
+
+UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
