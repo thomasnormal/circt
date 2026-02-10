@@ -1,5 +1,45 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 963 - February 10, 2026
+
+### `circt-mut report`: Built-In Lane Trend Policy Bundles
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with two built-in matrix lane
+   trend governance profiles:
+   - `formal-regression-matrix-lane-trend-nightly`
+   - `formal-regression-matrix-lane-trend-strict`
+2. Both profiles now apply predefined trend gates over lane-budget telemetry:
+   - worst timeout/unknown/errors lane values must not regress upward
+   - lanes with zero detected mutants must not increase
+   - lowest detected-mutants lane value must not regress downward
+3. Strict profile adds extra trend guards:
+   - `matrix.detected_mutants_sum` must not regress downward
+   - `matrix.prequalify_drift_comparable` must not regress downward
+4. Updated policy surfaces:
+   - `circt-mut report --help` includes new profile names
+   - invalid profile diagnostics include the expanded accepted set
+5. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-lane-trend-requires-history.test`
+   - `test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-fail.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-lane-trend-requires-history.test test/Tools/circt-mut-report-policy-matrix-lane-trend-strict-fail.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (40/40)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (159/159)
+- Filtered external cadence:
+  - `BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-trend-policy-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --sv-tests-uvm-bmc-semantics-tag-regex '.*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped`)
+    - `verilator-verification` BMC/LEC: PASS (`17/17`)
+    - `yosys/tests/sva` BMC: FAIL (`2` fail), LEC: PASS (`14/14`)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 962 - February 10, 2026
 
 ### LEC Harness: Explicit `diag` Field + Backward-Compatible Consumers

@@ -147,7 +147,9 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-trend-guard|\n";
   os << "                           formal-regression-matrix-guard-smoke|\n";
   os << "                           formal-regression-matrix-guard-nightly|\n";
-  os << "                           formal-regression-matrix-guard-strict\n";
+  os << "                           formal-regression-matrix-guard-strict|\n";
+  os << "                           formal-regression-matrix-lane-trend-nightly|\n";
+  os << "                           formal-regression-matrix-lane-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5590,6 +5592,48 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      1.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-lane-trend-nightly") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_timeout_mutants_value", 0.0);
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_lec_unknown_mutants_value", 0.0);
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_value", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.lane_budget.worst_errors_value", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules,
+                     "matrix.lane_budget.lowest_detected_mutants_value", 0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-lane-trend-strict") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_timeout_mutants_value", 0.0);
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_lec_unknown_mutants_value", 0.0);
+    appendUniqueRule(
+        opts.failIfTrendDeltaGtRules,
+        "matrix.lane_budget.worst_global_filter_bmc_unknown_mutants_value", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.lane_budget.worst_errors_value", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules,
+                     "matrix.lane_budget.lowest_detected_mutants_value", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
+                     0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules,
+                     "matrix.prequalify_drift_comparable", 0.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
@@ -5597,7 +5641,9 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-trend-guard|"
            "formal-regression-matrix-guard-smoke|"
            "formal-regression-matrix-guard-nightly|"
-           "formal-regression-matrix-guard-strict)")
+           "formal-regression-matrix-guard-strict|"
+           "formal-regression-matrix-lane-trend-nightly|"
+           "formal-regression-matrix-lane-trend-strict)")
               .str();
   return false;
 }

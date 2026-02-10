@@ -16,6 +16,8 @@
 // CHECK: formal-regression-matrix-guard-smoke
 // CHECK: formal-regression-matrix-guard-nightly
 // CHECK: formal-regression-matrix-guard-strict
+// CHECK: formal-regression-matrix-lane-trend-nightly
+// CHECK: formal-regression-matrix-lane-trend-strict
 // CHECK: --append-history
 // CHECK: --fail-if-value-gt
 // CHECK: --fail-if-value-lt
