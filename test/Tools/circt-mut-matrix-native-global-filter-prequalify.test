@@ -17,6 +17,13 @@
 //
 // LOG-DAG: native_matrix_prequalify_lanes_tsv{{[[:space:]]+}}{{.*}}native_global_filter_prequalify_lanes.tsv
 // LOG-DAG: native_matrix_prequalify_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_summary_lanes{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_summary_missing_lanes{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_total_mutants{{[[:space:]]+}}2
+// LOG-DAG: native_matrix_prequalify_not_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_propagated_mutants{{[[:space:]]+}}1
+// LOG-DAG: native_matrix_prequalify_create_mutated_error_mutants{{[[:space:]]+}}0
+// LOG-DAG: native_matrix_prequalify_probe_error_mutants{{[[:space:]]+}}0
 // LOG-DAG: ARG:--lanes-tsv
 // LOG-DAG: ARG:{{.*}}native_global_filter_prequalify_lanes.tsv
 //

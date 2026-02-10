@@ -1,5 +1,49 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 915 - February 10, 2026
+
+### `circt-mut` Matrix Prequalification Telemetry Aggregation
+
+1. Extended native matrix prequalification in `tools/circt-mut/circt-mut.cpp`
+   to aggregate per-lane `cover --native-global-filter-prequalify-only`
+   summaries from `native_global_filter_prequalify.log`.
+2. Added matrix-level emitted telemetry keys:
+   - `native_matrix_prequalify_summary_lanes`
+   - `native_matrix_prequalify_summary_missing_lanes`
+   - `native_matrix_prequalify_total_mutants`
+   - `native_matrix_prequalify_not_propagated_mutants`
+   - `native_matrix_prequalify_propagated_mutants`
+   - `native_matrix_prequalify_create_mutated_error_mutants`
+   - `native_matrix_prequalify_probe_error_mutants`
+   - `native_matrix_prequalify_cmd_token_not_propagated_mutants`
+   - `native_matrix_prequalify_cmd_token_propagated_mutants`
+   - `native_matrix_prequalify_cmd_rc_not_propagated_mutants`
+   - `native_matrix_prequalify_cmd_rc_propagated_mutants`
+   - `native_matrix_prequalify_cmd_timeout_propagated_mutants`
+   - `native_matrix_prequalify_cmd_error_mutants`
+3. Hardened parsing to only consume numeric `prequalify_*` counters
+   (`prequalify_total_mutants` and `*_mutants`) and ignore non-numeric metadata
+   rows from lane logs.
+4. Added/updated regression coverage:
+   - `test/Tools/circt-mut-matrix-native-global-filter-prequalify.test`
+   - `test/Tools/circt-mut-matrix-native-global-filter-prequalify-cmd.test`
+5. Updated `PROJECT_PLAN.md` mutation CLI roadmap entry to mark matrix
+   prequalification aggregation as landed and move next steps forward.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-global-filter-prequalify*.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (144/144)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-prequalify-summary --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC: FAIL (`error=1`, sampled-value bucket), LEC PASS
+    - `yosys/tests/sva` BMC: FAIL (implication-timing bucket), LEC PASS
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 914 - February 10, 2026
 
 ### BMC Hardening: sv-tests Backend Parity Drift Instrumentation
@@ -22,6 +66,33 @@
      (`16.10--property-local-var-fail`,
       `16.10--sequence-local-var-fail`,
       `16.15--property-disable-iff-fail`).
+
+## Iteration 913 - February 10, 2026
+
+### BMC Backend-Parity Closure Hardening (`sv-tests/BMC`)
+
+1. Updated `VerifToSMT` BMC lowering in
+   `lib/Conversion/VerifToSMT/VerifToSMT.cpp` to keep `JIT` and `SMTLIB`
+   lowering behavior aligned for outlined/non-outlined BMC helper handling:
+   - outlined helper regions are now cloned (`cloneInto`) and have residual
+     `verif.{assume,assert,cover}` stripped in helper funcs before use.
+   - inline helper lowering path now consistently skips
+     `verif.{assume,assert,cover}` (matching outlined helper behavior).
+2. Focused parity repro validation:
+   - `TEST_FILTER='^(16\.10--property-local-var-fail|16\.10--sequence-local-var-fail|16\.15--property-disable-iff-fail)$'`
+   - `BMC_RUN_SMTLIB=0`: all 3 `PASS`
+   - `BMC_RUN_SMTLIB=1`: all 3 `PASS`
+3. Lane-level parity validation:
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-parity-after-stripfix --sv-tests /home/thomas-ahle/sv-tests --include-lane-regex '^sv-tests/BMC$' --sv-tests-bmc-backend-parity --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+   - Result:
+     - `sv-tests/BMC`: `total=26 pass=26 fail=0`
+     - `bmc_backend_parity_mismatch_cases=0`
+     - `bmc_backend_parity_status_diff_cases=0`
+4. Current broader branch snapshot (not yet closed in this iteration):
+   - `verilator-verification/BMC`: `pass=12 fail=5`
+   - `yosys/tests/sva/BMC`: `pass=0 fail=12 skip=2`
+   - `opentitan/E2E`: `pass=11 fail=1`
+   - `opentitan/E2E_STRICT`: `pass=11 fail=1`
 
 ## Iteration 912 - February 10, 2026
 
@@ -128,7 +199,6 @@
   - `bmc-semantic-bucket-case-map.tsv`: 16 lines
     (header + 15 case rows = 3 sv-tests + 5 verilator + 7 yosys).
 
-
 ## Iteration 908 - February 10, 2026
 
 ### BMC Hardening: Per-Case Semantic-Bucket Export Artifacts
@@ -164,7 +234,6 @@
     - `verilator-bmc-semantic-buckets.tsv`: `5`
     - `yosys-bmc-semantic-buckets.tsv`: `7`
 
-
 ## Iteration 907 - February 10, 2026
 
 ### LEC Hardening: Strict-Gate Default X-PROP Prefix Policy
@@ -199,7 +268,6 @@
     `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-strict-defaultxprop-strictgate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-opentitan-lec-strict-defaultxprop-baseline.tsv --strict-gate`
   - result: `opentitan/LEC_STRICT` PASS in both runs.
 
-
 ## Iteration 906 - February 10, 2026
 
 ### BMC Hardening: Strict-Gate Coverage for All Semantic Buckets
@@ -233,6 +301,35 @@
     - `yosys/tests/sva/BMC`: `fail_like=6`, `tagged=6`, `disable_iff=2`, `four_state=1`, `sampled_value=1`, `implication_timing=2`, `hierarchical_net=1`, `unclassified=0`
     - `opentitan/LEC_STRICT`: `pass=1`, `fail=0`, `error=0`.
 
+## Iteration 905 - February 10, 2026
+
+### config_db VTable Dispatch Fix + APB Dual-Top Milestone
+
+1. **config_db `call_indirect` interceptor**: Added interceptor in the VTable dispatch
+   (`call_indirect`) path for `config_db_default_implementation_t::set/get`. Previously
+   only `func.call` path was intercepted. The actual class name contains "default" between
+   "config_db" and "implementation", requiring split match: `contains("config_db") &&
+   contains("implementation")`.
+
+2. **config_db get value write-back fix**: Changed `findBlockByAddress()` (global-only) to
+   `findMemoryBlockByAddress(addr, procId)` (process-aware) in the `call_indirect` get
+   handler. Alloca-backed local variables like `int got` are per-process and invisible to
+   the global address index. Fixes `config-db.sv` test: `got_val=42` (was 0).
+
+3. **Fuzzy key matching for `_x` suffix**: When `config_db::get` requests a field like
+   `apb_slave_monitor_bfm_x` (SV unresolved array index), fuzzy-matches against stored
+   entries with numeric suffixes (e.g., `bfm_x` → `bfm_0`).
+
+4. **APB dual-top boots fully**: APB AVIP with `--top hvl_top --top hdl_top` now
+   completes UVM elaboration with no `UVM_FATAL`. Config_db handles flow from hdl_top
+   BFM registration to hvl_top BFM retrieval. Full testbench topology constructed.
+
+### Tests and Validation
+
+- circt-sim lit tests: 223/223 pass (100%)
+- sv-tests simulation: 0 xfail, 0 fail
+- APB AVIP dual-top: No UVM_FATAL, grace period termination at 42ps
+- Remaining blocker: `seq_item_port` not connected + VIF task dispatch
 
 ## Iteration 904 - February 10, 2026
 
