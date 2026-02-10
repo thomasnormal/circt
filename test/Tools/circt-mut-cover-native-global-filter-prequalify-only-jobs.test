@@ -1,0 +1,27 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts %t/bin
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M_SLOW_EQ\n2 M_FAST_UNKNOWN\n3 M_FAST_EQ\n4 M_SLOW_UNKNOWN\n' > %t/mutations.txt
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    -i) in=\"$2\"; shift 2 ;;\n    -o) out=\"$2\"; shift 2 ;;\n    -d) design=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nspec=$(sed -n \"1p\" \"$in\" | cut -d\" \" -f2-)\nif [[ \"$spec\" == M_SLOW_* ]]; then\n  sleep 0.1\nfi\n{\n  echo \"// design: $design\"\n  echo \"// spec: $spec\"\n} > \"$out\"\n' > %t/fake-create-mutated.sh
+// RUN: chmod +x %t/fake-create-mutated.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmutant=\"${@: -1}\"\nif grep -q \"spec: .*_EQ\" \"$mutant\"; then\n  echo LEC_RESULT=EQ\nelse\n  echo LEC_RESULT=UNKNOWN\nfi\n' > %t/fake-circt-lec.sh
+// RUN: chmod +x %t/fake-circt-lec.sh
+// RUN: env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --design %t/design.il --mutations-file %t/mutations.txt --native-global-filter-prequalify-only --jobs 3 --create-mutated-script %t/fake-create-mutated.sh --formal-global-propagate-circt-lec %t/fake-circt-lec.sh --work-dir %t/work > %t/out.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/out.txt
+// RUN: FileCheck %s --check-prefix=PAIR < %t/work/native_global_filter_prequalify.tsv
+// RUN: test ! -e %t/invoked
+//
+// OUT: prequalify_pair_file{{[[:space:]]+}}{{.*}}native_global_filter_prequalify.tsv
+// OUT: prequalify_total_mutants{{[[:space:]]+}}4
+// OUT: prequalify_not_propagated_mutants{{[[:space:]]+}}2
+// OUT: prequalify_propagated_mutants{{[[:space:]]+}}2
+// OUT: prequalify_create_mutated_error_mutants{{[[:space:]]+}}0
+// OUT: prequalify_probe_error_mutants{{[[:space:]]+}}0
+//
+// PAIR: mutation_id{{.*}}propagation
+// PAIR-NEXT: 1{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated
+// PAIR-NEXT: 2{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_propagated
+// PAIR-NEXT: 3{{.*}}-{{.*}}activated{{.*}}not_propagated{{.*}}global_filter_not_propagated
+// PAIR-NEXT: 4{{.*}}-{{.*}}activated{{.*}}propagated{{.*}}global_filter_propagated

@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf '1 M1\n' > %t/mutations.txt
+// RUN: not circt-mut cover --design %t/design.il --mutations-file %t/mutations.txt --native-global-filter-prequalify-only --formal-global-propagate-circt-lec /bin/true --jobs 0 > %t/out.txt 2>&1
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: circt-mut cover: invalid --jobs value for native prequalification: 0 (expected positive integer).

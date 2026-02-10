@@ -427,13 +427,16 @@ Prequalify mode:
 - creates mutants and runs native built-in global filter classification
   (`circt-lec`/`circt-bmc`/chain) before test dispatch,
 - supports both `--mutations-file` and `--generate-mutations` mutation sources,
+- uses `--jobs <N>` to parallelize prequalification worker execution
+  (deterministic pair-row ordering is preserved),
 - writes a `pair_qualification.tsv`-compatible reuse file
   (`test_id=-` prequalified rows), and
 - dispatches `run_mutation_cover.sh` with `--reuse-pair-file` set to that
   generated file.
 To run prequalification without launching dynamic tests, use:
 - `--native-global-filter-prequalify-only`
-  (emits pair-file + prequalify summary to stdout, no script dispatch).
+  (emits pair-file + prequalify summary to stdout, no script dispatch;
+  also honors `--jobs`).
 
 Current scope limits:
 - supports built-in filters only (not `--formal-global-propagate-cmd`),
