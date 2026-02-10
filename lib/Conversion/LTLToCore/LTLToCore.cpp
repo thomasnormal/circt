@@ -765,11 +765,8 @@ struct LTLPropertyLowerer {
       auto notAntecedent = comb::XorOp::create(
           builder, loc, antecedent,
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-      auto safety =
-          comb::OrOp::create(builder, loc,
-                             SmallVector<Value, 2>{notAntecedent,
-                                                   consequent.safety},
-                             true);
+      auto safety = builder.createOrFold<comb::OrOp>(
+          loc, SmallVector<Value, 2>{notAntecedent, consequent.safety}, true);
       if (!clock) {
         implOp.emitError("implication requires a clocked property");
         return {Value(), {}};
@@ -779,11 +776,8 @@ struct LTLPropertyLowerer {
       auto notSeen = comb::XorOp::create(
           builder, loc, antecedentSeen,
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
-      auto finalCheck =
-          comb::OrOp::create(builder, loc,
-                             SmallVector<Value, 2>{notSeen,
-                                                   consequent.finalCheck},
-                             true);
+      auto finalCheck = builder.createOrFold<comb::OrOp>(
+          loc, SmallVector<Value, 2>{notSeen, consequent.finalCheck}, true);
       return {safety, finalCheck};
     }
     if (auto untilOp = prop.getDefiningOp<ltl::UntilOp>()) {
