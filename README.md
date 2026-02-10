@@ -409,8 +409,9 @@ circt-mut cover \
 ```
 
 Probe mode reports `classification` (`not_propagated` or `propagated`) plus
-`global_filter_rc` and `global_filter_log`. It currently supports built-in
-circt-lec/circt-bmc/chain modes (not `--formal-global-propagate-cmd`).
+`global_filter_rc` and `global_filter_log`. It supports
+`--formal-global-propagate-cmd` and built-in
+circt-lec/circt-bmc/chain modes.
 For campaign-scale global relevance prequalification, `circt-mut cover` now
 also supports:
 

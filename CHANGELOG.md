@@ -1,5 +1,55 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 866 - February 10, 2026
+
+### `circt-mut` Native Probe: `--formal-global-propagate-cmd` Parity
+
+1. Extended native single-mutant probe mode in `tools/circt-mut/circt-mut.cpp`
+   to support command-mode global filtering:
+   - `circt-mut cover --native-global-filter-probe-mutant ...` now accepts
+     `--formal-global-propagate-cmd` in addition to built-in
+     circt-lec/circt-bmc/chain modes.
+   - removed hard rejection for cmd-mode probe in cover preflight.
+   - updated probe config parsing to accept cmd-mode and global timeout wiring.
+2. Native probe cmd execution now uses the same cmd classification semantics as
+   native prequalification:
+   - token override:
+     - `NOT_PROPAGATED` => `not_propagated`
+     - `PROPAGATED` => `propagated`
+   - rc fallback:
+     - `0 => not_propagated`
+     - `1 => propagated`
+     - other rc => `error`
+   - timeout fallback with configured timeout => `propagated`.
+3. Probe cmd mode now exports mutation context env vars to wrappers:
+   - `ORIG_DESIGN`, `MUTANT_DESIGN`, `MUTATION_ID`, `MUTATION_SPEC`,
+     `MUTATION_WORKDIR`.
+
+### Tests and Documentation
+
+- Added tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-cmd.test`
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-cmd-timeout.test`
+- Removed obsolete test:
+  - `test/Tools/circt-mut-cover-native-global-filter-probe-cmd-unsupported.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-probe-*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-probe-cmd --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 865 - February 10, 2026
 
 ### `circt-mut` Native Prequalification: `--formal-global-propagate-cmd` Parity

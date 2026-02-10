@@ -968,18 +968,12 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                    "--generate-mutations.";
     return result;
   }
-  if (nativeGlobalFilterProbe && hasGlobalFilterCmd) {
-    result.error =
-        "circt-mut cover: --native-global-filter-probe-mutant does not support "
-        "--formal-global-propagate-cmd; use built-in circt-lec/circt-bmc/chain "
-        "global filters.";
-    return result;
-  }
-  if (nativeGlobalFilterProbe && !hasGlobalFilterLEC && !hasGlobalFilterBMC &&
-      !hasGlobalFilterChain) {
+  if (nativeGlobalFilterProbe && !hasGlobalFilterCmd && !hasGlobalFilterLEC &&
+      !hasGlobalFilterBMC && !hasGlobalFilterChain) {
     result.error =
         "circt-mut cover: --native-global-filter-probe-mutant requires "
-        "a built-in global filter mode (--formal-global-propagate-circt-lec, "
+        "a global filter mode (--formal-global-propagate-cmd, "
+        "--formal-global-propagate-circt-lec, "
         "--formal-global-propagate-circt-bmc, or "
         "--formal-global-propagate-circt-chain).";
     return result;
@@ -1036,6 +1030,7 @@ struct CoverGlobalFilterProbeConfig {
   std::string globalFilterLEC;
   std::string globalFilterBMC;
   std::string globalFilterChain;
+  std::string globalFilterCmd;
   std::string globalFilterLECToolArgs;
   std::string globalFilterBmcToolArgs;
   std::string globalFilterZ3;
@@ -1049,6 +1044,7 @@ struct CoverGlobalFilterProbeConfig {
   bool globalFilterBMCAssumeKnownInputs = false;
   uint64_t globalFilterLECTimeoutSeconds = 0;
   uint64_t globalFilterBMCTimeoutSeconds = 0;
+  uint64_t globalFilterCmdTimeoutSeconds = 0;
   uint64_t globalFilterBMCBound = 20;
   uint64_t globalFilterBMCIgnoreAssertsUntil = 0;
 };
@@ -1459,6 +1455,12 @@ static bool parseCoverGlobalFilterProbeConfig(
         return false;
       continue;
     }
+    if (arg == "--formal-global-propagate-cmd" ||
+        arg.starts_with("--formal-global-propagate-cmd=")) {
+      if (!consumeValue("--formal-global-propagate-cmd", cfg.globalFilterCmd))
+        return false;
+      continue;
+    }
     if (arg == "--formal-global-propagate-circt-lec-args" ||
         arg.starts_with("--formal-global-propagate-circt-lec-args=")) {
       if (!consumeValue("--formal-global-propagate-circt-lec-args",
@@ -1586,8 +1588,9 @@ static bool parseCoverGlobalFilterProbeConfig(
     return false;
   }
   if (cfg.globalFilterChain.empty()) {
-    if (cfg.globalFilterLEC.empty() && cfg.globalFilterBMC.empty()) {
-      error = "circt-mut cover: no built-in global filter configured for probe.";
+    if (cfg.globalFilterCmd.empty() && cfg.globalFilterLEC.empty() &&
+        cfg.globalFilterBMC.empty()) {
+      error = "circt-mut cover: no global filter configured for probe.";
       return false;
     }
   } else if (cfg.globalFilterChain != "lec-then-bmc" &&
@@ -1603,6 +1606,8 @@ static bool parseCoverGlobalFilterProbeConfig(
     cfg.globalFilterLECTimeoutSeconds = globalTimeoutSeconds;
   if (hasGlobalTimeoutSeconds && !hasBMCTimeoutOverride)
     cfg.globalFilterBMCTimeoutSeconds = globalTimeoutSeconds;
+  if (hasGlobalTimeoutSeconds)
+    cfg.globalFilterCmdTimeoutSeconds = globalTimeoutSeconds;
   return true;
 }
 
@@ -1629,7 +1634,23 @@ static bool executeNativeCoverGlobalFilterProbe(
       classification = "error";
   };
 
-  if (!cfg.globalFilterChain.empty()) {
+  if (!cfg.globalFilterCmd.empty()) {
+    ProbeRawResult cmdRaw =
+        runCoverGlobalFilterCmdRaw(/*runDir=*/".", cfg.globalFilterCmd,
+                                   cfg.logFile, cfg.globalFilterCmdTimeoutSeconds,
+                                   cfg.design, cfg.mutantDesign,
+                                   /*mutationID=*/"-", /*mutationSpec=*/"-",
+                                   error);
+    if (!error.empty())
+      return false;
+    if (cmdRaw.state == "not_propagated")
+      classification = "not_propagated";
+    else if (cmdRaw.state == "propagated")
+      classification = "propagated";
+    else
+      classification = "error";
+    finalRC = cmdRaw.rc;
+  } else if (!cfg.globalFilterChain.empty()) {
     if (cfg.globalFilterLEC.empty() || cfg.globalFilterBMC.empty()) {
       error = "circt-mut cover: probe chain mode requires both "
               "--formal-global-propagate-circt-lec and "
@@ -1722,8 +1743,7 @@ static bool executeNativeCoverGlobalFilterProbe(
     sys::fs::remove(cfg.logFile + ".orig");
     sys::fs::remove(cfg.logFile + ".mutant");
   } else {
-    error = "circt-mut cover: no built-in global filter configured for "
-            "native probe.";
+    error = "circt-mut cover: no global filter configured for native probe.";
     return false;
   }
 
