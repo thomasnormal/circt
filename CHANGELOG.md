@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 927 - February 10, 2026
+
+### BMC SMT-LIB Closure: Legalize `llvm.mlir.constant` in `verif.bmc`
+
+1. Updated `lib/Conversion/VerifToSMT/VerifToSMT.cpp`:
+   - in `for-smtlib-export` mode, pre-legalize supported LLVM constants inside
+     each `verif.bmc`:
+     - rewrite scalar integer/float `llvm.mlir.constant` to `arith.constant`.
+   - keep generic unsupported-op rejection for remaining LLVM operations.
+2. Regression coverage:
+   - added
+     `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir`
+     (positive: LLVM constant accepted and no residual `llvm.mlir.constant`).
+   - updated
+     `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+     to assert rejection on `llvm.call` (not constant).
+3. Validation:
+   - `ninja -C build circt-opt circt-bmc`
+   - `llvm-lit -sv test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir`
+     -> `2 passed`.
+   - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-llvmconst-legalize-20260210 ... --include-lane-regex '^sv-tests/BMC$'`
+     -> `sv-tests/BMC total=26 pass=26 fail=0 error=0`.
+   - 6-case UVM semantic SMT-LIB subset rerun:
+     still `error=6`, but blocker advanced from `llvm.mlir.constant` to
+     `llvm.call` (`malloc`) in all cases.
+4. Next closure target (now narrowed):
+   - remove/legalize residual call/pointer constructs in BMC regions for
+     SMT-LIB export (`llvm.call` + pointer bridge path).
+
 ## Iteration 926 - February 10, 2026
 
 ### BMC Strict-Gate Hardening: Track/Gate Drop-Remark Drift in Formal Sweep

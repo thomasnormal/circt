@@ -1077,3 +1077,11 @@ See CHANGELOG.md on recent progress.
    `utils/run_formal_all.sh` captures `bmc_drop_remark_cases` for
    `sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS`, and can gate regression via
    `--fail-on-new-bmc-drop-remark-cases` (enabled by `--strict-gate`).
+7. SMT-LIB syntax-tree closure progress (February 10, 2026):
+   `convert-verif-to-smt(for-smtlib-export=true)` now legalizes
+   `llvm.mlir.constant` (scalar integer/float) inside `verif.bmc` regions to
+   `arith.constant` before unsupported-op checks.
+8. After this legalization, the 6-case UVM semantic SMT-LIB blocker moved from
+   `llvm.mlir.constant` to `llvm.call` (`malloc` path), making the next closure
+   target explicit: eliminate or legalize call/pointer constructs in BMC
+   regions for SMT-LIB export.
