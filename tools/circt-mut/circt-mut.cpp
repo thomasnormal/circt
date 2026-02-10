@@ -125,6 +125,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --mode MODE              cover|matrix|all (default: all)\n";
   os << "  --cover-work-dir DIR     Override cover work directory\n";
   os << "  --matrix-out-dir DIR     Override matrix output directory\n";
+  os << "  --compare FILE           Compare against baseline report TSV\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
@@ -2191,6 +2192,7 @@ struct ReportOptions {
   std::string mode = "all";
   std::string coverWorkDir;
   std::string matrixOutDir;
+  std::string compareFile;
   std::string outFile;
 };
 
@@ -2251,7 +2253,7 @@ static bool parseKeyValueTSV(StringRef path, StringMap<std::string> &values,
       continue;
     StringRef key = line.substr(0, tabPos).trim();
     StringRef value = line.substr(tabPos + 1).trim();
-    if (key.empty() || key == "metric")
+    if (key.empty() || key == "metric" || key == "key")
       continue;
     values[key] = value.str();
   }
@@ -2286,6 +2288,64 @@ static std::string formatDouble2(double value) {
   char buffer[64];
   std::snprintf(buffer, sizeof(buffer), "%.2f", value);
   return std::string(buffer);
+}
+
+static void appendReportComparison(
+    ArrayRef<std::pair<std::string, std::string>> currentRows, StringRef baselinePath,
+    std::vector<std::pair<std::string, std::string>> &rows, std::string &error) {
+  StringMap<std::string> baselineValues;
+  if (!parseKeyValueTSV(baselinePath, baselineValues, error))
+    return;
+
+  StringMap<std::string> currentValues;
+  for (const auto &row : currentRows)
+    currentValues[row.first] = row.second;
+
+  uint64_t overlapKeys = 0;
+  uint64_t addedKeys = 0;
+  uint64_t missingKeys = 0;
+  uint64_t numericOverlapKeys = 0;
+  uint64_t exactChangedKeys = 0;
+
+  for (const auto &it : currentValues) {
+    StringRef key = it.getKey();
+    if (key.starts_with("compare.") || key.starts_with("diff."))
+      continue;
+    auto baselineIt = baselineValues.find(key);
+    if (baselineIt == baselineValues.end()) {
+      ++addedKeys;
+      continue;
+    }
+    ++overlapKeys;
+    StringRef currentValue = it.getValue();
+    StringRef baselineValue = baselineIt->second;
+    if (currentValue != baselineValue)
+      ++exactChangedKeys;
+
+    auto currentNum = parseOptionalDouble(currentValue);
+    auto baselineNum = parseOptionalDouble(baselineValue);
+    if (!currentNum || !baselineNum)
+      continue;
+    ++numericOverlapKeys;
+    double delta = *currentNum - *baselineNum;
+    rows.emplace_back((Twine("diff.") + key + ".delta").str(), formatDouble2(delta));
+    rows.emplace_back((Twine("diff.") + key + ".pct_change").str(),
+                      *baselineNum != 0.0
+                          ? formatDouble2((100.0 * delta) / *baselineNum)
+                          : std::string("-"));
+  }
+
+  for (const auto &it : baselineValues) {
+    if (!currentValues.count(it.getKey()))
+      ++missingKeys;
+  }
+
+  rows.emplace_back("compare.baseline_file", std::string(baselinePath));
+  rows.emplace_back("diff.overlap_keys", std::to_string(overlapKeys));
+  rows.emplace_back("diff.numeric_overlap_keys", std::to_string(numericOverlapKeys));
+  rows.emplace_back("diff.exact_changed_keys", std::to_string(exactChangedKeys));
+  rows.emplace_back("diff.added_keys", std::to_string(addedKeys));
+  rows.emplace_back("diff.missing_keys", std::to_string(missingKeys));
 }
 
 static bool collectCoverReport(StringRef coverWorkDir,
@@ -2689,6 +2749,13 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.matrixOutDir = v->str();
       continue;
     }
+    if (arg == "--compare" || arg.starts_with("--compare=")) {
+      auto v = consumeValue(i, arg, "--compare");
+      if (!v)
+        return result;
+      result.opts.compareFile = v->str();
+      continue;
+    }
     if (arg == "--out" || arg.starts_with("--out=")) {
       auto v = consumeValue(i, arg, "--out");
       if (!v)
@@ -2778,6 +2845,20 @@ static int runNativeReport(const ReportOptions &opts) {
   }
   if (opts.mode == "matrix" || opts.mode == "all") {
     if (!collectMatrixReport(matrixOutDir, rows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+  }
+
+  if (!opts.compareFile.empty()) {
+    std::string baselinePath = resolveRelativeTo(opts.projectDir, opts.compareFile);
+    if (!sys::fs::exists(baselinePath)) {
+      errs() << "circt-mut report: compare baseline file not found: "
+             << baselinePath << "\n";
+      return 1;
+    }
+    appendReportComparison(rows, baselinePath, rows, error);
+    if (!error.empty()) {
       errs() << error << "\n";
       return 1;
     }

@@ -243,8 +243,24 @@ circt-mut report --project-dir mut-campaign --mode all --out reports/campaign.ts
 `<project-dir>/out/matrix` defaults), then emits key-value summaries for:
 - cover mutation buckets and coverage.
 - matrix lane pass/fail/gate status and aggregated per-lane mutant metrics.
- - formal-global-filter telemetry aggregation (timeouts, unknown outcomes,
-   chain fallback counters, runtime/run counters, and BMC orig-cache counters).
+- formal-global-filter telemetry aggregation (timeouts, unknown outcomes,
+  chain fallback counters, runtime/run counters, and BMC orig-cache counters).
+
+Compare against a baseline campaign report:
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --compare reports/baseline.tsv \
+  --out reports/current-with-diff.tsv
+```
+
+This appends diff rows (for overlapping numeric keys):
+- `diff.<metric>.delta`
+- `diff.<metric>.pct_change`
+plus summary counters (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
+`diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
 
 Run a single mutation campaign:
 
