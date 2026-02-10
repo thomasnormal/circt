@@ -43,6 +43,8 @@ DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 Z3_BIN="${Z3_BIN:-}"
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-0}"
+FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
+DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
@@ -95,6 +97,7 @@ unknown=0
 timeout=0
 skip=0
 total=0
+drop_remark_cases=0
 declare -A semantic_tags_by_case
 
 is_xfail() {
@@ -274,6 +277,9 @@ for suite in "${suites[@]}"; do
     cmd+=("$sv")
 
     if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+        drop_remark_cases=$((drop_remark_cases + 1))
+      fi
       result="ERROR"
       if is_xfail "$base"; then
         result="XFAIL"
@@ -283,6 +289,9 @@ for suite in "${suites[@]}"; do
       fi
       emit_result_row "$result" "$base" "$sv"
       continue
+    fi
+    if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+      drop_remark_cases=$((drop_remark_cases + 1))
     fi
 
     bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
@@ -416,4 +425,9 @@ if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; the
 fi
 
 echo "verilator-verification summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
+echo "verilator-verification dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
 echo "results: $OUT"
+if [[ "$FAIL_ON_DROP_REMARKS" == "1" && "$drop_remark_cases" -gt 0 ]]; then
+  echo "FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=$drop_remark_cases" >&2
+  exit 2
+fi

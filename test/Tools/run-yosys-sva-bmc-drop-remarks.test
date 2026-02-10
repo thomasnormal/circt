@@ -1,0 +1,24 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule\n' > %t/simple.sv
+// RUN: printf '#!/usr/bin/env bash\necho \"// dummy mlir\"\necho \"warning: unsupported construct will be dropped during lowering\" >&2\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: not env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 \
+// RUN:   SKIP_FAIL_WITHOUT_MACRO=1 FAIL_ON_DROP_REMARKS=1 \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/gate.log 2>&1
+// RUN: FileCheck %s --check-prefix=GATE < %t/gate.log
+//
+// SUMMARY: PASS(pass): simple
+// SUMMARY: SKIP(fail-no-macro): simple
+// SUMMARY: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+// SUMMARY: yosys dropped-syntax summary: drop_remark_cases=1
+// GATE: yosys dropped-syntax summary: drop_remark_cases=1
+// GATE: FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=1

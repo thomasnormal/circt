@@ -1,0 +1,15 @@
+// RUN: rm -rf %t/verilator
+// RUN: mkdir -p %t/verilator/tests/asserts %t/bin
+// RUN: printf 'module top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/verilator/tests/asserts/drop_case.sv
+// RUN: printf '#!/bin/sh\necho \"module @top {\"\necho \"  verif.assert %c0_i1\"\necho \"}\"\necho \"warning: unsupported construct will be dropped during lowering\" >&2\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho \"BMC_RESULT=UNSAT\"\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc TEST_FILTER='drop_case' OUT=%t/results.tsv %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator | FileCheck %s --check-prefix=SUMMARY
+// RUN: not env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc FAIL_ON_DROP_REMARKS=1 TEST_FILTER='drop_case' OUT=%t/results-gate.tsv %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator > %t/gate.log 2>&1
+// RUN: FileCheck %s --check-prefix=GATE < %t/gate.log
+//
+// SUMMARY: verilator-verification summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// SUMMARY: verilator-verification dropped-syntax summary: drop_remark_cases=1
+// GATE: verilator-verification dropped-syntax summary: drop_remark_cases=1
+// GATE: FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=1
