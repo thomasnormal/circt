@@ -1,5 +1,26 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 984 - February 10, 2026
+
+### `run_formal_all`: Strict-Gate Absolute No-Drop Option
+
+1. Added `--strict-gate-no-drop-remarks` to `utils/run_formal_all.sh`.
+2. Behavior:
+   - when combined with `--strict-gate`, it also enables:
+     - `--fail-on-any-bmc-drop-remarks`
+     - `--fail-on-any-lec-drop-remarks`
+   - this provides an opt-in absolute zero-drop policy (not just regression
+     gating) for dropped-syntax diagnostics.
+3. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-no-drop-remarks.test`
+   - updated `test/Tools/run-formal-all-help.test` for help text.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-no-drop-remarks.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-formal-all-*.test`: PASS (75/75)
+
 ## Iteration 983 - February 10, 2026
 
 ### `circt-mut matrix`: Native Dispatch Lane-Filter Parity
