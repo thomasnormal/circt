@@ -1,0 +1,3 @@
+// RUN: not circt-mut report --mode cover --fail-if-delta-gt invalid 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: invalid --fail-if-delta-gt value 'invalid' (expected <metric>=<number>)

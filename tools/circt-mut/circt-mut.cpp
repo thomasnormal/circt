@@ -126,9 +126,18 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --cover-work-dir DIR     Override cover work directory\n";
   os << "  --matrix-out-dir DIR     Override matrix output directory\n";
   os << "  --compare FILE           Compare against baseline report TSV\n";
+  os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
+  os << "  --fail-if-delta-lt RULE  Fail if numeric delta is below threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
+
+struct DeltaGateRule {
+  std::string key;
+  double threshold = 0.0;
+};
 
 static std::optional<StringRef> mapSubcommandToScript(StringRef subcommand) {
   if (subcommand == "cover")
@@ -2193,6 +2202,8 @@ struct ReportOptions {
   std::string coverWorkDir;
   std::string matrixOutDir;
   std::string compareFile;
+  SmallVector<DeltaGateRule, 8> failIfDeltaGtRules;
+  SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
   std::string outFile;
 };
 
@@ -2290,12 +2301,44 @@ static std::string formatDouble2(double value) {
   return std::string(buffer);
 }
 
-static void appendReportComparison(
+static bool parseDeltaGateRule(StringRef value, StringRef optionName,
+                               DeltaGateRule &rule, std::string &error) {
+  size_t eqPos = value.find('=');
+  if (eqPos == StringRef::npos || eqPos == 0 || eqPos + 1 >= value.size()) {
+    error = (Twine("circt-mut report: invalid ") + optionName +
+             " value '" + value + "' (expected <metric>=<number>)")
+                .str();
+    return false;
+  }
+  StringRef key = value.substr(0, eqPos).trim();
+  StringRef thresholdStr = value.substr(eqPos + 1).trim();
+  if (key.empty() || thresholdStr.empty()) {
+    error = (Twine("circt-mut report: invalid ") + optionName +
+             " value '" + value + "' (expected <metric>=<number>)")
+                .str();
+    return false;
+  }
+  std::string thresholdStorage = thresholdStr.str();
+  char *end = nullptr;
+  double parsed = std::strtod(thresholdStorage.c_str(), &end);
+  if (end == thresholdStorage.c_str() || !end || *end != '\0') {
+    error = (Twine("circt-mut report: invalid numeric threshold in ") +
+             optionName + " value '" + value + "'")
+                .str();
+    return false;
+  }
+  rule.key = key.str();
+  rule.threshold = parsed;
+  return true;
+}
+
+static bool appendReportComparison(
     ArrayRef<std::pair<std::string, std::string>> currentRows, StringRef baselinePath,
-    std::vector<std::pair<std::string, std::string>> &rows, std::string &error) {
+    std::vector<std::pair<std::string, std::string>> &rows,
+    StringMap<double> &numericDeltas, std::string &error) {
   StringMap<std::string> baselineValues;
   if (!parseKeyValueTSV(baselinePath, baselineValues, error))
-    return;
+    return false;
 
   StringMap<std::string> currentValues;
   for (const auto &row : currentRows)
@@ -2328,6 +2371,7 @@ static void appendReportComparison(
       continue;
     ++numericOverlapKeys;
     double delta = *currentNum - *baselineNum;
+    numericDeltas[key] = delta;
     rows.emplace_back((Twine("diff.") + key + ".delta").str(), formatDouble2(delta));
     rows.emplace_back((Twine("diff.") + key + ".pct_change").str(),
                       *baselineNum != 0.0
@@ -2346,6 +2390,7 @@ static void appendReportComparison(
   rows.emplace_back("diff.exact_changed_keys", std::to_string(exactChangedKeys));
   rows.emplace_back("diff.added_keys", std::to_string(addedKeys));
   rows.emplace_back("diff.missing_keys", std::to_string(missingKeys));
+  return true;
 }
 
 static bool collectCoverReport(StringRef coverWorkDir,
@@ -2756,6 +2801,26 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.compareFile = v->str();
       continue;
     }
+    if (arg == "--fail-if-delta-gt" || arg.starts_with("--fail-if-delta-gt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-delta-gt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-delta-gt", rule, result.error))
+        return result;
+      result.opts.failIfDeltaGtRules.push_back(rule);
+      continue;
+    }
+    if (arg == "--fail-if-delta-lt" || arg.starts_with("--fail-if-delta-lt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-delta-lt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-delta-lt", rule, result.error))
+        return result;
+      result.opts.failIfDeltaLtRules.push_back(rule);
+      continue;
+    }
     if (arg == "--out" || arg.starts_with("--out=")) {
       auto v = consumeValue(i, arg, "--out");
       if (!v)
@@ -2836,6 +2901,7 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::vector<std::pair<std::string, std::string>> rows;
   rows.emplace_back("report.mode", opts.mode);
+  int finalRC = 0;
   std::string error;
   if (opts.mode == "cover" || opts.mode == "all") {
     if (!collectCoverReport(coverWorkDir, rows, error)) {
@@ -2850,6 +2916,14 @@ static int runNativeReport(const ReportOptions &opts) {
     }
   }
 
+  if (opts.compareFile.empty() &&
+      (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty())) {
+    errs() << "circt-mut report: --fail-if-delta-gt/--fail-if-delta-lt "
+              "require --compare\n";
+    return 1;
+  }
+
+  StringMap<double> numericDeltas;
   if (!opts.compareFile.empty()) {
     std::string baselinePath = resolveRelativeTo(opts.projectDir, opts.compareFile);
     if (!sys::fs::exists(baselinePath)) {
@@ -2857,11 +2931,51 @@ static int runNativeReport(const ReportOptions &opts) {
              << baselinePath << "\n";
       return 1;
     }
-    appendReportComparison(rows, baselinePath, rows, error);
-    if (!error.empty()) {
+    if (!appendReportComparison(rows, baselinePath, rows, numericDeltas, error)) {
       errs() << error << "\n";
       return 1;
     }
+  }
+
+  if (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty()) {
+    SmallVector<std::string, 8> failures;
+    auto evaluateRule = [&](const DeltaGateRule &rule, bool isUpperBound) -> bool {
+      auto it = numericDeltas.find(rule.key);
+      if (it == numericDeltas.end()) {
+        errs() << "circt-mut report: numeric delta missing for gate rule key '"
+               << rule.key
+               << "' (run with --compare and numeric baseline values)\n";
+        return false;
+      }
+      double delta = it->second;
+      if ((isUpperBound && delta > rule.threshold) ||
+          (!isUpperBound && delta < rule.threshold)) {
+        failures.push_back((Twine(rule.key) + " delta=" + formatDouble2(delta) +
+                            (isUpperBound ? " > " : " < ") +
+                            formatDouble2(rule.threshold))
+                               .str());
+      }
+      return true;
+    };
+
+    for (const auto &rule : opts.failIfDeltaGtRules)
+      if (!evaluateRule(rule, /*isUpperBound=*/true))
+        return 1;
+    for (const auto &rule : opts.failIfDeltaLtRules)
+      if (!evaluateRule(rule, /*isUpperBound=*/false))
+        return 1;
+
+    rows.emplace_back("compare.gate_rules_total",
+                      std::to_string(opts.failIfDeltaGtRules.size() +
+                                     opts.failIfDeltaLtRules.size()));
+    rows.emplace_back("compare.gate_failure_count",
+                      std::to_string(failures.size()));
+    rows.emplace_back("compare.gate_status", failures.empty() ? "pass" : "fail");
+    for (size_t i = 0; i < failures.size(); ++i)
+      rows.emplace_back((Twine("compare.gate_failure_") + Twine(i + 1)).str(),
+                        failures[i]);
+    if (!failures.empty())
+      finalRC = 2;
   }
 
   std::string outFile;
@@ -2878,7 +2992,7 @@ static int runNativeReport(const ReportOptions &opts) {
   outs() << "key\tvalue\n";
   for (const auto &row : rows)
     outs() << row.first << "\t" << row.second << "\n";
-  return 0;
+  return finalRC;
 }
 
 static void splitCSV(StringRef csv, SmallVectorImpl<std::string> &out) {

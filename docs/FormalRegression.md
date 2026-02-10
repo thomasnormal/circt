@@ -178,6 +178,26 @@ Comparison emits per-metric numeric diffs for overlapping keys:
 and summary counts (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
 `diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
 
+Comparison can also enforce numeric delta gates:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --compare /path/to/baseline-report.tsv \
+  --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-delta-lt cover.detected_mutants=0 \
+  --out /tmp/mutation-report-with-gates.tsv
+```
+
+Gate mode emits:
+- `compare.gate_rules_total`
+- `compare.gate_failure_count`
+- `compare.gate_status` (`pass`/`fail`)
+- `compare.gate_failure_<n>` rows for failing rules.
+Gate rules require `--compare` with numeric baseline values for the gated keys.
+Gate failures return process exit code `2`.
+
 Basic usage:
 
 ```bash

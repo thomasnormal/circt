@@ -262,6 +262,26 @@ This appends diff rows (for overlapping numeric keys):
 plus summary counters (`diff.overlap_keys`, `diff.numeric_overlap_keys`,
 `diff.exact_changed_keys`, `diff.added_keys`, `diff.missing_keys`).
 
+Gate regressions directly in report mode:
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --compare reports/baseline.tsv \
+  --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-delta-lt cover.detected_mutants=0
+```
+
+`--fail-if-delta-gt` / `--fail-if-delta-lt` evaluate numeric
+`diff.<metric>.delta` values and set:
+- `compare.gate_rules_total`
+- `compare.gate_failure_count`
+- `compare.gate_status` (`pass`/`fail`)
+- `compare.gate_failure_<n>` for each failing rule.
+Gate rules require `--compare` with numeric baseline values for the gated keys.
+On gate failure, `circt-mut report` exits with code `2`.
+
 Run a single mutation campaign:
 
 ```sh
@@ -508,6 +528,9 @@ done
 circt-mut report \
   --project-dir /path/to/mut-campaign \
   --mode all \
+  --compare /path/to/baseline-report.tsv \
+  --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-delta-lt cover.detected_mutants=0 \
   --out /tmp/mutation-report.tsv
 ```
 
