@@ -138,12 +138,10 @@ See CHANGELOG.md on recent progress.
   - Keep strict-gate unclassified semantic-bucket growth checks active so
     new fail-like rows cannot silently bypass bucket tracking.
   - Remaining harness limitation:
-    `verilator-verification/BMC` has an initial `disable iff` seed
-    (`assert_named_without_parenthesis`) plus sampled-value seeds
-    (`assert_changed`, `assert_fell`, `assert_stable`), but 2 active fail-like
-    rows remain unclassified (`assert_named`, `assert_named_typed`);
-    `yosys/tests/sva/BMC` has initial 4-state seed coverage
-    (`sva_value_change_sim`) but remains only partially seeded.
+    `verilator-verification/BMC` active fail-like rows are now fully classified
+    via explicit semantic tags (sampled-value + named-property buckets), while
+    `yosys/tests/sva/BMC` still has only initial 4-state seed coverage
+    (`sva_value_change_sim`) and 5 unclassified fail-like rows.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
