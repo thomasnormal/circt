@@ -133,6 +133,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           Compare against latest snapshot in history TSV\n";
   os << "  --trend-history FILE     Compute trend summary from history TSV\n";
   os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
+  os << "  --policy-profile NAME    Apply built-in report policy profile\n";
+  os << "                           formal-regression-basic|formal-regression-trend\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -2219,6 +2221,7 @@ struct ReportOptions {
   std::string compareHistoryLatestFile;
   std::string trendHistoryFile;
   uint64_t trendWindowRuns = 0;
+  SmallVector<std::string, 4> policyProfiles;
   std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
@@ -2366,6 +2369,48 @@ static bool parseDeltaGateRule(StringRef value, StringRef optionName,
   return true;
 }
 
+static bool appendUniqueRule(SmallVectorImpl<DeltaGateRule> &rules, StringRef key,
+                             double threshold) {
+  for (const auto &rule : rules) {
+    if (rule.key == key && rule.threshold == threshold)
+      return false;
+  }
+  DeltaGateRule rule;
+  rule.key = key.str();
+  rule.threshold = threshold;
+  rules.push_back(rule);
+  return true;
+}
+
+static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
+                               std::string &error) {
+  if (profile == "formal-regression-basic") {
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "cover.global_filter_timeout_mutants", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "cover.global_filter_lec_unknown_mutants", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules,
+                     "cover.global_filter_bmc_unknown_mutants", 0.0);
+    appendUniqueRule(opts.failIfDeltaLtRules, "cover.detected_mutants", 0.0);
+    return true;
+  }
+  if (profile == "formal-regression-trend") {
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "cover.global_filter_timeout_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "cover.global_filter_lec_unknown_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules,
+                     "cover.global_filter_bmc_unknown_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaLtRules, "cover.detected_mutants",
+                     0.0);
+    return true;
+  }
+  error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
+           " (expected formal-regression-basic|formal-regression-trend)")
+              .str();
+  return false;
+}
+
 static void appendReportComparisonRows(
     ArrayRef<std::pair<std::string, std::string>> currentRows,
     const StringMap<std::string> &baselineValues, StringRef baselineLabel,
@@ -2383,7 +2428,8 @@ static void appendReportComparisonRows(
 
   for (const auto &it : currentValues) {
     StringRef key = it.getKey();
-    if (key.starts_with("compare.") || key.starts_with("diff."))
+    if (key.starts_with("compare.") || key.starts_with("diff.") ||
+        key.starts_with("policy."))
       continue;
     auto baselineIt = baselineValues.find(key);
     if (baselineIt == baselineValues.end()) {
@@ -2412,7 +2458,8 @@ static void appendReportComparisonRows(
 
   for (const auto &it : baselineValues) {
     StringRef key = it.getKey();
-    if (key.starts_with("compare.") || key.starts_with("diff."))
+    if (key.starts_with("compare.") || key.starts_with("diff.") ||
+        key.starts_with("policy."))
       continue;
     if (!currentValues.count(it.getKey()))
       ++missingKeys;
@@ -2560,6 +2607,7 @@ static bool appendHistorySnapshot(
     StringRef key = row.first;
     if (key.starts_with("compare.") || key.starts_with("diff.") ||
         key.starts_with("history.") || key.starts_with("trend.") ||
+        key.starts_with("policy.") ||
         key == "report.file")
       continue;
     os << runID << "\t" << timestampUTC << "\t" << row.first << "\t"
@@ -2658,6 +2706,7 @@ static void appendTrendRows(
     StringRef key = row.first;
     if (key.starts_with("compare.") || key.starts_with("diff.") ||
         key.starts_with("history.") || key.starts_with("trend.") ||
+        key.starts_with("policy.") ||
         key == "report.file")
       continue;
     auto currentNum = parseOptionalDouble(row.second);
@@ -3156,6 +3205,13 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.trendWindowRuns = parsed;
       continue;
     }
+    if (arg == "--policy-profile" || arg.starts_with("--policy-profile=")) {
+      auto v = consumeValue(i, arg, "--policy-profile");
+      if (!v)
+        return result;
+      result.opts.policyProfiles.push_back(v->str());
+      continue;
+    }
     if (arg == "--append-history" || arg.starts_with("--append-history=")) {
       auto v = consumeValue(i, arg, "--append-history");
       if (!v)
@@ -3239,6 +3295,18 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
                    "are mutually exclusive";
     return result;
   }
+  if (!result.opts.policyProfiles.empty()) {
+    SmallVector<std::string, 4> uniqueProfiles;
+    StringSet<> seen;
+    for (const auto &profile : result.opts.policyProfiles) {
+      if (!seen.insert(profile).second)
+        continue;
+      uniqueProfiles.push_back(profile);
+      if (!applyPolicyProfile(profile, result.opts, result.error))
+        return result;
+    }
+    result.opts.policyProfiles = std::move(uniqueProfiles);
+  }
 
   result.ok = true;
   return result;
@@ -3293,6 +3361,13 @@ static int runNativeReport(const ReportOptions &opts) {
 
   std::vector<std::pair<std::string, std::string>> rows;
   rows.emplace_back("report.mode", opts.mode);
+  if (!opts.policyProfiles.empty()) {
+    rows.emplace_back("policy.profile_count",
+                      std::to_string(opts.policyProfiles.size()));
+    for (size_t i = 0; i < opts.policyProfiles.size(); ++i)
+      rows.emplace_back((Twine("policy.profile_") + Twine(i + 1)).str(),
+                        opts.policyProfiles[i]);
+  }
   int finalRC = 0;
   std::string error;
   if (opts.mode == "cover" || opts.mode == "all") {

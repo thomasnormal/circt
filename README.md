@@ -330,6 +330,28 @@ Trend gate rows:
 - `trend.gate_failure_<n>`
 Trend gates require `--trend-history`.
 
+Use built-in policy bundles (recommended for CI):
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --compare-history-latest reports/history.tsv \
+  --trend-history reports/history.tsv \
+  --trend-window 10 \
+  --policy-profile formal-regression-basic \
+  --policy-profile formal-regression-trend
+```
+
+Built-in profiles:
+- `formal-regression-basic`
+  - blocks regressions in compare deltas for:
+    `cover.detected_mutants`, `cover.global_filter_timeout_mutants`,
+    `cover.global_filter_lec_unknown_mutants`,
+    `cover.global_filter_bmc_unknown_mutants`.
+- `formal-regression-trend`
+  - blocks regressions against rolling trend deltas for the same metrics.
+
 Run a single mutation campaign:
 
 ```sh
@@ -583,6 +605,8 @@ circt-mut report \
   --trend-window 10 \
   --fail-if-trend-delta-gt cover.global_filter_timeout_mutants=0 \
   --fail-if-trend-delta-lt cover.detected_mutants=0 \
+  --policy-profile formal-regression-basic \
+  --policy-profile formal-regression-trend \
   --append-history /tmp/mutation-history.tsv \
   --out /tmp/mutation-report.tsv
 ```

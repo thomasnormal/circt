@@ -238,6 +238,13 @@ Trend gate mode emits:
 - `trend.gate_failure_<n>` rows for failing rules.
 Trend gates require `--trend-history` with numeric history values for
 the gated keys.
+Built-in profiles can be used to apply standard gate sets:
+- `--policy-profile formal-regression-basic`
+- `--policy-profile formal-regression-trend`
+These profiles pre-populate compare/trend gates for formal regression metrics:
+`cover.detected_mutants`, `cover.global_filter_timeout_mutants`,
+`cover.global_filter_lec_unknown_mutants`, and
+`cover.global_filter_bmc_unknown_mutants`.
 Gate failures return process exit code `2`.
 
 Basic usage:
