@@ -1418,6 +1418,53 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     result.rewrittenArgs.push_back(arg.str());
   }
 
+  AllocationParseResult defaultModeCounts =
+      parseModeAllocationCSV(defaults.mutationsModeCounts);
+  if (defaultModeCounts.errorKind == AllocationParseErrorKind::InvalidEntry) {
+    result.error =
+        (Twine("circt-mut matrix: invalid --default-mutations-mode-counts "
+               "entry: ") +
+         defaultModeCounts.entry + " (expected NAME=COUNT).")
+            .str();
+    return result;
+  }
+  if (defaultModeCounts.errorKind == AllocationParseErrorKind::InvalidValue) {
+    result.error = (Twine("circt-mut matrix: invalid "
+                          "--default-mutations-mode-count value for ") +
+                    defaultModeCounts.modeName + ": " +
+                    defaultModeCounts.value +
+                    " (expected positive integer).")
+                       .str();
+    return result;
+  }
+
+  AllocationParseResult defaultModeWeights =
+      parseModeAllocationCSV(defaults.mutationsModeWeights);
+  if (defaultModeWeights.errorKind == AllocationParseErrorKind::InvalidEntry) {
+    result.error =
+        (Twine("circt-mut matrix: invalid --default-mutations-mode-weights "
+               "entry: ") +
+         defaultModeWeights.entry + " (expected NAME=WEIGHT).")
+            .str();
+    return result;
+  }
+  if (defaultModeWeights.errorKind == AllocationParseErrorKind::InvalidValue) {
+    result.error = (Twine("circt-mut matrix: invalid "
+                          "--default-mutations-mode-weight value for ") +
+                    defaultModeWeights.modeName + ": " +
+                    defaultModeWeights.value +
+                    " (expected positive integer).")
+                       .str();
+    return result;
+  }
+
+  if (defaultModeCounts.enabled && defaultModeWeights.enabled) {
+    result.error =
+        "circt-mut matrix: use either --default-mutations-mode-counts or "
+        "--default-mutations-mode-weights, not both.";
+    return result;
+  }
+
   if (hasDefaultGlobalFilterChain) {
     if (defaultGlobalFilterChainMode != "lec-then-bmc" &&
         defaultGlobalFilterChainMode != "bmc-then-lec" &&

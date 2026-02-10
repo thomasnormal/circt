@@ -545,6 +545,10 @@ Execution controls:
     `--default-bmc-orig-cache-max-bytes`,
     `--default-bmc-orig-cache-max-age-seconds`,
     `--default-bmc-orig-cache-eviction-policy`.
+  - matrix default mutation allocation options are now validated natively:
+    `--default-mutations-mode-counts`,
+    `--default-mutations-mode-weights` (syntax/value checks plus
+    mutual-exclusion conflict detection).
   - when any effective matrix timeout is non-zero (default or lane override)
     with an active effective global filter mode, `circt-mut` now fail-fast
     validates `timeout` availability from the current `PATH`.
