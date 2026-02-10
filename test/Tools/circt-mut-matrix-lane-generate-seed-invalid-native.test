@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'lane1\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t-\t1\t-\tbad\n' > %t/lanes.tsv
+// RUN: not env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut matrix --lanes-tsv %t/lanes.tsv > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: Invalid lane mutations_seed value in --lanes-tsv at line 1 (lane lane1): bad (expected 0-9 integer).

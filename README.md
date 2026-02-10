@@ -390,6 +390,7 @@ Cover mutation source consistency is now also validated natively:
 - conflicting or missing source configuration fails fast.
 For generated-mutation cover runs, native preflight now also validates:
 - `--generate-mutations` as a positive integer
+- `--mutations-seed` as a non-negative integer
 - `--mutations-profiles` names against built-in profile set
 - `--mutations-mode-counts` / `--mutations-mode-weights` entry syntax
 - count/weight conflict (`mode-counts` vs `mode-weights`)
@@ -402,6 +403,7 @@ Generated lanes in `--lanes-tsv` now also get native preflight validation for
 lane `mutations_yosys` values before script dispatch.
 Generated lanes now also validate:
 - `generate_count` as a positive integer
+- `mutations_seed` as a non-negative integer (defaults to `1` when unset)
 - effective `mutations_mode_counts` / `mutations_mode_weights` syntax
   (lane override or matrix default)
 - count/weight conflict

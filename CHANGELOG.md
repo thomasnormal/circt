@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 843 - February 10, 2026
+
+### Generated-Mutation Seed Preflight (`circt-mut`)
+
+1. Extended native generated-mutation preflight with seed validation:
+   - cover:
+     - `--mutations-seed`
+   - matrix generated lanes:
+     - lane `mutations_seed` column in `--lanes-tsv`
+2. Seed values now fail fast in native preflight unless they are decimal
+   integers (`^[0-9]+$`):
+   - cover reports:
+     - `circt-mut cover: invalid --mutations-seed value: ...`
+   - matrix reports:
+     - `Invalid lane mutations_seed value in --lanes-tsv ...`
+3. For generated matrix lanes with unset seed, preflight now follows existing
+   script semantics by defaulting to `1` before validation.
+4. This removes another class of deferred script-stage failures and keeps
+   generated-campaign configuration checks centralized in `circt-mut`.
+
+### Tests and Documentation
+
+- Added native regression tests:
+  - `test/Tools/circt-mut-cover-generate-seed-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-generate-seed-invalid-native.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-generate-seed-invalid-native.test test/Tools/circt-mut-matrix-lane-generate-seed-invalid-native.test test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test`: PASS (54/54)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-seed-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 841 - February 10, 2026
 
 ### Signal Resolution Fix + VIF Shadow Signals (`circt-sim`)
