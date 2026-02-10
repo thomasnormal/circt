@@ -480,6 +480,9 @@ Execution controls:
     - conflicting or missing source configuration fails fast.
   - generated-mutation allocation controls are now validated natively for
     cover dispatch:
+    - `--mutations-profiles` entries must be known built-in profile names
+      (`arith-depth`, `control-depth`, `balanced-depth`, `fault-basic`,
+      `fault-stuck`, `fault-connect`, `cover`, `none`).
     - `--generate-mutations` must be a positive integer.
     - `--mutations-mode-counts` / `--mutations-mode-weights` entries must be
       `NAME=VALUE` with positive integers.
@@ -557,6 +560,10 @@ Execution controls:
     `--default-mutations-mode-counts`,
     `--default-mutations-mode-weights` (syntax/value checks plus
     mutual-exclusion conflict detection).
+  - matrix default/lane generated-mutation profile names are now validated
+    natively:
+    `--default-mutations-profiles` and lane `mutations_profiles` must resolve
+    to known built-in profile names.
   - when any effective matrix timeout is non-zero (default or lane override)
     with an active effective global filter mode, `circt-mut` now fail-fast
     validates `timeout` availability from the current `PATH`.

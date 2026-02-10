@@ -390,6 +390,7 @@ Cover mutation source consistency is now also validated natively:
 - conflicting or missing source configuration fails fast.
 For generated-mutation cover runs, native preflight now also validates:
 - `--generate-mutations` as a positive integer
+- `--mutations-profiles` names against built-in profile set
 - `--mutations-mode-counts` / `--mutations-mode-weights` entry syntax
 - count/weight conflict (`mode-counts` vs `mode-weights`)
 - `--mutations-mode-counts` total against `--generate-mutations`.
@@ -430,6 +431,8 @@ Matrix default numeric/cache options now also fail fast natively:
 Matrix default mutation allocation options now also fail fast natively:
 `--default-mutations-mode-counts` and `--default-mutations-mode-weights`
 (syntax/value checks plus mutual-exclusion conflict checks).
+Matrix generated-lane/default profile names are now also validated natively:
+`--default-mutations-profiles` and lane `mutations_profiles`.
 When effective matrix global-filter mode + timeout settings are non-zero
 (defaults or lane overrides), `circt-mut matrix` now also fail-fast checks
 that `timeout` is resolvable from the current `PATH`.
