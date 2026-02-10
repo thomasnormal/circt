@@ -1,0 +1,3 @@
+// RUN: not circt-mut report --mode cover --lane-budget-out lane_budget.tsv 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: --lane-budget-out requires --mode matrix or --mode all

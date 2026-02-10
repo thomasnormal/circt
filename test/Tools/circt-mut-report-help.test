@@ -24,4 +24,5 @@
 // CHECK: --fail-if-trend-delta-gt
 // CHECK: --fail-if-trend-delta-lt
 // CHECK: --fail-on-prequalify-drift
+// CHECK: --lane-budget-out
 // CHECK: --out

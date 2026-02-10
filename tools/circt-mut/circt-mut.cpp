@@ -166,6 +166,7 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --fail-on-prequalify-drift\n";
   os << "                           Fail if matrix prequalify results.tsv counters\n";
   os << "                           drift from native prequalify summary counters\n";
+  os << "  --lane-budget-out FILE   Write per-lane matrix budget TSV artifact\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
 }
@@ -5285,7 +5286,20 @@ struct ReportOptions {
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfTrendDeltaLtRules;
   bool failOnPrequalifyDrift = false;
+  std::string laneBudgetOutFile;
   std::string outFile;
+};
+
+struct MatrixLaneBudgetRow {
+  std::string laneID;
+  std::string status;
+  std::string gateStatus;
+  bool hasMetrics = false;
+  uint64_t detectedMutants = 0;
+  uint64_t errors = 0;
+  uint64_t timeoutMutants = 0;
+  uint64_t lecUnknownMutants = 0;
+  uint64_t bmcUnknownMutants = 0;
 };
 
 struct ReportParseResult {
@@ -5998,7 +6012,8 @@ static bool collectCoverReport(StringRef coverWorkDir,
 static bool collectMatrixReport(
     StringRef matrixOutDir, std::vector<std::pair<std::string, std::string>> &rows,
     std::string &error, uint64_t *prequalifyDriftNonZeroOut = nullptr,
-    bool *prequalifyDriftComparableOut = nullptr) {
+    bool *prequalifyDriftComparableOut = nullptr,
+    std::vector<MatrixLaneBudgetRow> *laneBudgetRowsOut = nullptr) {
   SmallString<256> resultsPath(matrixOutDir);
   sys::path::append(resultsPath, "results.tsv");
   if (!sys::fs::exists(resultsPath)) {
@@ -6273,6 +6288,10 @@ static bool collectMatrixReport(
     StringRef laneID = getField(laneIDCol);
     StringRef status = getField(statusCol);
     StringRef gate = getField(gateCol);
+    MatrixLaneBudgetRow laneBudgetRow;
+    laneBudgetRow.laneID = laneID.str();
+    laneBudgetRow.status = status.str();
+    laneBudgetRow.gateStatus = gate.str();
     if (status == "PASS")
       ++lanesPass;
     else
@@ -6345,6 +6364,8 @@ static bool collectMatrixReport(
     }
     if (metricsPath.empty() || !sys::fs::exists(metricsPath)) {
       ++lanesMissingMetrics;
+      if (laneBudgetRowsOut)
+        laneBudgetRowsOut->push_back(std::move(laneBudgetRow));
       continue;
     }
 
@@ -6352,6 +6373,7 @@ static bool collectMatrixReport(
     if (!parseKeyValueTSV(metricsPath, metrics, error))
       return false;
     ++lanesWithMetrics;
+    laneBudgetRow.hasMetrics = true;
     addMetric(metrics, "total_mutants", totalMutantsSum);
     addMetric(metrics, "relevant_mutants", relevantMutantsSum);
     addMetric(metrics, "detected_mutants", detectedMutantsSum);
@@ -6365,6 +6387,7 @@ static bool collectMatrixReport(
 
     uint64_t detectedMutants = 0;
     if (tryGetMetric(metrics, "detected_mutants", detectedMutants)) {
+      laneBudgetRow.detectedMutants = detectedMutants;
       updateLowestLane(detectedMutants, laneID, laneBudgetSawDetected,
                        laneBudgetMinDetectedMutants,
                        laneBudgetLowestDetectedLaneID);
@@ -6374,6 +6397,7 @@ static bool collectMatrixReport(
 
     uint64_t timeoutMutants = 0;
     if (tryGetMetric(metrics, "global_filter_timeout_mutants", timeoutMutants)) {
+      laneBudgetRow.timeoutMutants = timeoutMutants;
       updateWorstLane(timeoutMutants, laneID, laneBudgetMaxTimeoutMutants,
                       laneBudgetWorstTimeoutLaneID);
       if (timeoutMutants > 0)
@@ -6382,6 +6406,7 @@ static bool collectMatrixReport(
     uint64_t lecUnknownMutants = 0;
     if (tryGetMetric(metrics, "global_filter_lec_unknown_mutants",
                      lecUnknownMutants)) {
+      laneBudgetRow.lecUnknownMutants = lecUnknownMutants;
       updateWorstLane(lecUnknownMutants, laneID, laneBudgetMaxLECUnknownMutants,
                       laneBudgetWorstLECUnknownLaneID);
       if (lecUnknownMutants > 0)
@@ -6390,15 +6415,21 @@ static bool collectMatrixReport(
     uint64_t bmcUnknownMutants = 0;
     if (tryGetMetric(metrics, "global_filter_bmc_unknown_mutants",
                      bmcUnknownMutants)) {
+      laneBudgetRow.bmcUnknownMutants = bmcUnknownMutants;
       updateWorstLane(bmcUnknownMutants, laneID, laneBudgetMaxBMCUnknownMutants,
                       laneBudgetWorstBMCUnknownLaneID);
       if (bmcUnknownMutants > 0)
         ++laneBudgetLanesNonZeroBMCUnknownMutants;
     }
     uint64_t errors = 0;
-    if (tryGetMetric(metrics, "errors", errors))
+    if (tryGetMetric(metrics, "errors", errors)) {
+      laneBudgetRow.errors = errors;
       updateWorstLane(errors, laneID, laneBudgetMaxErrors,
                       laneBudgetWorstErrorsLaneID);
+    }
+
+    if (laneBudgetRowsOut)
+      laneBudgetRowsOut->push_back(std::move(laneBudgetRow));
   }
 
   rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
@@ -6766,6 +6797,43 @@ static bool writeReportFile(
   return true;
 }
 
+static bool writeLaneBudgetFile(StringRef path,
+                                ArrayRef<MatrixLaneBudgetRow> laneRows,
+                                std::string &error) {
+  SmallString<256> parent(path);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code dirEC = sys::fs::create_directories(parent);
+    if (dirEC) {
+      error = (Twine("circt-mut report: failed to create lane budget output "
+                     "directory: ") +
+               parent + ": " + dirEC.message())
+                  .str();
+      return false;
+    }
+  }
+
+  std::error_code ec;
+  raw_fd_ostream os(path, ec, sys::fs::OF_Text);
+  if (ec) {
+    error = (Twine("circt-mut report: failed to open --lane-budget-out file: ") +
+             path + ": " + ec.message())
+                .str();
+    return false;
+  }
+  os << "lane_id\tstatus\tgate_status\thas_metrics\tdetected_mutants\t"
+        "errors\tglobal_filter_timeout_mutants\t"
+        "global_filter_lec_unknown_mutants\t"
+        "global_filter_bmc_unknown_mutants\n";
+  for (const auto &row : laneRows) {
+    os << row.laneID << "\t" << row.status << "\t" << row.gateStatus << "\t"
+       << (row.hasMetrics ? "1" : "0") << "\t" << row.detectedMutants << "\t"
+       << row.errors << "\t" << row.timeoutMutants << "\t"
+       << row.lecUnknownMutants << "\t" << row.bmcUnknownMutants << "\n";
+  }
+  return true;
+}
+
 static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
   ReportParseResult result;
 
@@ -6954,6 +7022,13 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.outFile = v->str();
       continue;
     }
+    if (arg == "--lane-budget-out" || arg.starts_with("--lane-budget-out=")) {
+      auto v = consumeValue(i, arg, "--lane-budget-out");
+      if (!v)
+        return result;
+      result.opts.laneBudgetOutFile = v->str();
+      continue;
+    }
     if (arg == "--fail-on-prequalify-drift") {
       result.opts.failOnPrequalifyDrift = true;
       continue;
@@ -7060,6 +7135,13 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string error;
   uint64_t prequalifyDriftNonZero = 0;
   bool prequalifyDriftComparable = false;
+  std::vector<MatrixLaneBudgetRow> laneBudgetRows;
+  if (!opts.laneBudgetOutFile.empty() &&
+      !(opts.mode == "matrix" || opts.mode == "all")) {
+    errs() << "circt-mut report: --lane-budget-out requires --mode matrix or "
+              "--mode all\n";
+    return 1;
+  }
   if (opts.mode == "cover" || opts.mode == "all") {
     if (!collectCoverReport(coverWorkDir, rows, error)) {
       errs() << error << "\n";
@@ -7068,10 +7150,21 @@ static int runNativeReport(const ReportOptions &opts) {
   }
   if (opts.mode == "matrix" || opts.mode == "all") {
     if (!collectMatrixReport(matrixOutDir, rows, error, &prequalifyDriftNonZero,
-                             &prequalifyDriftComparable)) {
+                             &prequalifyDriftComparable, &laneBudgetRows)) {
       errs() << error << "\n";
       return 1;
     }
+  }
+  if (!opts.laneBudgetOutFile.empty()) {
+    std::string laneBudgetOut =
+        resolveRelativeTo(opts.projectDir, opts.laneBudgetOutFile);
+    if (!writeLaneBudgetFile(laneBudgetOut, laneBudgetRows, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    rows.emplace_back("matrix.lane_budget_file", laneBudgetOut);
+    rows.emplace_back("matrix.lane_budget_file_rows",
+                      std::to_string(laneBudgetRows.size()));
   }
 
   if (opts.compareFile.empty() && opts.compareHistoryLatestFile.empty() &&
