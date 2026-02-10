@@ -371,6 +371,12 @@ struct ProcessExecutionState {
   /// the function rather than skipping to the next process-level operation.
   llvm::SmallVector<CallStackFrame, 4> callStack;
 
+  /// When a seq_item_pull_port::get interceptor finds an empty FIFO, it saves
+  /// the call_indirect operation here so that on resume the innermost call
+  /// stack frame can be overridden to re-execute the get call (instead of
+  /// skipping past it).
+  mlir::Operation *sequencerGetRetryCallOp = nullptr;
+
   /// Address to write the result of a pending mailbox get operation.
   /// When a blocking mailbox get is waiting for a message, this stores where
   /// to write the message value when it becomes available.
@@ -1239,6 +1245,17 @@ private:
   /// "Late Connection" phase check that incorrectly rejects connect() calls
   /// during connect_phase.
   llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 2>> analysisPortConnections;
+
+  /// Native sequencer item FIFO. Maps sequencer address to a queue of
+  /// sequence item addresses pushed by finish_item() and consumed by
+  /// seq_item_pull_port::get(). Implements a simple rendezvous between
+  /// the sequence producer and driver consumer.
+  llvm::DenseMap<uint64_t, std::deque<uint64_t>> sequencerItemFifo;
+
+  /// Maps sequence item address to the sequencer address that owns it.
+  /// Set during start_item() interception so finish_item() knows which
+  /// sequencer FIFO to push the item into.
+  llvm::DenseMap<uint64_t, uint64_t> itemToSequencer;
 
   /// Tracks valid associative array base addresses returned by __moore_assoc_create.
   /// Used to distinguish properly-initialized arrays from uninitialized class members.

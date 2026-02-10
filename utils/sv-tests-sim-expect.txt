@@ -10,7 +10,7 @@ uvm_monitor_env	pass	UVM testbench: resolved with resolveSignalId cast+probe tra
 uvm_scoreboard_env	pass	UVM testbench: analysis port connect/write interceptor
 uvm_scoreboard_monitor_env	pass	UVM testbench: analysis port chain-following write dispatch
 uvm_scoreboard_monitor_agent_env	pass	UVM testbench: analysis port chain-following write dispatch
-uvm_driver_sequencer_env	xfail	UVM testbench: needs sequencer interface implementation
+uvm_driver_sequencer_env	pass	UVM testbench: native sequencer interface (start_item/finish_item/get)
 
 # Ch18: Constraint tests that fail at runtime (advanced constraint features)
 18.5.2--constraint-inheritance_1	pass	Constraint inheritance with override

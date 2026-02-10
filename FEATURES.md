@@ -15,7 +15,7 @@ repository (1,036 tests across 15 IEEE chapters).
 |------|----------|------|------|------|-------|
 | Parsing | 853 | 853 | 0 | **100%** | 183 skipped: 70 negative tests, 104 need UVM, 6 need includes, 3 need `-D` flags |
 | Elaboration | 1028 | 1021+ | 7 | **99.3%+** | 2 multi-assign detection, 5 crash/timeout (tagged union, SVA); stream_unpack FIXED, queue ops FIXED |
-| Simulation (full) | 912 | 856 | 0 | **99.9%** | 912 total, 1 xfail (sequencer interface), 7 xpass; 0 fail, 0 timeout |
+| Simulation (full) | 912 | 856 | 0 | **99.9%** | 912 total, 0 xfail, 7 xpass; 0 fail, 0 timeout |
 | BMC (full Z3) | 26 | 26 | 0 | **100%** | All Chapter 16 SVA tests pass with Z3 solving |
 | LEC (full Z3) | 23 | 23 | 0 | **100%** | All Chapter 16 equivalence tests pass with Z3 |
 
@@ -31,13 +31,13 @@ repository (1,036 tests across 15 IEEE chapters).
 
 ### Simulation: 0 Failures, 1 Unexpected Pass, 0 Timeouts
 
-912 tests found, 856 pass, 0 fail, 55 xfail, 7 xpass.
+912 tests found, 856 pass, 0 fail, 54 xfail, 7 xpass.
 All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
 - 7 `skip` (should-fail tests circt-verilog doesn't detect, utility files)
 - 46 `compile-only` (class-only definitions, SVA UVM tests, event sequence controls)
-- 1 `xfail` (uvm_driver_sequencer_env — needs sequencer interface)
+- 0 `xfail` (all UVM testbench tests now pass)
 - 7 `xpass` (4 agent/monitor + 3 scoreboard — fixed by resolveSignalId + analysis port interceptor)
-- 116 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction, rand_mode, resource_db, all UVM agent/monitor/scoreboard tests)
+- 117 `pass` (Ch18 constraints, random stability, UVM phases, inline constraints, foreach/array-reduction, rand_mode, resource_db, all UVM agent/monitor/scoreboard/driver-sequencer tests)
 
 ### What's Needed for True 100%
 
@@ -59,7 +59,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 221 | 221 | 0 | All pass; randomize(null) check-only mode, randomize(var_list) argument filtering, stream unpack interpreter handler, inline soft constraint override, assoc array deep copy, call stack restoration, runtime vtable override, UVM phase sequencing, constraint solver (dist, soft, guards, inheritance, compound, inline, foreach, array-reduction), per-object RNG, parametric coverage sampling, VIF clock propagation |
+| circt-sim | 223 | 223 | 0 | All pass; sequencer interface, analysis ports, resolveSignalId cast+probe tracing, VIF shadow signals, resolveDrivers multi-bit fix, randomize(null/var_list), stream unpack, constraint solver, per-object RNG, parametric coverage, VIF clock propagation |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -79,6 +79,8 @@ to commercial simulators like Cadence Xcelium.
 | `$cast` / RTTI | WORKS | Parent table, type hierarchy checking |
 | VTable dispatch | WORKS | Inherited methods, virtual calls across class hierarchy; runtime vtable override in all 3 call_indirect paths (X-fallback, direct, static) |
 | `process::self()` | WORKS | Intercepted for both old and new compilations |
+| Sequencer interface | WORKS | `start_item`/`finish_item`/`seq_item_pull_port::get` native interceptors; per-sequencer FIFO with call stack frame override for blocking get retry |
+| Analysis ports | WORKS | `connect()`/`write()` interceptors; chain-following BFS dispatch via vtable slot 11 |
 | **Data Structures** | | |
 | Associative arrays | WORKS | Auto-create on null, integer and string keys; deep-copy on whole-assignment (`aa1 = aa2`) via `__moore_assoc_copy_into` |
 | Queues | WORKS | `push_back`, `pop_front`, `size`, `sort`, `rsort`, `shuffle`, `reverse`, `unique` |

@@ -27,15 +27,13 @@ Goal: Bring `circt-sim` to parity with Cadence Xcelium for running UVM testbench
 
 4. **Analysis port connect/write interceptor** — Native interceptor bypasses UVM "Late Connection" phase check. Chain-following BFS dispatch: port → port/export → terminal imp via vtable slot 11.
 
-5. **7 UVM tests fixed**: `uvm_agent_active/env/passive`, `uvm_monitor_env`, `uvm_scoreboard_env/monitor_env/monitor_agent_env`. Only 1 xfail remains.
+5. **7 UVM tests fixed**: `uvm_agent_active/env/passive`, `uvm_monitor_env`, `uvm_scoreboard_env/monitor_env/monitor_agent_env`.
 
-### xfail Breakdown (1 UVM test remaining)
+6. **Native sequencer interface** — Interceptors for `start_item`/`finish_item`/`seq_item_pull_port::get` implement a rendezvous between sequence producer and driver consumer. Uses per-sequencer FIFO + call stack frame override for blocking get retry. `uvm_driver_sequencer_env` now passes (0 UVM xfails remaining).
 
-| Category | Count | Tests | Root Cause |
-|----------|-------|-------|------------|
-| Sequencer interface | 1 | uvm_driver_sequencer_env | Needs sequencer interface implementation |
+### xfail Breakdown (0 UVM tests remaining)
 
-**Root cause**: Missing `get_next_item()`/`item_done()` sequencer interface implementation.
+All UVM testbench tests now pass.
 
 ### Tests Now Passing (previously xfail)
 
@@ -77,8 +75,8 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 4. **Default bins** - `bins others = default` catch-all
 5. **Verify coverage vs Xcelium reference** - Compare APB 21-30% baseline
 
-### Track 4: UVM Testbench Fixes (**1 xfail remaining**)
-**Goal**: Fix remaining 7 UVM testbench xfail tests.
+### Track 4: UVM Testbench Fixes (**COMPLETE — 0 xfails**)
+**Goal**: Fix all 8 UVM testbench xfail tests. **ALL DONE.**
 
 **Completed**:
 - ✅ Virtual interface clock propagation (module-level continuous assigns)
@@ -94,11 +92,7 @@ All Ch18 constraint, random stability, and basic UVM tests pass:
 - ✅ resolveSignalId cast+probe tracing for interface module ports
 - ✅ uvm_scoreboard_env, uvm_scoreboard_monitor_env, uvm_scoreboard_monitor_agent_env now pass
 - ✅ Analysis port connect/write interceptor with chain-following dispatch
-
-**Remaining 1 xfail**: uvm_driver_sequencer_env (sequencer interface).
-
-**Investigation needed**:
-- Implement sequencer interface (`get_next_item()`, `item_done()`)
+- ✅ Native sequencer interface (start_item/finish_item/get) — uvm_driver_sequencer_env passes
 
 **Also pending**:
 - **SVA concurrent assertions** - Runtime eval for `assert property` (26 compile-only tests)
