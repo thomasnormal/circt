@@ -5548,6 +5548,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
     appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
                      1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
     appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
                      1.0);
     return true;
@@ -6130,6 +6132,16 @@ static bool collectMatrixReport(
   uint64_t prequalifyResultsCmdRCPropagatedMutantsSum = 0;
   uint64_t prequalifyResultsCmdTimeoutPropagatedMutantsSum = 0;
   uint64_t prequalifyResultsCmdErrorMutantsSum = 0;
+  uint64_t laneBudgetMaxTimeoutMutants = 0;
+  uint64_t laneBudgetMaxLECUnknownMutants = 0;
+  uint64_t laneBudgetMaxBMCUnknownMutants = 0;
+  uint64_t laneBudgetMaxErrors = 0;
+  uint64_t laneBudgetMinDetectedMutants = 0;
+  bool laneBudgetSawDetected = false;
+  uint64_t laneBudgetLanesZeroDetectedMutants = 0;
+  uint64_t laneBudgetLanesNonZeroTimeoutMutants = 0;
+  uint64_t laneBudgetLanesNonZeroLECUnknownMutants = 0;
+  uint64_t laneBudgetLanesNonZeroBMCUnknownMutants = 0;
   double coverageSum = 0.0;
   uint64_t coverageCount = 0;
   StringMap<uint64_t> extraMetricSums;
@@ -6187,6 +6199,19 @@ static bool collectMatrixReport(
       return;
     }
     accumulator += parsed;
+  };
+  auto tryGetMetric = [&](const StringMap<std::string> &metrics, StringRef key,
+                          uint64_t &value) -> bool {
+    auto it = metrics.find(key);
+    if (it == metrics.end() || it->second.empty())
+      return false;
+    uint64_t parsed = 0;
+    if (StringRef(it->second).trim().getAsInteger(10, parsed)) {
+      ++invalidMetricValues;
+      return false;
+    }
+    value = parsed;
+    return true;
   };
   auto addOptionalResultMetric = [&](ArrayRef<StringRef> rowFields, size_t col,
                                      uint64_t &accumulator,
@@ -6311,6 +6336,46 @@ static bool collectMatrixReport(
     addMetric(metrics, "errors", errorsSum);
     for (const char *key : kExtraMetricKeys)
       addMetric(metrics, key, extraMetricSums[key]);
+
+    uint64_t detectedMutants = 0;
+    if (tryGetMetric(metrics, "detected_mutants", detectedMutants)) {
+      if (!laneBudgetSawDetected) {
+        laneBudgetMinDetectedMutants = detectedMutants;
+        laneBudgetSawDetected = true;
+      } else {
+        laneBudgetMinDetectedMutants =
+            std::min(laneBudgetMinDetectedMutants, detectedMutants);
+      }
+      if (detectedMutants == 0)
+        ++laneBudgetLanesZeroDetectedMutants;
+    }
+
+    uint64_t timeoutMutants = 0;
+    if (tryGetMetric(metrics, "global_filter_timeout_mutants", timeoutMutants)) {
+      laneBudgetMaxTimeoutMutants =
+          std::max(laneBudgetMaxTimeoutMutants, timeoutMutants);
+      if (timeoutMutants > 0)
+        ++laneBudgetLanesNonZeroTimeoutMutants;
+    }
+    uint64_t lecUnknownMutants = 0;
+    if (tryGetMetric(metrics, "global_filter_lec_unknown_mutants",
+                     lecUnknownMutants)) {
+      laneBudgetMaxLECUnknownMutants =
+          std::max(laneBudgetMaxLECUnknownMutants, lecUnknownMutants);
+      if (lecUnknownMutants > 0)
+        ++laneBudgetLanesNonZeroLECUnknownMutants;
+    }
+    uint64_t bmcUnknownMutants = 0;
+    if (tryGetMetric(metrics, "global_filter_bmc_unknown_mutants",
+                     bmcUnknownMutants)) {
+      laneBudgetMaxBMCUnknownMutants =
+          std::max(laneBudgetMaxBMCUnknownMutants, bmcUnknownMutants);
+      if (bmcUnknownMutants > 0)
+        ++laneBudgetLanesNonZeroBMCUnknownMutants;
+    }
+    uint64_t errors = 0;
+    if (tryGetMetric(metrics, "errors", errors))
+      laneBudgetMaxErrors = std::max(laneBudgetMaxErrors, errors);
   }
 
   rows.emplace_back("matrix.out_dir", std::string(matrixOutDir));
@@ -6338,6 +6403,28 @@ static bool collectMatrixReport(
   rows.emplace_back("matrix.not_activated_mutants_sum",
                     std::to_string(notActivatedMutantsSum));
   rows.emplace_back("matrix.errors_sum", std::to_string(errorsSum));
+  rows.emplace_back("matrix.lane_budget.max_global_filter_timeout_mutants",
+                    std::to_string(laneBudgetMaxTimeoutMutants));
+  rows.emplace_back("matrix.lane_budget.max_global_filter_lec_unknown_mutants",
+                    std::to_string(laneBudgetMaxLECUnknownMutants));
+  rows.emplace_back("matrix.lane_budget.max_global_filter_bmc_unknown_mutants",
+                    std::to_string(laneBudgetMaxBMCUnknownMutants));
+  rows.emplace_back("matrix.lane_budget.max_errors",
+                    std::to_string(laneBudgetMaxErrors));
+  rows.emplace_back("matrix.lane_budget.min_detected_mutants",
+                    std::to_string(laneBudgetSawDetected ? laneBudgetMinDetectedMutants
+                                                         : 0));
+  rows.emplace_back("matrix.lane_budget.lanes_zero_detected_mutants",
+                    std::to_string(laneBudgetLanesZeroDetectedMutants));
+  rows.emplace_back(
+      "matrix.lane_budget.lanes_nonzero_global_filter_timeout_mutants",
+      std::to_string(laneBudgetLanesNonZeroTimeoutMutants));
+  rows.emplace_back(
+      "matrix.lane_budget.lanes_nonzero_global_filter_lec_unknown_mutants",
+      std::to_string(laneBudgetLanesNonZeroLECUnknownMutants));
+  rows.emplace_back(
+      "matrix.lane_budget.lanes_nonzero_global_filter_bmc_unknown_mutants",
+      std::to_string(laneBudgetLanesNonZeroBMCUnknownMutants));
   rows.emplace_back(
       "matrix.coverage_percent_avg",
       coverageCount ? formatDouble2(coverageSum / static_cast<double>(coverageCount))
