@@ -1046,3 +1046,25 @@ See CHANGELOG.md on recent progress.
 7. Next execution target:
    continue capability closure/hardening on non-sv-tests BMC fail-like rows
    while preserving strict no-drop semantics.
+
+### Latest BMC/LEC No-Drop Interface Status (February 10, 2026)
+1. Hardened `strip-llhd-interface-signals` interface fallback to honor
+   `require-no-llhd` for unresolved interface-field cases:
+   in `require-no-llhd=false` mode (used by BMC), unresolved reads are no longer
+   force-abstracted to unconstrained module inputs.
+2. Added regression:
+   `test/Tools/circt-lec/lec-strip-llhd-interface-require-no-llhd.mlir`
+   to lock default abstraction vs residual-LLHD behavior split.
+3. Revalidated targeted semantic-closure set with
+   `FORCE_BMC=1 ALLOW_MULTI_CLOCK=1` on:
+   `16.10--property-local-var-uvm`,
+   `16.10--sequence-local-var-uvm`,
+   `16.11--sequence-subroutine-uvm`,
+   `16.13--sequence-multiclock-uvm`,
+   `16.15--property-iff-uvm`,
+   `16.15--property-iff-uvm-fail`
+   -> `total=6 pass=5 fail=1 error=0`.
+4. Current near-term blocker remains SMT-LIB closure on this bucket:
+   `for-smtlib-export` still rejects residual LLVM ops in `verif.bmc` regions
+   (for example `llvm.mlir.constant`), so this remains the next syntax-tree
+   completeness target for BMC formal parity.

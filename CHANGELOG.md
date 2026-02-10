@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 924 - February 10, 2026
+
+### BMC/LEC No-Drop Hardening: Preserve Residual LLHD When Allowed
+
+1. Updated `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+   - threaded `requireNoLLHD` into `stripInterfaceSignal(...)`.
+   - for unresolved interface-field cases:
+     - `strict-llhd=true` still hard-fails (unchanged).
+     - `require-no-llhd=true` still abstracts to explicit module inputs.
+     - `require-no-llhd=false` now preserves residual LLHD behavior instead of
+       introducing unconstrained abstraction inputs.
+   - applied to both unresolved-abstraction and read-before-dominating-store
+     fallback paths.
+2. Added regression:
+   - `test/Tools/circt-lec/lec-strip-llhd-interface-require-no-llhd.mlir`
+   - checks default abstraction behavior and
+     `require-no-llhd=false` residual-LLHD behavior.
+3. Validation:
+   - `ninja -C build circt-opt circt-bmc` -> success.
+   - `llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-interface-require-no-llhd.mlir test/Tools/circt-lec/lec-strip-llhd-allow-residual.mlir test/Tools/circt-lec/lec-strip-llhd-interface-read-before-store-strict.mlir`
+     -> `3 passed`.
+   - `FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 INCLUDE_UVM_TAGS=1 TEST_FILTER='^(16.13--sequence-multiclock-uvm|16.15--property-iff-uvm|16.15--property-iff-uvm-fail|16.10--property-local-var-uvm|16.10--sequence-local-var-uvm|16.11--sequence-subroutine-uvm)$' utils/run_sv_tests_circt_bmc.sh`
+     -> `sv-tests SVA summary: total=6 pass=5 fail=1 error=0`.
+4. Remaining blocker (unchanged):
+   - SMT-LIB path still rejects residual LLVM ops in `verif.bmc` regions
+     (for example `llvm.mlir.constant`) and remains the next syntax-tree
+     completeness closure item for BMC parity.
+
 ## Iteration 923 - February 10, 2026
 
 ### BMC/LEC Syntax-Tree Completeness Audit (Formal Closure Backlog)
