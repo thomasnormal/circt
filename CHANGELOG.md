@@ -1,5 +1,36 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 890 - February 10, 2026
+
+### BMC Strict-Gate Hardening: Fingerprint-Fallback Case Drift
+
+1. Extended `utils/run_formal_all.sh` strict-gate controls with:
+   - `--fail-on-new-bmc-ir-check-fingerprint-cases`
+   - enabled by default by `--strict-gate`.
+2. Added BMC check-attribution summary counters to lane summaries:
+   - `bmc_ir_check_total`, `bmc_ir_check_cases`
+   - `bmc_ir_check_key_mode_{fingerprint,label,loc}_{checks,cases}`
+3. Strict-gate comparator now enforces no regression in
+   `bmc_ir_check_key_mode_fingerprint_cases` for `BMC*` modes when baseline
+   rows carry that metric.
+4. Added regression test:
+   - `test/Tools/run-formal-all-strict-gate-bmc-ir-check-fingerprint-cases.test`
+   - validates strict-gate fails on `fingerprint_cases` increase (`0 -> 1`).
+
+### Tests and Validation
+
+- Syntax:
+  - `bash -n utils/run_formal_all.sh`: PASS
+- Lit:
+  - `./build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-ir-check-fingerprint-cases.test test/Tools/run-formal-all-strict-gate.test test/Tools/run-formal-all-baselines.test`: PASS
+- Real suite run:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-fingerprint-casegate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^sv-tests/BMC$'`
+  - result:
+    - `sv-tests/BMC`: `total=26 pass=23 fail=3 xfail=0 xpass=0 error=0 skip=1002`
+    - summary now includes
+      `bmc_ir_check_key_mode_fingerprint_cases=16` and companion key-mode
+      counters.
+
 ## Iteration 889 - February 10, 2026
 
 ### BMC Check-ID Hardening: Structured Key Modes (`label|loc|fingerprint`)

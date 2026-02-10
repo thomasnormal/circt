@@ -32,6 +32,9 @@ Options:
                          Fail when BMC timeout-case count increases vs baseline
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
+  --fail-on-new-bmc-ir-check-fingerprint-cases
+                         Fail when BMC fingerprint-fallback IR-check case count
+                         increases vs baseline
   --fail-on-new-bmc-abstraction-provenance
                          Fail when BMC abstraction provenance tokens increase
                          vs baseline
@@ -1664,6 +1667,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
+FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
 BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE=""
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
@@ -1949,6 +1953,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
+    --fail-on-new-bmc-ir-check-fingerprint-cases)
+      FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-abstraction-provenance)
       FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=1; shift ;;
     --bmc-abstraction-provenance-allowlist-file)
@@ -3786,6 +3792,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_FAILURE_CASES=1
   FAIL_ON_NEW_BMC_TIMEOUT_CASES=1
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
+  FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=1
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=1
@@ -6724,6 +6731,81 @@ print(f"bmc_abstraction_provenance_tokens={len(tokens)}")
 PY
 }
 
+summarize_bmc_check_attribution_file() {
+  local check_file="$1"
+  if [[ ! -s "$check_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_CHECK_ATTRIBUTION_FILE="$check_file" python3 - <<'PY'
+import os
+import re
+from collections import defaultdict
+from pathlib import Path
+
+path = Path(os.environ["BMC_CHECK_ATTRIBUTION_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+mode_check_counts = {
+    "label": 0,
+    "loc": 0,
+    "fingerprint": 0,
+}
+mode_case_sets = {
+    "label": set(),
+    "loc": set(),
+    "fingerprint": set(),
+}
+case_keys = set()
+check_total = 0
+
+for line in path.open(encoding="utf-8"):
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    parts = line.split("\t")
+    if len(parts) < 5:
+        continue
+    case_id = parts[0].strip()
+    case_path = parts[1].strip()
+    kind = parts[3].strip()
+    snippet = parts[4].strip()
+    if not case_id or not kind:
+        continue
+    mode = "fingerprint"
+    label_match = re.search(r'\blabel\s+"([^"]*)"', snippet)
+    if label_match and label_match.group(1).strip():
+        mode = "label"
+    else:
+        loc_matches = re.findall(r'loc\(([^)]*)\)', snippet)
+        if any(loc.strip() for loc in loc_matches):
+            mode = "loc"
+    case_key = (case_id, case_path)
+    case_keys.add(case_key)
+    mode_check_counts[mode] += 1
+    mode_case_sets[mode].add(case_key)
+    check_total += 1
+
+if check_total <= 0:
+    print("")
+    raise SystemExit(0)
+
+parts = [
+    f"bmc_ir_check_total={check_total}",
+    f"bmc_ir_check_cases={len(case_keys)}",
+    f"bmc_ir_check_key_mode_fingerprint_checks={mode_check_counts['fingerprint']}",
+    f"bmc_ir_check_key_mode_label_checks={mode_check_counts['label']}",
+    f"bmc_ir_check_key_mode_loc_checks={mode_check_counts['loc']}",
+    f"bmc_ir_check_key_mode_fingerprint_cases={len(mode_case_sets['fingerprint'])}",
+    f"bmc_ir_check_key_mode_label_cases={len(mode_case_sets['label'])}",
+    f"bmc_ir_check_key_mode_loc_cases={len(mode_case_sets['loc'])}",
+]
+print(" ".join(parts))
+PY
+}
+
 generate_bmc_abstraction_provenance_case_map() {
   local out_dir="$1"
   local case_map_file="$out_dir/bmc-abstraction-provenance-case-map.tsv"
@@ -7244,6 +7326,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
       fi
+      bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_check_attribution_file")"
+      if [[ -n "$bmc_check_summary" ]]; then
+        summary="${summary} ${bmc_check_summary}"
+      fi
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
@@ -7288,6 +7374,10 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_uvm_semantics_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_check_summary="$(summarize_bmc_check_attribution_file "$sv_bmc_uvm_semantics_check_attribution_file")"
+      if [[ -n "$bmc_check_summary" ]]; then
+        summary="${summary} ${bmc_check_summary}"
       fi
       record_result_with_summary "sv-tests-uvm" "BMC_SEMANTICS" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
@@ -7353,6 +7443,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
       fi
+      bmc_check_summary="$(summarize_bmc_check_attribution_file "$verilator_bmc_check_attribution_file")"
+      if [[ -n "$bmc_check_summary" ]]; then
+        summary="${summary} ${bmc_check_summary}"
+      fi
       record_result_with_summary "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
   fi
@@ -7416,6 +7510,10 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$yosys_bmc_provenance_file")"
       if [[ -n "$bmc_provenance_summary" ]]; then
         summary="${summary} ${bmc_provenance_summary}"
+      fi
+      bmc_check_summary="$(summarize_bmc_check_attribution_file "$yosys_bmc_check_attribution_file")"
+      if [[ -n "$bmc_check_summary" ]]; then
+        summary="${summary} ${bmc_check_summary}"
       fi
       record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped" "$summary"
     fi
@@ -9552,6 +9650,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
@@ -9567,6 +9666,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
+  FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
   BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE="$BMC_ABSTRACTION_PROVENANCE_ALLOWLIST_FILE" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
@@ -9738,6 +9838,9 @@ fail_on_new_bmc_timeout_cases = (
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
 )
+fail_on_new_bmc_ir_check_fingerprint_cases = (
+    os.environ.get("FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES", "0") == "1"
+)
 fail_on_new_bmc_abstraction_provenance = (
     os.environ.get("FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE", "0") == "1"
 )
@@ -9908,7 +10011,7 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new failure cases observed (baseline={len(baseline_case_set)} current={len(current_case_set)}, window={baseline_window}): {sample}"
                 )
-    if mode == "BMC":
+    if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
         if fail_on_new_bmc_timeout_cases:
             baseline_timeout_values = []
@@ -9933,6 +10036,22 @@ for key, current_row in summary.items():
                 if current_unknown > baseline_unknown:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_unknown_cases increased ({baseline_unknown} -> {current_unknown}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_ir_check_fingerprint_cases:
+            baseline_fingerprint_case_values = []
+            for counts in parsed_counts:
+                if "bmc_ir_check_key_mode_fingerprint_cases" in counts:
+                    baseline_fingerprint_case_values.append(
+                        int(counts["bmc_ir_check_key_mode_fingerprint_cases"])
+                    )
+            if baseline_fingerprint_case_values:
+                baseline_fingerprint_cases = min(baseline_fingerprint_case_values)
+                current_fingerprint_cases = int(
+                    current_counts.get("bmc_ir_check_key_mode_fingerprint_cases", 0)
+                )
+                if current_fingerprint_cases > baseline_fingerprint_cases:
+                    gate_errors.append(
+                        f"{suite} {mode}: bmc_ir_check_key_mode_fingerprint_cases increased ({baseline_fingerprint_cases} -> {current_fingerprint_cases}, window={baseline_window})"
                     )
         if fail_on_new_bmc_abstraction_provenance:
             baseline_provenance_raw = [

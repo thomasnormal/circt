@@ -533,6 +533,17 @@ See CHANGELOG.md on recent progress.
       because lowered checks mostly lack non-empty labels/source locs.
     - Next long-term feature remains backend-owned stable check IDs propagated
       through lowering and solver witness reporting.
+65. Strict-gate fallback-key drift hardening landed (February 10, 2026):
+    - `run_formal_all.sh` now supports
+      `--fail-on-new-bmc-ir-check-fingerprint-cases`.
+    - `--strict-gate` enables this by default.
+    - BMC lane summaries now emit explicit check-key mode counters:
+      `bmc_ir_check_key_mode_{fingerprint,label,loc}_{checks,cases}`.
+66. Remaining limitation after fallback-key drift gate:
+    - The gate currently tracks fallback-key drift at case granularity, not
+      per-check witness semantics.
+    - Next long-term closure target remains native stable backend check IDs
+      that eliminate heuristic fallback identity in strict-gate policy.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
