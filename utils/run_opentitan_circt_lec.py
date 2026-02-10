@@ -79,6 +79,29 @@ def encode_summary_counts(counts: dict[str, int]) -> str:
     return ",".join(f"{key}={counts[key]}" for key in sorted(counts))
 
 
+def normalize_drop_reason(line: str) -> str:
+    line = line.replace("\t", " ").strip()
+    line = re.sub(r"^[^:\n]+:\d+(?::\d+)?:\s*", "", line)
+    line = re.sub(r"^[Ww]arning:\s*", "", line)
+    line = re.sub(r"\s+", " ", line)
+    line = re.sub(r"\d+", "<n>", line)
+    line = line.replace(";", ",")
+    if len(line) > 240:
+        line = line[:240]
+    return line
+
+
+def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
+    reasons: set[str] = set()
+    for line in log_text.splitlines():
+        if pattern not in line:
+            continue
+        reason = normalize_drop_reason(line)
+        if reason:
+            reasons.add(reason)
+    return sorted(reasons)
+
+
 def run_and_log(
     cmd: list[str], log_path: Path, out_path: Path | None = None
 ) -> str:
@@ -141,6 +164,16 @@ def main() -> int:
             "assume_known_result)."
         ),
     )
+    parser.add_argument(
+        "--drop-remark-cases-file",
+        default=os.environ.get("LEC_DROP_REMARK_CASES_OUT", ""),
+        help="Optional TSV output path for dropped-syntax case IDs.",
+    )
+    parser.add_argument(
+        "--drop-remark-reasons-file",
+        default=os.environ.get("LEC_DROP_REMARK_REASONS_OUT", ""),
+        help="Optional TSV output path for dropped-syntax case+reason rows.",
+    )
     args = parser.parse_args()
 
     ot_root = Path(args.opentitan_root).resolve()
@@ -200,6 +233,10 @@ def main() -> int:
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_mode_label = os.environ.get("LEC_MODE_LABEL", "LEC").strip() or "LEC"
+    drop_remark_pattern = os.environ.get(
+        "LEC_DROP_REMARK_PATTERN",
+        os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
+    )
     z3_bin = os.environ.get("Z3_BIN", "")
     if lec_run_smtlib and not lec_smoke_only:
         if not z3_bin:
@@ -279,6 +316,10 @@ def main() -> int:
     failures = 0
     case_rows: list[tuple[str, str, str, str, str]] = []
     xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+    drop_remark_case_rows: list[tuple[str, str]] = []
+    drop_remark_reason_rows: list[tuple[str, str, str]] = []
+    drop_remark_seen_cases: set[str] = set()
+    drop_remark_seen_case_reasons: set[tuple[str, str]] = set()
     try:
         print(
             f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
@@ -287,6 +328,7 @@ def main() -> int:
         for impl in sorted(impl_list):
             impl_dir = workdir / impl
             impl_dir.mkdir(parents=True, exist_ok=True)
+            verilog_log_path = impl_dir / "circt-verilog.log"
             src_ref = rtl_path / f"{impl_gold}.sv"
             src_impl = rtl_path / f"{impl}.sv"
             ref_file = src_ref
@@ -372,7 +414,23 @@ def main() -> int:
             assume_known_result: str | None = None
             summary_counts: dict[str, int] = {}
             try:
-                run_and_log(verilog_cmd, impl_dir / "circt-verilog.log")
+                run_and_log(verilog_cmd, verilog_log_path)
+                if verilog_log_path.exists():
+                    reasons = extract_drop_reasons(
+                        verilog_log_path.read_text(), drop_remark_pattern
+                    )
+                    if reasons:
+                        if impl not in drop_remark_seen_cases:
+                            drop_remark_seen_cases.add(impl)
+                            drop_remark_case_rows.append((impl, str(impl_dir)))
+                        for reason in reasons:
+                            reason_key = (impl, reason)
+                            if reason_key in drop_remark_seen_case_reasons:
+                                continue
+                            drop_remark_seen_case_reasons.add(reason_key)
+                            drop_remark_reason_rows.append(
+                                (impl, str(impl_dir), reason)
+                            )
                 run_and_log(opt_cmd, impl_dir / "circt-opt.log")
                 lec_stdout = run_and_log(
                     lec_cmd,
@@ -468,6 +526,23 @@ def main() -> int:
         with xprop_summary_path.open("w") as handle:
             for row in sorted(xprop_rows, key=lambda item: (item[1], item[2], item[0], item[6])):
                 handle.write("\t".join(row) + "\n")
+    if args.drop_remark_cases_file:
+        drop_case_path = Path(args.drop_remark_cases_file)
+        drop_case_path.parent.mkdir(parents=True, exist_ok=True)
+        with drop_case_path.open("w") as handle:
+            for row in sorted(drop_remark_case_rows, key=lambda item: item[0]):
+                handle.write("\t".join(row) + "\n")
+    if args.drop_remark_reasons_file:
+        drop_reason_path = Path(args.drop_remark_reasons_file)
+        drop_reason_path.parent.mkdir(parents=True, exist_ok=True)
+        with drop_reason_path.open("w") as handle:
+            for row in sorted(drop_remark_reason_rows, key=lambda item: (item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
+
+    print(
+        f"opentitan LEC dropped-syntax summary: drop_remark_cases={len(drop_remark_case_rows)} pattern='{drop_remark_pattern}'",
+        flush=True,
+    )
 
     if failures:
         print(f"LEC failures: {failures}", file=sys.stderr)

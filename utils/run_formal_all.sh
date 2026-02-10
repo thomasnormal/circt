@@ -8325,6 +8325,8 @@ run_opentitan_lec_lane() {
   local xprop_summary_file="$5"
   local workdir="$6"
   local strict_x="$7"
+  local drop_remark_cases_file="$8"
+  local drop_remark_reasons_file="$9"
 
   if ! lane_enabled "$lane_id"; then
     return
@@ -8335,6 +8337,8 @@ run_opentitan_lec_lane() {
 
   : > "$case_results"
   : > "$xprop_summary_file"
+  : > "$drop_remark_cases_file"
+  : > "$drop_remark_reasons_file"
   rm -rf "$workdir"
 
   local opentitan_lec_args=(--opentitan-root "$OPENTITAN_DIR")
@@ -8347,6 +8351,8 @@ run_opentitan_lec_lane() {
 
   local opentitan_lec_env=(OUT="$case_results"
     OUT_XPROP_SUMMARY="$xprop_summary_file"
+    LEC_DROP_REMARK_CASES_OUT="$drop_remark_cases_file"
+    LEC_DROP_REMARK_REASONS_OUT="$drop_remark_reasons_file"
     CIRCT_VERILOG="$CIRCT_VERILOG_BIN_OPENTITAN")
   if [[ "$strict_x" == "1" ]]; then
     opentitan_lec_env+=(LEC_X_OPTIMISTIC=0 LEC_MODE_LABEL=LEC_STRICT)
@@ -8411,7 +8417,9 @@ if [[ "$WITH_OPENTITAN" == "1" ]]; then
     "$OUT_DIR/opentitan-lec-results.txt" \
     "$OUT_DIR/opentitan-lec-xprop-summary.tsv" \
     "$OUT_DIR/opentitan-lec-work" \
-    "0"
+    "0" \
+    "$OUT_DIR/opentitan-lec-drop-remark-cases.tsv" \
+    "$OUT_DIR/opentitan-lec-drop-remark-reasons.tsv"
 fi
 
 # OpenTitan strict LEC audit lane (optional)
@@ -8423,7 +8431,9 @@ if [[ "$WITH_OPENTITAN_LEC_STRICT" == "1" ]]; then
     "$OUT_DIR/opentitan-lec-strict-results.txt" \
     "$OUT_DIR/opentitan-lec-strict-xprop-summary.tsv" \
     "$OUT_DIR/opentitan-lec-strict-work" \
-    "1"
+    "1" \
+    "$OUT_DIR/opentitan-lec-strict-drop-remark-cases.tsv" \
+    "$OUT_DIR/opentitan-lec-strict-drop-remark-reasons.tsv"
 fi
 
 run_opentitan_e2e_lane() {
@@ -10332,6 +10342,8 @@ def collect_lec_drop_remark_cases(out_dir: Path):
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-cases.tsv"),
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-cases.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-drop-remark-cases.tsv"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-drop-remark-cases.tsv"),
     ]
     cases = {}
     for suite, mode, path in sources:
@@ -10356,6 +10368,8 @@ def collect_lec_drop_remark_case_reasons(out_dir: Path):
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-reasons.tsv"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-reasons.tsv"),
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-reasons.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-drop-remark-reasons.tsv"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-drop-remark-reasons.tsv"),
     ]
     reasons = {}
     for suite, mode, path in sources:
@@ -10798,6 +10812,8 @@ def collect_lec_drop_remark_cases(out_dir: Path):
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-cases.tsv"),
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-cases.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-drop-remark-cases.tsv"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-drop-remark-cases.tsv"),
     ]
     cases = {}
     for suite, mode, path in sources:
@@ -10822,6 +10838,8 @@ def collect_lec_drop_remark_case_reasons(out_dir: Path):
         ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-reasons.tsv"),
         ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-reasons.tsv"),
         ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-reasons.tsv"),
+        ("opentitan", "LEC", out_dir / "opentitan-lec-drop-remark-reasons.tsv"),
+        ("opentitan", "LEC_STRICT", out_dir / "opentitan-lec-strict-drop-remark-reasons.tsv"),
     ]
     reasons = {}
     for suite, mode, path in sources:
@@ -11152,7 +11170,7 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new dropped-syntax case-reason tuples observed (baseline={len(baseline_drop_case_reason_set)} current={len(current_drop_case_reason_set)}, window={baseline_window}): {sample}"
                 )
-    if fail_on_new_lec_drop_remark_case_ids and mode == "LEC":
+    if fail_on_new_lec_drop_remark_case_ids and mode.startswith("LEC"):
         baseline_drop_case_ids_raw = [
             row.get("lec_drop_remark_case_ids") for row in compare_rows
         ]
@@ -11174,7 +11192,7 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new LEC dropped-syntax cases observed (baseline={len(baseline_drop_case_set)} current={len(current_drop_case_set)}, window={baseline_window}): {sample}"
                 )
-    if fail_on_new_lec_drop_remark_case_reasons and mode == "LEC":
+    if fail_on_new_lec_drop_remark_case_reasons and mode.startswith("LEC"):
         baseline_drop_case_reason_ids_raw = [
             row.get("lec_drop_remark_case_reason_ids") for row in compare_rows
         ]
@@ -11398,7 +11416,7 @@ for key, current_row in summary.items():
                     gate_errors.append(
                         f"{suite} {mode}: new abstraction provenance tokens observed (baseline={len(baseline_provenance_set)} current={len(current_provenance_set)}{allowlisted_suffix}, window={baseline_window}): {sample}"
                     )
-    if mode == "LEC":
+    if mode.startswith("LEC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
         if fail_on_new_lec_drop_remark_cases:
             baseline_drop_remark_values = []
