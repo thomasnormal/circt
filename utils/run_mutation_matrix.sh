@@ -212,6 +212,132 @@ LANE_JOBS=1
 LANE_SCHEDULE_POLICY="fifo"
 STOP_ON_FAIL=0
 
+VALIDATION_ERROR=""
+PARSED_ALLOCATION_TOTAL=0
+PARSED_ALLOCATION_ENABLED=0
+
+trim_ws() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf "%s" "$s"
+}
+
+set_validation_error() {
+  VALIDATION_ERROR="$1"
+}
+
+is_known_mutation_mode() {
+  local mode_name="$1"
+  case "$mode_name" in
+    inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_known_mutation_profile() {
+  local profile_name="$1"
+  case "$profile_name" in
+    arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_mode_list_csv() {
+  local label="$1"
+  local csv="$2"
+  local mode=""
+  local -a modes=()
+
+  csv="$(trim_ws "$csv")"
+  if [[ -z "$csv" ]]; then
+    return 0
+  fi
+  IFS=',' read -r -a modes <<< "$csv"
+  for mode in "${modes[@]}"; do
+    mode="$(trim_ws "$mode")"
+    [[ -z "$mode" ]] && continue
+    if ! is_known_mutation_mode "$mode"; then
+      set_validation_error "Invalid ${label} mode: $mode (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)."
+      return 1
+    fi
+  done
+  return 0
+}
+
+validate_profile_list_csv() {
+  local label="$1"
+  local csv="$2"
+  local profile=""
+  local -a profiles=()
+
+  csv="$(trim_ws "$csv")"
+  if [[ -z "$csv" ]]; then
+    return 0
+  fi
+  IFS=',' read -r -a profiles <<< "$csv"
+  for profile in "${profiles[@]}"; do
+    profile="$(trim_ws "$profile")"
+    [[ -z "$profile" ]] && continue
+    if ! is_known_mutation_profile "$profile"; then
+      set_validation_error "Invalid ${label} profile: $profile (expected arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none)."
+      return 1
+    fi
+  done
+  return 0
+}
+
+parse_mode_allocation_csv() {
+  local label="$1"
+  local csv="$2"
+  local value_name="$3"
+  local entry=""
+  local mode_name=""
+  local mode_value=""
+  local -a entries=()
+
+  PARSED_ALLOCATION_TOTAL=0
+  PARSED_ALLOCATION_ENABLED=0
+  csv="$(trim_ws "$csv")"
+  if [[ -z "$csv" ]]; then
+    return 0
+  fi
+
+  IFS=',' read -r -a entries <<< "$csv"
+  for entry in "${entries[@]}"; do
+    entry="$(trim_ws "$entry")"
+    [[ -z "$entry" ]] && continue
+    mode_name="${entry%%=*}"
+    mode_value="${entry#*=}"
+    mode_name="$(trim_ws "$mode_name")"
+    mode_value="$(trim_ws "$mode_value")"
+    if [[ -z "$mode_name" || "$mode_value" == "$entry" ]]; then
+      set_validation_error "Invalid ${label} entry: $entry (expected NAME=${value_name})."
+      return 1
+    fi
+    if ! is_known_mutation_mode "$mode_name"; then
+      set_validation_error "Invalid ${label} mode: $mode_name (expected inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect)."
+      return 1
+    fi
+    if [[ ! "$mode_value" =~ ^[1-9][0-9]*$ ]]; then
+      set_validation_error "Invalid ${label} value for ${mode_name}: ${mode_value} (expected positive integer)."
+      return 1
+    fi
+    PARSED_ALLOCATION_TOTAL=$((PARSED_ALLOCATION_TOTAL + mode_value))
+    PARSED_ALLOCATION_ENABLED=1
+  done
+
+  return 0
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --lanes-tsv) LANES_TSV="$2"; shift 2 ;;
@@ -312,6 +438,28 @@ if [[ ! "$LANE_SCHEDULE_POLICY" =~ ^(fifo|cache-aware)$ ]]; then
 fi
 if [[ -n "$DEFAULT_MUTATIONS_SEED" ]] && ! [[ "$DEFAULT_MUTATIONS_SEED" =~ ^[0-9]+$ ]]; then
   echo "Invalid --default-mutations-seed value: $DEFAULT_MUTATIONS_SEED" >&2
+  exit 1
+fi
+if ! validate_mode_list_csv "--default-mutations-modes" "$DEFAULT_MUTATIONS_MODES"; then
+  echo "$VALIDATION_ERROR" >&2
+  exit 1
+fi
+if ! validate_profile_list_csv "--default-mutations-profiles" "$DEFAULT_MUTATIONS_PROFILES"; then
+  echo "$VALIDATION_ERROR" >&2
+  exit 1
+fi
+if ! parse_mode_allocation_csv "--default-mutations-mode-counts" "$DEFAULT_MUTATIONS_MODE_COUNTS" "COUNT"; then
+  echo "$VALIDATION_ERROR" >&2
+  exit 1
+fi
+default_mode_counts_enabled="$PARSED_ALLOCATION_ENABLED"
+if ! parse_mode_allocation_csv "--default-mutations-mode-weights" "$DEFAULT_MUTATIONS_MODE_WEIGHTS" "WEIGHT"; then
+  echo "$VALIDATION_ERROR" >&2
+  exit 1
+fi
+default_mode_weights_enabled="$PARSED_ALLOCATION_ENABLED"
+if [[ "$default_mode_counts_enabled" -eq 1 && "$default_mode_weights_enabled" -eq 1 ]]; then
+  echo "Use either --default-mutations-mode-counts or --default-mutations-mode-weights, not both." >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
@@ -756,6 +904,10 @@ run_lane() {
   local lane_generated_mutations_cache_saved_runtime_ns="0"
   local lane_generated_mutations_cache_lock_wait_ns="0"
   local lane_generated_mutations_cache_lock_contended="0"
+  local lane_mode_counts_enabled=0
+  local lane_mode_weights_enabled=0
+  local lane_mode_counts_total=0
+  local -a cmd=()
 
   lane_write_status() {
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
@@ -846,6 +998,11 @@ run_lane() {
   fi
 
   if [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
+    if ! [[ "${GENERATE_COUNT[$i]}" =~ ^[1-9][0-9]*$ ]]; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
     lane_mutations_modes="${MUTATIONS_MODES[$i]}"
     if [[ "$lane_mutations_modes" == "-" || -z "$lane_mutations_modes" ]]; then
       lane_mutations_modes="$DEFAULT_MUTATIONS_MODES"
@@ -869,6 +1026,39 @@ run_lane() {
     lane_mutations_select="${MUTATIONS_SELECT[$i]}"
     if [[ "$lane_mutations_select" == "-" || -z "$lane_mutations_select" ]]; then
       lane_mutations_select="$DEFAULT_MUTATIONS_SELECT"
+    fi
+    if ! validate_mode_list_csv "lane mutations_modes" "$lane_mutations_modes"; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    if ! validate_profile_list_csv "lane mutations_profiles" "$lane_mutations_profiles"; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    if ! parse_mode_allocation_csv "lane mutations_mode_counts" "$lane_mutations_mode_counts" "COUNT"; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    lane_mode_counts_enabled="$PARSED_ALLOCATION_ENABLED"
+    lane_mode_counts_total="$PARSED_ALLOCATION_TOTAL"
+    if ! parse_mode_allocation_csv "lane mutations_mode_weights" "$lane_mutations_mode_weights" "WEIGHT"; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    lane_mode_weights_enabled="$PARSED_ALLOCATION_ENABLED"
+    if [[ "$lane_mode_counts_enabled" -eq 1 && "$lane_mode_weights_enabled" -eq 1 ]]; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
+    fi
+    if [[ "$lane_mode_counts_enabled" -eq 1 && "$lane_mode_counts_total" -ne "${GENERATE_COUNT[$i]}" ]]; then
+      gate="CONFIG_ERROR"
+      lane_write_status
+      return 0
     fi
     if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
       cmd+=(--mutations-top "${MUTATIONS_TOP[$i]}")

@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top; endmodule\n' > %t/design.il
+// RUN: printf 't\tbash -lc "echo SURVIVED > result.txt"\tresult.txt\t^DETECTED$\t^SURVIVED$\n' > %t/tests.tsv
+// RUN: printf 'lane_bad\t%t/design.il\t-\t%t/tests.tsv\t-\t-\t-\t1\t-\t-\t-\t-\t-\tbogus\n' > %t/lanes.tsv
+//
+// RUN: not %S/../../utils/run_mutation_matrix.sh \
+// RUN:   --lanes-tsv %t/lanes.tsv \
+// RUN:   --out-dir %t/out \
+// RUN:   2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/out/results.tsv
+//
+// LOG: Mutation matrix summary: pass=0 fail=1
+//
+// RESULTS: lane_id{{.*}}status{{.*}}exit_code{{.*}}gate_status
+// RESULTS-NEXT: lane_bad{{.*}}FAIL{{.*}}1{{.*}}CONFIG_ERROR

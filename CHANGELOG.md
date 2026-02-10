@@ -1,5 +1,57 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 847 - February 10, 2026
+
+### Matrix Script Generated-Lane Preflight Hardening (`run_mutation_matrix.sh`)
+
+1. Added shared generated-mutation validators in matrix script path for direct
+   script users:
+   - known mode names (`inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect`)
+   - known profiles (`arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none`)
+   - allocation entry parsing (`NAME=COUNT` / `NAME=WEIGHT`) with positive values.
+2. Added early default option validation (hard fail before lane execution):
+   - `--default-mutations-modes`
+   - `--default-mutations-profiles`
+   - `--default-mutations-mode-counts`
+   - `--default-mutations-mode-weights`
+   - plus default count/weight conflict detection.
+3. Added generated-lane config validation in `run_lane` before dispatching
+   `run_mutation_cover.sh`:
+   - `generate_count` positive integer
+   - effective lane/default `mutations_modes` names
+   - effective lane/default `mutations_profiles` names
+   - effective lane/default `mutations_mode_counts` /
+     `mutations_mode_weights` entry syntax + mode-name/value checks
+   - count/weight conflict
+   - mode-count total must equal `generate_count`
+4. Malformed generated lanes now resolve to lane-level `CONFIG_ERROR` without
+   launching cover runs.
+
+### Tests and Documentation
+
+- Added regression tests:
+  - `test/Tools/run-mutation-matrix-default-mutations-modes-invalid.test`
+  - `test/Tools/run-mutation-matrix-default-mutations-profiles-invalid.test`
+  - `test/Tools/run-mutation-matrix-default-mode-allocation-conflict.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-modes-invalid.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-mode-counts-total-invalid.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix*.test`: PASS (49/49)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (14/14)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-script-generated-preflight --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 846 - February 10, 2026
 
 ### Script-Path Generated Mode Name Validation (`generate_mutations_yosys.sh`)

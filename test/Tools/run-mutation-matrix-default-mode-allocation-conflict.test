@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'lane1\t%t/design.il\t%t/mutations.txt\t%t/tests.tsv\n' > %t/lanes.tsv
+// RUN: not %S/../../utils/run_mutation_matrix.sh --lanes-tsv %t/lanes.tsv --out-dir %t/out --default-mutations-mode-counts arith=1 --default-mutations-mode-weights arith=1 2>&1 | FileCheck %s
+//
+// CHECK: Use either --default-mutations-mode-counts or --default-mutations-mode-weights, not both.
