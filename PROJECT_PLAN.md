@@ -372,6 +372,24 @@ See CHANGELOG.md on recent progress.
     - add formal-lane drift gates for abstraction provenance
       (`count + details`) with allowlist controls, then mirror this format for
       process-result abstractions.
+43. BMC provenance-drift gate landed (February 10, 2026):
+    - `lower-to-bmc` now emits machine-readable warning tokens for each
+      abstracted LLHD interface input:
+      `BMC_PROVENANCE_LLHD_INTERFACE reason=... signal=... field=... name=...`.
+    - BMC harnesses now collect these tokens per case into lane TSVs:
+      `sv-tests-bmc-abstraction-provenance.tsv`,
+      `verilator-bmc-abstraction-provenance.tsv`,
+      `yosys-bmc-abstraction-provenance.tsv`.
+    - `run_formal_all.sh` now persists per-suite/mode provenance token sets in
+      baselines and supports strict gating with
+      `--fail-on-new-bmc-abstraction-provenance`.
+44. Remaining near-term formal limitations after provenance gate:
+    - BMC semantic closure is still blocked by real solver mismatches in
+      local-var and `disable iff` related positive tests (not infrastructure
+      visibility gaps).
+    - LEC strict no-waiver posture is in place, but process-result abstraction
+      provenance is still count-only and should be upgraded to the same
+      source-path token model.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

@@ -1,5 +1,60 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 879 - February 10, 2026
+
+### BMC/LEC Semantic-Closure Hardening: Provenance Drift Gating
+
+1. Added machine-readable interface-abstraction provenance emission in BMC
+   lowering:
+   - file:
+     - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+   - change:
+     - when
+       `circt.bmc_abstracted_llhd_interface_input_details`
+       is present, `lower-to-bmc` now emits one warning token per entry:
+       `BMC_PROVENANCE_LLHD_INTERFACE reason=... signal=... field=... name=...`
+2. Added regression coverage for provenance warning emission:
+   - file:
+     - `test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`
+   - change:
+     - added `WARN` check-prefix run line and token assertion.
+3. Added provenance token collection in all BMC lane harnesses:
+   - files:
+     - `utils/run_sv_tests_circt_bmc.sh`
+     - `utils/run_verilator_verification_circt_bmc.sh`
+     - `utils/run_yosys_sva_circt_bmc.sh`
+   - change:
+     - each script now supports `BMC_ABSTRACTION_PROVENANCE_OUT`,
+       extracts `BMC_PROVENANCE_LLHD_INTERFACE ...` tokens from case logs,
+       writes per-case TSV rows, and normalizes via `sort -u`.
+4. Added strict provenance drift gating to the orchestrator:
+   - file:
+     - `utils/run_formal_all.sh`
+   - changes:
+     - new flag:
+       `--fail-on-new-bmc-abstraction-provenance`
+     - baseline schema extended with
+       `bmc_abstraction_provenance` per suite/mode.
+     - strict gate now compares current provenance token sets against the
+       baseline window and fails on new tokens when enabled.
+
+### Tests and Validation
+
+- Build/lit:
+  - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-llhd-interface-abstraction-attr.mlir`: PASS
+- Script syntax:
+  - `bash -n utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh utils/run_formal_all.sh`: PASS
+- Formal gate smoke (temp baseline, BMC lanes only):
+  - baseline update:
+    - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-provenance-gate-smoke-20260210-local --baseline-file /tmp/formal-bmc-provenance-gate-smoke-20260210-local-baselines.tsv --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$' --update-baselines --baseline-window 1`
+  - strict gate check:
+    - same command with `--strict-gate --fail-on-new-bmc-abstraction-provenance`
+  - result:
+    - command exit status PASS for gate behavior (no new provenance tokens).
+    - current lane statuses unchanged in this environment:
+      `sv-tests/BMC` `23/26`, `verilator-verification/BMC` `12/17`,
+      `yosys/tests/sva/BMC` `7/14`.
+
 ## Iteration 878 - February 10, 2026
 
 ### BMC/LEC Semantic-Closure Hardening: Source-Path Interface Provenance

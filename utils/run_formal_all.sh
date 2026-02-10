@@ -32,6 +32,9 @@ Options:
                          Fail when BMC timeout-case count increases vs baseline
   --fail-on-new-bmc-unknown-cases
                          Fail when BMC unknown-case count increases vs baseline
+  --fail-on-new-bmc-abstraction-provenance
+                         Fail when BMC abstraction provenance tokens increase
+                         vs baseline
   --fail-on-new-e2e-mode-diff-strict-only-fail
                          Fail when OpenTitan E2E mode-diff strict_only_fail
                          count increases vs baseline
@@ -1651,6 +1654,7 @@ FAIL_ON_PASSRATE_REGRESSION=0
 FAIL_ON_NEW_FAILURE_CASES=0
 FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
+FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF=0
 FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS=0
@@ -1930,6 +1934,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_TIMEOUT_CASES=1; shift ;;
     --fail-on-new-bmc-unknown-cases)
       FAIL_ON_NEW_BMC_UNKNOWN_CASES=1; shift ;;
+    --fail-on-new-bmc-abstraction-provenance)
+      FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE=1; shift ;;
     --fail-on-new-e2e-mode-diff-strict-only-fail)
       FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL=1; shift ;;
     --fail-on-new-e2e-mode-diff-status-diff)
@@ -6664,6 +6670,38 @@ print(f"bmc_timeout_cases={timeout_cases} bmc_unknown_cases={unknown_cases}")
 PY
 }
 
+summarize_bmc_abstraction_provenance_file() {
+  local provenance_file="$1"
+  if [[ ! -s "$provenance_file" ]]; then
+    echo ""
+    return 0
+  fi
+  BMC_ABSTRACTION_PROVENANCE_FILE="$provenance_file" python3 - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["BMC_ABSTRACTION_PROVENANCE_FILE"])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+tokens = set()
+with path.open(encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        token = parts[2].strip()
+        if token:
+            tokens.add(token)
+
+print(f"bmc_abstraction_provenance_tokens={len(tokens)}")
+PY
+}
+
 results_tsv="$OUT_DIR/summary.tsv"
 : > "$results_tsv"
 
@@ -6705,8 +6743,11 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
   if lane_resume_from_state "sv-tests/BMC"; then
     :
   else
+    sv_bmc_provenance_file="$OUT_DIR/sv-tests-bmc-abstraction-provenance.tsv"
+    : > "$sv_bmc_provenance_file"
     run_suite sv-tests-bmc \
       env OUT="$OUT_DIR/sv-tests-bmc-results.txt" \
+      BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
@@ -6725,6 +6766,10 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/sv-tests-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
+      fi
+      bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$sv_bmc_provenance_file")"
+      if [[ -n "$bmc_provenance_summary" ]]; then
+        summary="${summary} ${bmc_provenance_summary}"
       fi
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
@@ -6759,8 +6804,11 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
   if lane_resume_from_state "verilator-verification/BMC"; then
     :
   else
+    verilator_bmc_provenance_file="$OUT_DIR/verilator-bmc-abstraction-provenance.tsv"
+    : > "$verilator_bmc_provenance_file"
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
+      BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
@@ -6779,6 +6827,10 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       bmc_case_summary="$(summarize_bmc_case_file "$OUT_DIR/verilator-bmc-results.txt")"
       if [[ -n "$bmc_case_summary" ]]; then
         summary="${summary} ${bmc_case_summary}"
+      fi
+      bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$verilator_bmc_provenance_file")"
+      if [[ -n "$bmc_provenance_summary" ]]; then
+        summary="${summary} ${bmc_provenance_summary}"
       fi
       record_result_with_summary "verilator-verification" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
     fi
@@ -6813,6 +6865,8 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
   if lane_resume_from_state "yosys/tests/sva/BMC"; then
     :
   else
+    yosys_bmc_provenance_file="$OUT_DIR/yosys-bmc-abstraction-provenance.tsv"
+    : > "$yosys_bmc_provenance_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -6820,6 +6874,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     yosys_bmc_env=(OUT="$OUT_DIR/yosys-bmc-results.txt"
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
+      BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
       yosys_bmc_env+=(BMC_ASSUME_KNOWN_INPUTS=1)
@@ -6833,7 +6888,12 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       failures=$(echo "$line" | sed -n 's/.*failures=\([0-9]\+\).*/\1/p')
       skipped=$(echo "$line" | sed -n 's/.*skipped=\([0-9]\+\).*/\1/p')
       pass=$((total - failures - skipped))
-      record_result "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped"
+      summary="total=${total} pass=${pass} fail=${failures} xfail=0 xpass=0 error=0 skip=${skipped}"
+      bmc_provenance_summary="$(summarize_bmc_abstraction_provenance_file "$yosys_bmc_provenance_file")"
+      if [[ -n "$bmc_provenance_summary" ]]; then
+        summary="${summary} ${bmc_provenance_summary}"
+      fi
+      record_result_with_summary "yosys/tests/sva" "BMC" "$total" "$pass" "$failures" 0 0 0 "$skipped" "$summary"
     fi
   fi
 fi
@@ -8759,6 +8819,31 @@ def collect_failure_cases(out_dir: Path, summary_rows):
             cases.setdefault(key, set()).add("__aggregate__")
     return {key: ";".join(sorted(values)) for key, values in cases.items()}
 
+def collect_bmc_abstraction_provenance(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-abstraction-provenance.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-abstraction-provenance.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-abstraction-provenance.tsv"),
+    ]
+    provenance = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                token = parts[2].strip()
+                if not token:
+                    continue
+                provenance.setdefault(key, set()).add(token)
+    return {key: ";".join(sorted(values)) for key, values in provenance.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -8784,6 +8869,7 @@ def compute_pass_rate(total: int, passed: int, xfail: int, skipped: int) -> floa
     return ((passed + xfail) * 100.0) / eligible
 
 failure_cases = collect_failure_cases(out_dir, rows)
+bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
 
 baseline = {}
 if baseline_path.exists():
@@ -8816,6 +8902,7 @@ if baseline_path.exists():
                 'pass_rate': pass_rate,
                 'result': row.get('result', ''),
                 'failure_cases': row.get('failure_cases', ''),
+                'bmc_abstraction_provenance': row.get('bmc_abstraction_provenance', ''),
             }
 
 for row in rows:
@@ -8842,6 +8929,7 @@ for row in rows:
         'pass_rate': f"{pass_rate:.3f}",
         'result': row['summary'],
         'failure_cases': failure_cases.get((row['suite'], row['mode']), ''),
+        'bmc_abstraction_provenance': bmc_abstraction_provenance.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -8862,6 +8950,7 @@ with baseline_path.open('w', newline='') as f:
             'pass_rate',
             'result',
             'failure_cases',
+            'bmc_abstraction_provenance',
         ],
         delimiter='\t',
     )
@@ -8919,6 +9008,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_FAILURE_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_TIMEOUT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
+      "$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" == "1" || \
       "$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" == "1" || \
@@ -8933,6 +9023,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_FAILURE_CASES="$FAIL_ON_NEW_FAILURE_CASES" \
   FAIL_ON_NEW_BMC_TIMEOUT_CASES="$FAIL_ON_NEW_BMC_TIMEOUT_CASES" \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
+  FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE="$FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF="$FAIL_ON_NEW_E2E_MODE_DIFF_STATUS_DIFF" \
   FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS="$FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_PASS" \
@@ -9046,6 +9137,30 @@ def collect_failure_cases(out_dir: Path, summary_rows):
             cases.setdefault(key, set()).add("__aggregate__")
     return cases
 
+def collect_bmc_abstraction_provenance(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-abstraction-provenance.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-abstraction-provenance.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-abstraction-provenance.tsv"),
+    ]
+    provenance = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                token = parts[2].strip()
+                if token:
+                    provenance.setdefault(key, set()).add(token)
+    return provenance
+
 summary = {}
 with summary_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -9054,6 +9169,9 @@ with summary_path.open() as f:
         summary[key] = row
 
 current_failure_cases = collect_failure_cases(Path(os.environ["OUT_DIR"]), summary)
+current_bmc_abstraction_provenance = collect_bmc_abstraction_provenance(
+    Path(os.environ["OUT_DIR"])
+)
 
 history = {}
 with baseline_path.open() as f:
@@ -9074,6 +9192,9 @@ fail_on_new_bmc_timeout_cases = (
 )
 fail_on_new_bmc_unknown_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_UNKNOWN_CASES", "0") == "1"
+)
+fail_on_new_bmc_abstraction_provenance = (
+    os.environ.get("FAIL_ON_NEW_BMC_ABSTRACTION_PROVENANCE", "0") == "1"
 )
 fail_on_new_e2e_mode_diff_strict_only_fail = (
     os.environ.get("FAIL_ON_NEW_E2E_MODE_DIFF_STRICT_ONLY_FAIL", "0") == "1"
@@ -9212,6 +9333,31 @@ for key, current_row in summary.items():
                 if current_unknown > baseline_unknown:
                     gate_errors.append(
                         f"{suite} {mode}: bmc_unknown_cases increased ({baseline_unknown} -> {current_unknown}, window={baseline_window})"
+                    )
+        if fail_on_new_bmc_abstraction_provenance:
+            baseline_provenance_raw = [
+                row.get("bmc_abstraction_provenance") for row in compare_rows
+            ]
+            # Legacy baseline rows may not carry provenance telemetry.
+            if any(raw is not None for raw in baseline_provenance_raw):
+                baseline_provenance_set = set()
+                for raw in baseline_provenance_raw:
+                    if raw is None or raw == "":
+                        continue
+                    for token in raw.split(";"):
+                        token = token.strip()
+                        if token:
+                            baseline_provenance_set.add(token)
+                current_provenance_set = current_bmc_abstraction_provenance.get(
+                    key, set()
+                )
+                new_tokens = sorted(current_provenance_set - baseline_provenance_set)
+                if new_tokens:
+                    sample = ", ".join(new_tokens[:3])
+                    if len(new_tokens) > 3:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new abstraction provenance tokens observed (baseline={len(baseline_provenance_set)} current={len(current_provenance_set)}, window={baseline_window}): {sample}"
                     )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))
