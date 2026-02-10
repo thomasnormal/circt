@@ -1,5 +1,31 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 942 - February 10, 2026
+
+### BMC ExternalizeRegisters Hardening: Reject Only Used Multi-Clock Conflicts
+
+1. Updated single-clock validation in
+   `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`:
+   - removed eager module-input scan that rejected modules with multiple
+     `!seq.clock` ports even when all externalized registers used one domain.
+   - moved conflict detection to per-register externalization with source-aware
+     checks (`bmc_reg_clock_sources` when available; clock names as fallback).
+   - behavior now rejects only real used-register clock divergence unless
+     `--allow-multi-clock` is enabled.
+2. Added regression coverage:
+   - `test/Tools/circt-bmc/externalize-registers-single-clock-used.mlir`
+   - verifies a module with two clock inputs passes in single-clock mode when
+     both externalized registers use `%clk0`.
+3. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/externalize-registers*.mlir`
+     -> `10 passed`.
+   - External formal sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-extregs-usedclk-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests/BMC|verilator-verification/BMC|verilator-verification/LEC)$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5` (known baseline),
+          `verilator-verification/LEC pass=17 fail=0`.
+
 ## Iteration 941 - February 10, 2026
 
 ### BMC SMTLIB Hardening: Live-Cone LLVM Rejection in `verif.bmc`
