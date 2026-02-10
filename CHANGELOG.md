@@ -1,5 +1,78 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 932 - February 10, 2026
+
+### Function Phase IMP Sequencing + APB Dual-Top EXIT 0
+
+1. **Function phase IMP sequencing fix**:
+   - UVM function phase IMPs (build, connect, end_of_elaboration, start_of_simulation)
+     have `predecessors=0` in the phase graph, causing arbitrary fork execution order.
+   - Intercept `process_phase` in `interpretFuncBody`: read IMP pointer from phase field
+     offset 36, check if predecessor IMP completed, block using currentOp-reset pattern
+     (save call_indirect iterator, schedule delta wake-up to re-execute).
+   - `finish_phase` interceptor marks IMPs as completed via `functionPhaseImpCompleted` map.
+   - Result: correct build→connect→EOE→SOS ordering in dual-top simulation.
+
+2. **APB dual-top EXIT 0 milestone**:
+   - Simulation completes at 42.4 ns with clean exit code 0.
+   - BFM driver active: "drive_apb_idle state = IDLE and state = 1".
+   - Both master and slave monitor proxies initialized.
+   - 0 UVM_FATAL, 0 UVM_ERROR. Coverage infrastructure registers (8 coverpoints).
+   - Remaining gap: seq_item_port not connected → driver can't obtain sequences → 0% coverage.
+
+3. **Debug output cleanup**:
+   - Removed 12 DIAG-* diagnostic print blocks from LLHDProcessInterpreter.cpp:
+     PHASE, SYNC, WAIT-STATE, HOPPER, PIPELINE, START, RESUME, DRV, WAIT, CDB,
+     SHADOW, PROP, TRACE.
+
+4. **Validation**:
+   - circt-sim lit tests: 224/224 pass (100%).
+   - APB dual-top: `timeout 120 circt-sim build/apb_avip_dual.mlir --top hvl_top --top hdl_top --max-time=500000000` → EXIT 0, 42.4 ns sim time.
+   - APB single-top: reaches run_phase correctly, exits 1 (expected: no BFMs available).
+
+## Iteration 931 - February 10, 2026
+
+### BMC Strict-Gate Hardening: Case-Reason Drop-Remark Drift
+
+1. Added reason-level dropped-syntax artifact export to BMC runners:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_verilator_verification_circt_bmc.sh`
+   - `utils/run_yosys_sva_circt_bmc.sh`
+   via new optional output:
+   `BMC_DROP_REMARK_REASONS_OUT`.
+2. Reason normalization is now runner-local for stability:
+   - strip common `<file>:<line>[:<col>]:` prefix
+   - remove leading `warning:` marker
+   - collapse whitespace, normalize digits, sanitize `;`
+   - cap reason length for baseline/TSV stability.
+3. Updated `utils/run_formal_all.sh`:
+   - passes lane-local reason artifact paths for all BMC lanes:
+     `sv-tests/BMC`, `sv-tests-uvm/BMC_SEMANTICS`,
+     `verilator-verification/BMC`, `yosys/tests/sva/BMC`.
+   - baseline updates now persist reason tuples in:
+     `bmc_drop_remark_case_reason_ids`
+     (`case_id::normalized_reason` entries).
+   - added strict-gate option:
+     `--fail-on-new-bmc-drop-remark-case-reasons`
+   - `--strict-gate` now enables this reason-tuple drift check.
+4. Added/updated regressions:
+   - `test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-reasons.test`
+   - `test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test`
+     (checks reason artifact output)
+   - `test/Tools/run-yosys-sva-bmc-drop-remarks.test`
+     (checks reason artifact output + existing dedup behavior)
+5. Validation:
+   - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_bmc.sh utils/run_verilator_verification_circt_bmc.sh utils/run_yosys_sva_circt_bmc.sh`
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-reasons.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-case-ids.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases-verilator.test test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test test/Tools/run-yosys-sva-bmc-drop-remarks.test`
+     -> `6 passed`.
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate*.test`
+     -> `27 passed`.
+   - focused external sweeps:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-reasons-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-drop-reasons-sv-... --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+     -> lanes remained stable with `bmc_drop_remark_cases=0` and emitted
+        `*-drop-remark-{cases,reasons}.tsv` artifacts.
+
 ## Iteration 930 - February 10, 2026
 
 ### BMC Strict-Gate Hardening: Per-Case Drop-Remark Drift Gate

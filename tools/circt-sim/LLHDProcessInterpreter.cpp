@@ -646,6 +646,20 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // addresses are known.
   createInterfaceFieldShadowSignals();
 
+  // Debug: report interfaceFieldSignals population
+  if (!interfaceFieldSignals.empty()) {
+    llvm::errs() << "[circt-sim] Interface field signals: "
+                 << interfaceFieldSignals.size() << " entries\n";
+    for (auto &[addr, sigId] : interfaceFieldSignals) {
+      llvm::errs() << "  addr=0x" << llvm::format_hex(addr, 16)
+                   << " -> signal " << sigId;
+      auto nameIt = signalIdToName.find(sigId);
+      if (nameIt != signalIdToName.end())
+        llvm::errs() << " (" << nameIt->second << ")";
+      llvm::errs() << "\n";
+    }
+  }
+
   // Set up propagation links using recorded child module-level store patterns.
   // childModuleCopyPairs records (srcAddr, destAddr) pairs from store ops that
   // copy parent interface fields to child interface fields during init.
@@ -668,6 +682,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                  << ") -> signal " << childSigId << " (0x"
                  << llvm::format_hex(destAddr, 16) << ")\n");
     }
+    llvm::errs() << "[circt-sim] Established " << interfaceFieldPropagation.size()
+                 << " interface field propagation links from "
+                 << childModuleCopyPairs.size() << " copy pairs\n";
     LLVM_DEBUG(llvm::dbgs()
                << "  Established " << interfaceFieldPropagation.size()
                << " interface field propagation links from "
@@ -11651,7 +11668,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
             valueBits.insertBits(llvm::APInt(8, valueData[i]), i * 8);
 
-
           // Write value to output ref via signal or memory
           SignalId sigId2 = resolveSignalId(outputRef);
           if (sigId2 != 0)
@@ -11751,6 +11767,120 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       calleeName.contains("::set_severity_file")) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                             << " intercepted (no-op)\n");
+    return success();
+  }
+
+  // Intercept uvm_report_handler::get_verbosity_level to avoid failures when
+  // associative array fields (severity_id_verbosities, id_verbosities) are not
+  // fully initialized or when terminationRequested causes early function exit.
+  // In the default case (no per-id/per-severity overrides), this returns
+  // m_max_verbosity_level which is UVM_MEDIUM (200).
+  if (calleeName.contains("uvm_report_handler") &&
+      calleeName.contains("::get_verbosity_level") &&
+      callOp.getNumResults() == 1) {
+    // Read m_max_verbosity_level from the handler object (field 1, offset after
+    // uvm_object base). Default is UVM_MEDIUM = 200.
+    int32_t verbosity = 200; // UVM_MEDIUM default
+    InterpretedValue handlerVal = getValue(procId, callOp.getOperand(0));
+    if (!handlerVal.isX()) {
+      uint64_t handlerAddr = handlerVal.getUInt64();
+      uint64_t off = 0;
+      MemoryBlock *blk = findMemoryBlockByAddress(handlerAddr, procId, &off);
+      if (blk && blk->initialized) {
+        // uvm_object base size: uvm_void(i32=4, ptr=8) + string(ptr=8, i64=8) + i32=4 = 32
+        // field 1 (m_max_verbosity_level) is at offset 32 from handler base
+        size_t fieldOff = off + 32;
+        if (fieldOff + 4 <= blk->data.size()) {
+          verbosity = 0;
+          for (int i = 0; i < 4; ++i)
+            verbosity |= static_cast<int32_t>(blk->data[fieldOff + i]) << (i * 8);
+        }
+      }
+    }
+    setValue(procId, callOp.getResult(0),
+            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(verbosity))));
+    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
+                            << " intercepted → " << verbosity << "\n");
+    return success();
+  }
+
+  // Intercept uvm_report_handler::get_action to return default severity actions.
+  // In the default case, returns severity_actions[severity] from the built-in
+  // defaults set during initialize().
+  if (calleeName.contains("uvm_report_handler") &&
+      calleeName.contains("::get_action") &&
+      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 2) {
+    // severity is arg[1], an i2 value: UVM_INFO=0, UVM_WARNING=1, UVM_ERROR=2, UVM_FATAL=3
+    InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));
+    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
+    // Default actions set by initialize():
+    //   UVM_INFO=DISPLAY(1), UVM_WARNING=DISPLAY(1),
+    //   UVM_ERROR=DISPLAY|COUNT(9), UVM_FATAL=DISPLAY|EXIT(33)
+    int32_t action;
+    switch (sev) {
+    case 0: action = 1; break;   // UVM_INFO → UVM_DISPLAY
+    case 1: action = 1; break;   // UVM_WARNING → UVM_DISPLAY
+    case 2: action = 9; break;   // UVM_ERROR → UVM_DISPLAY | UVM_COUNT
+    case 3: action = 33; break;  // UVM_FATAL → UVM_DISPLAY | UVM_EXIT
+    default: action = 1; break;
+    }
+    setValue(procId, callOp.getResult(0),
+            InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(action))));
+    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
+                            << " intercepted (sev=" << sev << ") → " << action
+                            << "\n");
+    return success();
+  }
+
+  // Intercept uvm_sequence_item::get_root_sequence to prevent infinite loops
+  // when the parent_sequence chain has cycles (due to incomplete constructor
+  // initialization). Walk the parent chain with a depth limit and cycle
+  // detection, return the last non-null parent (or self if no parent).
+  if (calleeName.contains("get_root_sequence") &&
+      !calleeName.contains("_name") &&
+      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 1) {
+    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+    uint64_t current = selfVal.isX() ? 0 : selfVal.getUInt64();
+    uint64_t root = current;
+    // Parent sequence is at field [0, 5] of uvm_sequence_item.
+    // Byte offset: uvm_transaction(108) + i32(4) + i1(1) + i32(4) + ptr(8)
+    //            = 108 + 4 + 1 + 4 + 8 = 125
+    constexpr size_t kParentSeqOffset = 125;
+    llvm::SmallDenseSet<uint64_t, 32> visited;
+    visited.insert(current);
+    for (int depth = 0; depth < 100 && current != 0; ++depth) {
+      uint64_t off = 0;
+      MemoryBlock *blk = findBlockByAddress(current + kParentSeqOffset, off);
+      if (!blk)
+        blk = findMemoryBlockByAddress(current + kParentSeqOffset, procId,
+                                       &off);
+      if (!blk || off + 8 > blk->data.size())
+        break;
+      uint64_t parent = 0;
+      for (int i = 0; i < 8; ++i)
+        parent |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+      if (parent == 0)
+        break;
+      if (visited.count(parent))
+        break; // Cycle detected
+      visited.insert(parent);
+      root = parent;
+      current = parent;
+    }
+    setValue(procId, callOp.getResult(0),
+            InterpretedValue(llvm::APInt(64, root)));
+    return success();
+  }
+
+  // Intercept uvm_sequence_item::get_root_sequence_name to avoid cascading
+  // failures from get_root_sequence. Returns an empty string struct.
+  if (calleeName.contains("get_root_sequence_name") &&
+      callOp.getNumResults() == 1) {
+    if (isa<LLVM::LLVMStructType>(callOp.getResult(0).getType())) {
+      setValue(procId, callOp.getResult(0), InterpretedValue(0ULL, 128));
+    } else {
+      setValue(procId, callOp.getResult(0), InterpretedValue(0ULL, 64));
+    }
     return success();
   }
 
@@ -12945,6 +13075,155 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     return success();
   }
 
+
+  // Record function phase IMP addresses from their ::new calls.
+  // These are the singleton IMP objects for each function phase.
+  // Build the ordered sequence: build=0, connect=1, EOE=2, SOS=3.
+  if (funcName.find("::new") != std::string::npos &&
+      !args.empty() && !args[0].isX()) {
+    uint64_t impAddr = args[0].getUInt64();
+    int order = -1;
+    if (funcName.find("uvm_build_phase::new") != std::string::npos)
+      order = 0;
+    else if (funcName.find("uvm_connect_phase::new") != std::string::npos)
+      order = 1;
+    else if (funcName.find("uvm_end_of_elaboration_phase::new") != std::string::npos)
+      order = 2;
+    else if (funcName.find("uvm_start_of_simulation_phase::new") != std::string::npos)
+      order = 3;
+    if (order >= 0) {
+      functionPhaseImpOrder[impAddr] = order;
+      functionPhaseImpCompleted[impAddr] = false;
+      // Ensure sequence vector is large enough
+      if (functionPhaseImpSequence.size() <= static_cast<size_t>(order))
+        functionPhaseImpSequence.resize(order + 1, 0);
+      functionPhaseImpSequence[order] = impAddr;
+    }
+  }
+
+  // Intercept process_phase to enforce function phase IMP ordering.
+  // The UVM phase hopper schedules all function phase IMP nodes
+  // simultaneously (they have predecessors=0 in the phase graph).
+  // Without intervention, they execute in arbitrary fork order.
+  // We enforce the correct IEEE 1800.2 order:
+  //   build → connect → end_of_elaboration → start_of_simulation
+  // by blocking process_phase until the predecessor IMP has completed.
+  //
+  // process_phase is called from a sim.fork join_none child in run_phases,
+  // so callOp is at the process (fork region) level. We can use the
+  // currentOp-reset pattern to re-execute the call_indirect on wake-up.
+  if (funcName == "uvm_pkg::uvm_phase_hopper::process_phase") {
+    if (args.size() >= 2 && !args[1].isX() && callOp) {
+      uint64_t phaseAddr = args[1].getUInt64();
+      // Read the IMP pointer from phase field [2] at offset 36
+      // (uvm_object=32 bytes + i32 phase_type=4 bytes = 36)
+      uint64_t impAddr = 0;
+      {
+        uint64_t impOff = 0;
+        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 36, impOff);
+        if (impBlk && impOff + 8 <= impBlk->data.size()) {
+          for (int i = 0; i < 8; ++i)
+            impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
+                       << (i * 8);
+        }
+      }
+      // Read phase name for diagnostics
+      std::string ppName = "<unk>";
+      {
+        uint64_t nOff = 0;
+        MemoryBlock *nBlk = findBlockByAddress(phaseAddr + 12, nOff);
+        if (nBlk && nOff + 16 <= nBlk->data.size()) {
+          uint64_t nPtr = 0, nLen = 0;
+          for (int i = 0; i < 8; ++i)
+            nPtr |= static_cast<uint64_t>(nBlk->data[nOff + i]) << (i * 8);
+          for (int i = 0; i < 8; ++i)
+            nLen |= static_cast<uint64_t>(nBlk->data[nOff + 8 + i]) << (i * 8);
+          if (nPtr && nLen > 0 && nLen < 200) {
+            uint64_t sOff = 0;
+            MemoryBlock *sBlk = findBlockByAddress(nPtr, sOff);
+            if (sBlk && sOff + nLen <= sBlk->data.size())
+              ppName.assign(reinterpret_cast<const char *>(
+                  sBlk->data.data() + sOff), nLen);
+          }
+        }
+      }
+      llvm::errs() << "[PHASE-DBG] process_phase proc=" << procId
+                   << " phase='" << ppName << "' addr=0x"
+                   << llvm::format_hex(phaseAddr, 8)
+                   << " imp=0x" << llvm::format_hex(impAddr, 8) << "\n";
+      auto impOrderIt = functionPhaseImpOrder.find(impAddr);
+      if (impOrderIt != functionPhaseImpOrder.end()) {
+        int myOrder = impOrderIt->second;
+        if (myOrder > 0) {
+          uint64_t predImpAddr =
+              (static_cast<size_t>(myOrder - 1) < functionPhaseImpSequence.size())
+                  ? functionPhaseImpSequence[myOrder - 1]
+                  : 0;
+          if (predImpAddr != 0 && !functionPhaseImpCompleted[predImpAddr]) {
+            // Predecessor hasn't completed. Suspend and re-execute this
+            // call_indirect on the next delta step.
+            llvm::errs() << "[PHASE-DBG]   BLOCKED waiting for order="
+                         << (myOrder - 1) << " predImp=0x"
+                         << llvm::format_hex(predImpAddr, 8) << "\n";
+            auto &state = processStates[procId];
+            state.waiting = true;
+            auto callOpIt = mlir::Block::iterator(callOp);
+            SimTime currentTime = scheduler.getCurrentTime();
+            SimTime targetTime = currentTime.nextDelta();
+            scheduler.getEventScheduler().schedule(
+                targetTime, SchedulingRegion::Active,
+                Event([this, procId, callOpIt]() {
+                  auto &st = processStates[procId];
+                  st.waiting = false;
+                  st.currentOp = callOpIt;
+                  scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+                }));
+            return success();
+          }
+        }
+      }
+    }
+  }
+
+  // Trace all phase hopper pipeline functions for debugging
+  if (funcName.starts_with("uvm_pkg::uvm_phase_hopper::") &&
+      (funcName.contains("sync_phase") || funcName.contains("start_phase") ||
+       funcName.contains("execute_phase") || funcName.contains("end_phase") ||
+       funcName.contains("cleanup_phase") || funcName.contains("finish_phase") ||
+       funcName.contains("schedule_phase") || funcName.contains("run_phases"))) {
+    llvm::errs() << "[PHASE-DBG] " << funcName << " proc=" << procId << "\n";
+  }
+
+  // Intercept finish_phase to mark function phase IMPs as completed.
+  // This allows the next function phase IMP (blocked in process_phase
+  // above) to proceed.
+  if (funcName == "uvm_pkg::uvm_phase_hopper::finish_phase") {
+    if (args.size() >= 2 && !args[1].isX()) {
+      uint64_t phaseAddr = args[1].getUInt64();
+      // Read the IMP pointer from phase field [2] at offset 36
+      uint64_t impAddr = 0;
+      {
+        uint64_t impOff = 0;
+        MemoryBlock *impBlk = findBlockByAddress(phaseAddr + 36, impOff);
+        if (impBlk && impOff + 8 <= impBlk->data.size()) {
+          for (int i = 0; i < 8; ++i)
+            impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i])
+                       << (i * 8);
+        }
+      }
+      auto impOrderIt = functionPhaseImpOrder.find(impAddr);
+      if (impOrderIt != functionPhaseImpOrder.end()) {
+        functionPhaseImpCompleted[impAddr] = true;
+        LLVM_DEBUG(llvm::dbgs() << "  Function phase IMP order="
+                                << impOrderIt->second
+                                << " completed (addr=0x"
+                                << llvm::format_hex(impAddr, 16) << ")\n");
+      }
+    }
+    // Don't return success() - let finish_phase execute normally
+    // (it sets state=DONE and schedules successors)
+  }
+
   // Intercept uvm_phase_hopper::execute_phase for task phases.
   // The original MLIR uses a complex sim.fork join_any structure with 3
   // branches (phase_done monitor, objection poller, timeout). Due to
@@ -12959,16 +13238,43 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   if (funcName == "uvm_pkg::uvm_phase_hopper::execute_phase") {
     if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
-
+      // Read the phase name from memory to identify the phase
+      // uvm_phase extends uvm_object. uvm_object layout:
+      //   [0] = uvm_void (i32 class_id, ptr vtable) = 12 bytes
+      //   [1] = struct<(ptr, i64)> = name string (ptr + len) at offset 12
+      // So name ptr at offset 12, name len at offset 20
+      std::string phaseName = "<unknown>";
+      uint64_t nameOff = 0;
+      MemoryBlock *nameBlk =
+          findBlockByAddress(phaseAddr + 12, nameOff);
+      if (nameBlk && nameOff + 16 <= nameBlk->data.size()) {
+        uint64_t namePtr = 0;
+        for (int i = 0; i < 8; ++i)
+          namePtr |= static_cast<uint64_t>(nameBlk->data[nameOff + i])
+                     << (i * 8);
+        uint64_t nameLen = 0;
+        for (int i = 0; i < 8; ++i)
+          nameLen |= static_cast<uint64_t>(nameBlk->data[nameOff + 8 + i])
+                     << (i * 8);
+        if (namePtr != 0 && nameLen > 0 && nameLen < 200) {
+          uint64_t strOff = 0;
+          MemoryBlock *strBlk = findBlockByAddress(namePtr, strOff);
+          if (strBlk && strOff + nameLen <= strBlk->data.size()) {
+            phaseName.assign(
+                reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+                nameLen);
+          }
+        }
+      }
       // Track which phase is currently being executed
       currentExecutingPhaseAddr = phaseAddr;
 
       // Ensure we have an objection handle for this phase
       auto objIt = phaseObjectionHandles.find(phaseAddr);
       if (objIt == phaseObjectionHandles.end()) {
-        std::string phaseName = "phase_" + std::to_string(phaseAddr);
+        std::string pn = "phase_" + std::to_string(phaseAddr);
         MooreObjectionHandle handle = __moore_objection_create(
-            phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+            pn.c_str(), static_cast<int64_t>(pn.size()));
         phaseObjectionHandles[phaseAddr] = handle;
       }
 
@@ -13069,6 +13375,65 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         }
       }
     }
+  }
+
+  // Fix uvm_sequence_base::start initialization: ensure the semaphore mutex
+  // (field [0, 1]) and m_sequence_state (field [0, 2]) are properly initialized
+  // even if the constructor chain didn't complete. Without this fix, start()
+  // fails with SEQ_NOT_DONE because semaphore_try_get on a null handle returns
+  // 0 (failure). After fixing, fall through to execute the normal start() body
+  // which uses fork/join for proper blocking behavior.
+  if (funcName.contains("uvm_sequence_base") &&
+      funcName.contains("::start") && args.size() >= 3) {
+    uint64_t selfAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    if (selfAddr != 0) {
+      // uvm_sequence_base struct layout (UNALIGNED):
+      //   [0] = uvm_sequence_item (134 bytes)
+      //   [1] = ptr (m_sequence_state_mutex semaphore) @ offset 134
+      //   [2] = i32 (m_sequence_state) @ offset 142
+      constexpr size_t kSemOffset = 134;
+      constexpr size_t kStateOffset = 142;
+
+      // Fix semaphore: if null, create a new one with initial count 1
+      uint64_t semOff = 0;
+      MemoryBlock *blk = findBlockByAddress(selfAddr + kSemOffset, semOff);
+      if (!blk)
+        blk = findMemoryBlockByAddress(selfAddr + kSemOffset, procId, &semOff);
+      if (blk && semOff + 8 <= blk->data.size()) {
+        uint64_t semHandle = 0;
+        for (int i = 0; i < 8; ++i)
+          semHandle |= static_cast<uint64_t>(blk->data[semOff + i]) << (i * 8);
+        if (semHandle == 0) {
+          int64_t newSem = __moore_semaphore_create(1);
+          for (int i = 0; i < 8; ++i)
+            blk->data[semOff + i] =
+                static_cast<uint8_t>((newSem >> (i * 8)) & 0xFF);
+        }
+      }
+
+      // Fix state: if 0 (uninitialized), set to UVM_CREATED (1)
+      uint64_t stateOff = 0;
+      blk = findBlockByAddress(selfAddr + kStateOffset, stateOff);
+      if (!blk)
+        blk = findMemoryBlockByAddress(selfAddr + kStateOffset, procId,
+                                       &stateOff);
+      if (blk && stateOff + 4 <= blk->data.size()) {
+        uint32_t state = 0;
+        for (int i = 0; i < 4; ++i)
+          state |= static_cast<uint32_t>(blk->data[stateOff + i]) << (i * 8);
+        if (state == 0) {
+          uint32_t created = 1; // UVM_CREATED
+          for (int i = 0; i < 4; ++i)
+            blk->data[stateOff + i] =
+                static_cast<uint8_t>((created >> (i * 8)) & 0xFF);
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  start() init fix: set m_sequence_state to CREATED"
+                     << " for seq 0x" << llvm::format_hex(selfAddr, 16)
+                     << "\n");
+        }
+      }
+    }
+    // Fall through to execute normal start() body (with fork/join blocking)
   }
 
   Block &entryBlock = funcOp.getBody().front();
@@ -13197,6 +13562,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     // are still running after the simulation has been told to stop.
     // Skip during global init as sim.terminate can be triggered re-entrantly.
     if (terminationRequested && !inGlobalInit) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  terminationRequested: aborting function '"
+                 << funcOp.getName() << "' for process " << procId << "\n");
       cleanupTempMappings();
       return failure();
     }
@@ -14842,6 +15210,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
     // Register the wait sensitivity with the scheduler
     scheduler.suspendProcessForEvents(procId, waitList);
+    LLVM_DEBUG(llvm::dbgs() << "  wait_event: suspended process " << procId
+                            << " on " << waitList.size() << " signals\n");
   } else {
     // No signals found - try to set up memory-based event polling.
     // This is needed for UVM events stored as boolean fields in class instances.
@@ -17119,6 +17489,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                 << (condArg.isX() ? "X" : std::to_string(condArg.getUInt64()))
                                 << ") -> condition is "
                                 << (conditionTrue ? "true" : "false") << "\n");
+
+        // Trace wait_condition blocks for phase hopper debugging (procs 16-30)
+        if (!conditionTrue && procId >= 16 && procId <= 40) {
+          llvm::errs() << "[PHASE-DBG] wait_condition BLOCKING proc="
+                       << procId << "\n";
+        }
 
         if (conditionTrue) {
           // Condition is already true, continue immediately.

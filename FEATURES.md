@@ -60,7 +60,7 @@ All tests properly categorized in `utils/sv-tests-sim-expect.txt`:
 
 | Suite | Total | Pass | XFail | Notes |
 |-------|-------|------|-------|-------|
-| circt-sim | 223 | 223 | 0 | All pass; sequencer interface, analysis ports, resolveSignalId cast+probe tracing, VIF shadow signals, resolveDrivers multi-bit fix, randomize(null/var_list), stream unpack, constraint solver, per-object RNG, parametric coverage, VIF clock propagation |
+| circt-sim | 224 | 224 | 0 | All pass; sequencer interface, analysis ports, resolveSignalId cast+probe tracing, VIF shadow signals, resolveDrivers multi-bit fix, randomize(null/var_list), stream unpack, constraint solver, per-object RNG, parametric coverage, VIF clock propagation, function phase IMP sequencing |
 | MooreToCore | 124 | 122 | 2 | All pass; 2 XFAIL (array-locator-func-call, interface-timing-after-inlining) |
 | ImportVerilog | 268 | 268 | 0 | All pass; short-circuit &&/\|\|/->, virtual-iface-bind-override, SVA moore.past, covergroup iff-no-parens |
 
@@ -92,8 +92,8 @@ to commercial simulators like Cadence Xcelium.
 | `$fopen` / `$fwrite` | WORKS | Basic file operations |
 | Malloc / free | WORKS | Heap allocation with unaligned struct layout |
 | **Simulation Infrastructure** | | |
-| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top boots full UVM topology with BFM registration via config_db (no UVM_FATAL); agents, drivers, monitors, sequencers, scoreboards all constructed |
-| VIF task/function calls | MISSING | Virtual interface method dispatch to BFM interface tasks (e.g., `bfm_h.wait_for_preset_n()`) — current blocker for AVIP transaction flow |
+| Combined HdlTop+HvlTop | WORKS | Multi-top simulation; APB AVIP dual-top EXIT 0 at 42.4 ns; BFM driver active; 0 UVM errors; function phase IMP sequencing enforces build→connect→EOE→SOS order |
+| Function phase IMP sequencing | WORKS | Intercepts `process_phase` to block function phase IMPs until predecessor completes; `finish_phase` marks IMP done; currentOp-reset pattern for correct re-execution |
 | seq_item_port connection | MISSING | Driver proxy `seq_item_port` not connected to sequencer during `connect_phase`; prevents driver from obtaining sequences |
 | Shutdown cleanup | WORKS | `_exit(0)` skips expensive destructors for large designs |
 | Signal driving (`llhd.drv`) | WORKS | Blocking assignments via epsilon delay |
@@ -127,18 +127,19 @@ to commercial simulators like Cadence Xcelium.
 
 All 9 AVIPs use a proxy-BFM split architecture where `hvl_top` (UVM test/env/agents)
 communicates with `hdl_top` (clock/reset/BFM interfaces) via `uvm_config_db` virtual
-interface handles. APB has been recompiled for dual-top simulation and **boots fully
-without UVM_FATAL** — config_db handles flow correctly from hdl_top to hvl_top.
-**No real bus transactions flow yet** because driver proxy's `seq_item_port` is not
-connected to the sequencer and VIF task dispatch to BFM interfaces is not implemented.
+interface handles. APB has been recompiled for dual-top simulation and **exits cleanly
+(code 0)** at 42.4 ns sim time — BFM driver reaches idle state, both monitor proxies
+initialize, config_db handles flow correctly from hdl_top to hvl_top. **No real bus
+transactions flow yet** because driver proxy's `seq_item_port` is not connected to
+the sequencer, preventing the driver from obtaining sequences.
 
 Xcelium reference: APB `apb_8b_write_test` achieves 21-30% coverage with real SETUP/ACCESS
-bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, 42ps sim time,
-no UVM_FATAL but no transactions.
+bus transactions at 130ns sim time, 0 UVM errors. Our output: 0% coverage, 42.4 ns sim
+time, no UVM_FATAL, BFM driver active but no transactions.
 
 | AVIP | HvlTop | HdlTop | Combined | Status | Notes |
 |------|--------|--------|----------|--------|-------|
-| APB | Full topology | ✅ Dual-top | ✅ Boots | seq_item_port gap | config_db works; all agents/monitors/scoreboards constructed; 0% coverage |
+| APB | Full topology | ✅ Dual-top | ✅ EXIT 0 | seq_item_port gap | BFM driver active; 42.4 ns sim time; 0 UVM errors; 0% coverage (no transactions) |
 | AHB | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | No MLIR file available |
 | UART | Full phase lifecycle | Needs compile | Not tested | Needs dual-top MLIR | hvl_top-only exits 0 |
 | I2S | UVM_FATAL (stale) | Needs compile | Not tested | Stale MLIR | Pre-compiled MLIR has parse errors |
@@ -247,3 +248,5 @@ no UVM_FATAL but no transactions.
 | UVM resource_db read_by_name | `uvm_resource_db::read_by_name` intercepted for UVM resource lookup |
 | resolveDrivers() multi-bit fix | Fixed signal resolution for FourStateStruct `hw.struct<value, unknown>`: group drivers by full APInt value instead of just LSB; fixes clock signals never toggling in multi-driver scenarios |
 | VIF shadow signals | Interface field shadow signals: `createInterfaceFieldShadowSignals()` creates per-field signals, store interception drives shadows when memory written, sensitivity expansion adds field signals to process wait lists |
+| Function phase IMP sequencing | Intercepts `process_phase` for function phase IMPs (build/connect/EOE/SOS); blocks until predecessor IMP completes via `finish_phase` callback; uses currentOp-reset pattern (same as sim.fork join_any) for correct re-execution of call_indirect |
+| Debug output cleanup | Removed 12+ DIAG-* diagnostic print blocks from interpreter: PHASE, SYNC, WAIT-STATE, HOPPER, PIPELINE, START, RESUME, DRV, WAIT, CDB, SHADOW, PROP, TRACE |
