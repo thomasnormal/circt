@@ -68,6 +68,10 @@ Options:
                          Fail when any LEC summary counter starting with PREFIX
                          increases vs baseline for any `LEC*` lane
                          (repeatable)
+  --fail-on-new-lec-diag-keys
+                         Fail when new LEC diagnostic counter keys
+                         (`lec_diag_*_cases`) appear vs baseline for any
+                         `LEC*` lane
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1768,6 +1772,7 @@ FAIL_ON_ANY_LEC_DROP_REMARKS=0
 LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 declare -a FAIL_ON_NEW_LEC_COUNTER_KEYS=()
 declare -a FAIL_ON_NEW_LEC_COUNTER_PREFIXES=()
+FAIL_ON_NEW_LEC_DIAG_KEYS=0
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -2095,6 +2100,8 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_LEC_COUNTER_KEYS+=("$2"); shift 2 ;;
     --fail-on-new-lec-counter-prefix)
       FAIL_ON_NEW_LEC_COUNTER_PREFIXES+=("$2"); shift 2 ;;
+    --fail-on-new-lec-diag-keys)
+      FAIL_ON_NEW_LEC_DIAG_KEYS=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -4074,6 +4081,7 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_LEC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1
+  FAIL_ON_NEW_LEC_DIAG_KEYS=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -10932,6 +10940,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
       "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
+      "$FAIL_ON_NEW_LEC_DIAG_KEYS" == "1" || \
       "$FAIL_ON_ANY_LEC_DROP_REMARKS" == "1" || \
       -n "$LEC_COUNTER_KEYS_CSV" || \
       -n "$LEC_COUNTER_PREFIXES_CSV" || \
@@ -10964,6 +10973,7 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASES="$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
   FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
+  FAIL_ON_NEW_LEC_DIAG_KEYS="$FAIL_ON_NEW_LEC_DIAG_KEYS" \
   FAIL_ON_ANY_LEC_DROP_REMARKS="$FAIL_ON_ANY_LEC_DROP_REMARKS" \
   LEC_COUNTER_KEYS="$LEC_COUNTER_KEYS_CSV" \
   LEC_COUNTER_PREFIXES="$LEC_COUNTER_PREFIXES_CSV" \
@@ -11293,6 +11303,9 @@ fail_on_new_lec_drop_remark_case_ids = (
 )
 fail_on_new_lec_drop_remark_case_reasons = (
     os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS", "0") == "1"
+)
+fail_on_new_lec_diag_keys = (
+    os.environ.get("FAIL_ON_NEW_LEC_DIAG_KEYS", "0") == "1"
 )
 fail_on_any_lec_drop_remarks = (
     os.environ.get("FAIL_ON_ANY_LEC_DROP_REMARKS", "0") == "1"
@@ -11834,6 +11847,30 @@ for key, current_row in summary.items():
                 if current_drop_remark > baseline_drop_remark:
                     gate_errors.append(
                         f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
+                    )
+        if fail_on_new_lec_diag_keys:
+            baseline_diag_keys = set()
+            for counts in parsed_counts:
+                for counter_key in counts.keys():
+                    if counter_key.startswith("lec_diag_") and counter_key.endswith("_cases"):
+                        baseline_diag_keys.add(counter_key)
+            # Under global strict-gate, avoid churn against legacy baselines
+            # that predate explicit LEC diag counter emission.
+            should_enforce_diag_key_drift = bool(baseline_diag_keys) or not strict_gate
+            if should_enforce_diag_key_drift:
+                current_diag_keys = {
+                    counter_key
+                    for counter_key in current_counts.keys()
+                    if counter_key.startswith("lec_diag_")
+                    and counter_key.endswith("_cases")
+                }
+                new_diag_keys = sorted(current_diag_keys - baseline_diag_keys)
+                if new_diag_keys:
+                    sample = ", ".join(new_diag_keys[:3])
+                    if len(new_diag_keys) > 3:
+                        sample += ", ..."
+                    gate_errors.append(
+                        f"{suite} {mode}: new LEC diagnostic keys observed (baseline={len(baseline_diag_keys)} current={len(current_diag_keys)}, window={baseline_window}): {sample}"
                     )
         if lec_counter_keys:
             for counter_key in lec_counter_keys:
