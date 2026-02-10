@@ -4708,7 +4708,14 @@ static int runNativeMatrixDispatch(const char *argv0,
   std::string resultsPath = joinPath2(cfg.outDir, "results.tsv");
   if (auto v = getLastOptionValue(args, "--results-file"))
     resultsPath = *v;
+  std::string gateSummaryPath = joinPath2(cfg.outDir, "gate_summary.tsv");
+  if (auto v = getLastOptionValue(args, "--gate-summary-file"))
+    gateSummaryPath = *v;
   if (!ensureParentDirForFile(resultsPath, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  if (!ensureParentDirForFile(gateSummaryPath, error)) {
     errs() << error << "\n";
     return 1;
   }
@@ -4744,6 +4751,7 @@ static int runNativeMatrixDispatch(const char *argv0,
   uint64_t lanePass = 0;
   uint64_t laneFail = 0;
   bool stopOnFail = hasOptionFlag(args, "--stop-on-fail");
+  StringMap<uint64_t> gateCounts;
 
   auto maybeAddArg = [](SmallVectorImpl<std::string> &cmd, StringRef flag,
                         const std::string &value) {
@@ -4813,6 +4821,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                    "CONFIG_ERROR", "missing_required_lane_fields");
       ++laneFail;
+      gateCounts["FAIL"]++;
       if (stopOnFail)
         break;
       continue;
@@ -4960,6 +4969,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                    "CONFIG_ERROR", "invalid_lane_boolean_override");
       ++laneFail;
+      gateCounts["FAIL"]++;
       if (stopOnFail)
         break;
       continue;
@@ -4980,6 +4990,7 @@ static int runNativeMatrixDispatch(const char *argv0,
       writeLaneRow(laneID, "FAIL", 1, "-", "FAIL", laneWorkDir, "-", "-",
                    "DISPATCH_ERROR", "cover_invocation_failed");
       ++laneFail;
+      gateCounts["FAIL"]++;
       if (stopOnFail)
         break;
       continue;
@@ -5014,6 +5025,7 @@ static int runNativeMatrixDispatch(const char *argv0,
                  pass ? "PASS" : "FAIL", laneWorkDir,
                  sys::fs::exists(metricsPath) ? metricsPath : "-",
                  sys::fs::exists(summaryPath) ? summaryPath : "-", "-", "-");
+    gateCounts[pass ? "PASS" : "FAIL"]++;
     if (pass)
       ++lanePass;
     else
@@ -5023,7 +5035,26 @@ static int runNativeMatrixDispatch(const char *argv0,
   }
 
   out.close();
+  std::error_code gateEC;
+  raw_fd_ostream gateOut(gateSummaryPath, gateEC, sys::fs::OF_Text);
+  if (gateEC) {
+    errs() << "circt-mut matrix: failed to open gate summary file: "
+           << gateSummaryPath << ": " << gateEC.message() << "\n";
+    return 1;
+  }
+  gateOut << "gate_status\tcount\n";
+  SmallVector<std::string, 8> gates;
+  gates.reserve(gateCounts.size());
+  for (const auto &it : gateCounts)
+    gates.push_back(it.getKey().str());
+  llvm::sort(gates);
+  for (const auto &gate : gates)
+    gateOut << gate << '\t' << gateCounts[gate] << '\n';
+  gateOut.close();
+
   outs() << "native_matrix_dispatch_results_tsv\t" << resultsPath << "\n";
+  outs() << "native_matrix_dispatch_gate_summary_tsv\t" << gateSummaryPath
+         << "\n";
   outs() << "native_matrix_dispatch_lanes\t" << laneTotal << "\n";
   outs() << "native_matrix_dispatch_pass\t" << lanePass << "\n";
   outs() << "native_matrix_dispatch_fail\t" << laneFail << "\n";

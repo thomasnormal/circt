@@ -127,8 +127,7 @@ See CHANGELOG.md on recent progress.
     bundles (`formal-regression-matrix-lane-drift-nightly|strict`), but
     native matrix lane scheduling is only partially migrated:
     `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
-    parallelism, lane-level gate overrides, and matrix gate-summary parity are
-    still script-backed.
+    parallelism and lane-level gate override parity are still script-backed.
   - Wire the composite matrix policy bundles into CI defaults for
     nightly/strict matrix report jobs.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring
@@ -145,6 +144,11 @@ See CHANGELOG.md on recent progress.
     - `verilator-verification` BMC/LEC and `yosys/tests/sva` LEC direct runner
       scripts now require explicit `TEST_FILTER` (no implicit full-suite
       fallback).
+    - `run_formal_all.sh` now also requires explicit OpenTitan lane filters
+      when those lanes are enabled:
+      `--opentitan-lec-impl-filter` for `opentitan/LEC|LEC_STRICT`,
+      `--opentitan-e2e-impl-filter` for
+      `opentitan/E2E|E2E_STRICT|E2E_MODE_DIFF`.
     - remaining migration step: align `yosys/tests/sva` BMC direct runner to
       the same explicit-filter contract after its larger lit-suite callsite
       update.

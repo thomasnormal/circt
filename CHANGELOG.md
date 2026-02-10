@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 979 - February 10, 2026
+
+### `circt-mut matrix`: Native Dispatch Gate-Summary Parity
+
+1. Extended native matrix dispatch in `tools/circt-mut/circt-mut.cpp` to emit
+   gate summary artifacts with script-compatible defaults:
+   - default `<out-dir>/gate_summary.tsv`
+   - optional `--gate-summary-file`
+2. Added native dispatch telemetry row:
+   - `native_matrix_dispatch_gate_summary_tsv`
+3. Added regression coverage:
+   - `test/Tools/circt-mut-matrix-native-dispatch-basic.test`
+     now validates gate-summary export and counts.
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-matrix-native-dispatch-basic.test test/Tools/circt-mut-matrix-native-dispatch-conflict.test`: PASS (2/2)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test test/Tools/circt-mut-matrix-*.test test/Tools/circt-mut-*.test`: PASS (287/287)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-native-matrix-gates-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --opentitan-lec-impl-filter '.*' --lec-accept-xprop-only`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator/yosys BMC FAIL, verilator/yosys/opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 978 - February 10, 2026
 
 ### `circt-mut matrix`: Native Lane-Dispatch Scaffold (Opt-In)
