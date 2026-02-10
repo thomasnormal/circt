@@ -904,17 +904,32 @@ run_lane() {
   local lane_generated_mutations_cache_saved_runtime_ns="0"
   local lane_generated_mutations_cache_lock_wait_ns="0"
   local lane_generated_mutations_cache_lock_contended="0"
+  local config_error_reason="-"
   local lane_mode_counts_enabled=0
   local lane_mode_weights_enabled=0
   local lane_mode_counts_total=0
   local -a cmd=()
 
   lane_write_status() {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" \
       "$lane_generated_mutations_cache_status" "$lane_generated_mutations_cache_hit" \
       "$lane_generated_mutations_cache_miss" "$lane_generated_mutations_cache_saved_runtime_ns" \
-      "$lane_generated_mutations_cache_lock_wait_ns" "$lane_generated_mutations_cache_lock_contended" > "$lane_status_file"
+      "$lane_generated_mutations_cache_lock_wait_ns" "$lane_generated_mutations_cache_lock_contended" \
+      "$config_error_reason" > "$lane_status_file"
+  }
+
+  lane_config_error() {
+    local reason="$1"
+    gate="CONFIG_ERROR"
+    lane_status="FAIL"
+    rc=1
+    if [[ -n "$reason" ]]; then
+      config_error_reason="$reason"
+    else
+      config_error_reason="-"
+    fi
+    lane_write_status
   }
 
   mkdir -p "$lane_dir"
@@ -934,20 +949,17 @@ run_lane() {
   fi
   lane_skip_baseline="$(resolve_bool_override "${LANE_SKIP_BASELINE[$i]}" "$SKIP_BASELINE")"
   if [[ "$lane_skip_baseline" == "invalid" ]]; then
-    gate="CONFIG_ERROR"
-    lane_write_status
+    lane_config_error "Invalid lane skip_baseline override (expected 1|0|true|false|yes|no|-)."
     return 0
   fi
   lane_fail_on_undetected="$(resolve_bool_override "${LANE_FAIL_ON_UNDETECTED[$i]}" "$FAIL_ON_UNDETECTED")"
   if [[ "$lane_fail_on_undetected" == "invalid" ]]; then
-    gate="CONFIG_ERROR"
-    lane_write_status
+    lane_config_error "Invalid lane fail_on_undetected override (expected 1|0|true|false|yes|no|-)."
     return 0
   fi
   lane_fail_on_errors="$(resolve_bool_override "${LANE_FAIL_ON_ERRORS[$i]}" "$FAIL_ON_ERRORS")"
   if [[ "$lane_fail_on_errors" == "invalid" ]]; then
-    gate="CONFIG_ERROR"
-    lane_write_status
+    lane_config_error "Invalid lane fail_on_errors override (expected 1|0|true|false|yes|no|-)."
     return 0
   fi
 
@@ -966,8 +978,7 @@ run_lane() {
   elif [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
     cmd+=(--generate-mutations "${GENERATE_COUNT[$i]}")
   else
-    gate="CONFIG_ERROR"
-    lane_write_status
+    lane_config_error "Lane is missing mutation input (provide mutations_file or generate_count)."
     return 0
   fi
 
@@ -977,8 +988,7 @@ run_lane() {
   fi
   if [[ -n "$lane_reuse_pair_file" ]]; then
     if [[ ! -f "$lane_reuse_pair_file" ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Lane reuse_pair_file not found: $lane_reuse_pair_file"
       return 0
     fi
     cmd+=(--reuse-pair-file "$lane_reuse_pair_file")
@@ -990,8 +1000,7 @@ run_lane() {
   fi
   if [[ -n "$lane_reuse_summary_file" ]]; then
     if [[ ! -f "$lane_reuse_summary_file" ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Lane reuse_summary_file not found: $lane_reuse_summary_file"
       return 0
     fi
     cmd+=(--reuse-summary-file "$lane_reuse_summary_file")
@@ -999,8 +1008,7 @@ run_lane() {
 
   if [[ "${GENERATE_COUNT[$i]}" != "-" && -n "${GENERATE_COUNT[$i]}" ]]; then
     if ! [[ "${GENERATE_COUNT[$i]}" =~ ^[1-9][0-9]*$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane generate_count value: ${GENERATE_COUNT[$i]} (expected positive integer)."
       return 0
     fi
     lane_mutations_modes="${MUTATIONS_MODES[$i]}"
@@ -1028,36 +1036,30 @@ run_lane() {
       lane_mutations_select="$DEFAULT_MUTATIONS_SELECT"
     fi
     if ! validate_mode_list_csv "lane mutations_modes" "$lane_mutations_modes"; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "$VALIDATION_ERROR"
       return 0
     fi
     if ! validate_profile_list_csv "lane mutations_profiles" "$lane_mutations_profiles"; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "$VALIDATION_ERROR"
       return 0
     fi
     if ! parse_mode_allocation_csv "lane mutations_mode_counts" "$lane_mutations_mode_counts" "COUNT"; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "$VALIDATION_ERROR"
       return 0
     fi
     lane_mode_counts_enabled="$PARSED_ALLOCATION_ENABLED"
     lane_mode_counts_total="$PARSED_ALLOCATION_TOTAL"
     if ! parse_mode_allocation_csv "lane mutations_mode_weights" "$lane_mutations_mode_weights" "WEIGHT"; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "$VALIDATION_ERROR"
       return 0
     fi
     lane_mode_weights_enabled="$PARSED_ALLOCATION_ENABLED"
     if [[ "$lane_mode_counts_enabled" -eq 1 && "$lane_mode_weights_enabled" -eq 1 ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Lane uses both mutations_mode_counts and mutations_mode_weights; choose one."
       return 0
     fi
     if [[ "$lane_mode_counts_enabled" -eq 1 && "$lane_mode_counts_total" -ne "${GENERATE_COUNT[$i]}" ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Lane mutations_mode_counts total (${lane_mode_counts_total}) must equal generate_count (${GENERATE_COUNT[$i]})."
       return 0
     fi
     if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
@@ -1069,8 +1071,7 @@ run_lane() {
     fi
     if [[ -n "$lane_mutations_seed" ]]; then
       if ! [[ "$lane_mutations_seed" =~ ^[0-9]+$ ]]; then
-        gate="CONFIG_ERROR"
-        lane_write_status
+        lane_config_error "Invalid lane mutations_seed value: $lane_mutations_seed"
         return 0
       fi
       cmd+=(--mutations-seed "$lane_mutations_seed")
@@ -1124,8 +1125,7 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_timeout_seconds" ]]; then
     if ! [[ "$lane_global_propagate_timeout_seconds" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane global_propagate_timeout_seconds value: $lane_global_propagate_timeout_seconds"
       return 0
     fi
     cmd+=(--formal-global-propagate-timeout-seconds "$lane_global_propagate_timeout_seconds")
@@ -1136,8 +1136,7 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_lec_timeout_seconds" ]]; then
     if ! [[ "$lane_global_propagate_lec_timeout_seconds" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane global_propagate_lec_timeout_seconds value: $lane_global_propagate_lec_timeout_seconds"
       return 0
     fi
     cmd+=(--formal-global-propagate-lec-timeout-seconds "$lane_global_propagate_lec_timeout_seconds")
@@ -1148,8 +1147,7 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_bmc_timeout_seconds" ]]; then
     if ! [[ "$lane_global_propagate_bmc_timeout_seconds" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane global_propagate_bmc_timeout_seconds value: $lane_global_propagate_bmc_timeout_seconds"
       return 0
     fi
     cmd+=(--formal-global-propagate-bmc-timeout-seconds "$lane_global_propagate_bmc_timeout_seconds")
@@ -1233,8 +1231,7 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_bmc_bound" ]]; then
     if ! [[ "$lane_global_propagate_bmc_bound" =~ ^[1-9][0-9]*$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane global_propagate_bmc_bound value: $lane_global_propagate_bmc_bound"
       return 0
     fi
     cmd+=(--formal-global-propagate-bmc-bound "$lane_global_propagate_bmc_bound")
@@ -1278,8 +1275,7 @@ run_lane() {
   fi
   if [[ -n "$lane_global_propagate_bmc_ignore_asserts_until" ]]; then
     if ! [[ "$lane_global_propagate_bmc_ignore_asserts_until" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane global_propagate_bmc_ignore_asserts_until value: $lane_global_propagate_bmc_ignore_asserts_until"
       return 0
     fi
     cmd+=(--formal-global-propagate-bmc-ignore-asserts-until "$lane_global_propagate_bmc_ignore_asserts_until")
@@ -1291,8 +1287,7 @@ run_lane() {
   fi
   if [[ -n "$lane_bmc_orig_cache_max_entries" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_entries" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane bmc_orig_cache_max_entries value: $lane_bmc_orig_cache_max_entries"
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-entries "$lane_bmc_orig_cache_max_entries")
@@ -1304,8 +1299,7 @@ run_lane() {
   fi
   if [[ -n "$lane_bmc_orig_cache_max_bytes" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_bytes" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane bmc_orig_cache_max_bytes value: $lane_bmc_orig_cache_max_bytes"
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-bytes "$lane_bmc_orig_cache_max_bytes")
@@ -1317,8 +1311,7 @@ run_lane() {
   fi
   if [[ -n "$lane_bmc_orig_cache_max_age_seconds" ]]; then
     if ! [[ "$lane_bmc_orig_cache_max_age_seconds" =~ ^[0-9]+$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane bmc_orig_cache_max_age_seconds value: $lane_bmc_orig_cache_max_age_seconds"
       return 0
     fi
     cmd+=(--bmc-orig-cache-max-age-seconds "$lane_bmc_orig_cache_max_age_seconds")
@@ -1330,8 +1323,7 @@ run_lane() {
   fi
   if [[ -n "$lane_bmc_orig_cache_eviction_policy" ]]; then
     if ! [[ "$lane_bmc_orig_cache_eviction_policy" =~ ^(lru|fifo|cost-lru)$ ]]; then
-      gate="CONFIG_ERROR"
-      lane_write_status
+      lane_config_error "Invalid lane bmc_orig_cache_eviction_policy value: $lane_bmc_orig_cache_eviction_policy"
       return 0
     fi
     cmd+=(--bmc-orig-cache-eviction-policy "$lane_bmc_orig_cache_eviction_policy")
@@ -1420,7 +1412,7 @@ else
   done
 fi
 
-printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\n" > "$RESULTS_FILE"
+printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_reason\n" > "$RESULTS_FILE"
 failures="$parse_failures"
 passes=0
 generated_cache_hit_lanes=0
@@ -1437,7 +1429,7 @@ for i in "${EXECUTED_INDICES[@]}"; do
   lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
   if [[ ! -f "$lane_status_file" ]]; then
     failures=$((failures + 1))
-    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\n" \
+    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
     GATE_COUNTS["MISSING_STATUS"]=$(( ${GATE_COUNTS["MISSING_STATUS"]:-0} + 1 ))

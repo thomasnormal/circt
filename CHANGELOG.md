@@ -1,5 +1,47 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 848 - February 10, 2026
+
+### Matrix Lane `CONFIG_ERROR` Diagnostics (`run_mutation_matrix.sh`)
+
+1. Extended matrix lane status/results export with deterministic
+   `config_error_reason` reporting:
+   - `lane_status.tsv` now includes a trailing `config_error_reason` column.
+   - `results.tsv` now includes a trailing `config_error_reason` column.
+2. Added explicit lane preflight diagnostics across mutation and formal
+   validation paths (instead of bare `CONFIG_ERROR`):
+   - invalid lane gate override booleans
+   - missing lane mutation source (`mutations_file` vs `generate_count`)
+   - missing reuse files
+   - invalid generated-mutation config (`generate_count`, mode/profile/allocation,
+     seed, count/weight conflict, count-total mismatch)
+   - invalid lane formal/cache numeric controls (timeouts, BMC bound/ignore,
+     BMC orig-cache limits/policy)
+3. This keeps matrix behavior deterministic while making CI triage actionable
+   without per-lane log digging.
+
+### Tests and Documentation
+
+- Updated regression tests to assert reason-bearing `CONFIG_ERROR` rows:
+  - `test/Tools/run-mutation-matrix-lane-gate-invalid-value.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-modes-invalid.test`
+  - `test/Tools/run-mutation-matrix-lane-generate-mode-counts-total-invalid.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test`: PASS (63/63)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-config-error-reasons --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 847 - February 10, 2026
 
 ### Matrix Script Generated-Lane Preflight Hardening (`run_mutation_matrix.sh`)
