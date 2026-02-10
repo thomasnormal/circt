@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
-TAG_REGEX="${TAG_REGEX:-(^| )16\\.|(^| )9\\.4\\.4}"
+TAG_REGEX="${TAG_REGEX:-}"
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -64,6 +64,11 @@ UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
+  exit 1
+fi
+
+if [[ -z "$TAG_REGEX" && -z "$TEST_FILTER" ]]; then
+  echo "must set TAG_REGEX or TEST_FILTER explicitly (no default filter)" >&2
   exit 1
 fi
 
@@ -206,6 +211,22 @@ extract_lec_diag() {
   fi
 }
 
+extract_lec_result_tag() {
+  local lec_text="$1"
+  if [[ "$lec_text" =~ LEC_RESULT=([A-Z0-9_]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if grep -Fq "c1 == c2" <<<"$lec_text"; then
+    printf 'EQ\n'
+    return 0
+  fi
+  if grep -Fq "c1 != c2" <<<"$lec_text"; then
+    printf 'NEQ\n'
+    return 0
+  fi
+}
+
 while IFS= read -r -d '' sv; do
   tags="$(read_meta tags "$sv")"
   if [[ -z "$tags" ]]; then
@@ -281,7 +302,7 @@ while IFS= read -r -d '' sv; do
     use_uvm=1
   fi
   if [[ "$use_uvm" == "1" && ! -d "$UVM_PATH" ]]; then
-    printf "ERROR\t%s\t%s (UVM path not found: %s)\tsv-tests\tLEC\t\n" \
+    printf "ERROR\t%s\t%s (UVM path not found: %s)\tsv-tests\tLEC\tUVM_PATH_MISSING\n" \
       "$base" "$sv" "$UVM_PATH" >> "$results_tmp"
     error=$((error + 1))
     total=$((total + 1))
@@ -321,7 +342,7 @@ while IFS= read -r -d '' sv; do
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     record_drop_remark_case "$base" "$sv" "$verilog_log"
-    printf "ERROR\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
+    printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_VERILOG_ERROR\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
     continue
@@ -338,14 +359,14 @@ while IFS= read -r -d '' sv; do
   opt_cmd+=("$mlir")
 
   if ! run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
-    printf "ERROR\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
+    printf "ERROR\t%s\t%s\tsv-tests\tLEC\tCIRCT_OPT_ERROR\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
     continue
   fi
 
   if [[ "$run_lec" == "0" ]]; then
-    printf "PASS\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
+    printf "PASS\t%s\t%s\tsv-tests\tLEC\tLEC_NOT_RUN\n" "$base" "$sv" >> "$results_tmp"
     pass=$((pass + 1))
     save_logs
     continue
@@ -372,7 +393,7 @@ while IFS= read -r -d '' sv; do
   lec_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir" "$opt_mlir")
 
   lec_out=""
-  if lec_out="$(run_limited $CIRCT_LEC "${lec_args[@]}" 2> "$lec_log")"; then
+  if lec_out="$(run_limited "$CIRCT_LEC" "${lec_args[@]}" 2> "$lec_log")"; then
     lec_status=0
   else
     lec_status=$?
@@ -390,13 +411,34 @@ while IFS= read -r -d '' sv; do
       result="ERROR"
     fi
   else
-    if grep -q "LEC_RESULT=EQ" <<<"$lec_out"; then
+    if grep -q "LEC_RESULT=EQ" <<<"$lec_combined"; then
       result="PASS"
-    elif grep -q "LEC_RESULT=NEQ" <<<"$lec_out"; then
+    elif grep -q "LEC_RESULT=NEQ" <<<"$lec_combined"; then
+      result="FAIL"
+    elif grep -Fq "c1 == c2" <<<"$lec_combined"; then
+      result="PASS"
+    elif grep -Fq "c1 != c2" <<<"$lec_combined"; then
       result="FAIL"
     else
       result="ERROR"
     fi
+  fi
+
+  if [[ -z "$lec_diag" ]]; then
+    lec_diag="$(extract_lec_result_tag "$lec_combined")"
+  fi
+  if [[ -z "$lec_diag" ]]; then
+    case "$result" in
+      PASS) lec_diag="EQ" ;;
+      FAIL) lec_diag="NEQ" ;;
+      *)
+        if [[ "$lec_status" -eq 124 || "$lec_status" -eq 137 ]]; then
+          lec_diag="TIMEOUT"
+        else
+          lec_diag="ERROR"
+        fi
+        ;;
+    esac
   fi
 
   case "$result" in
