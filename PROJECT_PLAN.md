@@ -146,8 +146,8 @@ See CHANGELOG.md on recent progress.
   - Remaining closure gap is now semantic correctness (reducing fail-like rows
     themselves), not bucket attribution coverage.
   - Syntax-tree completeness gaps to close next:
-    - BMC: support clock fields nested inside `hw.struct` inputs instead of
-      hard-failing (`LowerToBMC.cpp`).
+    - BMC: close remaining mixed-clock input gap when top-level `!seq.clock`
+      inputs and struct-carried clock fields coexist (`LowerToBMC.cpp`).
     - BMC SMT-LIB export: remove residual LLVM-in-`verif.bmc` dependency so
       `for-smtlib-export` no longer rejects LLVM ops in BMC regions.
     - BMC: widen register-initial-value lowering beyond current typed-attr
@@ -1190,3 +1190,14 @@ See CHANGELOG.md on recent progress.
 23. Remaining policy decision:
     decide when to make absolute no-drop gating default in strict CI
     versus opt-in for targeted closure runs.
+24. BMC struct-clock closure progress (February 10, 2026):
+    - `lower-to-bmc` now accepts single `seq.clock` fields nested in
+      `hw.struct` inputs by routing them through derived-clock synthesis
+      (`seq.from_clock` materialization + prepended BMC clock input + assume
+      equality wiring), instead of hard-failing.
+    - Added regression:
+      `test/Tools/circt-bmc/lower-to-bmc-struct-seq-clock-input.mlir`.
+    - Remaining limitation:
+      mixed explicit top-level clocks + struct-carried clocks are still
+      rejected with explicit diagnostic and remain the next syntax-closure
+      item.

@@ -1,5 +1,33 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 936 - February 10, 2026
+
+### BMC Syntax Closure: Struct-Carried `seq.clock` Inputs
+
+1. Updated `lib/Tools/circt-bmc/LowerToBMC.cpp` to support struct-carried
+   clock values in the derived-clock path:
+   - materialize `seq.clock` values to `i1` (`seq.from_clock`) when building
+     clock equivalence/dedup keys.
+   - remove unconditional hard-fail on struct-contained clocks and route
+     single struct-clock cases through existing derived BMC clock insertion.
+2. Added recursive struct clock-field counting for clock multiplicity checks.
+3. Kept a conservative guard for unresolved mixed mode:
+   - explicit top-level `!seq.clock` + struct-contained clock fields are still
+     rejected with a dedicated diagnostic until mixed wiring is implemented.
+4. Added regression test:
+   - `test/Tools/circt-bmc/lower-to-bmc-struct-seq-clock-input.mlir`
+5. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-struct-seq-clock-input.mlir test/Tools/circt-bmc/lower-to-bmc-ltl-clock-inputs.mlir test/Tools/circt-bmc/lower-to-bmc-struct-clock.mlir test/Tools/circt-bmc/lower-to-bmc-errors.mlir`
+     -> `4 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir`
+     -> `28 passed`, `1 xfail`.
+   - External suite sanity:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-struct-clock-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^sv-tests/BMC$'`
+       -> `sv-tests/BMC total=26 pass=26 fail=0`.
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-struct-clock-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^verilator-verification/LEC$'`
+       -> `verilator-verification/LEC total=17 pass=17 fail=0`.
+
 ## Iteration 935 - February 10, 2026
 
 ### Formal No-Drop Closure: Absolute Zero-Drop Gates (BMC + LEC)

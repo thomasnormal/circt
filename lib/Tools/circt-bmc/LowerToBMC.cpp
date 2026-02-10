@@ -624,7 +624,20 @@ void LowerToBMCPass::runOnOperation() {
     return clocks;
   };
 
-  bool structClockFound = false;
+  auto countStructClockFields = [&](Type type, auto &&self) -> unsigned {
+    auto structTy = dyn_cast<hw::StructType>(type);
+    if (!structTy)
+      return 0;
+    unsigned total = 0;
+    for (auto field : structTy.getElements()) {
+      if (isa<seq::ClockType>(field.type))
+        ++total;
+      total += self(field.type, self);
+    }
+    return total;
+  };
+
+  unsigned structClockCount = 0;
   SmallVector<BlockArgument, 4> explicitClocks;
   {
     auto &entryBlock = hwModule.getBody().front();
@@ -634,24 +647,18 @@ void LowerToBMCPass::runOnOperation() {
         explicitClocks.push_back(entryBlock.getArgument(idx));
         continue;
       }
-      if (auto hwStruct = dyn_cast<hw::StructType>(input)) {
-        for (auto field : hwStruct.getElements()) {
-          if (isa<seq::ClockType>(field.type)) {
-            structClockFound = true;
-            break;
-          }
-        }
-      }
+      structClockCount += countStructClockFields(input, countStructClockFields);
     }
   }
 
-  if (structClockFound) {
-    if (!allowMultiClock) {
-      hwModule.emitError("designs with multiple clocks not yet supported");
-      return signalPassFailure();
-    }
+  if (!allowMultiClock && (explicitClocks.size() + structClockCount) > 1) {
+    hwModule.emitError("designs with multiple clocks not yet supported");
+    return signalPassFailure();
+  }
+
+  if (structClockCount > 0 && !explicitClocks.empty()) {
     hwModule.emitError(
-        "clock inputs inside struct types are not yet supported");
+        "mixed top-level and struct clock inputs are not yet supported");
     return signalPassFailure();
   }
 
@@ -680,7 +687,34 @@ void LowerToBMCPass::runOnOperation() {
     };
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
+    DenseMap<Value, Value> materializedClockInputs;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+
+    auto materializeClockInputI1 = [&](Value input) -> Value {
+      if (!input)
+        return Value();
+      if (input.getType() == builder.getI1Type())
+        return input;
+      if (!isa<seq::ClockType>(input.getType()))
+        return Value();
+      if (auto toClock = input.getDefiningOp<seq::ToClockOp>())
+        return toClock.getInput();
+      if (auto it = materializedClockInputs.find(input);
+          it != materializedClockInputs.end())
+        return it->second;
+
+      OpBuilder::InsertionGuard guard(builder);
+      if (auto blockArg = dyn_cast<BlockArgument>(input)) {
+        builder.setInsertionPointToStart(blockArg.getOwner());
+      } else if (auto *def = input.getDefiningOp()) {
+        builder.setInsertionPointAfter(def);
+      } else {
+        return Value();
+      }
+      Value lowered = seq::FromClockOp::create(builder, loc, input);
+      materializedClockInputs.try_emplace(input, lowered);
+      return lowered;
+    };
 
     // Use stable argument names when building clock keys, so they remain valid
     // across transformations that insert or remove module inputs (which shifts
@@ -925,13 +959,14 @@ void LowerToBMCPass::runOnOperation() {
     };
 
     auto maybeAddClockInput = [&](Value input) {
-      if (!input || input.getType() != builder.getI1Type())
+      Value i1Input = materializeClockInputI1(input);
+      if (!i1Input || i1Input.getType() != builder.getI1Type())
         return;
       bool invert = false;
-      Value canonical = canonicalizeClockValue(input, invert);
+      Value canonical = canonicalizeClockValue(i1Input, invert);
       Value base = getFourStateClockBase(canonical);
       if (!base)
-        base = getFourStateClockBase(input);
+        base = getFourStateClockBase(i1Input);
       if (base)
         base = canonicalizeFourStateClockBase(base);
       Value keyValue = canonicalizeClockKeyValue(canonical);
@@ -952,7 +987,7 @@ void LowerToBMCPass::runOnOperation() {
                     base == existing.fourStateBase);
           }))
         return;
-      clockInputs.push_back({input, canonical, invert, base, inputKey});
+      clockInputs.push_back({i1Input, canonical, invert, base, inputKey});
     };
     for (auto toClockOp : toClockOps)
       maybeAddClockInput(toClockOp.getInput());
@@ -1094,14 +1129,17 @@ void LowerToBMCPass::runOnOperation() {
       }
 
     auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
+      Value i1Input = materializeClockInputI1(input);
+      if (!i1Input || i1Input.getType() != builder.getI1Type())
+        return std::nullopt;
       bool invert = false;
-      Value canonical = canonicalizeClockValue(input, invert);
+      Value canonical = canonicalizeClockValue(i1Input, invert);
       Value keyValue = canonicalizeClockKeyValue(canonical);
       auto inputKey =
           getI1ValueKeyWithBlockArgNames(keyValue, getBlockArgName);
       Value base = getFourStateClockBase(canonical);
       if (!base)
-        base = getFourStateClockBase(input);
+        base = getFourStateClockBase(i1Input);
       if (base)
         base = canonicalizeFourStateClockBase(base);
       for (auto [idx, existing] : llvm::enumerate(clockInputs)) {
