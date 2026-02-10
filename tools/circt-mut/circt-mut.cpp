@@ -144,7 +144,10 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-basic|\n";
   os << "                           formal-regression-matrix-trend|\n";
   os << "                           formal-regression-matrix-guard|\n";
-  os << "                           formal-regression-matrix-trend-guard\n";
+  os << "                           formal-regression-matrix-trend-guard|\n";
+  os << "                           formal-regression-matrix-guard-smoke|\n";
+  os << "                           formal-regression-matrix-guard-nightly|\n";
+  os << "                           formal-regression-matrix-guard-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-value-gt RULE  Fail if current numeric value exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
@@ -5508,11 +5511,55 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      0.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-guard-smoke") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 5.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-guard-nightly") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-guard-strict") {
+    opts.failOnPrequalifyDrift = true;
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_timeout_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules, "matrix.errors_sum", 0.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.detected_mutants_sum",
+                     1.0);
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
+                     1.0);
+    return true;
+  }
   error = (Twine("circt-mut report: unknown --policy-profile value: ") + profile +
            " (expected formal-regression-basic|formal-regression-trend|"
            "formal-regression-matrix-basic|formal-regression-matrix-trend|"
            "formal-regression-matrix-guard|"
-           "formal-regression-matrix-trend-guard)")
+           "formal-regression-matrix-trend-guard|"
+           "formal-regression-matrix-guard-smoke|"
+           "formal-regression-matrix-guard-nightly|"
+           "formal-regression-matrix-guard-strict)")
               .str();
   return false;
 }
