@@ -8,5 +8,4 @@
 // RUN: FileCheck %s < %t/out.txt
 // RUN: test ! -e %t/invoked
 //
-// CHECK: circt-mut cover: --native-global-filter-prequalify requires a built-in global filter mode
-
+// CHECK: circt-mut cover: --native-global-filter-prequalify requires a global filter mode

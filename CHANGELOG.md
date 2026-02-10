@@ -1,5 +1,61 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 865 - February 10, 2026
+
+### `circt-mut` Native Prequalification: `--formal-global-propagate-cmd` Parity
+
+1. Extended native cover prequalification to support command-mode global
+   filtering:
+   - file: `tools/circt-mut/circt-mut.cpp`
+   - `--native-global-filter-prequalify` and
+     `--native-global-filter-prequalify-only` now accept
+     `--formal-global-propagate-cmd` in addition to built-in
+     circt-lec/circt-bmc/chain modes.
+   - native cmd-mode execution now exports mutation context env vars for
+     wrappers:
+     `ORIG_DESIGN`, `MUTANT_DESIGN`, `MUTATION_ID`, `MUTATION_SPEC`,
+     `MUTATION_WORKDIR`.
+   - classification follows script-compatible semantics:
+     `NOT_PROPAGATED` / `PROPAGATED` token override, then rc fallback
+     (`0 => not_propagated`, `1 => propagated`, other => error),
+     with timeout-as-propagated behavior when timeout is configured.
+2. Extended native matrix prequalification parity:
+   - `circt-mut matrix --native-global-filter-prequalify` now supports
+     lane/default `global_propagate_cmd` instead of rejecting cmd-mode lanes.
+   - matrix prequalify now forwards `--formal-global-propagate-cmd` into lane
+     `cover --native-global-filter-prequalify-only` calls.
+3. Updated diagnostics and tests:
+   - updated missing-filter diagnostic to require a general global-filter mode
+     (cmd or built-in), not built-in only.
+   - removed obsolete unsupported-cmd test.
+
+### Tests and Documentation
+
+- Added tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-cmd.test`
+  - `test/Tools/circt-mut-matrix-native-global-filter-prequalify-cmd.test`
+- Updated tests:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-missing-filter.test`
+- Removed obsolete test:
+  - `test/Tools/circt-mut-cover-native-global-filter-prequalify-cmd-unsupported.test`
+- Updated docs/planning:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-native-global-filter-prequalify*.test test/Tools/circt-mut-matrix-native-global-filter-prequalify*.test`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-native-prequalify-cmd --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 864 - February 10, 2026
 
 ### BMC Semantic-Closure Investigation: LLHD Interface Stripping Reuse
