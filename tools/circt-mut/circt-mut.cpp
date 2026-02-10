@@ -1002,17 +1002,12 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                    "be combined with --reuse-pair-file.";
     return result;
   }
-  if (nativeGlobalFilterPrequalify && hasGlobalFilterCmd) {
-    result.error = "circt-mut cover: --native-global-filter-prequalify "
-                   "supports built-in global filters only; "
-                   "--formal-global-propagate-cmd is not supported.";
-    return result;
-  }
-  if (nativeGlobalFilterPrequalify && !hasGlobalFilterLEC && !hasGlobalFilterBMC &&
-      !hasGlobalFilterChain) {
+  if (nativeGlobalFilterPrequalify && !hasGlobalFilterCmd &&
+      !hasGlobalFilterLEC && !hasGlobalFilterBMC && !hasGlobalFilterChain) {
     result.error =
         "circt-mut cover: --native-global-filter-prequalify requires "
-        "a built-in global filter mode (--formal-global-propagate-circt-lec, "
+        "a global filter mode (--formal-global-propagate-cmd, "
+        "--formal-global-propagate-circt-lec, "
         "--formal-global-propagate-circt-bmc, or "
         "--formal-global-propagate-circt-chain).";
     return result;
@@ -1127,6 +1122,85 @@ static bool runArgvToLog(ArrayRef<std::string> argv, StringRef logPath,
     return false;
   }
   return true;
+}
+
+static std::string readTextFileOrEmpty(StringRef path);
+
+static bool
+runCommandStringToLogWithMutationEnv(StringRef runDir, StringRef command,
+                                     StringRef logPath, uint64_t timeoutSeconds,
+                                     StringRef design, StringRef mutantDesign,
+                                     StringRef mutationID, StringRef mutationSpec,
+                                     int &rc, std::string &error) {
+  std::string shell;
+  shell += "cd ";
+  shell += shellQuote(runDir);
+  shell += " && ";
+  shell += "export ORIG_DESIGN=";
+  shell += shellQuote(design);
+  shell += " MUTANT_DESIGN=";
+  shell += shellQuote(mutantDesign);
+  shell += " MUTATION_ID=";
+  shell += shellQuote(mutationID);
+  shell += " MUTATION_SPEC=";
+  shell += shellQuote(mutationSpec);
+  shell += " MUTATION_WORKDIR=";
+  shell += shellQuote(runDir);
+  shell += " && ";
+  if (timeoutSeconds > 0) {
+    shell += "timeout --signal=TERM --kill-after=5 ";
+    shell += std::to_string(timeoutSeconds);
+    shell += " ";
+  }
+  shell += "bash -lc ";
+  shell += shellQuote(command);
+  shell += " >";
+  shell += shellQuote(logPath);
+  shell += " 2>&1";
+
+  SmallVector<StringRef, 8> shArgs;
+  shArgs.push_back("env");
+  shArgs.push_back("bash");
+  shArgs.push_back("-lc");
+  shArgs.push_back(shell);
+  std::string errMsg;
+  rc = sys::ExecuteAndWait("/usr/bin/env", shArgs, /*Env=*/std::nullopt,
+                           /*Redirects=*/{},
+                           /*SecondsToWait=*/0, /*MemoryLimit=*/0, &errMsg);
+  if (!errMsg.empty()) {
+    error = (Twine("circt-mut cover: execution error: ") + errMsg).str();
+    return false;
+  }
+  return true;
+}
+
+static ProbeRawResult runCoverGlobalFilterCmdRaw(
+    StringRef runDir, StringRef command, StringRef logPath,
+    uint64_t timeoutSeconds, StringRef design, StringRef mutantDesign,
+    StringRef mutationID, StringRef mutationSpec, std::string &error) {
+  int rc = -1;
+  if (!runCommandStringToLogWithMutationEnv(runDir, command, logPath,
+                                            timeoutSeconds, design,
+                                            mutantDesign, mutationID,
+                                            mutationSpec, rc, error))
+    return ProbeRawResult{"error", rc};
+
+  std::string logText = readTextFileOrEmpty(logPath);
+  Regex notPropagatedToken("(^|[^[:alnum:]_])NOT_PROPAGATED([^[:alnum:]_]|$)",
+                           Regex::IgnoreCase);
+  Regex propagatedToken("(^|[^[:alnum:]_])PROPAGATED([^[:alnum:]_]|$)",
+                        Regex::IgnoreCase);
+  if (notPropagatedToken.match(logText))
+    return ProbeRawResult{"not_propagated", rc};
+  if (propagatedToken.match(logText))
+    return ProbeRawResult{"propagated", rc};
+  if (timeoutSeconds > 0 && isTimeoutExitCode(rc))
+    return ProbeRawResult{"propagated", rc};
+  if (rc == 0)
+    return ProbeRawResult{"not_propagated", rc};
+  if (rc == 1)
+    return ProbeRawResult{"propagated", rc};
+  return ProbeRawResult{"error", rc};
 }
 
 static std::string readTextFileOrEmpty(StringRef path) {
@@ -1690,6 +1764,10 @@ struct MutationRow {
 
 struct CoverNativePrequalifyConfig {
   CoverGlobalFilterProbeConfig probeCfg;
+  bool useGlobalFilterCmd = false;
+  std::string globalFilterCmd;
+  std::string design;
+  uint64_t globalFilterTimeoutSeconds = 0;
   std::string mutationsFile;
   bool useGeneratedMutations = false;
   uint64_t generateMutations = 0;
@@ -1765,14 +1843,6 @@ static std::string joinPath2(StringRef a, StringRef b) {
 static bool parseCoverNativePrequalifyConfig(
     const char *argv0, const CoverRewriteResult &rewrite,
     CoverNativePrequalifyConfig &cfg, std::string &error) {
-  CoverRewriteResult probeRewrite = rewrite;
-  probeRewrite.nativeGlobalFilterProbeMutant = "__native_prequalify_dummy__";
-  probeRewrite.nativeGlobalFilterProbeLog = "__native_prequalify_dummy__.log";
-  if (!parseCoverGlobalFilterProbeConfig(probeRewrite, cfg.probeCfg, error))
-    return false;
-  cfg.probeCfg.mutantDesign.clear();
-  cfg.probeCfg.logFile.clear();
-
   auto parseUIntArg = [&](StringRef value, StringRef flag, uint64_t &out) {
     if (value.getAsInteger(10, out)) {
       error = (Twine("circt-mut cover: invalid value for ") + flag + ": " +
@@ -1806,6 +1876,27 @@ static bool parseCoverNativePrequalifyConfig(
 
     if (arg == "--mutations-file" || arg.starts_with("--mutations-file=")) {
       if (!consumeValue("--mutations-file", cfg.mutationsFile))
+        return false;
+      continue;
+    }
+    if (arg == "--design" || arg.starts_with("--design=")) {
+      if (!consumeValue("--design", cfg.design))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-cmd" ||
+        arg.starts_with("--formal-global-propagate-cmd=")) {
+      if (!consumeValue("--formal-global-propagate-cmd", cfg.globalFilterCmd))
+        return false;
+      continue;
+    }
+    if (arg == "--formal-global-propagate-timeout-seconds" ||
+        arg.starts_with("--formal-global-propagate-timeout-seconds=")) {
+      std::string raw;
+      if (!consumeValue("--formal-global-propagate-timeout-seconds", raw))
+        return false;
+      if (!parseUIntArg(raw, "--formal-global-propagate-timeout-seconds",
+                        cfg.globalFilterTimeoutSeconds))
         return false;
       continue;
     }
@@ -1968,6 +2059,27 @@ static bool parseCoverNativePrequalifyConfig(
     cfg.mutationsFile = joinPath2(cfg.workDir, "generated_mutations.txt");
     cfg.generateLogFile = joinPath2(cfg.workDir, "generate_mutations.log");
   }
+
+  cfg.useGlobalFilterCmd = !cfg.globalFilterCmd.empty();
+  if (cfg.useGlobalFilterCmd) {
+    if (cfg.design.empty()) {
+      error = "circt-mut cover: --native-global-filter-prequalify requires "
+              "--design when using --formal-global-propagate-cmd.";
+      return false;
+    }
+    return true;
+  }
+
+  CoverRewriteResult probeRewrite = rewrite;
+  probeRewrite.nativeGlobalFilterProbeMutant = "__native_prequalify_dummy__";
+  probeRewrite.nativeGlobalFilterProbeLog = "__native_prequalify_dummy__.log";
+  if (!parseCoverGlobalFilterProbeConfig(probeRewrite, cfg.probeCfg, error))
+    return false;
+  cfg.probeCfg.mutantDesign.clear();
+  cfg.probeCfg.logFile.clear();
+  if (cfg.design.empty())
+    cfg.design = cfg.probeCfg.design;
+
   return true;
 }
 
@@ -1994,7 +2106,7 @@ static bool runNativeGenerateForPrequalify(const char *argv0,
   genCmd.push_back(mainExec);
   genCmd.push_back("generate");
   genCmd.push_back("--design");
-  genCmd.push_back(cfg.probeCfg.design);
+  genCmd.push_back(cfg.design);
   genCmd.push_back("--out");
   genCmd.push_back(cfg.mutationsFile);
   genCmd.push_back("--count");
@@ -2183,7 +2295,7 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     SmallVector<std::string, 16> createCmd;
     createCmd.push_back(cfg.createMutatedScript);
     createCmd.push_back("-d");
-    createCmd.push_back(cfg.probeCfg.design);
+    createCmd.push_back(cfg.design);
     createCmd.push_back("-i");
     createCmd.push_back(mutationInput);
     createCmd.push_back("-o");
@@ -2199,26 +2311,51 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
       result.note += ";native_prequalify_create_mutated_error=1";
       result.createMutatedError = true;
     } else {
-      CoverGlobalFilterProbeConfig probeCfg = cfg.probeCfg;
-      probeCfg.mutantDesign = mutantDesign;
-      probeCfg.logFile = probeLog;
-      CoverGlobalFilterProbeOutcome outcome;
-      std::string probeError;
-      if (!executeNativeCoverGlobalFilterProbe(probeCfg, outcome, probeError)) {
-        result.note += ";native_prequalify_probe_exec_error=1";
-        result.probeError = true;
-      } else if (outcome.classification == "not_propagated") {
-        result.propagation = "not_propagated";
-        result.propagateRC = outcome.finalRC;
-        result.note = "global_filter_not_propagated;native_prequalify=1";
-      } else if (outcome.classification == "propagated") {
-        result.propagation = "propagated";
-        result.propagateRC = outcome.finalRC;
+      if (cfg.useGlobalFilterCmd) {
+        std::string probeError;
+        ProbeRawResult cmdOutcome = runCoverGlobalFilterCmdRaw(
+            mutationRoot, cfg.globalFilterCmd, probeLog,
+            cfg.globalFilterTimeoutSeconds, cfg.design, mutantDesign, row.id,
+            row.spec, probeError);
+        if (!probeError.empty()) {
+          result.note += ";native_prequalify_probe_exec_error=1";
+          result.probeError = true;
+        } else if (cmdOutcome.state == "not_propagated") {
+          result.propagation = "not_propagated";
+          result.propagateRC = cmdOutcome.rc;
+          result.note = "global_filter_not_propagated;native_prequalify=1";
+        } else if (cmdOutcome.state == "propagated") {
+          result.propagation = "propagated";
+          result.propagateRC = cmdOutcome.rc;
+        } else {
+          result.propagation = "propagated";
+          result.propagateRC = cmdOutcome.rc;
+          result.note += ";native_prequalify_probe_error=1";
+          result.probeError = true;
+        }
       } else {
-        result.propagation = "propagated";
-        result.propagateRC = outcome.finalRC;
-        result.note += ";native_prequalify_probe_error=1";
-        result.probeError = true;
+        CoverGlobalFilterProbeConfig probeCfg = cfg.probeCfg;
+        probeCfg.mutantDesign = mutantDesign;
+        probeCfg.logFile = probeLog;
+        CoverGlobalFilterProbeOutcome outcome;
+        std::string probeError;
+        if (!executeNativeCoverGlobalFilterProbe(probeCfg, outcome,
+                                                 probeError)) {
+          result.note += ";native_prequalify_probe_exec_error=1";
+          result.probeError = true;
+        } else if (outcome.classification == "not_propagated") {
+          result.propagation = "not_propagated";
+          result.propagateRC = outcome.finalRC;
+          result.note = "global_filter_not_propagated;native_prequalify=1";
+        } else if (outcome.classification == "propagated") {
+          result.propagation = "propagated";
+          result.propagateRC = outcome.finalRC;
+        } else {
+          result.propagation = "propagated";
+          result.propagateRC = outcome.finalRC;
+          result.note += ";native_prequalify_probe_error=1";
+          result.probeError = true;
+        }
       }
     }
 
@@ -3667,14 +3804,6 @@ static int runNativeMatrixGlobalFilterPrequalify(
       continue;
     }
 
-    if (!laneGlobalCmd.empty()) {
-      errs() << "circt-mut matrix: --native-global-filter-prequalify supports "
-                "only built-in global filters; lane "
-             << laneID
-             << " uses global_propagate_cmd.\n";
-      return 1;
-    }
-
     std::string existingReusePair =
         effectiveColumn(cols, ColReusePairFile, cfg.defaultReusePairFile);
     if (!existingReusePair.empty()) {
@@ -3783,6 +3912,7 @@ static int runNativeMatrixGlobalFilterPrequalify(
       coverCmd.push_back(flag.str());
       coverCmd.push_back(value);
     };
+    maybeAddArg("--formal-global-propagate-cmd", laneGlobalCmd);
     maybeAddArg("--formal-global-propagate-circt-chain", laneGlobalChain);
     maybeAddArg("--formal-global-propagate-circt-lec", laneGlobalLEC);
     maybeAddArg("--formal-global-propagate-circt-bmc", laneGlobalBMC);

@@ -423,9 +423,14 @@ circt-mut cover \
   --work-dir /tmp/mutation-cover
 ```
 
+For wrapper-driven formal relevance (closer to MCY/Certitude glue style),
+replace the chain flags with:
+`--formal-global-propagate-cmd "<your_formal_relevance_cmd>"`.
+
 Prequalify mode:
-- creates mutants and runs native built-in global filter classification
-  (`circt-lec`/`circt-bmc`/chain) before test dispatch,
+- creates mutants and runs native global filter classification
+  (`--formal-global-propagate-cmd` or built-in
+  `circt-lec`/`circt-bmc`/chain) before test dispatch,
 - supports both `--mutations-file` and `--generate-mutations` mutation sources,
 - uses `--jobs <N>` to parallelize prequalification worker execution
   (deterministic pair-row ordering is preserved),
@@ -439,7 +444,6 @@ To run prequalification without launching dynamic tests, use:
   also honors `--jobs`).
 
 Current scope limits:
-- supports built-in filters only (not `--formal-global-propagate-cmd`),
 - cannot be combined with explicit `--reuse-pair-file`.
 Cover mutation source consistency is now also validated natively:
 - exactly one of `--mutations-file` or `--generate-mutations` must be set
@@ -454,13 +458,15 @@ For generated-mutation cover runs, native preflight now also validates:
 - count/weight conflict (`mode-counts` vs `mode-weights`)
 - `--mutations-mode-counts` total against `--generate-mutations`.
 `circt-mut matrix` now applies the same preflight model for default global
-filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
+filter options (`--default-formal-global-propagate-cmd` and
+`--default-formal-global-propagate-circt-*`) before dispatch.
 For matrix-wide native formal prequalification before lane dispatch, use:
 - `--native-global-filter-prequalify`
   (runs `circt-mut cover --native-global-filter-prequalify-only` per lane,
   rewrites lane `reuse_pair_file`, then dispatches matrix lanes).
 Current native matrix prequalify scope:
-- built-in global filters only (not `global_propagate_cmd`)
+- supports both cmd and built-in global filters
+  (`global_propagate_cmd` and `global_propagate_circt_*`),
 - cannot be combined with pre-existing lane/default reuse pair input.
 It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
 fail fast if the default Yosys executable is unavailable.

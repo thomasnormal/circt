@@ -357,6 +357,10 @@ circt-mut cover \
   --work-dir /tmp/mutation-cover
 ```
 
+For wrapper-driven formal relevance (MCY/Certitude-style external glue), use
+`--formal-global-propagate-cmd "<your_formal_relevance_cmd>"` instead of
+built-in chain flags.
+
 Equivalent MCY flow (schematic; custom formal-prune glue is typical):
 
 ```bash
@@ -546,12 +550,13 @@ Execution controls:
     built-in circt-lec/circt-bmc/chain classification on a single mutant and
     prints `classification`, `global_filter_rc`, and `global_filter_log`
     without launching test execution.
-  - native campaign prequalification mode is now available for built-in formal
-    filters:
+  - native campaign prequalification mode is now available for command-mode
+    and built-in formal filters:
     `--native-global-filter-prequalify`
     (optional `--native-global-filter-prequalify-pair-file <path>`). This
-    runs built-in circt-lec/circt-bmc/chain global classification for each
-    mutation from `--mutations-file` or `--generate-mutations`, emits reuse-compatible
+    runs `--formal-global-propagate-cmd` or built-in
+    circt-lec/circt-bmc/chain global classification for each mutation from
+    `--mutations-file` or `--generate-mutations`, emits reuse-compatible
     `pair_qualification.tsv` rows (`test_id=-`), and dispatches
     `run_mutation_cover.sh` with `--reuse-pair-file`.
   - `--native-global-filter-prequalify-only` runs the same native batch
@@ -560,8 +565,7 @@ Execution controls:
   - native prequalification now honors `--jobs <N>` for parallel per-mutant
     classification in both dispatch and prequalify-only modes while preserving
     deterministic pair-row output order.
-  - native prequalification rejects explicit `--reuse-pair-file`, and does not
-    support `--formal-global-propagate-cmd`.
+  - native prequalification rejects explicit `--reuse-pair-file`.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
   - cover formal numeric/cache controls are now validated natively:
@@ -585,9 +589,9 @@ Execution controls:
     formal prequalification before matrix dispatch (using cover native
     prequalify-only under the hood), writes per-lane reuse pair files, and
     dispatches `run_mutation_matrix.sh` with a rewritten lanes manifest.
-  - native matrix prequalification currently supports built-in global filter
-    modes only (not lane/default `global_propagate_cmd`) and rejects
-    pre-existing lane/default reuse-pair input.
+  - native matrix prequalification supports both command-mode and built-in
+    global filters (including lane/default `global_propagate_cmd`), and
+    rejects pre-existing lane/default reuse-pair input.
   - default generated-mutation Yosys option is now pre-resolved natively:
     `--default-mutations-yosys`.
   - default generated-mutation seed is now configurable/validated natively:
