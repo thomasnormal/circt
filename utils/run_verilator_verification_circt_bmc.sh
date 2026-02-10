@@ -31,6 +31,7 @@ KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
+BMC_DROP_REMARK_REASONS_OUT="${BMC_DROP_REMARK_REASONS_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
 # NOTE: NO_PROPERTY_AS_SKIP defaults to 0 because the "no property provided to check"
 # warning is SPURIOUS for clocked assertions that are lowered later in the pipeline.
@@ -49,6 +50,11 @@ DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
+  exit 1
+fi
+
+if [[ -z "$TEST_FILTER" ]]; then
+  echo "must set TEST_FILTER explicitly (no default filter)" >&2
   exit 1
 fi
 
@@ -101,6 +107,7 @@ total=0
 drop_remark_cases=0
 declare -A semantic_tags_by_case
 declare -A drop_remark_seen_cases
+declare -A drop_remark_seen_case_reasons
 
 is_xfail() {
   local name="$1"
@@ -155,6 +162,36 @@ record_drop_remark_case() {
   if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
     return
   fi
+  while IFS= read -r reason; do
+    if [[ -z "$reason" ]]; then
+      continue
+    fi
+    local reason_key="${case_id}|${reason}"
+    if [[ -n "${drop_remark_seen_case_reasons["$reason_key"]+x}" ]]; then
+      continue
+    fi
+    drop_remark_seen_case_reasons["$reason_key"]=1
+    if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+      printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$BMC_DROP_REMARK_REASONS_OUT"
+    fi
+  done < <(
+    awk -v pattern="$DROP_REMARK_PATTERN" '
+      index($0, pattern) {
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
+          line = substr(line, RLENGTH + 1)
+        sub(/^[Ww]arning:[[:space:]]*/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        gsub(/[0-9]+/, "<n>", line)
+        gsub(/;/, ",", line)
+        if (length(line) > 240)
+          line = substr(line, 1, 240)
+        print line
+      }
+    ' "$verilog_log" | sort -u
+  )
   if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
     return
   fi
@@ -443,6 +480,9 @@ if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; the
 fi
 if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
   sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" && -f "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_REASONS_OUT" "$BMC_DROP_REMARK_REASONS_OUT"
 fi
 
 echo "verilator-verification summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"

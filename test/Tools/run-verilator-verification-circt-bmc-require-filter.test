@@ -1,0 +1,4 @@
+// RUN: rm -rf %t && mkdir -p %t/verilator/tests/asserts
+// RUN: not env CIRCT_VERILOG=/bin/true CIRCT_BMC=/bin/true %S/../../utils/run_verilator_verification_circt_bmc.sh %t/verilator 2>&1 | FileCheck %s
+//
+// CHECK: must set TEST_FILTER explicitly (no default filter)

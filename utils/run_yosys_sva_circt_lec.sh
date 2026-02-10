@@ -40,6 +40,11 @@ if [[ ! -d "$YOSYS_SVA_DIR" ]]; then
   exit 1
 fi
 
+if [[ -z "$TEST_FILTER" ]]; then
+  echo "must set TEST_FILTER explicitly (no default filter)" >&2
+  exit 1
+fi
+
 if [[ -z "$Z3_BIN" ]]; then
   if command -v z3 >/dev/null 2>&1; then
     Z3_BIN="z3"
