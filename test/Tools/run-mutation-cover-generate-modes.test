@@ -1,6 +1,6 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top; endmodule\n' > %t/design.il
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nwhile IFS= read -r line; do\n  out=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" <<< "$line")\n  mode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" <<< "$line")\n  if [[ "$mode" == "inv" ]]; then\n    echo "10 M_INV" > "$out"\n  elif [[ "$mode" == "const0" ]]; then\n    echo "11 M_CONST0" > "$out"\n  elif [[ "$mode" == "cnot0" ]]; then\n    echo "20 M_CNOT0" > "$out"\n  elif [[ "$mode" == "cnot1" ]]; then\n    echo "21 M_CNOT1" > "$out"\n  else\n    echo "30 M_DEFAULT" > "$out"\n  fi\ndone < <(grep "^mutate -list " "$script")\n' > %t/fake-yosys.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nwhile IFS= read -r line; do\n  out=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" <<< "$line")\n  mode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" <<< "$line")\n  if [[ "$mode" == "inv" ]]; then\n    echo "10 M_INV" > "$out"\n  elif [[ "$mode" == "const0" ]]; then\n    echo "11 M_CONST0" > "$out"\n  elif [[ "$mode" == "const1" ]]; then\n    echo "12 M_CONST1" > "$out"\n  elif [[ "$mode" == "cnot0" ]]; then\n    echo "20 M_CNOT0" > "$out"\n  elif [[ "$mode" == "cnot1" ]]; then\n    echo "21 M_CNOT1" > "$out"\n  else\n    echo "30 M_DEFAULT" > "$out"\n  fi\ndone < <(grep "^mutate -list " "$script")\n' > %t/fake-yosys.sh
 // RUN: chmod +x %t/fake-yosys.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    -d) design="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\ncp "$design" "$out"\n' > %t/fake-create-mutated.sh
 // RUN: chmod +x %t/fake-create-mutated.sh
@@ -20,8 +20,8 @@
 // RUN: FileCheck %s --check-prefix=GEN < %t/out/generated_mutations.txt
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/summary.tsv
 
-// GEN: 1 M_INV
-// GEN: 2 M_CONST0
+// GEN: 1 M_CONST0
+// GEN: 2 M_CONST1
 // GEN: 3 M_CNOT0
 // GEN: 4 M_CNOT1
 

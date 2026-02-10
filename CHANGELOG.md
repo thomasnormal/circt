@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 834 - February 10, 2026
+
+### Seed-Rotated Remainders Inside Family Expansion
+
+1. Improved mutation-generation fairness for family aliases
+   (`arith/control/balanced/all`) when per-family counts are not evenly
+   divisible across concrete operators:
+   - `utils/generate_mutations_yosys.sh` now applies deterministic
+     seed-rotated remainder allocation within family expansion.
+   - native `circt-mut generate` now uses the same policy.
+2. This removes persistent first-operator bias during family split (for
+   example repeatedly favoring `inv` over `const0/const1` on odd leftovers)
+   while preserving reproducibility under `--seed`.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/run-mutation-generate-family-remainder-rotation.test`
+  - `test/Tools/circt-mut-generate-native-family-remainder-rotation.test`
+- Updated:
+  - `test/Tools/run-mutation-generate-mode-remainder-rotation.test`
+  - `test/Tools/circt-mut-generate-native-mode-remainder-rotation.test`
+  - `test/Tools/run-mutation-generate-mode-weights.test`
+  - `test/Tools/circt-mut-generate-native-mode-weights.test`
+  - `test/Tools/run-mutation-generate-modes.test`
+  - `test/Tools/run-mutation-generate-profiles.test`
+  - `test/Tools/run-mutation-cover-generate-mode-weights.test`
+  - `test/Tools/run-mutation-matrix-generate-mode-weights.test`
+  - `test/Tools/run-mutation-cover-generate-modes.test`
+  - `test/Tools/run-mutation-matrix-generate-modes.test`
+  - `test/Tools/run-mutation-cover-generate-profiles.test`
+  - `test/Tools/run-mutation-matrix-generate-profiles.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/circt-mut-generate*.test`: PASS (20/20)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test test/Tools/circt-mut-run-cover-generate-config.test test/Tools/circt-mut-run-matrix-config.test`: PASS (16/16)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-family-rotation --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 833 - February 10, 2026
 
 ### Weighted Mutation Mode Allocation (`mode-weights`)

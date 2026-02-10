@@ -4229,8 +4229,14 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     uint64_t familyCount = familyTargets.size();
     uint64_t familyBase = listCount / familyCount;
     uint64_t familyExtra = listCount % familyCount;
+    uint64_t familyExtraStart = 0;
+    if (familyCount > 0)
+      familyExtraStart = (opts.seed + i) % familyCount;
     for (size_t j = 0; j < familyTargets.size(); ++j) {
-      uint64_t familyListCount = familyBase + (j < familyExtra ? 1 : 0);
+      uint64_t familyListCount = familyBase;
+      if (isIndexInRotatedExtraPrefix(j, familyExtraStart, familyExtra,
+                                      familyCount))
+        ++familyListCount;
       if (familyListCount == 0)
         continue;
       modeTargetList.push_back(familyTargets[j]);

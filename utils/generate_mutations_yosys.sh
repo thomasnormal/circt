@@ -696,10 +696,14 @@ for idx in "${!MODE_LIST[@]}"; do
   family_count="${#family_targets[@]}"
   family_base=$((list_count / family_count))
   family_extra=$((list_count % family_count))
+  family_extra_start=0
+  if [[ "$family_count" -gt 0 ]]; then
+    family_extra_start=$(( (SEED + idx) % family_count ))
+  fi
   for family_idx in "${!family_targets[@]}"; do
     family_mode="${family_targets[$family_idx]}"
     family_list_count="$family_base"
-    if [[ "$family_idx" -lt "$family_extra" ]]; then
+    if is_rotated_extra_index "$family_idx" "$family_extra_start" "$family_extra" "$family_count"; then
       family_list_count=$((family_list_count + 1))
     fi
     [[ "$family_list_count" -le 0 ]] && continue
