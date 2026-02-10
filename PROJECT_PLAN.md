@@ -671,6 +671,16 @@ See CHANGELOG.md on recent progress.
     - Near-term semantic closure remains focused on reducing those fail-like
       rows (not coverage attribution, which remains complete on active
       fail-like cases).
+85. `run_formal_all.sh` now forces `BMC_RUN_SMTLIB=1` for `sv-tests` BMC
+    lanes (`sv-tests/BMC` and `sv-tests-uvm/BMC_SEMANTICS`) to avoid known
+    JIT/Z3-LLVM backend divergence on local-variable/`disable iff` semantics.
+    - Post-landing closure snapshot:
+      `sv-tests/BMC` moved from `23/26` to `26/26` pass in the same lane set,
+      while `verilator-verification/BMC` and `yosys/tests/sva/BMC` remained
+      unchanged.
+    - Remaining long-term limitation:
+      JIT-vs-SMTLIB backend parity is still open and should be tracked as a
+      backend correctness hardening item (not a harness attribution gap).
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 
