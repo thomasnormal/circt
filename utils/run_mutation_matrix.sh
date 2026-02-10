@@ -39,6 +39,8 @@ Optional:
                             Default --mutations-cfg for generated-mutation lanes
   --default-mutations-select CSV
                             Default --mutations-select for generated-mutation lanes
+  --default-mutations-seed N
+                            Default --mutations-seed for generated-mutation lanes
   --default-mutations-yosys PATH
                             Default --mutations-yosys for generated-mutation lanes
   --default-formal-global-propagate-cmd CMD
@@ -176,6 +178,7 @@ DEFAULT_MUTATIONS_MODE_WEIGHTS=""
 DEFAULT_MUTATIONS_PROFILES=""
 DEFAULT_MUTATIONS_CFG=""
 DEFAULT_MUTATIONS_SELECT=""
+DEFAULT_MUTATIONS_SEED=""
 DEFAULT_MUTATIONS_YOSYS=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD=""
 DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS=""
@@ -228,6 +231,7 @@ while [[ $# -gt 0 ]]; do
     --default-mutations-profiles) DEFAULT_MUTATIONS_PROFILES="$2"; shift 2 ;;
     --default-mutations-cfg) DEFAULT_MUTATIONS_CFG="$2"; shift 2 ;;
     --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
+    --default-mutations-seed) DEFAULT_MUTATIONS_SEED="$2"; shift 2 ;;
     --default-mutations-yosys) DEFAULT_MUTATIONS_YOSYS="$2"; shift 2 ;;
     --default-formal-global-propagate-cmd) DEFAULT_FORMAL_GLOBAL_PROPAGATE_CMD="$2"; shift 2 ;;
     --default-formal-global-propagate-timeout-seconds) DEFAULT_FORMAL_GLOBAL_PROPAGATE_TIMEOUT_SECONDS="$2"; shift 2 ;;
@@ -304,6 +308,10 @@ if [[ ! "$LANE_JOBS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$LANE_SCHEDULE_POLICY" =~ ^(fifo|cache-aware)$ ]]; then
   echo "Invalid --lane-schedule-policy value: $LANE_SCHEDULE_POLICY (expected fifo|cache-aware)." >&2
+  exit 1
+fi
+if [[ -n "$DEFAULT_MUTATIONS_SEED" ]] && ! [[ "$DEFAULT_MUTATIONS_SEED" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --default-mutations-seed value: $DEFAULT_MUTATIONS_SEED" >&2
   exit 1
 fi
 if [[ -n "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" ]] && ! [[ "$DEFAULT_FORMAL_GLOBAL_PROPAGATE_BMC_BOUND" =~ ^[1-9][0-9]*$ ]]; then
@@ -593,6 +601,9 @@ lane_cache_schedule_key() {
     lane_mutations_top=""
   fi
   if [[ "$lane_mutations_seed" == "-" || -z "$lane_mutations_seed" ]]; then
+    lane_mutations_seed="$DEFAULT_MUTATIONS_SEED"
+  fi
+  if [[ "$lane_mutations_seed" == "-" || -z "$lane_mutations_seed" ]]; then
     lane_mutations_seed="1"
   fi
   if [[ "$lane_mutations_yosys" == "-" || -z "$lane_mutations_yosys" ]]; then
@@ -711,6 +722,7 @@ run_lane() {
   local lane_mutations_profiles=""
   local lane_mutations_cfg=""
   local lane_mutations_select=""
+  local lane_mutations_seed=""
   local lane_global_propagate_cmd=""
   local lane_global_propagate_timeout_seconds=""
   local lane_global_propagate_lec_timeout_seconds=""
@@ -861,8 +873,17 @@ run_lane() {
     if [[ "${MUTATIONS_TOP[$i]}" != "-" && -n "${MUTATIONS_TOP[$i]}" ]]; then
       cmd+=(--mutations-top "${MUTATIONS_TOP[$i]}")
     fi
-    if [[ "${MUTATIONS_SEED[$i]}" != "-" && -n "${MUTATIONS_SEED[$i]}" ]]; then
-      cmd+=(--mutations-seed "${MUTATIONS_SEED[$i]}")
+    lane_mutations_seed="${MUTATIONS_SEED[$i]}"
+    if [[ "$lane_mutations_seed" == "-" || -z "$lane_mutations_seed" ]]; then
+      lane_mutations_seed="$DEFAULT_MUTATIONS_SEED"
+    fi
+    if [[ -n "$lane_mutations_seed" ]]; then
+      if ! [[ "$lane_mutations_seed" =~ ^[0-9]+$ ]]; then
+        gate="CONFIG_ERROR"
+        lane_write_status
+        return 0
+      fi
+      cmd+=(--mutations-seed "$lane_mutations_seed")
     fi
     lane_mutations_yosys="${MUTATIONS_YOSYS[$i]}"
     if [[ "$lane_mutations_yosys" == "-" || -z "$lane_mutations_yosys" ]]; then

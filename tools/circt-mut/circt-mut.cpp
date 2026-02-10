@@ -805,6 +805,7 @@ struct MatrixRewriteResult {
 };
 
 struct MatrixLanePreflightDefaults {
+  std::string mutationsSeed;
   std::string mutationsYosys;
   std::string mutationsProfiles;
   std::string mutationsModeCounts;
@@ -1153,7 +1154,7 @@ static bool preflightMatrixLaneTools(
     if (!autoGenerateLane)
       continue;
 
-    StringRef effectiveSeed = normalized(laneMutationsSeed);
+    StringRef effectiveSeed = withDefault(laneMutationsSeed, defaults.mutationsSeed);
     if (effectiveSeed.empty())
       effectiveSeed = "1";
     if (!Regex("^[0-9]+$").match(effectiveSeed)) {
@@ -1416,6 +1417,10 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       continue;
     }
+    if (arg == "--default-mutations-seed" ||
+        arg.starts_with("--default-mutations-seed=")) {
+      defaults.mutationsSeed = valueFromArg().str();
+    }
     if (arg == "--default-mutations-mode-counts" ||
         arg.starts_with("--default-mutations-mode-counts=")) {
       defaults.mutationsModeCounts = valueFromArg().str();
@@ -1566,6 +1571,14 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     result.error =
         "circt-mut matrix: use either --default-mutations-mode-counts or "
         "--default-mutations-mode-weights, not both.";
+    return result;
+  }
+  if (!defaults.mutationsSeed.empty() &&
+      !Regex("^[0-9]+$").match(defaults.mutationsSeed)) {
+    result.error = (Twine("circt-mut matrix: invalid --default-mutations-seed "
+                          "value: ") +
+                    defaults.mutationsSeed + " (expected 0-9 integer).")
+                       .str();
     return result;
   }
   if (auto unknown = firstUnknownMutationProfile(defaults.mutationsProfiles)) {
@@ -2512,6 +2525,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                             "--default-mutations-cfg");
     appendOptionalConfigArg(args, cfg.matrix, "default_mutations_select",
                             "--default-mutations-select");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_seed",
+                            "--default-mutations-seed");
     appendOptionalConfigPathArg(args, cfg.matrix, "default_mutations_yosys",
                                 "--default-mutations-yosys", opts.projectDir);
 

@@ -399,6 +399,8 @@ For generated-mutation cover runs, native preflight now also validates:
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
 It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
 fail fast if the default Yosys executable is unavailable.
+Matrix default generated-mutation seed is now configurable via
+`--default-mutations-seed` for lanes that leave `mutations_seed` unset.
 Generated lanes in `--lanes-tsv` now also get native preflight validation for
 lane `mutations_yosys` values before script dispatch.
 Generated lanes now also validate:
@@ -499,6 +501,7 @@ circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --default-mutations-yosys yosys \
+  --default-mutations-seed 1 \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
@@ -613,6 +616,7 @@ circt-mut matrix \
   --lanes-tsv /path/to/lanes.tsv \
   --out-dir /tmp/mutation-matrix \
   --default-mutations-yosys yosys \
+  --default-mutations-seed 1 \
   --default-formal-global-propagate-circt-lec \
   --default-formal-global-propagate-circt-bmc \
   --default-formal-global-propagate-circt-chain auto \
