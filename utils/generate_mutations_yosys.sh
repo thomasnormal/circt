@@ -374,6 +374,27 @@ append_profile() {
         "weight_pq_ms=2"
       )
       ;;
+    fault-basic)
+      PROFILE_MODE_LIST+=("stuck" "invert" "connect")
+      PROFILE_CFG_LIST+=(
+        "weight_cover=5"
+        "pick_cover_prcnt=80"
+      )
+      ;;
+    fault-stuck)
+      PROFILE_MODE_LIST+=("stuck" "invert")
+      PROFILE_CFG_LIST+=(
+        "weight_cover=4"
+        "pick_cover_prcnt=70"
+      )
+      ;;
+    fault-connect)
+      PROFILE_MODE_LIST+=("connect" "invert")
+      PROFILE_CFG_LIST+=(
+        "weight_cover=4"
+        "pick_cover_prcnt=70"
+      )
+      ;;
     cover)
       PROFILE_CFG_LIST+=(
         "weight_cover=5"
@@ -383,7 +404,7 @@ append_profile() {
     none)
       ;;
     *)
-      echo "Unknown --profile value: $profile_name (expected arith-depth|control-depth|balanced-depth|cover|none)." >&2
+      echo "Unknown --profile value: $profile_name (expected arith-depth|control-depth|balanced-depth|fault-basic|fault-stuck|fault-connect|cover|none)." >&2
       exit 1
       ;;
   esac

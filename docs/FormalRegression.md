@@ -574,7 +574,8 @@ Execution controls:
   deterministic seed-rotated remainder assignment.
 - `--mutations-profiles <csv>`: pass-through named profile presets for
   auto-generation (`generate_mutations_yosys.sh --profiles`), e.g.
-  `arith-depth`, `control-depth`, `balanced-depth`, `cover`.
+  `arith-depth`, `control-depth`, `balanced-depth`, `fault-basic`,
+  `fault-stuck`, `fault-connect`, `cover`.
 - `--mutations-cfg <csv>`: pass-through mutate config entries for
   auto-generation (`generate_mutations_yosys.sh --cfgs`), e.g. mutation
   weight tuning such as `weight_pq_w=2,weight_cover=5`.

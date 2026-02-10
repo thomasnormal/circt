@@ -3917,6 +3917,28 @@ static bool appendProfile(StringRef profileName,
     profileCfgs.push_back("weight_pq_ms=2");
     return true;
   }
+  if (profileName == "fault-basic") {
+    profileModes.push_back("stuck");
+    profileModes.push_back("invert");
+    profileModes.push_back("connect");
+    profileCfgs.push_back("weight_cover=5");
+    profileCfgs.push_back("pick_cover_prcnt=80");
+    return true;
+  }
+  if (profileName == "fault-stuck") {
+    profileModes.push_back("stuck");
+    profileModes.push_back("invert");
+    profileCfgs.push_back("weight_cover=4");
+    profileCfgs.push_back("pick_cover_prcnt=70");
+    return true;
+  }
+  if (profileName == "fault-connect") {
+    profileModes.push_back("connect");
+    profileModes.push_back("invert");
+    profileCfgs.push_back("weight_cover=4");
+    profileCfgs.push_back("pick_cover_prcnt=70");
+    return true;
+  }
   if (profileName == "cover") {
     profileCfgs.push_back("weight_cover=5");
     profileCfgs.push_back("pick_cover_prcnt=80");
@@ -3926,7 +3948,8 @@ static bool appendProfile(StringRef profileName,
     return true;
 
   error = (Twine("circt-mut generate: unknown --profile value: ") + profileName +
-           " (expected arith-depth|control-depth|balanced-depth|cover|none)")
+           " (expected arith-depth|control-depth|balanced-depth|fault-basic|"
+           "fault-stuck|fault-connect|cover|none)")
               .str();
   return false;
 }

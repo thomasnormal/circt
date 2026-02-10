@@ -449,6 +449,9 @@ circt-mut cover \
   --mutations-seed 1
 ```
 
+For fault-model-oriented presets, use profiles such as
+`--mutations-profiles fault-basic` (or `fault-stuck`, `fault-connect`).
+
 When `--generate-mutations` is not evenly divisible:
 - across selected top-level mode groups, and
 - across concrete operators inside family aliases
