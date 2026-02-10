@@ -6918,9 +6918,12 @@ def build_ir_check_fields(entries, max_sites: int = 16):
         idx_norm = idx_raw if idx_raw else "?"
         fingerprint = compute_ir_check_fingerprint(kind, snippet)
         fingerprints.append(fingerprint)
+        display_snippet = compact_line(snippet)
+        if len(display_snippet) > 200:
+            display_snippet = display_snippet[:197] + "..."
         site = f"C{idx_norm}:{kind}"
-        if snippet:
-            site = f"{site}:{snippet}"
+        if display_snippet:
+            site = f"{site}:{display_snippet}"
         sites.append(site)
     if len(ordered) > max_sites:
         for _, kind, snippet in ordered[max_sites:]:
