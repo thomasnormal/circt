@@ -1,5 +1,73 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 952 - February 10, 2026
+
+### `circt-mut report` Matrix Governance Policy Profiles
+
+1. Extended built-in report policy profiles in
+   `tools/circt-mut/circt-mut.cpp` with matrix-focused governance presets:
+   - `formal-regression-matrix-basic`
+   - `formal-regression-matrix-trend`
+2. Profile behavior:
+   - both matrix profiles enable `--fail-on-prequalify-drift` semantics.
+   - `formal-regression-matrix-basic` adds compare-delta gates for:
+     - `matrix.global_filter_timeout_mutants_sum`
+     - `matrix.global_filter_lec_unknown_mutants_sum`
+     - `matrix.global_filter_bmc_unknown_mutants_sum`
+     - `matrix.detected_mutants_sum`
+   - `formal-regression-matrix-trend` adds trend-delta gates for the same keys.
+3. Updated report help/validation surfaces:
+   - `--policy-profile` help text now includes both matrix profiles.
+   - invalid profile diagnostics include the expanded accepted set.
+4. Added regression coverage:
+   - `test/Tools/circt-mut-report-policy-matrix-basic-drift-gate.test`
+   - `test/Tools/circt-mut-report-policy-matrix-trend-requires-history.test`
+   - updated:
+     - `test/Tools/circt-mut-report-help.test`
+     - `test/Tools/circt-mut-report-policy-invalid-profile.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-basic-drift-gate.test test/Tools/circt-mut-report-policy-matrix-trend-requires-history.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test test/Tools/circt-mut-*.test`: PASS (175/175)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-policy-matrix-governance --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `yosys/tests/sva` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
+## Iteration 951 - February 10, 2026
+
+### Formal Harness Hardening: Explicit Caller Filters for sv-tests BMC/LEC
+
+1. Enforced explicit filter contract in sv-tests formal runners:
+   - `utils/run_sv_tests_circt_bmc.sh`
+   - `utils/run_sv_tests_circt_lec.sh`
+   - both now fail fast unless caller sets at least one of:
+     - `TAG_REGEX`
+     - `TEST_FILTER`
+   - implicit default tag regexes were removed.
+2. Updated top-level formal orchestration to stay explicit and stable:
+   - `utils/run_formal_all.sh` now passes `TAG_REGEX` explicitly for:
+     - `sv-tests/BMC`
+     - `sv-tests/LEC`
+     - `sv-tests-uvm/BMC_SEMANTICS`
+3. Added/updated regression coverage:
+   - new: `test/Tools/run-sv-tests-bmc-require-filter.test`
+   - new: `test/Tools/run-sv-tests-lec-require-filter.test`
+   - updated explicit filter wiring in:
+     - `test/Tools/circt-bmc/sv-tests-expectations.mlir`
+     - `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir`
+     - `test/Tools/run-sv-tests-lec-z3-validation.test`
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv -j 4 test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test test/Tools/circt-bmc/sv-tests-expectations.mlir test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir test/Tools/run-sv-tests-lec-z3-validation.test test/Tools/run-sv-tests-bmc-simfail.test test/Tools/run-sv-tests-bmc-smtlib-fallback.test test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test test/Tools/run-formal-all-bmc-uvm-semantics-lane.test`: PASS (9/9)
+
 ## Iteration 950 - February 10, 2026
 
 ### `circt-mut report`: Matrix Prequalify Drift Integrity Gate

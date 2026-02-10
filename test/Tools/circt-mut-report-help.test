@@ -16,4 +16,5 @@
 // CHECK: --fail-if-delta-lt
 // CHECK: --fail-if-trend-delta-gt
 // CHECK: --fail-if-trend-delta-lt
+// CHECK: --fail-on-prequalify-drift
 // CHECK: --out
