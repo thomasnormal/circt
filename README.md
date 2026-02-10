@@ -385,12 +385,23 @@ It also runs native global-filter preflight checks:
 - validates `--formal-global-propagate-circt-chain` mode values
 - auto-injects LEC/BMC built-in tools for chain mode when omitted
 - rejects conflicting non-chain global filter mode combinations early.
+For generated-mutation cover runs, native preflight now also validates:
+- `--generate-mutations` as a positive integer
+- `--mutations-mode-counts` / `--mutations-mode-weights` entry syntax
+- count/weight conflict (`mode-counts` vs `mode-weights`)
+- `--mutations-mode-counts` total against `--generate-mutations`.
 `circt-mut matrix` now applies the same preflight model for default global
 filter options (`--default-formal-global-propagate-circt-*`) before dispatch.
 It also pre-resolves `--default-mutations-yosys` so generated-mutation lanes
 fail fast if the default Yosys executable is unavailable.
 Generated lanes in `--lanes-tsv` now also get native preflight validation for
 lane `mutations_yosys` values before script dispatch.
+Generated lanes now also validate:
+- `generate_count` as a positive integer
+- effective `mutations_mode_counts` / `mutations_mode_weights` syntax
+  (lane override or matrix default)
+- count/weight conflict
+- `mutations_mode_counts` total against `generate_count`.
 Lane-level formal tool fields in `--lanes-tsv` now also get native preflight
 validation (`global_propagate_circt_lec`, `global_propagate_circt_bmc`,
 `global_propagate_z3`, `global_propagate_bmc_z3`) with effective default
