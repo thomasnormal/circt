@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t/bin %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch %t/invoked\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: ln -s "$(command -v circt-mut)" %t/bin/circt-mut
+// RUN: printf 'module top; endmodule\n' > %t/orig.il
+// RUN: printf 'module top; endmodule\n' > %t/mut.il
+// RUN: not env PATH=%t/bin:/usr/bin:/bin CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut cover --design %t/orig.il --native-global-filter-probe-mutant %t/mut.il --formal-global-propagate-cmd '/bin/echo PROPAGATED' > %t/out.txt 2>&1
+// RUN: FileCheck %s < %t/out.txt
+// RUN: test ! -e %t/invoked
+//
+// CHECK: circt-mut cover: --native-global-filter-probe-mutant does not support --formal-global-propagate-cmd
+

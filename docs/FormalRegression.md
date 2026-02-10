@@ -500,6 +500,12 @@ Execution controls:
   - native preflight now validates chain-mode values, injects missing built-in
     LEC/BMC tools for `--formal-global-propagate-circt-chain`, and rejects
     conflicting non-chain global-filter mode combinations before dispatch.
+  - native runtime probe mode is now available for built-in formal filters:
+    `--native-global-filter-probe-mutant <mutant.il>`
+    (optional `--native-global-filter-probe-log <path>`). This executes
+    built-in circt-lec/circt-bmc/chain classification on a single mutant and
+    prints `classification`, `global_filter_rc`, and `global_filter_log`
+    without launching test execution.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
     instead of deferred shell-script setup failures.
   - cover formal numeric/cache controls are now validated natively:
