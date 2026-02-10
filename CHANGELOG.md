@@ -1,5 +1,21 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 987 - February 10, 2026
+
+### `sv-tests` Direct Runner Filter-Contract Regression Coverage
+
+1. Added direct regression tests for the explicit-filter contract already
+   enforced by sv-tests runners:
+   - `test/Tools/run-sv-tests-bmc-require-filter.test`
+   - `test/Tools/run-sv-tests-lec-require-filter.test`
+2. Scope:
+   - verifies both runners fail fast when neither `TAG_REGEX` nor
+     `TEST_FILTER` is provided, preventing accidental full-suite defaults.
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-sv-tests-bmc-require-filter.test test/Tools/run-sv-tests-lec-require-filter.test`: PASS (2/2)
+
 ## Iteration 986 - February 10, 2026
 
 ### `run_formal_all`: Guard Strict No-Drop Option Against Silent No-Op
