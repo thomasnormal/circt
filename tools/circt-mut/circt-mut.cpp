@@ -370,6 +370,49 @@ static AllocationParseResult parseModeAllocationCSV(StringRef csv) {
   return result;
 }
 
+static bool isKnownMutationMode(StringRef mode) {
+  return mode == "inv" || mode == "const0" || mode == "const1" ||
+         mode == "cnot0" || mode == "cnot1" || mode == "arith" ||
+         mode == "control" || mode == "balanced" || mode == "all" ||
+         mode == "stuck" || mode == "invert" || mode == "connect";
+}
+
+static std::optional<std::string>
+firstUnknownMutationModeCSV(StringRef csv) {
+  if (csv.empty())
+    return std::nullopt;
+  SmallVector<StringRef, 16> entries;
+  csv.split(entries, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef raw : entries) {
+    StringRef mode = raw.trim();
+    if (mode.empty())
+      continue;
+    if (!isKnownMutationMode(mode))
+      return mode.str();
+  }
+  return std::nullopt;
+}
+
+static std::optional<std::string>
+firstUnknownMutationModeInAllocationCSV(StringRef csv) {
+  if (csv.empty())
+    return std::nullopt;
+  SmallVector<StringRef, 16> entries;
+  csv.split(entries, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef rawEntry : entries) {
+    StringRef entry = rawEntry.trim();
+    if (entry.empty())
+      continue;
+    auto split = entry.split('=');
+    StringRef modeName = split.first.trim();
+    if (modeName.empty() || split.second == split.first)
+      continue;
+    if (!isKnownMutationMode(modeName))
+      return modeName.str();
+  }
+  return std::nullopt;
+}
+
 static bool isKnownMutationProfile(StringRef profile) {
   return profile == "arith-depth" || profile == "control-depth" ||
          profile == "balanced-depth" || profile == "fault-basic" ||
@@ -406,6 +449,7 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
   bool wantsHelp = false;
   std::string generateMutations;
   std::string mutationsSeed;
+  std::string mutationsModes;
   std::string mutationsProfiles;
   std::string mutationsModeCounts;
   std::string mutationsModeWeights;
@@ -527,6 +571,8 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     }
     if (arg == "--mutations-seed" || arg.starts_with("--mutations-seed="))
       mutationsSeed = valueFromArg().str();
+    if (arg == "--mutations-modes" || arg.starts_with("--mutations-modes="))
+      mutationsModes = valueFromArg().str();
     if (arg == "--mutations-mode-counts" ||
         arg.starts_with("--mutations-mode-counts="))
       mutationsModeCounts = valueFromArg().str();
@@ -606,6 +652,15 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                          .str();
       return result;
     }
+    if (auto unknown = firstUnknownMutationModeCSV(mutationsModes)) {
+      result.error = (Twine("circt-mut cover: unknown --mutations-modes "
+                            "value: ") +
+                      *unknown +
+                      " (expected inv|const0|const1|cnot0|cnot1|"
+                      "arith|control|balanced|all|stuck|invert|connect).")
+                         .str();
+      return result;
+    }
     if (!mutationsSeed.empty() && !Regex("^[0-9]+$").match(mutationsSeed)) {
       result.error = (Twine("circt-mut cover: invalid --mutations-seed value: ") +
                       mutationsSeed + " (expected 0-9 integer).")
@@ -642,6 +697,16 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                          .str();
       return result;
     }
+    if (auto unknown =
+            firstUnknownMutationModeInAllocationCSV(mutationsModeCounts)) {
+      result.error =
+          (Twine("circt-mut cover: unknown --mutations-mode-counts mode: ") +
+           *unknown +
+           " (expected inv|const0|const1|cnot0|cnot1|"
+           "arith|control|balanced|all|stuck|invert|connect).")
+              .str();
+      return result;
+    }
 
     AllocationParseResult modeWeights =
         parseModeAllocationCSV(mutationsModeWeights);
@@ -658,6 +723,16 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                       modeWeights.modeName + ": " + modeWeights.value +
                       " (expected positive integer).")
                          .str();
+      return result;
+    }
+    if (auto unknown =
+            firstUnknownMutationModeInAllocationCSV(mutationsModeWeights)) {
+      result.error =
+          (Twine("circt-mut cover: unknown --mutations-mode-weights mode: ") +
+           *unknown +
+           " (expected inv|const0|const1|cnot0|cnot1|"
+           "arith|control|balanced|all|stuck|invert|connect).")
+              .str();
       return result;
     }
 
@@ -805,6 +880,7 @@ struct MatrixRewriteResult {
 };
 
 struct MatrixLanePreflightDefaults {
+  std::string mutationsModes;
   std::string mutationsSeed;
   std::string mutationsYosys;
   std::string mutationsProfiles;
@@ -876,6 +952,7 @@ static bool preflightMatrixLaneTools(
     StringRef laneID = getCol(0);
     StringRef mutationsFile = getCol(2);
     StringRef generateCount = getCol(7);
+    StringRef laneMutationsModes = getCol(13);
     StringRef laneMutationsSeed = getCol(9);
     StringRef laneMutationsYosys = getCol(10);
     StringRef laneMutationsProfiles = getCol(32);
@@ -1154,6 +1231,19 @@ static bool preflightMatrixLaneTools(
     if (!autoGenerateLane)
       continue;
 
+    StringRef effectiveModes =
+        withDefault(laneMutationsModes, defaults.mutationsModes);
+    if (auto unknown = firstUnknownMutationModeCSV(effectiveModes)) {
+      error = (Twine("Unknown lane mutations_modes value in --lanes-tsv at "
+                     "line ") +
+               Twine(static_cast<unsigned long long>(lineIdx + 1)) +
+               " (lane " + laneLabel + "): " + *unknown +
+               " (expected inv|const0|const1|cnot0|cnot1|"
+               "arith|control|balanced|all|stuck|invert|connect).")
+                  .str();
+      return false;
+    }
+
     StringRef effectiveSeed = withDefault(laneMutationsSeed, defaults.mutationsSeed);
     if (effectiveSeed.empty())
       effectiveSeed = "1";
@@ -1216,6 +1306,18 @@ static bool preflightMatrixLaneTools(
               .str();
       return false;
     }
+    if (auto unknown =
+            firstUnknownMutationModeInAllocationCSV(effectiveModeCounts)) {
+      error =
+          (Twine("Unknown lane mutations_mode_counts mode in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + *unknown +
+           " (expected inv|const0|const1|cnot0|cnot1|"
+           "arith|control|balanced|all|stuck|invert|connect).")
+              .str();
+      return false;
+    }
     AllocationParseResult modeWeights =
         parseModeAllocationCSV(effectiveModeWeights);
     if (modeWeights.errorKind == AllocationParseErrorKind::InvalidEntry) {
@@ -1236,6 +1338,18 @@ static bool preflightMatrixLaneTools(
            laneLabel + "): " + modeWeights.modeName + "=" +
            modeWeights.value +
            " (expected NAME=WEIGHT with positive integer WEIGHT).")
+              .str();
+      return false;
+    }
+    if (auto unknown =
+            firstUnknownMutationModeInAllocationCSV(effectiveModeWeights)) {
+      error =
+          (Twine("Unknown lane mutations_mode_weights mode in --lanes-tsv at "
+                 "line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel + "): " + *unknown +
+           " (expected inv|const0|const1|cnot0|cnot1|"
+           "arith|control|balanced|all|stuck|invert|connect).")
               .str();
       return false;
     }
@@ -1421,6 +1535,10 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
         arg.starts_with("--default-mutations-seed=")) {
       defaults.mutationsSeed = valueFromArg().str();
     }
+    if (arg == "--default-mutations-modes" ||
+        arg.starts_with("--default-mutations-modes=")) {
+      defaults.mutationsModes = valueFromArg().str();
+    }
     if (arg == "--default-mutations-mode-counts" ||
         arg.starts_with("--default-mutations-mode-counts=")) {
       defaults.mutationsModeCounts = valueFromArg().str();
@@ -1571,6 +1689,37 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     result.error =
         "circt-mut matrix: use either --default-mutations-mode-counts or "
         "--default-mutations-mode-weights, not both.";
+    return result;
+  }
+  if (auto unknown = firstUnknownMutationModeCSV(defaults.mutationsModes)) {
+    result.error =
+        (Twine("circt-mut matrix: unknown --default-mutations-modes value: ") +
+         *unknown +
+         " (expected inv|const0|const1|cnot0|cnot1|"
+         "arith|control|balanced|all|stuck|invert|connect).")
+            .str();
+    return result;
+  }
+  if (auto unknown =
+          firstUnknownMutationModeInAllocationCSV(defaults.mutationsModeCounts)) {
+    result.error =
+        (Twine("circt-mut matrix: unknown --default-mutations-mode-counts "
+               "mode: ") +
+         *unknown +
+         " (expected inv|const0|const1|cnot0|cnot1|"
+         "arith|control|balanced|all|stuck|invert|connect).")
+            .str();
+    return result;
+  }
+  if (auto unknown = firstUnknownMutationModeInAllocationCSV(
+          defaults.mutationsModeWeights)) {
+    result.error =
+        (Twine("circt-mut matrix: unknown --default-mutations-mode-weights "
+               "mode: ") +
+         *unknown +
+         " (expected inv|const0|const1|cnot0|cnot1|"
+         "arith|control|balanced|all|stuck|invert|connect).")
+            .str();
     return result;
   }
   if (!defaults.mutationsSeed.empty() &&
@@ -4494,6 +4643,17 @@ static int runNativeGenerate(const GenerateOptions &opts) {
       return 1;
     }
   }
+  for (const std::string &modeEntry : opts.modeList) {
+    StringRef mode = StringRef(modeEntry).trim();
+    if (mode.empty())
+      continue;
+    if (!isKnownMutationMode(mode)) {
+      errs() << "circt-mut generate: unknown --mode value: " << mode
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
+      return 1;
+    }
+  }
 
   bool modeCountsEnabled = false;
   uint64_t modeCountsTotal = 0;
@@ -4513,6 +4673,12 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     if (!parsePositiveUInt(countRef, modeCountValue)) {
       errs() << "circt-mut generate: invalid --mode-count count for " << modeName
              << ": " << countRef << " (expected positive integer)\n";
+      return 1;
+    }
+    if (!isKnownMutationMode(modeName)) {
+      errs() << "circt-mut generate: unknown --mode-count mode: " << modeName
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
       return 1;
     }
     if (!modeCountByMode.count(modeName))
@@ -4545,6 +4711,12 @@ static int runNativeGenerate(const GenerateOptions &opts) {
       errs() << "circt-mut generate: invalid --mode-weight weight for "
              << modeName << ": " << weightRef
              << " (expected positive integer)\n";
+      return 1;
+    }
+    if (!isKnownMutationMode(modeName)) {
+      errs() << "circt-mut generate: unknown --mode-weight mode: " << modeName
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
       return 1;
     }
     if (!modeWeightByMode.count(modeName))

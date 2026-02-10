@@ -391,8 +391,10 @@ Cover mutation source consistency is now also validated natively:
 For generated-mutation cover runs, native preflight now also validates:
 - `--generate-mutations` as a positive integer
 - `--mutations-seed` as a non-negative integer
+- `--mutations-modes` names against supported mode/family set
 - `--mutations-profiles` names against built-in profile set
 - `--mutations-mode-counts` / `--mutations-mode-weights` entry syntax
+- `--mutations-mode-counts` / `--mutations-mode-weights` mode names
 - count/weight conflict (`mode-counts` vs `mode-weights`)
 - `--mutations-mode-counts` total against `--generate-mutations`.
 `circt-mut matrix` now applies the same preflight model for default global
@@ -406,8 +408,10 @@ lane `mutations_yosys` values before script dispatch.
 Generated lanes now also validate:
 - `generate_count` as a positive integer
 - `mutations_seed` as a non-negative integer (defaults to `1` when unset)
+- effective `mutations_modes` names
 - effective `mutations_mode_counts` / `mutations_mode_weights` syntax
   (lane override or matrix default)
+- effective `mutations_mode_counts` / `mutations_mode_weights` mode names
 - count/weight conflict
 - `mutations_mode_counts` total against `generate_count`.
 Lane mutation source consistency is now also validated natively:
@@ -435,6 +439,9 @@ Matrix default numeric/cache options now also fail fast natively:
 Matrix default mutation allocation options now also fail fast natively:
 `--default-mutations-mode-counts` and `--default-mutations-mode-weights`
 (syntax/value checks plus mutual-exclusion conflict checks).
+Matrix default mutation mode names are now also validated natively:
+`--default-mutations-modes`, `--default-mutations-mode-counts`,
+`--default-mutations-mode-weights`.
 Matrix generated-lane/default profile names are now also validated natively:
 `--default-mutations-profiles` and lane `mutations_profiles`.
 When effective matrix global-filter mode + timeout settings are non-zero
@@ -452,7 +459,9 @@ options for built-in filters (`--formal-global-propagate-z3`,
 `--formal-global-propagate-bmc-z3`, and default matrix variants) and fail fast
 if unresolved.
 `circt-mut cover` also pre-resolves `--mutations-yosys`, and native
-`circt-mut generate` now fail-fast resolves `--yosys` before execution.
+`circt-mut generate` now fail-fast resolves `--yosys` before execution and
+validates `--mode` / `--mode-count(s)` / `--mode-weight(s)` names against the
+supported mode/family set.
 
 For CI robustness, set `--formal-global-propagate-timeout-seconds <N>` to cap
 global formal filter wall time per mutant. Timeout outcomes are classified

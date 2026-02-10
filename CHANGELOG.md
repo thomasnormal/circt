@@ -1,5 +1,56 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 845 - February 10, 2026
+
+### Generated-Mutation Mode Name Preflight (`circt-mut`)
+
+1. Extended native mutation preflight with fail-fast mode-name validation for
+   generated flows, using the built-in mode/family set:
+   `inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect`.
+2. Cover preflight additions:
+   - validates `--mutations-modes` names.
+   - validates mode keys in `--mutations-mode-counts` /
+     `--mutations-mode-weights`.
+3. Matrix preflight additions:
+   - validates `--default-mutations-modes` names.
+   - validates mode keys in
+     `--default-mutations-mode-counts` / `--default-mutations-mode-weights`.
+   - validates effective lane generated-mode names (`mutations_modes`) and mode
+     keys in effective lane `mutations_mode_counts` / `mutations_mode_weights`.
+4. Native `circt-mut generate` additions:
+   - validates `--mode` / `--modes` names.
+   - validates mode keys in `--mode-count(s)` / `--mode-weight(s)`.
+5. This removes another class of deferred script/Yosys failures and keeps
+   generated-campaign config diagnostics centralized and deterministic.
+
+### Tests and Documentation
+
+- Added native regression tests:
+  - `test/Tools/circt-mut-cover-generate-modes-invalid-native.test`
+  - `test/Tools/circt-mut-cover-generate-mode-counts-mode-invalid-native.test`
+  - `test/Tools/circt-mut-cover-generate-mode-weights-mode-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-default-mutations-modes-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-default-mode-counts-mode-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-mutations-modes-invalid-native.test`
+  - `test/Tools/circt-mut-matrix-lane-mode-counts-mode-invalid-native.test`
+  - `test/Tools/circt-mut-generate-native-mode-invalid.test`
+- Updated docs:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-cover-*.test test/Tools/circt-mut-matrix-*.test test/Tools/circt-mut-generate-native-*.test`: PASS (68/68)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test test/Tools/run-mutation-generate*.test`: PASS (28/28)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-mode-validation --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`, `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 844 - February 10, 2026
 
 ### Matrix Default Generated-Mutation Seed (`circt-mut` + matrix script)
