@@ -28,6 +28,8 @@ BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-0}"
 Z3_BIN="${Z3_BIN:-}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+FAIL_ON_DROP_REMARKS="${FAIL_ON_DROP_REMARKS:-0}"
+DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_SEMANTIC_TAG_MAP_FILE="${BMC_SEMANTIC_TAG_MAP_FILE:-}"
@@ -161,6 +163,7 @@ unknown=0
 timeout=0
 skip=0
 total=0
+drop_remark_cases=0
 
 declare -A expect_mode
 declare -A semantic_tags_by_case
@@ -370,6 +373,9 @@ while IFS= read -r -d '' sv; do
   cmd+=("${files[@]}")
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+    if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+      drop_remark_cases=$((drop_remark_cases + 1))
+    fi
     # Treat expected compile failures as PASS for negative compilation/parsing
     # tests. Simulation-negative tests are expected to compile and are handled
     # via SAT/UNSAT classification below.
@@ -382,6 +388,9 @@ while IFS= read -r -d '' sv; do
     fi
     emit_result_row "$result" "$base" "$sv"
     continue
+  fi
+  if grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+    drop_remark_cases=$((drop_remark_cases + 1))
   fi
 
   if [[ "$run_bmc" == "0" ]]; then
@@ -574,4 +583,9 @@ if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; the
 fi
 
 echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
+echo "sv-tests dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
 echo "results: $OUT"
+if [[ "$FAIL_ON_DROP_REMARKS" == "1" && "$drop_remark_cases" -gt 0 ]]; then
+  echo "FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=$drop_remark_cases" >&2
+  exit 2
+fi
