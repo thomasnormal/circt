@@ -109,7 +109,8 @@ utils/run_formal_all.sh --with-opentitan-e2e --with-opentitan-e2e-strict --opent
 Use the mutation harness to classify injected faults into:
 `not_activated`, `not_propagated`, `propagated_not_detected`, and `detected`.
 
-Preferred frontend: `circt-mut` (`init`, `cover`, `matrix`, `generate`).
+Preferred frontend: `circt-mut` (`init`, `run`, `cover`, `matrix`,
+`generate`).
 Legacy `utils/run_mutation_*.sh` entrypoints remain supported.
 
 Bootstrap a project template:
@@ -122,6 +123,15 @@ This creates:
 - `circt-mut.toml` with baseline cover/matrix settings
 - `tests.tsv` template
 - `lanes.tsv` template
+
+Run from project config:
+
+```bash
+circt-mut run --project-dir /path/to/mut-campaign --mode all
+```
+
+`circt-mut run` reads `circt-mut.toml` and dispatches the native
+preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
 
 Basic usage:
 

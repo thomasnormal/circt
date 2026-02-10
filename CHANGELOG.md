@@ -1,5 +1,51 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 822 - February 10, 2026
+
+### Native `circt-mut run` Config-Consume Flow
+
+1. Added native `circt-mut run` to consume project config and launch campaign
+   flows without hand-writing long CLI invocations:
+   - `circt-mut run --project-dir <dir> --mode cover|matrix|all`
+   - reads TOML from `<project-dir>/circt-mut.toml` (or `--config` path).
+   - maps config keys into native-preflight-backed `cover` / `matrix`
+     dispatches.
+2. Added relative-path resolution against `--project-dir` for path-like config
+   keys (`design`, `mutations_file`, `tests_manifest`, `work_dir`, `lanes_tsv`,
+   `out_dir`), so project-local configs are portable.
+3. Refactored main dispatch to reuse shared `runCoverFlow`/`runMatrixFlow`
+   helpers, reducing duplicate script-rewrite/dispatch code paths.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-run-help.test`
+  - `test/Tools/circt-mut-run-cover-config.test`
+  - `test/Tools/circt-mut-run-matrix-config.test`
+  - `test/Tools/circt-mut-run-missing-required-key.test`
+- Updated:
+  - `test/Tools/circt-mut-help.test` (subcommand list includes `run`)
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-help.test test/Tools/circt-mut-run-help.test test/Tools/circt-mut-run-cover-config.test test/Tools/circt-mut-run-matrix-config.test test/Tools/circt-mut-run-missing-required-key.test`: PASS (5/5)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (92/92)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation*.test`: 116/117 PASS with one transient failure:
+  - `test/Tools/run-mutation-matrix-schedule-cache-aware.test` showed
+    intermittent order sensitivity; passed on immediate isolated rerun:
+    `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix-schedule-cache-aware.test`
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-run-config --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL: `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 821 - February 10, 2026
 
 ### Native `circt-mut init` Project Bootstrap

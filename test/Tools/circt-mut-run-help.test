@@ -1,0 +1,6 @@
+// RUN: circt-mut run --help | FileCheck %s
+
+// CHECK: usage: circt-mut run [options]
+// CHECK: --project-dir DIR
+// CHECK: --config FILE
+// CHECK: --mode MODE

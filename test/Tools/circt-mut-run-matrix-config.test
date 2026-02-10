@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t/proj %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SCRIPT:run_mutation_matrix.sh\nfor a in "$@"; do echo ARG:$a; done\n' > %t/scripts/run_mutation_matrix.sh
+// RUN: chmod +x %t/scripts/run_mutation_matrix.sh
+// RUN: printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\t-\t-\t-\n' > %t/proj/lanes.tsv
+// RUN: printf '[matrix]\nlanes_tsv = "lanes.tsv"\nout_dir = "out/matrix"\ndefault_formal_global_propagate_timeout_seconds = 0\n' > %t/proj/circt-mut.toml
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode matrix > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: SCRIPT:run_mutation_matrix.sh
+// CHECK-DAG: ARG:--lanes-tsv
+// CHECK-DAG: ARG:{{.*}}/lanes.tsv
+// CHECK-DAG: ARG:--out-dir
+// CHECK-DAG: ARG:{{.*}}/out/matrix
+// CHECK-DAG: ARG:--default-formal-global-propagate-timeout-seconds
+// CHECK-DAG: ARG:0

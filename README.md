@@ -195,8 +195,8 @@ Build the tools:
 ninja -C build circt-mut circt-bmc circt-lec circt-verilog
 ```
 
-Preferred frontend: `circt-mut` (subcommands: `init`, `cover`, `matrix`,
-`generate`).
+Preferred frontend: `circt-mut` (subcommands: `init`, `run`, `cover`,
+`matrix`, `generate`).
 Legacy script entrypoints under `utils/` remain supported for compatibility.
 `circt-mut generate` now has a native execution path for core generation
 options, including native generated-mutation caching via `--cache-dir`.
@@ -213,6 +213,15 @@ This writes:
 - `mut-campaign/circt-mut.toml` (cover/matrix defaults)
 - `mut-campaign/tests.tsv` (test manifest template)
 - `mut-campaign/lanes.tsv` (matrix lane template)
+
+Run from project config:
+
+```sh
+circt-mut run --project-dir mut-campaign --mode all
+```
+
+`circt-mut run` consumes `circt-mut.toml` and dispatches native
+preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
 
 Run a single mutation campaign:
 

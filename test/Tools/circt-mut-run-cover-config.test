@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/proj %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SCRIPT:run_mutation_cover.sh\nfor a in "$@"; do echo ARG:$a; done\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf '[cover]\ndesign = "d.il"\nmutations_file = "m.txt"\ntests_manifest = "t.tsv"\nwork_dir = "out/cover"\n' > %t/proj/circt-mut.toml
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode cover > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: SCRIPT:run_mutation_cover.sh
+// CHECK-DAG: ARG:--design
+// CHECK-DAG: ARG:{{.*}}/d.il
+// CHECK-DAG: ARG:--mutations-file
+// CHECK-DAG: ARG:{{.*}}/m.txt
+// CHECK-DAG: ARG:--tests-manifest
+// CHECK-DAG: ARG:{{.*}}/t.tsv
+// CHECK-DAG: ARG:--work-dir
+// CHECK-DAG: ARG:{{.*}}/out/cover

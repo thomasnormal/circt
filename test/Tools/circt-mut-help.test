@@ -5,6 +5,7 @@
 // CHECK: circt-mut <subcommand> [args...]
 // CHECK: Subcommands:
 // CHECK: init
+// CHECK: run
 // CHECK: cover
 // CHECK: matrix
 // CHECK: generate

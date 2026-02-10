@@ -47,6 +47,7 @@ static void printHelp(raw_ostream &os) {
   os << "  circt-mut <subcommand> [args...]\n\n";
   os << "Subcommands:\n";
   os << "  init      Initialize a mutation campaign project template\n";
+  os << "  run       Run campaign from circt-mut.toml project config\n";
   os << "  cover     Run mutation coverage flow (run_mutation_cover.sh)\n";
   os << "  matrix    Run mutation lane matrix flow (run_mutation_matrix.sh)\n";
   os << "  generate  Generate mutation lists (native path; script fallback)\n\n";
@@ -54,6 +55,7 @@ static void printHelp(raw_ostream &os) {
   os << "  CIRCT_MUT_SCRIPTS_DIR  Override script directory location\n\n";
   os << "Examples:\n";
   os << "  circt-mut init --project-dir mut-campaign\n";
+  os << "  circt-mut run --project-dir mut-campaign --mode all\n";
   os << "  circt-mut cover --help\n";
   os << "  circt-mut matrix --lanes-tsv lanes.tsv --out-dir out\n";
   os << "  circt-mut generate --design design.v --out mutations.txt\n";
@@ -101,6 +103,15 @@ static void printInitHelp(raw_ostream &os) {
   os << "  <project-dir>/circt-mut.toml\n";
   os << "  <project-dir>/<tests-manifest>\n";
   os << "  <project-dir>/<lanes-tsv>\n";
+}
+
+static void printRunHelp(raw_ostream &os) {
+  os << "usage: circt-mut run [options]\n\n";
+  os << "Options:\n";
+  os << "  --project-dir DIR        Project root directory (default: .)\n";
+  os << "  --config FILE            Config file path (default: <project-dir>/circt-mut.toml)\n";
+  os << "  --mode MODE              cover|matrix|all (default: all)\n";
+  os << "  -h, --help               Show help\n";
 }
 
 static std::optional<StringRef> mapSubcommandToScript(StringRef subcommand) {
@@ -1263,6 +1274,48 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   return result;
 }
 
+static int runCoverFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
+  CoverRewriteResult rewrite = rewriteCoverArgs(argv0, forwardedArgs);
+  if (!rewrite.ok) {
+    errs() << rewrite.error << "\n";
+    return 1;
+  }
+
+  auto scriptPath = resolveScriptPath(argv0, "run_mutation_cover.sh");
+  if (!scriptPath) {
+    errs() << "circt-mut: unable to locate script 'run_mutation_cover.sh'.\n";
+    errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+              " utils scripts.\n";
+    return 1;
+  }
+
+  SmallVector<StringRef, 32> rewrittenArgsRef;
+  for (const std::string &arg : rewrite.rewrittenArgs)
+    rewrittenArgsRef.push_back(arg);
+  return dispatchToScript(*scriptPath, rewrittenArgsRef);
+}
+
+static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
+  MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
+  if (!rewrite.ok) {
+    errs() << rewrite.error << "\n";
+    return 1;
+  }
+
+  auto scriptPath = resolveScriptPath(argv0, "run_mutation_matrix.sh");
+  if (!scriptPath) {
+    errs() << "circt-mut: unable to locate script 'run_mutation_matrix.sh'.\n";
+    errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
+              " utils scripts.\n";
+    return 1;
+  }
+
+  SmallVector<StringRef, 32> rewrittenArgsRef;
+  for (const std::string &arg : rewrite.rewrittenArgs)
+    rewrittenArgsRef.push_back(arg);
+  return dispatchToScript(*scriptPath, rewrittenArgsRef);
+}
+
 struct InitOptions {
   std::string projectDir = ".";
   std::string design = "design.il";
@@ -1507,6 +1560,333 @@ static int runNativeInit(const InitOptions &opts) {
   outs() << "  Tests manifest template: " << testsPath << "\n";
   outs() << "  Lanes template: " << lanesPath << "\n";
   return 0;
+}
+
+struct RunOptions {
+  std::string projectDir = ".";
+  std::string configPath;
+  std::string mode = "all";
+};
+
+struct RunParseResult {
+  bool ok = false;
+  bool showHelp = false;
+  std::string error;
+  RunOptions opts;
+};
+
+struct RunConfigValues {
+  StringMap<std::string> cover;
+  StringMap<std::string> matrix;
+};
+
+static bool parseTomlQuotedString(StringRef value, std::string &out,
+                                  std::string &error, StringRef path,
+                                  size_t lineNo) {
+  if (value.size() < 2 || !value.starts_with("\"") || !value.ends_with("\"")) {
+    error = (Twine("circt-mut run: invalid TOML string in ") + path + ":" +
+             Twine(static_cast<unsigned long long>(lineNo)) + ": " + value)
+                .str();
+    return false;
+  }
+  out.clear();
+  for (size_t i = 1; i + 1 < value.size(); ++i) {
+    char c = value[i];
+    if (c != '\\') {
+      out.push_back(c);
+      continue;
+    }
+    if (i + 2 >= value.size()) {
+      error = (Twine("circt-mut run: invalid TOML escape in ") + path + ":" +
+               Twine(static_cast<unsigned long long>(lineNo)))
+                  .str();
+      return false;
+    }
+    char next = value[++i];
+    switch (next) {
+    case '\\':
+    case '"':
+      out.push_back(next);
+      break;
+    case 'n':
+      out.push_back('\n');
+      break;
+    case 't':
+      out.push_back('\t');
+      break;
+    default:
+      error = (Twine("circt-mut run: unsupported TOML escape in ") + path +
+               ":" + Twine(static_cast<unsigned long long>(lineNo)))
+                  .str();
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool parseRunConfigFile(StringRef path, RunConfigValues &cfg,
+                               std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut run: unable to read config file: ") + path).str();
+    return false;
+  }
+
+  StringRef section;
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  for (size_t i = 0; i < lines.size(); ++i) {
+    StringRef rawLine = lines[i];
+    StringRef line = rawLine.trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    if (line.starts_with("[") && line.ends_with("]")) {
+      section = line.drop_front().drop_back().trim();
+      continue;
+    }
+
+    size_t eqPos = line.find('=');
+    if (eqPos == StringRef::npos)
+      continue;
+    StringRef key = line.substr(0, eqPos).trim();
+    StringRef value = line.substr(eqPos + 1).trim();
+    if (key.empty())
+      continue;
+
+    if (!value.starts_with("\"")) {
+      size_t hashPos = value.find('#');
+      if (hashPos != StringRef::npos)
+        value = value.substr(0, hashPos).trim();
+    }
+
+    std::string parsedValue;
+    if (value.starts_with("\"")) {
+      if (!parseTomlQuotedString(value, parsedValue, error, path, i + 1))
+        return false;
+    } else {
+      parsedValue = value.str();
+    }
+
+    if (section == "cover")
+      cfg.cover[key] = parsedValue;
+    else if (section == "matrix")
+      cfg.matrix[key] = parsedValue;
+  }
+
+  return true;
+}
+
+static bool appendRequiredConfigArg(SmallVectorImpl<std::string> &args,
+                                    const StringMap<std::string> &sectionMap,
+                                    StringRef key, StringRef optionFlag,
+                                    StringRef sectionName, StringRef projectDir,
+                                    bool resolveRelativePath,
+                                    std::string &error) {
+  auto it = sectionMap.find(key);
+  if (it == sectionMap.end() || it->second.empty()) {
+    error =
+        (Twine("circt-mut run: missing required [") + sectionName + "] key '" +
+         key + "' in config.")
+            .str();
+    return false;
+  }
+  std::string value = it->second;
+  if (resolveRelativePath && !sys::path::is_absolute(value)) {
+    SmallString<256> joined(projectDir);
+    sys::path::append(joined, value);
+    value = std::string(joined.str());
+  }
+  args.push_back(optionFlag.str());
+  args.push_back(value);
+  return true;
+}
+
+static void appendOptionalConfigArg(SmallVectorImpl<std::string> &args,
+                                    const StringMap<std::string> &sectionMap,
+                                    StringRef key, StringRef optionFlag) {
+  auto it = sectionMap.find(key);
+  if (it == sectionMap.end() || it->second.empty())
+    return;
+  args.push_back(optionFlag.str());
+  args.push_back(it->second);
+}
+
+static RunParseResult parseRunArgs(ArrayRef<StringRef> args) {
+  RunParseResult result;
+
+  auto consumeValue = [&](size_t &index, StringRef arg,
+                          StringRef optName) -> std::optional<StringRef> {
+    size_t eqPos = arg.find('=');
+    if (eqPos != StringRef::npos) {
+      StringRef value = arg.substr(eqPos + 1);
+      if (value.empty()) {
+        result.error =
+            (Twine("circt-mut run: missing value for ") + optName).str();
+        return std::nullopt;
+      }
+      return value;
+    }
+    if (index + 1 >= args.size()) {
+      result.error = (Twine("circt-mut run: missing value for ") + optName).str();
+      return std::nullopt;
+    }
+    return args[++index];
+  };
+
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == "-h" || arg == "--help") {
+      result.showHelp = true;
+      result.ok = true;
+      return result;
+    }
+    if (arg == "--project-dir" || arg.starts_with("--project-dir=")) {
+      auto v = consumeValue(i, arg, "--project-dir");
+      if (!v)
+        return result;
+      result.opts.projectDir = v->str();
+      continue;
+    }
+    if (arg == "--config" || arg.starts_with("--config=")) {
+      auto v = consumeValue(i, arg, "--config");
+      if (!v)
+        return result;
+      result.opts.configPath = v->str();
+      continue;
+    }
+    if (arg == "--mode" || arg.starts_with("--mode=")) {
+      auto v = consumeValue(i, arg, "--mode");
+      if (!v)
+        return result;
+      result.opts.mode = v->str();
+      continue;
+    }
+
+    if (arg.starts_with("-")) {
+      result.error = (Twine("circt-mut run: unknown option: ") + arg).str();
+      return result;
+    }
+    result.error =
+        (Twine("circt-mut run: unexpected positional argument: ") + arg).str();
+    return result;
+  }
+
+  if (result.opts.mode != "cover" && result.opts.mode != "matrix" &&
+      result.opts.mode != "all") {
+    result.error =
+        (Twine("circt-mut run: invalid --mode value: ") + result.opts.mode +
+         " (expected cover|matrix|all)")
+            .str();
+    return result;
+  }
+
+  result.ok = true;
+  return result;
+}
+
+static int runNativeRun(const char *argv0, const RunOptions &opts) {
+  SmallString<256> configPath;
+  if (opts.configPath.empty()) {
+    configPath = opts.projectDir;
+    sys::path::append(configPath, "circt-mut.toml");
+  } else if (sys::path::is_absolute(opts.configPath)) {
+    configPath = opts.configPath;
+  } else {
+    configPath = opts.projectDir;
+    sys::path::append(configPath, opts.configPath);
+  }
+
+  RunConfigValues cfg;
+  std::string error;
+  if (!parseRunConfigFile(configPath, cfg, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  auto runCoverFromConfig = [&]() -> int {
+    SmallVector<std::string, 32> args;
+    if (!appendRequiredConfigArg(args, cfg.cover, "design", "--design", "cover",
+                                 opts.projectDir, /*resolveRelativePath=*/true,
+                                 error) ||
+        !appendRequiredConfigArg(args, cfg.cover, "mutations_file",
+                                 "--mutations-file", "cover", opts.projectDir,
+                                 /*resolveRelativePath=*/true, error) ||
+        !appendRequiredConfigArg(args, cfg.cover, "tests_manifest",
+                                 "--tests-manifest", "cover", opts.projectDir,
+                                 /*resolveRelativePath=*/true, error) ||
+        !appendRequiredConfigArg(args, cfg.cover, "work_dir", "--work-dir",
+                                 "cover", opts.projectDir,
+                                 /*resolveRelativePath=*/true, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_chain",
+                            "--formal-global-propagate-circt-chain");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_timeout_seconds",
+                            "--formal-global-propagate-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_lec_timeout_seconds",
+                            "--formal-global-propagate-lec-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.cover,
+                            "formal_global_propagate_bmc_timeout_seconds",
+                            "--formal-global-propagate-bmc-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_lec",
+                            "--formal-global-propagate-circt-lec");
+    appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_circt_bmc",
+                            "--formal-global-propagate-circt-bmc");
+
+    SmallVector<StringRef, 32> argRefs;
+    for (const auto &arg : args)
+      argRefs.push_back(arg);
+    return runCoverFlow(argv0, argRefs);
+  };
+
+  auto runMatrixFromConfig = [&]() -> int {
+    SmallVector<std::string, 32> args;
+    if (!appendRequiredConfigArg(args, cfg.matrix, "lanes_tsv", "--lanes-tsv",
+                                 "matrix", opts.projectDir,
+                                 /*resolveRelativePath=*/true, error) ||
+        !appendRequiredConfigArg(args, cfg.matrix, "out_dir", "--out-dir",
+                                 "matrix", opts.projectDir,
+                                 /*resolveRelativePath=*/true, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_circt_chain",
+                            "--default-formal-global-propagate-circt-chain");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_timeout_seconds",
+                            "--default-formal-global-propagate-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_lec_timeout_seconds",
+                            "--default-formal-global-propagate-lec-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_bmc_timeout_seconds",
+                            "--default-formal-global-propagate-bmc-timeout-seconds");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_circt_lec",
+                            "--default-formal-global-propagate-circt-lec");
+    appendOptionalConfigArg(args, cfg.matrix,
+                            "default_formal_global_propagate_circt_bmc",
+                            "--default-formal-global-propagate-circt-bmc");
+
+    SmallVector<StringRef, 32> argRefs;
+    for (const auto &arg : args)
+      argRefs.push_back(arg);
+    return runMatrixFlow(argv0, argRefs);
+  };
+
+  if (opts.mode == "cover")
+    return runCoverFromConfig();
+  if (opts.mode == "matrix")
+    return runMatrixFromConfig();
+
+  int rc = runCoverFromConfig();
+  if (rc != 0)
+    return rc;
+  return runMatrixFromConfig();
 }
 
 static void splitCSV(StringRef csv, SmallVectorImpl<std::string> &out) {
@@ -2501,6 +2881,23 @@ int main(int argc, char **argv) {
     return runNativeInit(parseResult.opts);
   }
 
+  if (firstArg == "run") {
+    SmallVector<StringRef, 16> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+
+    RunParseResult parseResult = parseRunArgs(forwardedArgs);
+    if (!parseResult.ok) {
+      errs() << parseResult.error << "\n";
+      return 1;
+    }
+    if (parseResult.showHelp) {
+      printRunHelp(outs());
+      return 0;
+    }
+    return runNativeRun(argv[0], parseResult.opts);
+  }
+
   if (firstArg == "generate") {
     SmallVector<StringRef, 16> forwardedArgs;
     for (int i = 2; i < argc; ++i)
@@ -2533,48 +2930,14 @@ int main(int argc, char **argv) {
     SmallVector<StringRef, 32> forwardedArgs;
     for (int i = 2; i < argc; ++i)
       forwardedArgs.push_back(argv[i]);
-    CoverRewriteResult rewrite = rewriteCoverArgs(argv[0], forwardedArgs);
-    if (!rewrite.ok) {
-      errs() << rewrite.error << "\n";
-      return 1;
-    }
-
-    auto scriptPath = resolveScriptPath(argv[0], "run_mutation_cover.sh");
-    if (!scriptPath) {
-      errs() << "circt-mut: unable to locate script 'run_mutation_cover.sh'.\n";
-      errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
-                " utils scripts.\n";
-      return 1;
-    }
-
-    SmallVector<StringRef, 32> rewrittenArgsRef;
-    for (const std::string &arg : rewrite.rewrittenArgs)
-      rewrittenArgsRef.push_back(arg);
-    return dispatchToScript(*scriptPath, rewrittenArgsRef);
+    return runCoverFlow(argv[0], forwardedArgs);
   }
 
   if (firstArg == "matrix") {
     SmallVector<StringRef, 32> forwardedArgs;
     for (int i = 2; i < argc; ++i)
       forwardedArgs.push_back(argv[i]);
-    MatrixRewriteResult rewrite = rewriteMatrixArgs(argv[0], forwardedArgs);
-    if (!rewrite.ok) {
-      errs() << rewrite.error << "\n";
-      return 1;
-    }
-
-    auto scriptPath = resolveScriptPath(argv[0], "run_mutation_matrix.sh");
-    if (!scriptPath) {
-      errs() << "circt-mut: unable to locate script 'run_mutation_matrix.sh'.\n";
-      errs() << "Set CIRCT_MUT_SCRIPTS_DIR or run from a build/install tree with"
-                " utils scripts.\n";
-      return 1;
-    }
-
-    SmallVector<StringRef, 32> rewrittenArgsRef;
-    for (const std::string &arg : rewrite.rewrittenArgs)
-      rewrittenArgsRef.push_back(arg);
-    return dispatchToScript(*scriptPath, rewrittenArgsRef);
+    return runMatrixFlow(argv[0], forwardedArgs);
   }
 
   auto scriptName = mapSubcommandToScript(firstArg);
