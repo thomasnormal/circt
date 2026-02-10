@@ -850,6 +850,20 @@ resolve_bool_override() {
   esac
 }
 
+prequalify_metric_from_log() {
+  local log_file="$1"
+  local metric_key="$2"
+  local default_value="$3"
+  local metric_value=""
+
+  metric_value="$(awk -F$'\t' -v k="$metric_key" '$1==k{print $2; exit}' "$log_file" | tr -d '\r')"
+  if [[ "$metric_value" =~ ^[0-9]+$ ]]; then
+    printf "%s\n" "$metric_value"
+  else
+    printf "%s\n" "$default_value"
+  fi
+}
+
 run_lane() {
   local i="$1"
   local lane_id="${LANE_ID[$i]}"
@@ -906,18 +920,40 @@ run_lane() {
   local lane_generated_mutations_cache_lock_contended="0"
   local config_error_code="-"
   local config_error_reason="-"
+  local lane_prequalify_summary_present="0"
+  local lane_prequalify_total_mutants="-"
+  local lane_prequalify_not_propagated_mutants="0"
+  local lane_prequalify_propagated_mutants="0"
+  local lane_prequalify_create_mutated_error_mutants="0"
+  local lane_prequalify_probe_error_mutants="0"
+  local lane_prequalify_cmd_token_not_propagated_mutants="0"
+  local lane_prequalify_cmd_token_propagated_mutants="0"
+  local lane_prequalify_cmd_rc_not_propagated_mutants="0"
+  local lane_prequalify_cmd_rc_propagated_mutants="0"
+  local lane_prequalify_cmd_timeout_propagated_mutants="0"
+  local lane_prequalify_cmd_error_mutants="0"
   local lane_mode_counts_enabled=0
   local lane_mode_weights_enabled=0
   local lane_mode_counts_total=0
   local -a cmd=()
 
   lane_write_status() {
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$lane_id" "$lane_status" "$rc" "$coverage" "$gate" "$lane_dir" "$lane_metrics" "$lane_json" \
       "$lane_generated_mutations_cache_status" "$lane_generated_mutations_cache_hit" \
       "$lane_generated_mutations_cache_miss" "$lane_generated_mutations_cache_saved_runtime_ns" \
       "$lane_generated_mutations_cache_lock_wait_ns" "$lane_generated_mutations_cache_lock_contended" \
-      "$config_error_code" "$config_error_reason" > "$lane_status_file"
+      "$config_error_code" "$config_error_reason" "$lane_prequalify_summary_present" \
+      "$lane_prequalify_total_mutants" "$lane_prequalify_not_propagated_mutants" \
+      "$lane_prequalify_propagated_mutants" \
+      "$lane_prequalify_create_mutated_error_mutants" \
+      "$lane_prequalify_probe_error_mutants" \
+      "$lane_prequalify_cmd_token_not_propagated_mutants" \
+      "$lane_prequalify_cmd_token_propagated_mutants" \
+      "$lane_prequalify_cmd_rc_not_propagated_mutants" \
+      "$lane_prequalify_cmd_rc_propagated_mutants" \
+      "$lane_prequalify_cmd_timeout_propagated_mutants" \
+      "$lane_prequalify_cmd_error_mutants" > "$lane_status_file"
   }
 
   lane_config_error() {
@@ -1387,6 +1423,24 @@ run_lane() {
     lane_status="PASS"
   fi
 
+  lane_prequalify_log="${lane_dir}/native_global_filter_prequalify.log"
+  if [[ -f "$lane_prequalify_log" ]]; then
+    lane_prequalify_total_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_total_mutants" "-")"
+    if [[ "$lane_prequalify_total_mutants" =~ ^[0-9]+$ ]]; then
+      lane_prequalify_summary_present="1"
+    fi
+    lane_prequalify_not_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_not_propagated_mutants" "0")"
+    lane_prequalify_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_propagated_mutants" "0")"
+    lane_prequalify_create_mutated_error_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_create_mutated_error_mutants" "0")"
+    lane_prequalify_probe_error_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_probe_error_mutants" "0")"
+    lane_prequalify_cmd_token_not_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_token_not_propagated_mutants" "0")"
+    lane_prequalify_cmd_token_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_token_propagated_mutants" "0")"
+    lane_prequalify_cmd_rc_not_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_rc_not_propagated_mutants" "0")"
+    lane_prequalify_cmd_rc_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_rc_propagated_mutants" "0")"
+    lane_prequalify_cmd_timeout_propagated_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_timeout_propagated_mutants" "0")"
+    lane_prequalify_cmd_error_mutants="$(prequalify_metric_from_log "$lane_prequalify_log" "prequalify_cmd_error_mutants" "0")"
+  fi
+
   lane_write_status
 }
 
@@ -1419,7 +1473,7 @@ else
   done
 fi
 
-printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\n" > "$RESULTS_FILE"
+printf "lane_id\tstatus\texit_code\tcoverage_percent\tgate_status\tlane_dir\tmetrics_file\tsummary_json\tgenerated_mutations_cache_status\tgenerated_mutations_cache_hit\tgenerated_mutations_cache_miss\tgenerated_mutations_cache_saved_runtime_ns\tgenerated_mutations_cache_lock_wait_ns\tgenerated_mutations_cache_lock_contended\tconfig_error_code\tconfig_error_reason\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\n" > "$RESULTS_FILE"
 failures="$parse_failures"
 passes=0
 generated_cache_hit_lanes=0
@@ -1436,7 +1490,7 @@ for i in "${EXECUTED_INDICES[@]}"; do
   lane_status_file="${OUT_DIR}/${LANE_ID[$i]}/lane_status.tsv"
   if [[ ! -f "$lane_status_file" ]]; then
     failures=$((failures + 1))
-    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\t-\n" \
+    printf "%s\tFAIL\t1\t0.00\tMISSING_STATUS\t%s\t%s\t%s\tdisabled\t0\t0\t0\t0\t0\t-\t-\t0\t-\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n" \
       "${LANE_ID[$i]}" "${OUT_DIR}/${LANE_ID[$i]}" \
       "${OUT_DIR}/${LANE_ID[$i]}/metrics.tsv" "${OUT_DIR}/${LANE_ID[$i]}/summary.json" >> "$RESULTS_FILE"
     GATE_COUNTS["MISSING_STATUS"]=$(( ${GATE_COUNTS["MISSING_STATUS"]:-0} + 1 ))

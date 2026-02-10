@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 948 - February 10, 2026
+
+### Mutation Matrix: Per-Lane Native Prequalify Counters in `results.tsv`
+
+1. Extended `utils/run_mutation_matrix.sh` lane result emission to append
+   prequalification columns directly into matrix `results.tsv` rows:
+   - `prequalify_summary_present`
+   - `prequalify_total_mutants`
+   - `prequalify_not_propagated_mutants`
+   - `prequalify_propagated_mutants`
+   - `prequalify_create_mutated_error_mutants`
+   - `prequalify_probe_error_mutants`
+   - `prequalify_cmd_token_not_propagated_mutants`
+   - `prequalify_cmd_token_propagated_mutants`
+   - `prequalify_cmd_rc_not_propagated_mutants`
+   - `prequalify_cmd_rc_propagated_mutants`
+   - `prequalify_cmd_timeout_propagated_mutants`
+   - `prequalify_cmd_error_mutants`
+2. Lane rows now opportunistically parse
+   `<lane-dir>/native_global_filter_prequalify.log` when present (native
+   prequalification path) and keep deterministic defaults when absent.
+3. Added regression coverage:
+   - `test/Tools/run-mutation-matrix-prequalify-results-columns.test`
+4. Updated mutation roadmap next-step text in `PROJECT_PLAN.md` to focus on
+   report integrity gates and native matrix scheduling migration.
+
+### Tests and Validation
+
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-matrix*.test`: PASS (50/50)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (144/144)
+- Filtered external cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-matrix-prequalify-results-columns --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - Snapshot:
+    - `sv-tests` BMC/LEC: PASS (`0 selected`, `1028 skipped` under filter)
+    - `verilator-verification` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `yosys/tests/sva` BMC/LEC: PASS (`1/1` selected in each mode)
+    - `opentitan` LEC: PASS (`1/1`)
+    - AVIP compile: PASS except `axi4Lite_avip` and `uart_avip` (FAIL)
+
 ## Iteration 947 - February 10, 2026
 
 ### `circt-mut` Matrix Native Prequalify Lane Summary Artifact + Report Ingestion
