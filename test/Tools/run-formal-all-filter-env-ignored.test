@@ -1,0 +1,9 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/sv-tests %t/verilator %t/yosys
+// RUN: cp %S/../../utils/run_formal_all.sh %t/utils/run_formal_all.sh
+// RUN: chmod +x %t/utils/run_formal_all.sh
+// RUN: not sh -c 'cd %t && VERILATOR_BMC_TEST_FILTER=".*" utils/run_formal_all.sh --out-dir %t/out-vbmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^verilator-verification/BMC$"' 2>&1 | FileCheck %s --check-prefix=VBMC
+// RUN: not sh -c 'cd %t && SV_TESTS_BMC_TAG_REGEX="(^| )assert( |$)" utils/run_formal_all.sh --out-dir %t/out-svbmc --sv-tests %t/sv-tests --verilator %t/verilator --yosys %t/yosys --include-lane-regex "^sv-tests/BMC$"' 2>&1 | FileCheck %s --check-prefix=SVBMC
+//
+// VBMC: verilator-verification/BMC requires explicit filter: set --verilator-bmc-test-filter
+// SVBMC: sv-tests/BMC requires explicit filter: set --sv-tests-bmc-tag-regex or --sv-tests-bmc-test-filter
