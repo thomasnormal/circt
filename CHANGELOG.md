@@ -1,5 +1,40 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 907 - February 10, 2026
+
+### LEC Hardening: Strict-Gate Default X-PROP Prefix Policy
+
+1. Upgraded `--strict-gate` behavior in `utils/run_formal_all.sh` so that when
+   `--with-opentitan-lec-strict` is active it now auto-enables OpenTitan
+   strict LEC X-prop key-prefix drift gates for:
+   - `xprop_diag_`
+   - `xprop_status_`
+   - `xprop_result_`
+   - `xprop_counter_`
+2. This removes a policy gap where strict-mode runs could omit X-prop drift
+   checks unless extra `--fail-on-new-opentitan-lec-strict-xprop-*` flags were
+   passed manually.
+3. Added deduping for explicit/default OpenTitan strict X-prop gate arrays to
+   avoid duplicated strict-gate diagnostics when users pass overlapping flags.
+4. Added regression coverage:
+   - `test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix-defaults.test`
+   - verifies `--strict-gate` alone catches new diag drift
+     (`xprop_diag_custom_diag`).
+5. Updated strict-gate help text to document the default OpenTitan strict LEC
+   X-prop prefix policy.
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-key-prefix-defaults.test`: PASS
+- Real OpenTitan strict-lane validation with temporary baseline:
+  - baseline update:
+    `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-strict-defaultxprop-baseline-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-opentitan-lec-strict-defaultxprop-baseline.tsv --update-baselines`
+  - strict gate:
+    `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-strict-defaultxprop-strictgate-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$' --baseline-file /tmp/formal-opentitan-lec-strict-defaultxprop-baseline.tsv --strict-gate`
+  - result: `opentitan/LEC_STRICT` PASS in both runs.
+
+
 ## Iteration 906 - February 10, 2026
 
 ### BMC Hardening: Strict-Gate Coverage for All Semantic Buckets
