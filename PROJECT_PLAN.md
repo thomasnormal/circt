@@ -125,9 +125,10 @@ See CHANGELOG.md on recent progress.
   - Composite matrix policy bundles are now available
     (`formal-regression-matrix-nightly|strict`) with dedicated lane-drift
     bundles (`formal-regression-matrix-lane-drift-nightly|strict`), but
-    native matrix lane scheduling is still script-dispatched; migrate lane
-    execution/retry/status loops into native `circt-mut matrix` to remove
-    script coupling.
+    native matrix lane scheduling is only partially migrated:
+    `--native-matrix-dispatch` now exists as an opt-in scaffold, but lane-job
+    parallelism, lane-level gate overrides, and matrix gate-summary parity are
+    still script-backed.
   - Wire the composite matrix policy bundles into CI defaults for
     nightly/strict matrix report jobs.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring

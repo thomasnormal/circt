@@ -1,0 +1,4 @@
+// RUN: rm -rf %t && mkdir -p %t && printf 'lane1\tdesign.il\tmutations.txt\ttests.tsv\n' > %t/lanes.tsv
+// RUN: not circt-mut matrix --native-matrix-dispatch --native-global-filter-prequalify --lanes-tsv %t/lanes.tsv 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut matrix: --native-matrix-dispatch cannot be combined with --native-global-filter-prequalify yet.
