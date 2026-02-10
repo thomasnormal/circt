@@ -1,5 +1,28 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 965 - February 10, 2026
+
+### run_formal_all: LEC Diagnostic Taxonomy Drift Gate
+
+1. Added dedicated strict-gate option in `utils/run_formal_all.sh`:
+   - `--fail-on-new-lec-diag-keys`
+   which fails when new `lec_diag_*_cases` keys appear vs baseline.
+2. Updated `--strict-gate` defaults to enable LEC diag-key drift checks.
+3. Added baseline-aware compatibility behavior for strict mode:
+   - if baseline rows predate LEC diag-key telemetry (no `lec_diag_*_cases`),
+     strict mode does not fail solely due to missing legacy baseline keys.
+4. Added regression tests:
+   - `test/Tools/run-formal-all-strict-gate-lec-diag-keys.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 8 test/Tools/run-formal-all-strict-gate-lec-diag-keys.test test/Tools/run-formal-all-strict-gate-lec-diag-keys-defaults.test test/Tools/run-formal-all-strict-gate-lec-counter.test test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test test/Tools/run-formal-all-opentitan-lec-explicit-diag-counter.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test`: PASS (7/7)
+- Filtered external LEC cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-diag-keys-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/LEC$' --sv-tests-lec-test-filter '16.9--sequence-goto-repetition' --verilator-lec-test-filter 'assert_fell' --yosys-lec-test-filter 'basic02' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog`
+  - Result: all selected LEC lanes PASS.
+
 ## Iteration 964 - February 10, 2026
 
 ### OpenTitan LEC: Explicit `diag` Case-Row Column

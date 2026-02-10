@@ -180,6 +180,9 @@ See CHANGELOG.md on recent progress.
     and `run_formal_all.sh` consumes explicit `diag` before `#DIAG` path tags.
   - OpenTitan LEC case rows now also emit explicit `diag` as a dedicated
     column (while retaining path-tag compatibility for downstream consumers).
+  - Strict-gate now supports dedicated LEC diag-taxonomy drift checks via
+    `--fail-on-new-lec-diag-keys`; global `--strict-gate` enables it with a
+    baseline-aware safeguard for legacy baseline rows.
   - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
     favor of fully explicit per-case diag fields for all producers/fixtures.
   - Keep optional absolute no-drop gates available for closure runs:
