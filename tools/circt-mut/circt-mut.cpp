@@ -4348,6 +4348,316 @@ static int runNativeMatrixGlobalFilterPrequalify(
   return 0;
 }
 
+struct MatrixPrequalifyLaneMetrics {
+  bool hasSummary = false;
+  uint64_t totalMutants = 0;
+  uint64_t notPropagatedMutants = 0;
+  uint64_t propagatedMutants = 0;
+  uint64_t createMutatedErrorMutants = 0;
+  uint64_t probeErrorMutants = 0;
+  uint64_t cmdTokenNotPropagatedMutants = 0;
+  uint64_t cmdTokenPropagatedMutants = 0;
+  uint64_t cmdRCNotPropagatedMutants = 0;
+  uint64_t cmdRCPropagatedMutants = 0;
+  uint64_t cmdTimeoutPropagatedMutants = 0;
+  uint64_t cmdErrorMutants = 0;
+};
+
+static bool loadMatrixPrequalifyLaneMetrics(
+    StringRef summaryPath, StringMap<MatrixPrequalifyLaneMetrics> &laneMetrics,
+    std::string &error) {
+  auto splitTSV = [](StringRef line, SmallVectorImpl<StringRef> &out) {
+    out.clear();
+    line.split(out, '\t', /*MaxSplit=*/-1, /*KeepEmpty=*/true);
+  };
+  auto bufferOrErr = MemoryBuffer::getFile(summaryPath);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut matrix: unable to read native prequalify summary: ") +
+             summaryPath)
+                .str();
+    return false;
+  }
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  if (lines.empty())
+    return true;
+
+  SmallVector<StringRef, 64> fields;
+  splitTSV(lines.front().rtrim("\r"), fields);
+  StringMap<size_t> columns;
+  for (size_t i = 0; i < fields.size(); ++i)
+    columns[fields[i].trim()] = i;
+  auto requireCol = [&](StringRef name, size_t &out) -> bool {
+    auto it = columns.find(name);
+    if (it == columns.end()) {
+      error = (Twine("circt-mut matrix: missing native prequalify summary "
+                     "column: ") +
+               name + " in " + summaryPath)
+                  .str();
+      return false;
+    }
+    out = it->second;
+    return true;
+  };
+  size_t laneIDCol = 0, hasSummaryCol = 0, totalCol = 0, notPropCol = 0,
+         propCol = 0, createErrCol = 0, probeErrCol = 0,
+         cmdTokenNotPropCol = 0, cmdTokenPropCol = 0, cmdRCNotPropCol = 0,
+         cmdRCPropCol = 0, cmdTimeoutPropCol = 0, cmdErrCol = 0;
+  if (!requireCol("lane_id", laneIDCol) || !requireCol("has_summary", hasSummaryCol) ||
+      !requireCol("prequalify_total_mutants", totalCol) ||
+      !requireCol("prequalify_not_propagated_mutants", notPropCol) ||
+      !requireCol("prequalify_propagated_mutants", propCol) ||
+      !requireCol("prequalify_create_mutated_error_mutants", createErrCol) ||
+      !requireCol("prequalify_probe_error_mutants", probeErrCol) ||
+      !requireCol("prequalify_cmd_token_not_propagated_mutants",
+                  cmdTokenNotPropCol) ||
+      !requireCol("prequalify_cmd_token_propagated_mutants", cmdTokenPropCol) ||
+      !requireCol("prequalify_cmd_rc_not_propagated_mutants", cmdRCNotPropCol) ||
+      !requireCol("prequalify_cmd_rc_propagated_mutants", cmdRCPropCol) ||
+      !requireCol("prequalify_cmd_timeout_propagated_mutants",
+                  cmdTimeoutPropCol) ||
+      !requireCol("prequalify_cmd_error_mutants", cmdErrCol))
+    return false;
+
+  auto getField = [&](ArrayRef<StringRef> row, size_t idx) -> StringRef {
+    if (idx >= row.size())
+      return StringRef();
+    return row[idx].trim();
+  };
+  auto parseUInt = [&](StringRef value, uint64_t &out, StringRef key,
+                       size_t lineNo) -> bool {
+    if (value.empty() || value == "-") {
+      out = 0;
+      return true;
+    }
+    if (value.getAsInteger(10, out)) {
+      error = (Twine("circt-mut matrix: invalid native prequalify metric in ") +
+               summaryPath + ":" + Twine(lineNo) + " key=" + key + " value=" +
+               value)
+                  .str();
+      return false;
+    }
+    return true;
+  };
+
+  for (size_t lineNo = 1; lineNo < lines.size(); ++lineNo) {
+    StringRef line = lines[lineNo].rtrim("\r");
+    if (line.trim().empty())
+      continue;
+    splitTSV(line, fields);
+    StringRef laneID = getField(fields, laneIDCol);
+    if (laneID.empty())
+      continue;
+
+    MatrixPrequalifyLaneMetrics row;
+    StringRef hasSummaryValue = getField(fields, hasSummaryCol);
+    if (hasSummaryValue == "1")
+      row.hasSummary = true;
+    else if (hasSummaryValue.empty() || hasSummaryValue == "0" ||
+             hasSummaryValue == "-")
+      row.hasSummary = false;
+    else {
+      error = (Twine("circt-mut matrix: invalid has_summary value in ") +
+               summaryPath + ":" + Twine(lineNo) + " for lane " + laneID + ": " +
+               hasSummaryValue)
+                  .str();
+      return false;
+    }
+    if (!parseUInt(getField(fields, totalCol), row.totalMutants,
+                   "prequalify_total_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, notPropCol), row.notPropagatedMutants,
+                   "prequalify_not_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, propCol), row.propagatedMutants,
+                   "prequalify_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, createErrCol), row.createMutatedErrorMutants,
+                   "prequalify_create_mutated_error_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, probeErrCol), row.probeErrorMutants,
+                   "prequalify_probe_error_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdTokenNotPropCol),
+                   row.cmdTokenNotPropagatedMutants,
+                   "prequalify_cmd_token_not_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdTokenPropCol),
+                   row.cmdTokenPropagatedMutants,
+                   "prequalify_cmd_token_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdRCNotPropCol),
+                   row.cmdRCNotPropagatedMutants,
+                   "prequalify_cmd_rc_not_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdRCPropCol), row.cmdRCPropagatedMutants,
+                   "prequalify_cmd_rc_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdTimeoutPropCol),
+                   row.cmdTimeoutPropagatedMutants,
+                   "prequalify_cmd_timeout_propagated_mutants", lineNo + 1) ||
+        !parseUInt(getField(fields, cmdErrCol), row.cmdErrorMutants,
+                   "prequalify_cmd_error_mutants", lineNo + 1))
+      return false;
+
+    laneMetrics[laneID] = row;
+  }
+  return true;
+}
+
+static bool annotateMatrixResultsWithPrequalifyMetrics(
+    StringRef resultsPath,
+    const StringMap<MatrixPrequalifyLaneMetrics> &laneMetricsByID,
+    uint64_t &annotatedLaneRows, uint64_t &missingSummaryLaneRows,
+    std::string &error) {
+  auto splitTSV = [](StringRef line, SmallVectorImpl<StringRef> &out) {
+    out.clear();
+    line.split(out, '\t', /*MaxSplit=*/-1, /*KeepEmpty=*/true);
+  };
+  annotatedLaneRows = 0;
+  missingSummaryLaneRows = 0;
+  auto bufferOrErr = MemoryBuffer::getFile(resultsPath);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut matrix: unable to read matrix results file: ") +
+             resultsPath)
+                .str();
+    return false;
+  }
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  if (lines.empty())
+    return true;
+
+  SmallVector<StringRef, 64> headerFields;
+  splitTSV(lines.front().rtrim("\r"), headerFields);
+  StringMap<size_t> columns;
+  for (size_t i = 0; i < headerFields.size(); ++i)
+    columns[headerFields[i].trim()] = i;
+
+  auto ensureCol = [&](StringRef name) -> size_t {
+    if (auto it = columns.find(name); it != columns.end())
+      return it->second;
+    size_t idx = headerFields.size();
+    headerFields.push_back(name);
+    columns[name] = idx;
+    return idx;
+  };
+
+  auto laneIDIt = columns.find("lane_id");
+  if (laneIDIt == columns.end()) {
+    error = (Twine("circt-mut matrix: missing lane_id column in matrix results: ") +
+             resultsPath)
+                .str();
+    return false;
+  }
+  size_t laneIDCol = laneIDIt->second;
+  size_t prequalifyPresentCol = ensureCol("prequalify_summary_present");
+  size_t totalCol = ensureCol("prequalify_total_mutants");
+  size_t notPropCol = ensureCol("prequalify_not_propagated_mutants");
+  size_t propCol = ensureCol("prequalify_propagated_mutants");
+  size_t createErrCol = ensureCol("prequalify_create_mutated_error_mutants");
+  size_t probeErrCol = ensureCol("prequalify_probe_error_mutants");
+  size_t cmdTokenNotPropCol =
+      ensureCol("prequalify_cmd_token_not_propagated_mutants");
+  size_t cmdTokenPropCol = ensureCol("prequalify_cmd_token_propagated_mutants");
+  size_t cmdRCNotPropCol = ensureCol("prequalify_cmd_rc_not_propagated_mutants");
+  size_t cmdRCPropCol = ensureCol("prequalify_cmd_rc_propagated_mutants");
+  size_t cmdTimeoutPropCol =
+      ensureCol("prequalify_cmd_timeout_propagated_mutants");
+  size_t cmdErrCol = ensureCol("prequalify_cmd_error_mutants");
+
+  auto toString = [](uint64_t v) { return std::to_string(v); };
+  auto assignPrequalify = [&](SmallVectorImpl<std::string> &row,
+                              const MatrixPrequalifyLaneMetrics *metrics) {
+    if (metrics) {
+      row[prequalifyPresentCol] = metrics->hasSummary ? "1" : "0";
+      row[totalCol] =
+          metrics->hasSummary ? toString(metrics->totalMutants) : std::string("-");
+      row[notPropCol] = toString(metrics->notPropagatedMutants);
+      row[propCol] = toString(metrics->propagatedMutants);
+      row[createErrCol] = toString(metrics->createMutatedErrorMutants);
+      row[probeErrCol] = toString(metrics->probeErrorMutants);
+      row[cmdTokenNotPropCol] = toString(metrics->cmdTokenNotPropagatedMutants);
+      row[cmdTokenPropCol] = toString(metrics->cmdTokenPropagatedMutants);
+      row[cmdRCNotPropCol] = toString(metrics->cmdRCNotPropagatedMutants);
+      row[cmdRCPropCol] = toString(metrics->cmdRCPropagatedMutants);
+      row[cmdTimeoutPropCol] = toString(metrics->cmdTimeoutPropagatedMutants);
+      row[cmdErrCol] = toString(metrics->cmdErrorMutants);
+      ++annotatedLaneRows;
+      if (!metrics->hasSummary)
+        ++missingSummaryLaneRows;
+      return;
+    }
+    row[prequalifyPresentCol] = "0";
+    row[totalCol] = "-";
+    row[notPropCol] = "0";
+    row[propCol] = "0";
+    row[createErrCol] = "0";
+    row[probeErrCol] = "0";
+    row[cmdTokenNotPropCol] = "0";
+    row[cmdTokenPropCol] = "0";
+    row[cmdRCNotPropCol] = "0";
+    row[cmdRCPropCol] = "0";
+    row[cmdTimeoutPropCol] = "0";
+    row[cmdErrCol] = "0";
+    ++missingSummaryLaneRows;
+  };
+
+  std::vector<std::string> outLines;
+  outLines.reserve(lines.size());
+  {
+    std::string headerLine;
+    raw_string_ostream os(headerLine);
+    for (size_t i = 0; i < headerFields.size(); ++i) {
+      if (i)
+        os << '\t';
+      os << headerFields[i];
+    }
+    os.flush();
+    outLines.push_back(std::move(headerLine));
+  }
+
+  SmallVector<StringRef, 64> rowFields;
+  for (size_t lineNo = 1; lineNo < lines.size(); ++lineNo) {
+    StringRef line = lines[lineNo].rtrim("\r");
+    if (line.trim().empty())
+      continue;
+    splitTSV(line, rowFields);
+    SmallVector<std::string, 64> row;
+    row.reserve(headerFields.size());
+    for (StringRef f : rowFields)
+      row.push_back(f.str());
+    if (row.size() < headerFields.size())
+      row.resize(headerFields.size());
+    StringRef laneID =
+        laneIDCol < row.size() ? StringRef(row[laneIDCol]).trim() : StringRef();
+    const MatrixPrequalifyLaneMetrics *metrics = nullptr;
+    if (!laneID.empty()) {
+      if (auto it = laneMetricsByID.find(laneID); it != laneMetricsByID.end())
+        metrics = &it->second;
+    }
+    assignPrequalify(row, metrics);
+
+    std::string out;
+    raw_string_ostream os(out);
+    for (size_t i = 0; i < row.size(); ++i) {
+      if (i)
+        os << '\t';
+      os << row[i];
+    }
+    os.flush();
+    outLines.push_back(std::move(out));
+  }
+
+  std::error_code ec;
+  raw_fd_ostream out(resultsPath, ec, sys::fs::OF_Text);
+  if (ec) {
+    error = (Twine("circt-mut matrix: failed to rewrite matrix results file: ") +
+             resultsPath + ": " + ec.message())
+                .str();
+    return false;
+  }
+  for (size_t i = 0; i < outLines.size(); ++i) {
+    out << outLines[i];
+    if (i + 1 < outLines.size())
+      out << '\n';
+  }
+  return true;
+}
+
 static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   MatrixRewriteResult rewrite = rewriteMatrixArgs(argv0, forwardedArgs);
   if (!rewrite.ok) {
@@ -4375,7 +4685,44 @@ static int runMatrixFlow(const char *argv0, ArrayRef<StringRef> forwardedArgs) {
   SmallVector<StringRef, 32> rewrittenArgsRef;
   for (const std::string &arg : dispatchArgs)
     rewrittenArgsRef.push_back(arg);
-  return dispatchToScript(*scriptPath, rewrittenArgsRef);
+  int rc = dispatchToScript(*scriptPath, rewrittenArgsRef);
+  if (rc != 0)
+    return rc;
+
+  if (!rewrite.nativeGlobalFilterPrequalify)
+    return 0;
+
+  std::string outDir = "mutation-matrix-results";
+  if (auto v = getLastOptionValue(dispatchArgs, "--out-dir"))
+    outDir = *v;
+  std::string resultsPath = joinPath2(outDir, "results.tsv");
+  if (auto v = getLastOptionValue(dispatchArgs, "--results-file"))
+    resultsPath = *v;
+  std::string summaryPath =
+      joinPath2(outDir, "native_matrix_prequalify_summary.tsv");
+  if (!sys::fs::exists(summaryPath) || !sys::fs::exists(resultsPath))
+    return 0;
+
+  StringMap<MatrixPrequalifyLaneMetrics> laneMetricsByID;
+  std::string error;
+  if (!loadMatrixPrequalifyLaneMetrics(summaryPath, laneMetricsByID, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  uint64_t annotatedLaneRows = 0;
+  uint64_t missingSummaryLaneRows = 0;
+  if (!annotateMatrixResultsWithPrequalifyMetrics(
+          resultsPath, laneMetricsByID, annotatedLaneRows,
+          missingSummaryLaneRows, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+  outs() << "native_matrix_prequalify_results_tsv\t" << resultsPath << "\n";
+  outs() << "native_matrix_prequalify_results_annotated_lanes\t"
+         << annotatedLaneRows << "\n";
+  outs() << "native_matrix_prequalify_results_missing_lanes\t"
+         << missingSummaryLaneRows << "\n";
+  return 0;
 }
 
 struct InitOptions {
