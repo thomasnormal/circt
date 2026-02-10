@@ -651,11 +651,6 @@ void LowerToBMCPass::runOnOperation() {
     }
   }
 
-  if (!allowMultiClock && (explicitClocks.size() + structClockCount) > 1) {
-    hwModule.emitError("designs with multiple clocks not yet supported");
-    return signalPassFailure();
-  }
-
   if (!allowMultiClock && explicitClocks.size() > 1) {
     hwModule.emitError("designs with multiple clocks not yet supported");
     return signalPassFailure();
@@ -1167,6 +1162,11 @@ void LowerToBMCPass::runOnOperation() {
         }
         return std::nullopt;
       };
+
+      if (!allowMultiClock && hasExplicitClockInput && !clockInputs.empty()) {
+        hwModule.emitError("designs with multiple clocks not yet supported");
+        return signalPassFailure();
+      }
 
       if (!allowMultiClock && clockInputs.size() > 1) {
         hwModule.emitError("designs with multiple clocks not yet supported");

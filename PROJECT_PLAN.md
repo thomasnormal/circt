@@ -1205,6 +1205,14 @@ See CHANGELOG.md on recent progress.
       explicit top-level clock uses remain on their native BMC clock inputs.
     - Added regression:
       `test/Tools/circt-bmc/lower-to-bmc-mixed-clock-inputs.mlir`.
+26. BMC single-clock conservatism reduction (February 10, 2026):
+    - mixed explicit+struct clock designs in single-clock mode no longer fail
+      solely because struct clock fields exist in the input type.
+    - single-clock mode now rejects mixed designs only when a struct-carried
+      clock domain is actually active in lowering (`clockInputs` non-empty).
+    - Added regression:
+      `test/Tools/circt-bmc/lower-to-bmc-mixed-clock-unused-struct.mlir`.
     - Remaining limitation:
-      with `allow-multi-clock=false`, mixed explicit+struct clocks are still
-      conservatively counted as multiple clocks before semantic dedup.
+      if both explicit and struct-derived domains are active and semantically
+      equivalent only via non-trivial assumptions, single-clock mode still
+      treats them as multiple clocks.

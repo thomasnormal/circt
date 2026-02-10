@@ -78,6 +78,16 @@ hw.module @testModule(in %clk0 : i1, in %clk1 : i1, in %in0 : i32, in %in1 : i32
 
 // expected-error @below {{designs with multiple clocks not yet supported}}
 hw.module @testModule(in %clk0 : !seq.clock, in %clkStruct : !hw.struct<clk: !seq.clock>, in %in0 : i32, in %in1 : i32, in %reg0_state : i32, in %reg1_state : i32, out out : i32, out reg0_input : i32, out reg1_input : i32) attributes {num_regs = 2 : i32, initial_values = [unit, unit]} {
+  %true = hw.constant true
+  %clk0_i1 = seq.from_clock %clk0
+  %seq0 = ltl.delay %true, 0, 0 : i1
+  %clocked0 = ltl.clock %seq0, posedge %clk0_i1 : !ltl.sequence
+  verif.assert %clocked0 : !ltl.sequence
+  %structClk = hw.struct_extract %clkStruct["clk"] : !hw.struct<clk: !seq.clock>
+  %struct_i1 = seq.from_clock %structClk
+  %seq1 = ltl.delay %true, 0, 0 : i1
+  %clocked1 = ltl.clock %seq1, posedge %struct_i1 : !ltl.sequence
+  verif.assert %clocked1 : !ltl.sequence
   %0 = comb.add %reg0_state, %reg1_state : i32
   %1 = comb.icmp eq %0, %in0 : i32
   verif.assert %1 : i1
