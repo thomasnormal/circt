@@ -136,8 +136,10 @@ See CHANGELOG.md on recent progress.
     legitimate closure wins (tagged-case regression is now fail-like-budget
     aware when fail-like rows decrease).
   - Remaining harness limitation:
-    `verilator-verification/BMC` and `yosys/tests/sva/BMC` semantic tag maps are
-    currently wired but mostly unseeded, so tagged-case signal remains sparse.
+    `verilator-verification/BMC` semantic tag maps are currently wired but still
+    unseeded for active fail-like rows; `yosys/tests/sva/BMC` now has initial
+    4-state seed coverage (`sva_value_change_sim`) but remains only partially
+    seeded.
 - LEC capability closure:
   - Keep no-waiver OpenTitan LEC policy (`XPROP_ONLY` remains fail-like).
   - Keep strict-gate X-prop counter drift checks active in CI.
