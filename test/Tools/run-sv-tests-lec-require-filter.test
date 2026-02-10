@@ -1,0 +1,3 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests
+// RUN: not env OUT=%t/results.txt /usr/bin/bash %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests 2>&1 | FileCheck %s
+// CHECK: must set TAG_REGEX or TEST_FILTER explicitly (no default filter)
