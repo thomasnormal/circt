@@ -4585,7 +4585,11 @@ static int runNativeInit(const InitOptions &opts) {
   cfg << "lanes_tsv = \"" << escapeTomlBasicString(opts.lanesTSV) << "\"\n";
   cfg << "out_dir = \"" << escapeTomlBasicString(opts.matrixOutDir) << "\"\n";
   cfg << "default_formal_global_propagate_circt_chain = \"auto\"\n";
-  cfg << "default_formal_global_propagate_timeout_seconds = 60\n";
+  cfg << "default_formal_global_propagate_timeout_seconds = 60\n\n";
+  cfg << "[report]\n";
+  cfg << "append_history = \"out/report-history.tsv\"\n";
+  cfg << "history_max_runs = 200\n";
+  cfg << "history_bootstrap = true\n";
   cfg.flush();
 
   std::string testsTemplate;
@@ -7320,6 +7324,7 @@ static int runNativeReport(const ReportOptions &opts) {
   std::string matrixOutDir = std::string(defaultMatrix.str());
   std::string appendHistoryFile = opts.appendHistoryFile;
   uint64_t historyMaxRuns = opts.historyMaxRuns;
+  bool historyBootstrap = opts.historyBootstrap;
 
   SmallString<256> configPath;
   if (opts.configPath.empty()) {
@@ -7365,6 +7370,25 @@ static int runNativeReport(const ReportOptions &opts) {
           errs() << "circt-mut report: invalid [report] key 'history_max_runs' "
                     "value '"
                  << it->second << "' (expected positive integer)\n";
+          return 1;
+        }
+      }
+    }
+    if (!historyBootstrap) {
+      if (auto it = cfg.report.find("history_bootstrap");
+          it != cfg.report.end() && !it->second.empty()) {
+        std::string lowered = StringRef(it->second).trim().lower();
+        if (lowered == "1" || lowered == "true" || lowered == "yes" ||
+            lowered == "on")
+          historyBootstrap = true;
+        else if (lowered == "0" || lowered == "false" || lowered == "no" ||
+                 lowered == "off")
+          historyBootstrap = false;
+        else {
+          errs() << "circt-mut report: invalid [report] key "
+                    "'history_bootstrap' value '"
+                 << it->second
+                 << "' (expected 1|0|true|false|yes|no|on|off)\n";
           return 1;
         }
       }
@@ -7456,7 +7480,7 @@ static int runNativeReport(const ReportOptions &opts) {
     std::string historyPath =
         resolveRelativeTo(opts.projectDir, opts.compareHistoryLatestFile);
     if (!sys::fs::exists(historyPath)) {
-      if (opts.historyBootstrap) {
+      if (historyBootstrap) {
         historyBootstrapActivated = true;
         skipCompareGatesForBootstrap = true;
         rows.emplace_back("history.bootstrap", "1");
@@ -7487,7 +7511,7 @@ static int runNativeReport(const ReportOptions &opts) {
   if (!opts.trendHistoryFile.empty()) {
     std::string historyPath = resolveRelativeTo(opts.projectDir, opts.trendHistoryFile);
     if (!sys::fs::exists(historyPath)) {
-      if (opts.historyBootstrap) {
+      if (historyBootstrap) {
         historyBootstrapActivated = true;
         skipTrendGatesForBootstrap = true;
         rows.emplace_back("history.bootstrap", "1");
