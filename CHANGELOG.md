@@ -1,5 +1,64 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 864 - February 10, 2026
+
+### BMC Semantic-Closure Investigation: LLHD Interface Stripping Reuse
+
+1. Investigated whether the existing `circt-lec` LLHD interface normalization
+   passes can be reused directly in `circt-bmc` to eliminate the remaining
+   4-state bridge-cast blocker.
+2. Trial wiring (`createLowerLLHDRefPorts`, `createStripLLHDInterfaceSignals`,
+   and optional `createLowerLECLLVM`) in the BMC LLHD path was not viable in
+   current pipeline ordering:
+   - observed error:
+     `LLHD operations are not supported by circt-lec`
+   - therefore the reuse path is not drop-in for BMC.
+3. Confirmed blocker status remains unchanged for semantic-closure candidates:
+   - `16.15--property-iff-uvm-fail` still reports LLVM translation failure on
+     `builtin.unrealized_conversion_cast` in the 4-state bridge path.
+4. Reverted the trial pipeline wiring and kept `circt-bmc` behavior stable.
+   No net pipeline changes from this investigation were retained.
+
+### Validation
+
+- `ninja -C build circt-bmc`: PASS (after reverting trial wiring)
+- `TEST_FILTER='16\\.15--property-iff-uvm-fail' INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh`
+  - result: `total=1 pass=0 error=1`
+- `TEST_FILTER='16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm(-fail)?|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm' INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh`
+  - result: `total=6 pass=0 error=6`
+
+## Iteration 863 - February 10, 2026
+
+### BMC Semantic-Closure: Lower SMT Integer-to-BV Bridge Casts
+
+1. Added bridge-cast lowering in SMT->Z3 LLVM conversion:
+   - file: `lib/Conversion/SMTToZ3LLVM/LowerSMTToZ3LLVM.cpp`
+   - new pattern lowers:
+     `builtin.unrealized_conversion_cast %x : iN to !smt.bv<N>`
+     into direct `Z3_mk_unsigned_int64` construction (`N<=64`).
+   - conversion target now treats `iN -> !smt.bv<N>` bridge casts as
+     dynamically illegal so they must be lowered, not carried through.
+2. Added regression test:
+   - `test/Conversion/SMTToZ3LLVM/smt-to-z3-llvm-int-bridge-casts.mlir`
+   - verifies integer bridge casts are lowered to
+     `llvm.zext` + `Z3_mk_unsigned_int64` and no
+     `builtin.unrealized_conversion_cast` remains in the lowered result.
+3. Candidate-set revalidation after this step:
+   - `ALLOW_MULTI_CLOCK=1` 6-case UVM semantic set remains
+     `total=6 pass=0 error=6`.
+   - single-case reproducer `16.15--property-iff-uvm-fail` remains `error`.
+   - failure signature shifted from front-end `iN -> !smt.bv<N>` bridge casts
+     to the remaining reverse-bridge path (`!llvm.ptr -> !smt.bv<1> -> i1`)
+     on 4-state UVM extraction.
+
+### Validation
+
+- `build/bin/llvm-lit -sv test/Conversion/SMTToZ3LLVM`: PASS
+- `TEST_FILTER='16\\.15--property-iff-uvm-fail' INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - result: `total=1 pass=0 error=1`
+- `TEST_FILTER='16\\.13--sequence-multiclock-uvm|16\\.15--property-iff-uvm(-fail)?|16\\.10--property-local-var-uvm|16\\.10--sequence-local-var-uvm|16\\.11--sequence-subroutine-uvm' INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+  - result: `total=6 pass=0 error=6`
+
 ## Iteration 862 - February 10, 2026
 
 ### BMC Semantic-Closure Hardening: Multiclock Orchestrator Control + Candidate Rebaseline
