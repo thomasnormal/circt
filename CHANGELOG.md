@@ -1,5 +1,54 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 933 - February 10, 2026
+
+### Formal No-Drop Parity: Extend Drop-Remark Governance from BMC to LEC
+
+1. Added dropped-syntax case/reason telemetry to all non-OpenTitan LEC runners:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+   with new optional outputs:
+   - `LEC_DROP_REMARK_CASES_OUT`
+   - `LEC_DROP_REMARK_REASONS_OUT`
+2. LEC runners now emit standardized lane summaries:
+   - `sv-tests LEC dropped-syntax summary: drop_remark_cases=...`
+   - `verilator-verification LEC dropped-syntax summary: drop_remark_cases=...`
+   - `yosys LEC dropped-syntax summary: drop_remark_cases=...`
+   using the same normalized reason extraction strategy as BMC.
+3. Extended `utils/run_formal_all.sh` to wire LEC drop artifacts and strict-gate:
+   - LEC lanes now produce lane-local artifacts:
+     `*-lec-drop-remark-cases.tsv`,
+     `*-lec-drop-remark-reasons.tsv`.
+   - Baseline rows now include:
+     - `lec_drop_remark_case_ids`
+     - `lec_drop_remark_case_reason_ids`
+   - Added strict-gate options:
+     - `--fail-on-new-lec-drop-remark-cases`
+     - `--fail-on-new-lec-drop-remark-case-ids`
+     - `--fail-on-new-lec-drop-remark-case-reasons`
+   - `--strict-gate` now enables all three LEC drop-remark guards.
+4. Added regression coverage:
+   - `test/Tools/run-sv-tests-circt-lec-drop-remarks.test`
+   - `test/Tools/run-verilator-verification-circt-lec-drop-remarks.test`
+   - `test/Tools/run-yosys-sva-circt-lec-drop-remarks.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons.test`
+   - `test/Tools/run-formal-all-help.test` updated for new option surface.
+5. Fixed a strict-gate control-flow regression introduced during integration:
+   BMC semantic bucket/parity/provenance checks were accidentally nested under
+   the new LEC branch; restored correct BMC branch scope.
+6. Validation:
+   - `bash -n utils/run_formal_all.sh utils/run_sv_tests_circt_lec.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh`
+   - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate*.test test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test test/Tools/run-yosys-sva-bmc-drop-remarks.test test/Tools/run-sv-tests-circt-lec-drop-remarks.test test/Tools/run-verilator-verification-circt-lec-drop-remarks.test test/Tools/run-yosys-sva-circt-lec-drop-remarks.test test/Tools/run-formal-all-help.test`
+     -> `34 passed`.
+   - External sanity runs:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-lec-drop-telemetry-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^(verilator-verification|yosys/tests/sva)/LEC$'`
+       -> `verilator-verification/LEC pass=17 fail=0 lec_drop_remark_cases=0`,
+          `yosys/tests/sva/LEC pass=14 fail=0 skip=2 lec_drop_remark_cases=0`.
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-sanity-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --include-lane-regex '^verilator-verification/BMC$'`
+       -> BMC lane remains stable under new orchestration plumbing
+          (`bmc_drop_remark_cases=0`; existing semantic fails unchanged).
+
 ## Iteration 932 - February 10, 2026
 
 ### Function Phase IMP Sequencing + APB Dual-Top EXIT 0

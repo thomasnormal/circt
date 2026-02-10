@@ -1,0 +1,15 @@
+// RUN: rm -rf %t/sv-tests %t/bin
+// RUN: mkdir -p %t/sv-tests/tests/chapter-16 %t/bin
+// RUN: printf '/*\n:tags: 16.10\n*/\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/chapter-16/drop_case.sv
+// RUN: printf '#!/bin/sh\necho \"module @top {\"\necho \"  verif.assert %c0_i1\"\necho \"}\"\necho \"warning: unsupported construct will be dropped during lowering\" >&2\n' > %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\necho \"module @top {}\"\n' > %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\necho \"LEC_RESULT=EQ\"\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec TEST_FILTER='drop_case' OUT=%t/results.tsv Z3_BIN=/bin/true LEC_DROP_REMARK_CASES_OUT=%t/drop.tsv LEC_DROP_REMARK_REASONS_OUT=%t/reasons.tsv %S/../../utils/run_sv_tests_circt_lec.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=DROPPED < %t/drop.tsv
+// RUN: FileCheck %s --check-prefix=REASON < %t/reasons.tsv
+//
+// SUMMARY: sv-tests LEC summary: total=1 pass=1 fail=0 error=0
+// SUMMARY: sv-tests LEC dropped-syntax summary: drop_remark_cases=1
+// DROPPED: drop_case{{[[:space:]]+}}{{.*}}drop_case.sv
+// REASON: drop_case{{[[:space:]]+}}{{.*}}drop_case.sv{{[[:space:]]+}}unsupported construct will be dropped during lowering

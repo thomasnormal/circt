@@ -18,6 +18,9 @@ Z3_BIN="${Z3_BIN:-}"
 OUT="${OUT:-$PWD/verilator-verification-lec-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+DROP_REMARK_PATTERN="${DROP_REMARK_PATTERN:-will be dropped during lowering}"
+LEC_DROP_REMARK_CASES_OUT="${LEC_DROP_REMARK_CASES_OUT:-}"
+LEC_DROP_REMARK_REASONS_OUT="${LEC_DROP_REMARK_REASONS_OUT:-}"
 
 if [[ ! -d "$VERIF_DIR/tests" ]]; then
   echo "verilator-verification directory not found: $VERIF_DIR" >&2
@@ -62,6 +65,60 @@ fail=0
 error=0
 skip=0
 total=0
+drop_remark_cases=0
+
+declare -A drop_remark_seen_cases
+declare -A drop_remark_seen_case_reasons
+
+record_drop_remark_case() {
+  local case_id="$1"
+  local case_path="$2"
+  local verilog_log="$3"
+  if [[ -z "$case_id" || ! -s "$verilog_log" ]]; then
+    return
+  fi
+  if ! grep -Fq "$DROP_REMARK_PATTERN" "$verilog_log"; then
+    return
+  fi
+  while IFS= read -r reason; do
+    if [[ -z "$reason" ]]; then
+      continue
+    fi
+    local reason_key="${case_id}|${reason}"
+    if [[ -n "${drop_remark_seen_case_reasons["$reason_key"]+x}" ]]; then
+      continue
+    fi
+    drop_remark_seen_case_reasons["$reason_key"]=1
+    if [[ -n "$LEC_DROP_REMARK_REASONS_OUT" ]]; then
+      printf "%s\t%s\t%s\n" "$case_id" "$case_path" "$reason" >> "$LEC_DROP_REMARK_REASONS_OUT"
+    fi
+  done < <(
+    awk -v pattern="$DROP_REMARK_PATTERN" '
+      index($0, pattern) {
+        line = $0
+        gsub(/\t/, " ", line)
+        sub(/^[[:space:]]+/, "", line)
+        if (match(line, /^[^:]+:[0-9]+(:[0-9]+)?:[[:space:]]*/))
+          line = substr(line, RLENGTH + 1)
+        sub(/^[Ww]arning:[[:space:]]*/, "", line)
+        gsub(/[[:space:]]+/, " ", line)
+        gsub(/[0-9]+/, "<n>", line)
+        gsub(/;/, ",", line)
+        if (length(line) > 240)
+          line = substr(line, 1, 240)
+        print line
+      }
+    ' "$verilog_log" | sort -u
+  )
+  if [[ -n "${drop_remark_seen_cases["$case_id"]+x}" ]]; then
+    return
+  fi
+  drop_remark_seen_cases["$case_id"]=1
+  drop_remark_cases=$((drop_remark_cases + 1))
+  if [[ -n "$LEC_DROP_REMARK_CASES_OUT" ]]; then
+    printf "%s\t%s\n" "$case_id" "$case_path" >> "$LEC_DROP_REMARK_CASES_OUT"
+  fi
+}
 
 # Detect top module similar to the BMC harness.
 detect_top() {
@@ -158,11 +215,13 @@ for suite in "${suites[@]}"; do
     cmd+=("$sv")
 
     if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+      record_drop_remark_case "$base" "$sv" "$verilog_log"
       printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
       error=$((error + 1))
       save_logs
       continue
     fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
 
     opt_cmd=("$CIRCT_OPT" --lower-llhd-ref-ports --strip-llhd-processes
       --strip-llhd-interface-signals --lower-ltl-to-core
@@ -231,5 +290,13 @@ done
 
 sort "$results_tmp" > "$OUT"
 
+if [[ -n "$LEC_DROP_REMARK_CASES_OUT" && -f "$LEC_DROP_REMARK_CASES_OUT" ]]; then
+  sort -u -o "$LEC_DROP_REMARK_CASES_OUT" "$LEC_DROP_REMARK_CASES_OUT"
+fi
+if [[ -n "$LEC_DROP_REMARK_REASONS_OUT" && -f "$LEC_DROP_REMARK_REASONS_OUT" ]]; then
+  sort -u -o "$LEC_DROP_REMARK_REASONS_OUT" "$LEC_DROP_REMARK_REASONS_OUT"
+fi
+
 echo "verilator-verification LEC summary: total=$total pass=$pass fail=$fail error=$error skip=$skip"
+echo "verilator-verification LEC dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
 echo "results: $OUT"

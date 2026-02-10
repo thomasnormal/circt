@@ -5,6 +5,7 @@
 // CHECK: --fail-on-diff
 // CHECK: --fail-on-new-bmc-timeout-cases
 // CHECK: --fail-on-new-bmc-unknown-cases
+// CHECK: --fail-on-new-lec-drop-remark-cases
 // CHECK: --fail-on-new-bmc-backend-parity-mismatch-cases
 // CHECK: --fail-on-new-bmc-semantic-bucket-cases
 // CHECK: --fail-on-new-bmc-semantic-bucket-unclassified-cases

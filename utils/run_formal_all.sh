@@ -43,6 +43,18 @@ Options:
   --fail-on-new-bmc-drop-remark-case-ids
                          Fail when BMC dropped-syntax affected case IDs
                          increase vs baseline
+  --fail-on-new-bmc-drop-remark-case-reasons
+                         Fail when BMC dropped-syntax affected case+reason
+                         tuples increase vs baseline
+  --fail-on-new-lec-drop-remark-cases
+                         Fail when LEC dropped-syntax remark count
+                         (`lec_drop_remark_cases`) increases vs baseline
+  --fail-on-new-lec-drop-remark-case-ids
+                         Fail when LEC dropped-syntax affected case IDs
+                         increase vs baseline
+  --fail-on-new-lec-drop-remark-case-reasons
+                         Fail when LEC dropped-syntax affected case+reason
+                         tuples increase vs baseline
   --fail-on-new-bmc-backend-parity-mismatch-cases
                          Fail when BMC backend-parity mismatch case count
                          increases vs baseline
@@ -1709,7 +1721,12 @@ FAIL_ON_NEW_BMC_TIMEOUT_CASES=0
 FAIL_ON_NEW_BMC_UNKNOWN_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASES=0
 FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=0
+FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=0
 BMC_DROP_REMARK_PATTERN="${BMC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
+FAIL_ON_NEW_LEC_DROP_REMARK_CASES=0
+FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=0
+FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=0
+LEC_DROP_REMARK_PATTERN="${LEC_DROP_REMARK_PATTERN:-will be dropped during lowering}"
 FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=0
 FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=0
 FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=0
@@ -2012,6 +2029,14 @@ while [[ $# -gt 0 ]]; do
       FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1; shift ;;
     --fail-on-new-bmc-drop-remark-case-ids)
       FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1; shift ;;
+    --fail-on-new-bmc-drop-remark-case-reasons)
+      FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=1; shift ;;
+    --fail-on-new-lec-drop-remark-cases)
+      FAIL_ON_NEW_LEC_DROP_REMARK_CASES=1; shift ;;
+    --fail-on-new-lec-drop-remark-case-ids)
+      FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1; shift ;;
+    --fail-on-new-lec-drop-remark-case-reasons)
+      FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
       FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
@@ -3865,6 +3890,10 @@ if [[ "$STRICT_GATE" == "1" ]]; then
   FAIL_ON_NEW_BMC_UNKNOWN_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES=1
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS=1
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS=1
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASES=1
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS=1
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS=1
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES=1
@@ -6748,6 +6777,27 @@ summarize_bmc_drop_remark_log() {
   echo "bmc_drop_remark_cases=${drop_hits}"
 }
 
+summarize_lec_drop_remark_log() {
+  local log_file="$1"
+  if [[ ! -f "$log_file" ]]; then
+    echo "lec_drop_remark_cases=0"
+    return 0
+  fi
+  local drop_line
+  drop_line="$(grep -E "LEC dropped-syntax summary:" "$log_file" | tail -1 || true)"
+  if [[ -n "$drop_line" ]]; then
+    local drop_cases
+    drop_cases="$(extract_kv "$drop_line" drop_remark_cases)"
+    if [[ -n "$drop_cases" ]]; then
+      echo "lec_drop_remark_cases=${drop_cases}"
+      return 0
+    fi
+  fi
+  local drop_hits
+  drop_hits="$(awk -v pattern="$LEC_DROP_REMARK_PATTERN" 'index($0, pattern) { ++count } END { print count + 0 }' "$log_file")"
+  echo "lec_drop_remark_cases=${drop_hits}"
+}
+
 summarize_opentitan_xprop_file() {
   local xprop_file="$1"
   if [[ ! -s "$xprop_file" ]]; then
@@ -7903,9 +7953,11 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
     sv_bmc_provenance_file="$OUT_DIR/sv-tests-bmc-abstraction-provenance.tsv"
     sv_bmc_check_attribution_file="$OUT_DIR/sv-tests-bmc-check-attribution.tsv"
     sv_bmc_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-drop-remark-cases.tsv"
+    sv_bmc_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-drop-remark-reasons.tsv"
     : > "$sv_bmc_provenance_file"
     : > "$sv_bmc_check_attribution_file"
     : > "$sv_bmc_drop_remark_cases_file"
+    : > "$sv_bmc_drop_remark_reasons_file"
     # sv-tests semantic closure currently relies on SMT-LIB execution to avoid
     # known JIT/Z3-LLVM backend divergence on local-var/disable-iff cases.
     run_suite sv-tests-bmc \
@@ -7913,6 +7965,7 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_drop_remark_cases_file" \
+      BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_drop_remark_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -7983,15 +8036,18 @@ if [[ "$WITH_SV_TESTS_UVM_BMC_SEMANTICS" == "1" ]] && \
     sv_bmc_uvm_semantics_provenance_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-abstraction-provenance.tsv"
     sv_bmc_uvm_semantics_check_attribution_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-check-attribution.tsv"
     sv_bmc_uvm_semantics_drop_remark_cases_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-cases.tsv"
+    sv_bmc_uvm_semantics_drop_remark_reasons_file="$OUT_DIR/sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"
     : > "$sv_bmc_uvm_semantics_provenance_file"
     : > "$sv_bmc_uvm_semantics_check_attribution_file"
     : > "$sv_bmc_uvm_semantics_drop_remark_cases_file"
+    : > "$sv_bmc_uvm_semantics_drop_remark_reasons_file"
     # Keep the semantic-closure lane aligned with sv-tests/BMC backend policy.
     run_suite sv-tests-bmc-uvm-semantics \
       env OUT="$sv_bmc_uvm_semantics_results_file" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$sv_bmc_uvm_semantics_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$sv_bmc_uvm_semantics_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$sv_bmc_uvm_semantics_drop_remark_cases_file" \
+      BMC_DROP_REMARK_REASONS_OUT="$sv_bmc_uvm_semantics_drop_remark_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK=1 \
@@ -8040,8 +8096,14 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
   if lane_resume_from_state "sv-tests/LEC"; then
     :
   else
+    sv_lec_drop_remark_cases_file="$OUT_DIR/sv-tests-lec-drop-remark-cases.tsv"
+    sv_lec_drop_remark_reasons_file="$OUT_DIR/sv-tests-lec-drop-remark-reasons.tsv"
+    : > "$sv_lec_drop_remark_cases_file"
+    : > "$sv_lec_drop_remark_reasons_file"
     run_suite sv-tests-lec \
       env OUT="$OUT_DIR/sv-tests-lec-results.txt" \
+      LEC_DROP_REMARK_CASES_OUT="$sv_lec_drop_remark_cases_file" \
+      LEC_DROP_REMARK_REASONS_OUT="$sv_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       Z3_BIN="$Z3_BIN" \
@@ -8053,7 +8115,12 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/LEC"; then
       fail=$(extract_kv "$line" fail)
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
-      record_result "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+      summary="total=${total} pass=${pass} fail=${fail} xfail=0 xpass=0 error=${error} skip=${skip}"
+      lec_drop_summary="$(summarize_lec_drop_remark_log "$OUT_DIR/sv-tests-lec.log")"
+      if [[ -n "$lec_drop_summary" ]]; then
+        summary="${summary} ${lec_drop_summary}"
+      fi
+      record_result_with_summary "sv-tests" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -8066,14 +8133,17 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
     verilator_bmc_provenance_file="$OUT_DIR/verilator-bmc-abstraction-provenance.tsv"
     verilator_bmc_check_attribution_file="$OUT_DIR/verilator-bmc-check-attribution.tsv"
     verilator_bmc_drop_remark_cases_file="$OUT_DIR/verilator-bmc-drop-remark-cases.tsv"
+    verilator_bmc_drop_remark_reasons_file="$OUT_DIR/verilator-bmc-drop-remark-reasons.tsv"
     : > "$verilator_bmc_provenance_file"
     : > "$verilator_bmc_check_attribution_file"
     : > "$verilator_bmc_drop_remark_cases_file"
+    : > "$verilator_bmc_drop_remark_reasons_file"
     run_suite verilator-bmc \
       env OUT="$OUT_DIR/verilator-bmc-results.txt" \
       BMC_ABSTRACTION_PROVENANCE_OUT="$verilator_bmc_provenance_file" \
       BMC_CHECK_ATTRIBUTION_OUT="$verilator_bmc_check_attribution_file" \
       BMC_DROP_REMARK_CASES_OUT="$verilator_bmc_drop_remark_cases_file" \
+      BMC_DROP_REMARK_REASONS_OUT="$verilator_bmc_drop_remark_reasons_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
@@ -8120,8 +8190,14 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
   if lane_resume_from_state "verilator-verification/LEC"; then
     :
   else
+    verilator_lec_drop_remark_cases_file="$OUT_DIR/verilator-lec-drop-remark-cases.tsv"
+    verilator_lec_drop_remark_reasons_file="$OUT_DIR/verilator-lec-drop-remark-reasons.tsv"
+    : > "$verilator_lec_drop_remark_cases_file"
+    : > "$verilator_lec_drop_remark_reasons_file"
     run_suite verilator-lec \
       env OUT="$OUT_DIR/verilator-lec-results.txt" \
+      LEC_DROP_REMARK_CASES_OUT="$verilator_lec_drop_remark_cases_file" \
+      LEC_DROP_REMARK_REASONS_OUT="$verilator_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       Z3_BIN="$Z3_BIN" \
@@ -8133,7 +8209,12 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/LEC"; then
       fail=$(extract_kv "$line" fail)
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
-      record_result "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+      summary="total=${total} pass=${pass} fail=${fail} xfail=0 xpass=0 error=${error} skip=${skip}"
+      lec_drop_summary="$(summarize_lec_drop_remark_log "$OUT_DIR/verilator-lec.log")"
+      if [[ -n "$lec_drop_summary" ]]; then
+        summary="${summary} ${lec_drop_summary}"
+      fi
+      record_result_with_summary "verilator-verification" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -8146,9 +8227,11 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
     yosys_bmc_provenance_file="$OUT_DIR/yosys-bmc-abstraction-provenance.tsv"
     yosys_bmc_check_attribution_file="$OUT_DIR/yosys-bmc-check-attribution.tsv"
     yosys_bmc_drop_remark_cases_file="$OUT_DIR/yosys-bmc-drop-remark-cases.tsv"
+    yosys_bmc_drop_remark_reasons_file="$OUT_DIR/yosys-bmc-drop-remark-reasons.tsv"
     : > "$yosys_bmc_provenance_file"
     : > "$yosys_bmc_check_attribution_file"
     : > "$yosys_bmc_drop_remark_cases_file"
+    : > "$yosys_bmc_drop_remark_reasons_file"
     # NOTE: Do not pass BMC_ASSUME_KNOWN_INPUTS here; the yosys script defaults
     # it to 1 because yosys SVA tests are 2-state and need --assume-known-inputs
     # to avoid spurious X-driven counterexamples.  Only forward an explicit
@@ -8159,6 +8242,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
       BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
       BMC_DROP_REMARK_CASES_OUT="$yosys_bmc_drop_remark_cases_file"
+      BMC_DROP_REMARK_REASONS_OUT="$yosys_bmc_drop_remark_reasons_file"
       BMC_SEMANTIC_TAG_MAP_FILE="$YOSYS_BMC_SEMANTIC_TAG_MAP_FILE"
       Z3_BIN="$Z3_BIN")
     if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
@@ -8204,8 +8288,14 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
   if lane_resume_from_state "yosys/tests/sva/LEC"; then
     :
   else
+    yosys_lec_drop_remark_cases_file="$OUT_DIR/yosys-lec-drop-remark-cases.tsv"
+    yosys_lec_drop_remark_reasons_file="$OUT_DIR/yosys-lec-drop-remark-reasons.tsv"
+    : > "$yosys_lec_drop_remark_cases_file"
+    : > "$yosys_lec_drop_remark_reasons_file"
     run_suite yosys-lec \
       env OUT="$OUT_DIR/yosys-lec-results.txt" \
+      LEC_DROP_REMARK_CASES_OUT="$yosys_lec_drop_remark_cases_file" \
+      LEC_DROP_REMARK_REASONS_OUT="$yosys_lec_drop_remark_reasons_file" \
       LEC_ASSUME_KNOWN_INPUTS="$LEC_ASSUME_KNOWN_INPUTS" \
       LEC_ACCEPT_XPROP_ONLY="$LEC_ACCEPT_XPROP_ONLY" \
       Z3_BIN="$Z3_BIN" \
@@ -8217,7 +8307,12 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/LEC"; then
       fail=$(extract_kv "$line" fail)
       error=$(extract_kv "$line" error)
       skip=$(extract_kv "$line" skip)
-      record_result "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip"
+      summary="total=${total} pass=${pass} fail=${fail} xfail=0 xpass=0 error=${error} skip=${skip}"
+      lec_drop_summary="$(summarize_lec_drop_remark_log "$OUT_DIR/yosys-lec.log")"
+      if [[ -n "$lec_drop_summary" ]]; then
+        summary="${summary} ${lec_drop_summary}"
+      fi
+      record_result_with_summary "yosys/tests/sva" "LEC" "$total" "$pass" "$fail" 0 0 "$error" "$skip" "$summary"
     fi
   fi
 fi
@@ -10204,6 +10299,85 @@ def collect_bmc_drop_remark_cases(out_dir: Path):
                     cases.setdefault(key, set()).add(case_id)
     return {key: ";".join(sorted(values)) for key, values in cases.items()}
 
+def collect_bmc_drop_remark_case_reasons(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-drop-remark-reasons.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-drop-remark-reasons.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-drop-remark-reasons.tsv"),
+    ]
+    reasons = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                reason = parts[2].strip() if len(parts) > 2 else ""
+                if not reason:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
+    return {key: ";".join(sorted(values)) for key, values in reasons.items()}
+
+def collect_lec_drop_remark_cases(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-cases.tsv"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-cases.tsv"),
+    ]
+    cases = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    cases.setdefault(key, set()).add(case_id)
+    return {key: ";".join(sorted(values)) for key, values in cases.items()}
+
+def collect_lec_drop_remark_case_reasons(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-reasons.tsv"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-reasons.tsv"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-reasons.tsv"),
+    ]
+    reasons = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                reason = parts[2].strip() if len(parts) > 2 else ""
+                if not reason:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
+    return {key: ";".join(sorted(values)) for key, values in reasons.items()}
+
 def read_baseline_int(row, key, summary_counts):
     raw = row.get(key)
     if raw is not None and raw != "":
@@ -10231,6 +10405,9 @@ def compute_pass_rate(total: int, passed: int, xfail: int, skipped: int) -> floa
 failure_cases = collect_failure_cases(out_dir, rows)
 bmc_abstraction_provenance = collect_bmc_abstraction_provenance(out_dir)
 bmc_drop_remark_case_ids = collect_bmc_drop_remark_cases(out_dir)
+bmc_drop_remark_case_reason_ids = collect_bmc_drop_remark_case_reasons(out_dir)
+lec_drop_remark_case_ids = collect_lec_drop_remark_cases(out_dir)
+lec_drop_remark_case_reason_ids = collect_lec_drop_remark_case_reasons(out_dir)
 
 baseline = {}
 if baseline_path.exists():
@@ -10265,6 +10442,9 @@ if baseline_path.exists():
                 'failure_cases': row.get('failure_cases', ''),
                 'bmc_abstraction_provenance': row.get('bmc_abstraction_provenance', ''),
                 'bmc_drop_remark_case_ids': row.get('bmc_drop_remark_case_ids', ''),
+                'bmc_drop_remark_case_reason_ids': row.get('bmc_drop_remark_case_reason_ids', ''),
+                'lec_drop_remark_case_ids': row.get('lec_drop_remark_case_ids', ''),
+                'lec_drop_remark_case_reason_ids': row.get('lec_drop_remark_case_reason_ids', ''),
             }
 
 for row in rows:
@@ -10293,6 +10473,9 @@ for row in rows:
         'failure_cases': failure_cases.get((row['suite'], row['mode']), ''),
         'bmc_abstraction_provenance': bmc_abstraction_provenance.get((row['suite'], row['mode']), ''),
         'bmc_drop_remark_case_ids': bmc_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
+        'bmc_drop_remark_case_reason_ids': bmc_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
+        'lec_drop_remark_case_ids': lec_drop_remark_case_ids.get((row['suite'], row['mode']), ''),
+        'lec_drop_remark_case_reason_ids': lec_drop_remark_case_reason_ids.get((row['suite'], row['mode']), ''),
     }
 
 baseline_path.parent.mkdir(parents=True, exist_ok=True)
@@ -10315,6 +10498,9 @@ with baseline_path.open('w', newline='') as f:
             'failure_cases',
             'bmc_abstraction_provenance',
             'bmc_drop_remark_case_ids',
+            'bmc_drop_remark_case_reason_ids',
+            'lec_drop_remark_case_ids',
+            'lec_drop_remark_case_reason_ids',
         ],
         delimiter='\t',
     )
@@ -10374,6 +10560,10 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
       "$FAIL_ON_NEW_BMC_UNKNOWN_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" == "1" || \
+      "$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" == "1" || \
+      "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" == "1" || \
+      "$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" == "1" || \
       "$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" == "1" || \
       "$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" == "1" || \
@@ -10398,6 +10588,10 @@ if [[ "$FAIL_ON_NEW_XPASS" == "1" || \
   FAIL_ON_NEW_BMC_UNKNOWN_CASES="$FAIL_ON_NEW_BMC_UNKNOWN_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASES="$FAIL_ON_NEW_BMC_DROP_REMARK_CASES" \
   FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS" \
+  FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS" \
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASES="$FAIL_ON_NEW_LEC_DROP_REMARK_CASES" \
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS" \
+  FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS="$FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS" \
   FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES="$FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES" \
   FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES="$FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES" \
   FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES="$FAIL_ON_NEW_BMC_SEMANTIC_BUCKET_CASES" \
@@ -10571,6 +10765,85 @@ def collect_bmc_drop_remark_cases(out_dir: Path):
                     cases.setdefault(key, set()).add(case_id)
     return cases
 
+def collect_bmc_drop_remark_case_reasons(out_dir: Path):
+    sources = [
+        ("sv-tests", "BMC", out_dir / "sv-tests-bmc-drop-remark-reasons.tsv"),
+        ("sv-tests-uvm", "BMC_SEMANTICS", out_dir / "sv-tests-bmc-uvm-semantics-drop-remark-reasons.tsv"),
+        ("verilator-verification", "BMC", out_dir / "verilator-bmc-drop-remark-reasons.tsv"),
+        ("yosys/tests/sva", "BMC", out_dir / "yosys-bmc-drop-remark-reasons.tsv"),
+    ]
+    reasons = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                reason = parts[2].strip() if len(parts) > 2 else ""
+                if not reason:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
+    return reasons
+
+def collect_lec_drop_remark_cases(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-cases.tsv"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-cases.tsv"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-cases.tsv"),
+    ]
+    cases = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    cases.setdefault(key, set()).add(case_id)
+    return cases
+
+def collect_lec_drop_remark_case_reasons(out_dir: Path):
+    sources = [
+        ("sv-tests", "LEC", out_dir / "sv-tests-lec-drop-remark-reasons.tsv"),
+        ("verilator-verification", "LEC", out_dir / "verilator-lec-drop-remark-reasons.tsv"),
+        ("yosys/tests/sva", "LEC", out_dir / "yosys-lec-drop-remark-reasons.tsv"),
+    ]
+    reasons = {}
+    for suite, mode, path in sources:
+        if not path.exists():
+            continue
+        key = (suite, mode)
+        with path.open() as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                parts = line.split("\t")
+                base = parts[0].strip() if len(parts) > 0 else ""
+                file_path = parts[1].strip() if len(parts) > 1 else ""
+                reason = parts[2].strip() if len(parts) > 2 else ""
+                if not reason:
+                    continue
+                case_id = compose_case_id(base, file_path)
+                if case_id:
+                    reasons.setdefault(key, set()).add(f"{case_id}::{reason}")
+    return reasons
+
 summary = {}
 with summary_path.open() as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -10583,6 +10856,15 @@ current_bmc_abstraction_provenance = collect_bmc_abstraction_provenance(
     Path(os.environ["OUT_DIR"])
 )
 current_bmc_drop_remark_cases = collect_bmc_drop_remark_cases(
+    Path(os.environ["OUT_DIR"])
+)
+current_bmc_drop_remark_case_reasons = collect_bmc_drop_remark_case_reasons(
+    Path(os.environ["OUT_DIR"])
+)
+current_lec_drop_remark_cases = collect_lec_drop_remark_cases(
+    Path(os.environ["OUT_DIR"])
+)
+current_lec_drop_remark_case_reasons = collect_lec_drop_remark_case_reasons(
     Path(os.environ["OUT_DIR"])
 )
 
@@ -10611,6 +10893,18 @@ fail_on_new_bmc_drop_remark_cases = (
 )
 fail_on_new_bmc_drop_remark_case_ids = (
     os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASE_IDS", "0") == "1"
+)
+fail_on_new_bmc_drop_remark_case_reasons = (
+    os.environ.get("FAIL_ON_NEW_BMC_DROP_REMARK_CASE_REASONS", "0") == "1"
+)
+fail_on_new_lec_drop_remark_cases = (
+    os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASES", "0") == "1"
+)
+fail_on_new_lec_drop_remark_case_ids = (
+    os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASE_IDS", "0") == "1"
+)
+fail_on_new_lec_drop_remark_case_reasons = (
+    os.environ.get("FAIL_ON_NEW_LEC_DROP_REMARK_CASE_REASONS", "0") == "1"
 )
 fail_on_new_bmc_backend_parity_mismatch_cases = (
     os.environ.get("FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES", "0") == "1"
@@ -10834,6 +11128,78 @@ for key, current_row in summary.items():
                 gate_errors.append(
                     f"{suite} {mode}: new dropped-syntax cases observed (baseline={len(baseline_drop_case_set)} current={len(current_drop_case_set)}, window={baseline_window}): {sample}"
                 )
+    if fail_on_new_bmc_drop_remark_case_reasons and mode.startswith("BMC"):
+        baseline_drop_case_reason_ids_raw = [
+            row.get("bmc_drop_remark_case_reason_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_drop_case_reason_ids_raw):
+            baseline_drop_case_reason_set = set()
+            for raw in baseline_drop_case_reason_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_drop_case_reason_set.add(token)
+            current_drop_case_reason_set = current_bmc_drop_remark_case_reasons.get(key, set())
+            new_drop_case_reasons = sorted(
+                current_drop_case_reason_set - baseline_drop_case_reason_set
+            )
+            if new_drop_case_reasons:
+                sample = ", ".join(new_drop_case_reasons[:2])
+                if len(new_drop_case_reasons) > 2:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new dropped-syntax case-reason tuples observed (baseline={len(baseline_drop_case_reason_set)} current={len(current_drop_case_reason_set)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_drop_remark_case_ids and mode == "LEC":
+        baseline_drop_case_ids_raw = [
+            row.get("lec_drop_remark_case_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_drop_case_ids_raw):
+            baseline_drop_case_set = set()
+            for raw in baseline_drop_case_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_drop_case_set.add(token)
+            current_drop_case_set = current_lec_drop_remark_cases.get(key, set())
+            new_drop_cases = sorted(current_drop_case_set - baseline_drop_case_set)
+            if new_drop_cases:
+                sample = ", ".join(new_drop_cases[:3])
+                if len(new_drop_cases) > 3:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC dropped-syntax cases observed (baseline={len(baseline_drop_case_set)} current={len(current_drop_case_set)}, window={baseline_window}): {sample}"
+                )
+    if fail_on_new_lec_drop_remark_case_reasons and mode == "LEC":
+        baseline_drop_case_reason_ids_raw = [
+            row.get("lec_drop_remark_case_reason_ids") for row in compare_rows
+        ]
+        if any(raw is not None for raw in baseline_drop_case_reason_ids_raw):
+            baseline_drop_case_reason_set = set()
+            for raw in baseline_drop_case_reason_ids_raw:
+                if raw is None or raw == "":
+                    continue
+                for token in raw.split(";"):
+                    token = token.strip()
+                    if token:
+                        baseline_drop_case_reason_set.add(token)
+            current_drop_case_reason_set = current_lec_drop_remark_case_reasons.get(
+                key, set()
+            )
+            new_drop_case_reasons = sorted(
+                current_drop_case_reason_set - baseline_drop_case_reason_set
+            )
+            if new_drop_case_reasons:
+                sample = ", ".join(new_drop_case_reasons[:2])
+                if len(new_drop_case_reasons) > 2:
+                    sample += ", ..."
+                gate_errors.append(
+                    f"{suite} {mode}: new LEC dropped-syntax case-reason tuples observed (baseline={len(baseline_drop_case_reason_set)} current={len(current_drop_case_reason_set)}, window={baseline_window}): {sample}"
+                )
     if mode.startswith("BMC"):
         current_counts = parse_result_summary(current_row.get("summary", ""))
         if fail_on_new_bmc_timeout_cases:
@@ -11031,6 +11397,24 @@ for key, current_row in summary.items():
                     )
                     gate_errors.append(
                         f"{suite} {mode}: new abstraction provenance tokens observed (baseline={len(baseline_provenance_set)} current={len(current_provenance_set)}{allowlisted_suffix}, window={baseline_window}): {sample}"
+                    )
+    if mode == "LEC":
+        current_counts = parse_result_summary(current_row.get("summary", ""))
+        if fail_on_new_lec_drop_remark_cases:
+            baseline_drop_remark_values = []
+            for counts in parsed_counts:
+                if "lec_drop_remark_cases" in counts:
+                    baseline_drop_remark_values.append(
+                        int(counts["lec_drop_remark_cases"])
+                    )
+            if baseline_drop_remark_values:
+                baseline_drop_remark = min(baseline_drop_remark_values)
+                current_drop_remark = int(
+                    current_counts.get("lec_drop_remark_cases", 0)
+                )
+                if current_drop_remark > baseline_drop_remark:
+                    gate_errors.append(
+                        f"{suite} {mode}: lec_drop_remark_cases increased ({baseline_drop_remark} -> {current_drop_remark}, window={baseline_window})"
                     )
     if suite == "opentitan" and mode == "E2E_MODE_DIFF":
         current_counts = parse_result_summary(current_row.get("summary", ""))
