@@ -1,0 +1,18 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t10\nrelevant_mutants\t5\ndetected_mutants\t4\npropagated_not_detected_mutants\t1\nnot_propagated_mutants\t2\nnot_activated_mutants\t3\nerrors\t0\nmutation_coverage_percent\t80.00\nglobal_filter_timeout_mutants\t3\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf 'run_id\ttimestamp_utc\tkey\tvalue\n1\t2026-02-10T00:00:00Z\tcover.detected_mutants\t1\n1\t2026-02-10T00:00:00Z\tcover.global_filter_timeout_mutants\t1\n2\t2026-02-10T01:00:00Z\tcover.detected_mutants\t2\n2\t2026-02-10T01:00:00Z\tcover.global_filter_timeout_mutants\t3\n3\t2026-02-10T02:00:00Z\tcover.detected_mutants\t3\n3\t2026-02-10T02:00:00Z\tcover.global_filter_timeout_mutants\t5\n' > %t/proj/history.tsv
+// RUN: circt-mut report --project-dir %t/proj --mode cover --trend-history history.tsv --trend-window 2 > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK-DAG: trend.history_file{{[[:space:]]}}{{.*}}/history.tsv
+// CHECK-DAG: trend.history_runs_available{{[[:space:]]}}3
+// CHECK-DAG: trend.history_runs_selected{{[[:space:]]}}2
+// CHECK-DAG: trend.history_window_requested{{[[:space:]]}}2
+// CHECK-DAG: trend.history_run_id_min{{[[:space:]]}}2
+// CHECK-DAG: trend.history_run_id_max{{[[:space:]]}}3
+// CHECK-DAG: trend.cover.detected_mutants.samples{{[[:space:]]}}2
+// CHECK-DAG: trend.cover.detected_mutants.mean{{[[:space:]]}}2.50
+// CHECK-DAG: trend.cover.detected_mutants.latest{{[[:space:]]}}3.00
+// CHECK-DAG: trend.cover.detected_mutants.delta_vs_mean{{[[:space:]]}}1.50
+// CHECK-DAG: trend.cover.global_filter_timeout_mutants.mean{{[[:space:]]}}4.00
+// CHECK-DAG: trend.cover.global_filter_timeout_mutants.delta_vs_mean{{[[:space:]]}}-1.00

@@ -1,5 +1,63 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 829 - February 10, 2026
+
+### `circt-mut report` Native History-Trend Summaries and Gates
+
+1. Added native trend-summary input from historical report snapshots:
+   - `--trend-history <history.tsv>`
+   - `--trend-window <N>` (`0` means all available runs).
+2. Trend output now emits per-metric rolling statistics for numeric keys:
+   - `trend.<metric>.samples`
+   - `trend.<metric>.mean`
+   - `trend.<metric>.min`
+   - `trend.<metric>.max`
+   - `trend.<metric>.latest`
+   - `trend.<metric>.delta_vs_mean`
+   - `trend.<metric>.pct_vs_mean`
+3. Added trend gate rules for CI policy enforcement against rolling behavior:
+   - `--fail-if-trend-delta-gt <metric>=<number>`
+   - `--fail-if-trend-delta-lt <metric>=<number>`
+   - emits:
+     - `trend.gate_rules_total`
+     - `trend.gate_failure_count`
+     - `trend.gate_status`
+     - `trend.gate_failure_<n>`
+4. Gate diagnostics and validation hardening:
+   - trend gates require `--trend-history`.
+   - invalid `--trend-window` values now fail with explicit diagnostics.
+5. History append hygiene:
+   - `--append-history` now excludes derived `trend.*` rows so stored snapshots
+     remain raw campaign metrics.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-report-trend-history-basic.test`
+  - `test/Tools/circt-mut-report-trend-gate-fail.test`
+  - `test/Tools/circt-mut-report-trend-gate-requires-trend-history.test`
+  - `test/Tools/circt-mut-report-trend-history-missing-file.test`
+  - `test/Tools/circt-mut-report-trend-window-invalid.test`
+- Updated:
+  - `test/Tools/circt-mut-report-help.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report*.test test/Tools/circt-mut-help.test`: PASS (22/22)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test test/Tools/run-mutation-matrix*.test`: PASS (117/117)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test`: PASS (27/27)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-report-trend --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 828 - February 10, 2026
 
 ### `circt-mut report` History Baselines and Snapshot Appends

@@ -197,6 +197,16 @@ circt-mut report \
 History file schema:
 - `run_id<TAB>timestamp_utc<TAB>key<TAB>value`
 
+Trend summaries can be computed from history windows:
+
+```bash
+circt-mut report \
+  --project-dir /path/to/mut-campaign \
+  --mode all \
+  --trend-history /tmp/mutation-history.tsv \
+  --trend-window 10
+```
+
 Comparison can also enforce numeric delta gates:
 
 ```bash
@@ -206,6 +216,10 @@ circt-mut report \
   --compare-history-latest /tmp/mutation-history.tsv \
   --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
   --fail-if-delta-lt cover.detected_mutants=0 \
+  --trend-history /tmp/mutation-history.tsv \
+  --trend-window 10 \
+  --fail-if-trend-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-trend-delta-lt cover.detected_mutants=0 \
   --append-history /tmp/mutation-history.tsv \
   --out /tmp/mutation-report-with-gates.tsv
 ```
@@ -217,6 +231,13 @@ Gate mode emits:
 - `compare.gate_failure_<n>` rows for failing rules.
 Gate rules require `--compare` or `--compare-history-latest` with numeric
 baseline values for the gated keys.
+Trend gate mode emits:
+- `trend.gate_rules_total`
+- `trend.gate_failure_count`
+- `trend.gate_status` (`pass`/`fail`)
+- `trend.gate_failure_<n>` rows for failing rules.
+Trend gates require `--trend-history` with numeric history values for
+the gated keys.
 Gate failures return process exit code `2`.
 
 Basic usage:
