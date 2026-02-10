@@ -6536,6 +6536,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
                      0.0);
     return true;
@@ -6560,6 +6561,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
                      0.0);
     return true;
@@ -6710,6 +6712,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.lane_budget.worst_errors_value", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaLtRules,
                      "matrix.lane_budget.lowest_detected_mutants_value", 0.0);
     return true;
@@ -6729,6 +6732,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.lane_budget.worst_errors_value", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaGtRules,
                      "matrix.lane_budget.lanes_zero_detected_mutants", 0.0);
+    appendUniqueRule(opts.failIfTrendDeltaGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaLtRules,
                      "matrix.lane_budget.lowest_detected_mutants_value", 0.0);
     appendUniqueRule(opts.failIfTrendDeltaLtRules, "matrix.detected_mutants_sum",
