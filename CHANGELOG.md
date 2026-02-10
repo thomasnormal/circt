@@ -1,5 +1,44 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 900 - February 10, 2026
+
+### BMC Semantic-Closure Coverage Expansion: Named-Property Bucket + Verilator Full Classification
+
+1. Extended BMC semantic-bucket classifier in `utils/run_formal_all.sh` with a
+   new explicit-tag bucket:
+   - `property_named`
+   - new summary counter:
+     `bmc_semantic_bucket_property_named_cases`.
+2. Added explicit-tag aliases:
+   - `property_named`, `property-named`,
+     `named_property`, `named-property`.
+3. Seeded remaining active verilator fail-like named-property cases:
+   - `utils/verilator-bmc-semantic-tags.tsv` now includes:
+     - `assert_named        property_named`
+     - `assert_named_typed  property_named`
+4. Updated semantic-bucket tests:
+   - `test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test`
+     now covers `property_named`.
+   - `test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test`
+     now verifies mixed forwarding/classification for
+     `disable_iff + sampled_value + property_named`.
+
+### Tests and Validation
+
+- Lit:
+  - `build/bin/llvm-lit -sv test/Tools/run-formal-all-bmc-semantic-bucket-explicit-tags.test test/Tools/run-formal-all-verilator-bmc-default-semantic-tag-map.test test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-bmc-semantic-bucket-unclassified-cases.test`: PASS
+- Real lane sweep:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-property-named-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$|^opentitan/(LEC|LEC_STRICT)$'`
+  - key deltas:
+    - `verilator-verification/BMC`: `classified_cases=5`,
+      `tagged_cases=5`, `sampled_value_cases=3`,
+      `property_named_cases=2`, `unclassified_cases=0`
+      (improved from 2).
+    - `sv-tests/BMC`: unchanged (`unclassified_cases=0`)
+    - `yosys/tests/sva/BMC`: unchanged (`tagged_cases=1`,
+      `four_state_cases=1`, `unclassified_cases=5`)
+    - `opentitan/LEC` and `opentitan/LEC_STRICT`: PASS.
+
 ## Iteration 899 - February 10, 2026
 
 ### BMC Semantic-Closure Coverage Expansion: Sampled-Value Bucket + Verilator Seeds
