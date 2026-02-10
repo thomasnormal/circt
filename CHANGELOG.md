@@ -1,5 +1,34 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 962 - February 10, 2026
+
+### LEC Harness: Explicit `diag` Field + Backward-Compatible Consumers
+
+1. Extended LEC result-row emission in:
+   - `utils/run_sv_tests_circt_lec.sh`
+   - `utils/run_verilator_verification_circt_lec.sh`
+   - `utils/run_yosys_sva_circt_lec.sh`
+   to include explicit structured fields:
+   - `status`, `base`, `path`, `suite`, `mode`, `diag`
+2. Added `LEC_DIAG=...` extraction in each LEC harness and emitted that as the
+   explicit `diag` column (empty when unavailable).
+3. Hardened `utils/run_formal_all.sh` parsers to prefer explicit `diag` fields
+   from result rows and fall back to legacy `#DIAG` path suffixes.
+4. Extended LEC case summarization (`lec_diag_*` counters) to consume explicit
+   `diag` columns without requiring path-tag encoding.
+5. Added/updated regression tests:
+   - new:
+     - `test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test`
+   - updated:
+     - `test/Tools/run-sv-tests-circt-lec-drop-remarks.test`
+     - `test/Tools/run-verilator-verification-circt-lec-drop-remarks.test`
+     - `test/Tools/run-yosys-sva-circt-lec-drop-remarks.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_sv_tests_circt_lec.sh utils/run_verilator_verification_circt_lec.sh utils/run_yosys_sva_circt_lec.sh utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv -j 8 test/Tools/run-sv-tests-circt-lec-drop-remarks.test test/Tools/run-verilator-verification-circt-lec-drop-remarks.test test/Tools/run-yosys-sva-circt-lec-drop-remarks.test test/Tools/run-formal-all-strict-gate-lec-counter.test test/Tools/run-formal-all-strict-gate-lec-counter-prefix.test test/Tools/run-formal-all-strict-gate-lec-counter-invalid.test test/Tools/run-formal-all-strict-gate-lec-counter-explicit-diag.test test/Tools/run-formal-all-opentitan-lec-xprop-summary.test test/Tools/run-formal-all-strict-gate-opentitan-lec-strict-xprop-counter.test`: PASS (9/9)
+
 ## Iteration 961 - February 10, 2026
 
 ### `circt-mut report`: Lane-Level Matrix Keys for History/Trend Gating

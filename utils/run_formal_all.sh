@@ -7079,12 +7079,14 @@ with path.open(encoding="utf-8") as f:
         counts[f"lec_status_{status}_cases"] += 1
 
         case_path = parts[2].strip() if len(parts) > 2 else ""
-        if "#" in case_path:
+        explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+        maybe_diag = explicit_diag
+        if not maybe_diag and "#" in case_path:
             maybe_diag = case_path.rsplit("#", 1)[1].strip()
-            if re.fullmatch(r"[A-Z0-9_]+", maybe_diag):
-                diag = normalize(maybe_diag)
-                counts[f"lec_diag_{diag}_cases"] += 1
-                counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
+        if re.fullmatch(r"[A-Z0-9_]+", maybe_diag):
+            diag = normalize(maybe_diag)
+            counts[f"lec_diag_{diag}_cases"] += 1
+            counts[f"lec_status_{status}_diag_{diag}_cases"] += 1
 
 if rows <= 0:
     print("")
@@ -9694,7 +9696,10 @@ def sample_rows(rows):
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 
-def extract_diag_tag(path: str) -> str:
+def extract_diag_tag(path: str, explicit_diag: str = "") -> str:
+  explicit = (explicit_diag or "").strip().upper()
+  if explicit and re.fullmatch(r"[A-Z0-9_]+", explicit):
+    return explicit
   if "#" not in path:
     return ""
   candidate = path.rsplit("#", 1)[1].strip()
@@ -9703,8 +9708,8 @@ def extract_diag_tag(path: str) -> str:
   return ""
 
 
-def derive_base_diag(base: str, path: str) -> str:
-  diag = extract_diag_tag(path)
+def derive_base_diag(base: str, path: str, explicit_diag: str = "") -> str:
+  diag = extract_diag_tag(path, explicit_diag)
   if base and diag:
     return f"{base}#{diag}"
   return base
@@ -9752,7 +9757,8 @@ for default_suite, default_mode, path in result_sources:
         continue
       base = parts[1].strip() if len(parts) > 1 else ""
       file_path = parts[2].strip() if len(parts) > 2 else ""
-      diag = extract_diag_tag(file_path)
+      explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+      diag = extract_diag_tag(file_path, explicit_diag)
       detailed_pairs_observed.add((suite, mode))
       observed.append(
           {
@@ -9760,7 +9766,7 @@ for default_suite, default_mode, path in result_sources:
               "mode": mode,
               "status": status,
               "base": base,
-              "base_diag": derive_base_diag(base, file_path),
+              "base_diag": derive_base_diag(base, file_path, explicit_diag),
               "diag": diag,
               "path": file_path,
           }
@@ -10268,7 +10274,10 @@ if out_path.exists():
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
 
-def extract_diag_tag(path: str) -> str:
+def extract_diag_tag(path: str, explicit_diag: str = "") -> str:
+  explicit = (explicit_diag or "").strip().upper()
+  if explicit and re.fullmatch(r"[A-Z0-9_]+", explicit):
+    return explicit
   if "#" not in path:
     return ""
   candidate = path.rsplit("#", 1)[1].strip()
@@ -10277,8 +10286,8 @@ def extract_diag_tag(path: str) -> str:
   return ""
 
 
-def derive_base_diag(base: str, path: str) -> str:
-  diag = extract_diag_tag(path)
+def derive_base_diag(base: str, path: str, explicit_diag: str = "") -> str:
+  diag = extract_diag_tag(path, explicit_diag)
   if base and diag:
     return f"{base}#{diag}"
   return base
@@ -10323,7 +10332,8 @@ for default_suite, default_mode, path in result_sources:
         continue
       base = parts[1].strip() if len(parts) > 1 else ""
       file_path = parts[2].strip() if len(parts) > 2 else ""
-      diag = extract_diag_tag(file_path)
+      explicit_diag = parts[5].strip() if len(parts) > 5 else ""
+      diag = extract_diag_tag(file_path, explicit_diag)
       detailed_pairs_observed.add((suite, mode))
       observed.append(
           {
@@ -10331,7 +10341,7 @@ for default_suite, default_mode, path in result_sources:
               "mode": mode,
               "status": status,
               "base": base,
-              "base_diag": derive_base_diag(base, file_path),
+              "base_diag": derive_base_diag(base, file_path, explicit_diag),
               "diag": diag,
               "path": file_path,
           }
@@ -10510,7 +10520,10 @@ def parse_result_summary(summary: str):
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
-def extract_diag_tag(path: str) -> str:
+def extract_diag_tag(path: str, explicit_diag: str = "") -> str:
+    explicit = (explicit_diag or "").strip().upper()
+    if explicit and re.fullmatch(r"[A-Z0-9_]+", explicit):
+        return explicit
     if "#" not in path:
         return ""
     candidate = path.rsplit("#", 1)[1].strip()
@@ -10518,8 +10531,8 @@ def extract_diag_tag(path: str) -> str:
         return candidate
     return ""
 
-def compose_case_id(base: str, path: str) -> str:
-    diag = extract_diag_tag(path)
+def compose_case_id(base: str, path: str, explicit_diag: str = "") -> str:
+    diag = extract_diag_tag(path, explicit_diag)
     if base and diag:
         return f"{base}#{diag}"
     if base:
@@ -10564,9 +10577,12 @@ def collect_failure_cases(out_dir: Path, summary_rows):
                     continue
                 base = parts[1].strip() if len(parts) > 1 else ""
                 file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
                 key = (suite, mode)
                 detailed_pairs_observed.add(key)
-                cases.setdefault(key, set()).add(compose_case_id(base, file_path))
+                cases.setdefault(key, set()).add(
+                    compose_case_id(base, file_path, explicit_diag)
+                )
     for row in summary_rows:
         suite = row.get("suite", "")
         mode = row.get("mode", "")
@@ -11006,7 +11022,10 @@ def pass_rate(row):
 
 fail_like_statuses = {"FAIL", "ERROR", "XFAIL", "XPASS", "EFAIL", "TIMEOUT", "UNKNOWN"}
 
-def extract_diag_tag(path: str) -> str:
+def extract_diag_tag(path: str, explicit_diag: str = "") -> str:
+    explicit = (explicit_diag or "").strip().upper()
+    if explicit and re.fullmatch(r"[A-Z0-9_]+", explicit):
+        return explicit
     if "#" not in path:
         return ""
     candidate = path.rsplit("#", 1)[1].strip()
@@ -11014,8 +11033,8 @@ def extract_diag_tag(path: str) -> str:
         return candidate
     return ""
 
-def compose_case_id(base: str, path: str) -> str:
-    diag = extract_diag_tag(path)
+def compose_case_id(base: str, path: str, explicit_diag: str = "") -> str:
+    diag = extract_diag_tag(path, explicit_diag)
     if base and diag:
         return f"{base}#{diag}"
     if base:
@@ -11060,9 +11079,12 @@ def collect_failure_cases(out_dir: Path, summary_rows):
                     continue
                 base = parts[1].strip() if len(parts) > 1 else ""
                 file_path = parts[2].strip() if len(parts) > 2 else ""
+                explicit_diag = parts[5].strip() if len(parts) > 5 else ""
                 key = (suite, mode)
                 detailed_pairs_observed.add(key)
-                cases.setdefault(key, set()).add(compose_case_id(base, file_path))
+                cases.setdefault(key, set()).add(
+                    compose_case_id(base, file_path, explicit_diag)
+                )
     for key, row in summary_rows.items():
         if key in detailed_pairs_observed:
             continue

@@ -199,6 +199,13 @@ save_logs() {
   cp -f "$lec_log" "$KEEP_LOGS_DIR/${log_tag}.circt-lec.log" 2>/dev/null || true
 }
 
+extract_lec_diag() {
+  local lec_text="$1"
+  if [[ "$lec_text" =~ LEC_DIAG=([A-Z0-9_]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
+}
+
 while IFS= read -r -d '' sv; do
   tags="$(read_meta tags "$sv")"
   if [[ -z "$tags" ]]; then
@@ -274,7 +281,7 @@ while IFS= read -r -d '' sv; do
     use_uvm=1
   fi
   if [[ "$use_uvm" == "1" && ! -d "$UVM_PATH" ]]; then
-    printf "ERROR\t%s\t%s (UVM path not found: %s)\n" \
+    printf "ERROR\t%s\t%s (UVM path not found: %s)\tsv-tests\tLEC\t\n" \
       "$base" "$sv" "$UVM_PATH" >> "$results_tmp"
     error=$((error + 1))
     total=$((total + 1))
@@ -314,7 +321,7 @@ while IFS= read -r -d '' sv; do
 
   if ! run_limited "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     record_drop_remark_case "$base" "$sv" "$verilog_log"
-    printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
+    printf "ERROR\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
     continue
@@ -331,14 +338,14 @@ while IFS= read -r -d '' sv; do
   opt_cmd+=("$mlir")
 
   if ! run_limited "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
-    printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
+    printf "ERROR\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
     error=$((error + 1))
     save_logs
     continue
   fi
 
   if [[ "$run_lec" == "0" ]]; then
-    printf "PASS\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
+    printf "PASS\t%s\t%s\tsv-tests\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
     pass=$((pass + 1))
     save_logs
     continue
@@ -370,6 +377,11 @@ while IFS= read -r -d '' sv; do
   else
     lec_status=$?
   fi
+  lec_combined="$lec_out"
+  if [[ -s "$lec_log" ]]; then
+    lec_combined+=$'\n'"$(cat "$lec_log")"
+  fi
+  lec_diag="$(extract_lec_diag "$lec_combined")"
 
   if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
     if [[ "$lec_status" -eq 0 ]]; then
@@ -392,7 +404,7 @@ while IFS= read -r -d '' sv; do
     FAIL) fail=$((fail + 1)) ;;
     *) error=$((error + 1)) ;;
   esac
-  printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+  printf "%s\t%s\t%s\tsv-tests\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
   save_logs
 done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
 

@@ -171,6 +171,13 @@ save_logs() {
   cp -f "$lec_log" "$KEEP_LOGS_DIR/${log_tag}.circt-lec.log" 2>/dev/null || true
 }
 
+extract_lec_diag() {
+  local lec_text="$1"
+  if [[ "$lec_text" =~ LEC_DIAG=([A-Z0-9_]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
+}
+
 for suite in "${suites[@]}"; do
   if [[ ! -d "$suite" ]]; then
     echo "suite not found: $suite" >&2
@@ -216,7 +223,7 @@ for suite in "${suites[@]}"; do
 
     if ! "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
       record_drop_remark_case "$base" "$sv" "$verilog_log"
-      printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
+      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
       error=$((error + 1))
       save_logs
       continue
@@ -233,7 +240,7 @@ for suite in "${suites[@]}"; do
     opt_cmd+=("$mlir")
 
     if ! "${opt_cmd[@]}" > "$opt_mlir" 2> "$opt_log"; then
-      printf "ERROR\t%s\t%s\n" "$base" "$sv" >> "$results_tmp"
+      printf "ERROR\t%s\t%s\tverilator-verification\tLEC\t\n" "$base" "$sv" >> "$results_tmp"
       error=$((error + 1))
       save_logs
       continue
@@ -260,6 +267,11 @@ for suite in "${suites[@]}"; do
     else
       lec_status=$?
     fi
+    lec_combined="$lec_out"
+    if [[ -s "$lec_log" ]]; then
+      lec_combined+=$'\n'"$(cat "$lec_log")"
+    fi
+    lec_diag="$(extract_lec_diag "$lec_combined")"
 
     if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
       if [[ "$lec_status" -eq 0 ]]; then
@@ -283,7 +295,7 @@ for suite in "${suites[@]}"; do
       *) error=$((error + 1)) ;;
     esac
 
-    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    printf "%s\t%s\t%s\tverilator-verification\tLEC\t%s\n" "$result" "$base" "$sv" "$lec_diag" >> "$results_tmp"
     save_logs
   done < <(find "$suite" -type f -name "*.sv" -print0)
 done
