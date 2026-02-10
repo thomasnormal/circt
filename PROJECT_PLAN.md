@@ -146,9 +146,9 @@ See CHANGELOG.md on recent progress.
   - Remaining closure gap is now semantic correctness (reducing fail-like rows
     themselves), not bucket attribution coverage.
   - Syntax-tree completeness gaps to close next:
-    - BMC: in single-clock mode, deduplicate equivalent top-level and
-      struct-carried clocks before emitting "multiple clocks" diagnostics
-      (`LowerToBMC.cpp`).
+    - BMC: continue the "no implicit drops" audit by ensuring clock/semantic
+      matching helpers do not materialize transient IR when comparing syntax
+      trees (`LowerToBMC.cpp` now side-effect-free for explicit-clock lookup).
     - BMC SMT-LIB export: remove residual LLVM-in-`verif.bmc` dependency so
       `for-smtlib-export` no longer rejects LLVM ops in BMC regions.
     - BMC: widen register-initial-value lowering beyond current typed-attr

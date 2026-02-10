@@ -677,6 +677,8 @@ void LowerToBMCPass::runOnOperation() {
     SmallVector<ClockInputInfo> clockInputs;
     CommutativeValueEquivalence equivalence;
     DenseMap<Value, Value> materializedClockInputs;
+    DenseMap<Value, Value> assumeEqParent;
+    DenseMap<Value, bool> assumeEqParityToParent;
     clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
 
     auto materializeClockInputI1 = [&](Value input) -> Value {
@@ -718,6 +720,96 @@ void LowerToBMCPass::runOnOperation() {
         return false;
       return isa<seq::ClockType>(blockArg.getType());
     };
+
+    auto findAssumeEqRoot = [&](Value value,
+                                auto &&findRef) -> std::pair<Value, bool> {
+      auto it = assumeEqParent.find(value);
+      if (it == assumeEqParent.end()) {
+        assumeEqParent.try_emplace(value, value);
+        assumeEqParityToParent.try_emplace(value, false);
+        return {value, false};
+      }
+      Value parent = it->second;
+      bool parity = assumeEqParityToParent.lookup(value);
+      if (parent == value)
+        return {value, parity};
+      auto [root, rootParity] = findRef(parent, findRef);
+      bool totalParity = parity ^ rootParity;
+      assumeEqParent[value] = root;
+      assumeEqParityToParent[value] = totalParity;
+      return {root, totalParity};
+    };
+
+    auto uniteAssumeEq = [&](Value lhs, Value rhs, bool invert) {
+      if (!lhs || !rhs || lhs.getType() != builder.getI1Type() ||
+          rhs.getType() != builder.getI1Type())
+        return;
+      auto [lhsRoot, lhsParity] = findAssumeEqRoot(lhs, findAssumeEqRoot);
+      auto [rhsRoot, rhsParity] = findAssumeEqRoot(rhs, findAssumeEqRoot);
+      if (lhsRoot == rhsRoot)
+        return;
+      assumeEqParent[lhsRoot] = rhsRoot;
+      assumeEqParityToParent[lhsRoot] = lhsParity ^ rhsParity ^ invert;
+    };
+
+    auto getAssumeEqInvert = [&](Value lhs, Value rhs) -> std::optional<bool> {
+      if (!lhs || !rhs || lhs.getType() != builder.getI1Type() ||
+          rhs.getType() != builder.getI1Type())
+        return std::nullopt;
+      auto [lhsRoot, lhsParity] = findAssumeEqRoot(lhs, findAssumeEqRoot);
+      auto [rhsRoot, rhsParity] = findAssumeEqRoot(rhs, findAssumeEqRoot);
+      if (lhsRoot != rhsRoot)
+        return std::nullopt;
+      return lhsParity ^ rhsParity;
+    };
+
+    auto isTriviallyTrueEnable = [&](Value enable) {
+      if (!enable)
+        return true;
+      auto literal = getConstI1Value(enable);
+      return literal && *literal;
+    };
+
+    hwModule.walk([&](verif::AssumeOp assumeOp) {
+      if (!isTriviallyTrueEnable(assumeOp.getEnable()))
+        return;
+      Value prop = assumeOp.getProperty();
+      if (auto cmpOp = prop.getDefiningOp<comb::ICmpOp>()) {
+        bool invert = false;
+        switch (cmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+        case comb::ICmpPredicate::ceq:
+        case comb::ICmpPredicate::weq:
+          invert = false;
+          break;
+        case comb::ICmpPredicate::ne:
+        case comb::ICmpPredicate::cne:
+        case comb::ICmpPredicate::wne:
+          invert = true;
+          break;
+        default:
+          return;
+        }
+        uniteAssumeEq(cmpOp.getLhs(), cmpOp.getRhs(), invert);
+        return;
+      }
+      if (auto xorOp = prop.getDefiningOp<comb::XorOp>()) {
+        bool parity = false;
+        SmallVector<Value> nonConst;
+        nonConst.reserve(xorOp.getNumOperands());
+        for (Value operand : xorOp.getOperands()) {
+          if (auto literal = getConstI1Value(operand))
+            parity ^= *literal;
+          else
+            nonConst.push_back(operand);
+        }
+        if (nonConst.size() != 2)
+          return;
+        // assume (a xor b) means a != b, unless constant parity flips it.
+        bool invert = !parity;
+        uniteAssumeEq(nonConst[0], nonConst[1], invert);
+      }
+    });
 
     // Use stable argument names when building clock keys, so they remain valid
     // across transformations that insert or remove module inputs (which shifts
@@ -1135,7 +1227,7 @@ void LowerToBMCPass::runOnOperation() {
         }
       }
 
-    auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
+      auto lookupClockInputIndex = [&](Value input) -> std::optional<size_t> {
       Value i1Input = materializeClockInputI1(input);
       if (!i1Input || i1Input.getType() != builder.getI1Type())
         return std::nullopt;
@@ -1162,6 +1254,93 @@ void LowerToBMCPass::runOnOperation() {
         }
         return std::nullopt;
       };
+
+      auto getExistingClockInputI1 = [&](Value input) -> Value {
+        if (!input)
+          return Value();
+        if (input.getType() == builder.getI1Type())
+          return input;
+        if (!isa<seq::ClockType>(input.getType()))
+          return Value();
+        if (auto toClock = input.getDefiningOp<seq::ToClockOp>())
+          return toClock.getInput();
+        if (auto it = materializedClockInputs.find(input);
+            it != materializedClockInputs.end())
+          return it->second;
+        for (Operation *user : input.getUsers())
+          if (auto fromClock = dyn_cast<seq::FromClockOp>(user))
+            return fromClock.getResult();
+        return Value();
+      };
+
+      auto lookupExplicitClockIndex = [&](Value input) -> std::optional<size_t> {
+        Value i1Input = materializeClockInputI1(input);
+        if (!i1Input || i1Input.getType() != builder.getI1Type())
+          return std::nullopt;
+
+        bool inputInvert = false;
+        Value inputCanonical = canonicalizeClockValue(i1Input, inputInvert);
+        Value inputKeyValue = canonicalizeClockKeyValue(inputCanonical);
+        auto inputKey =
+            getI1ValueKeyWithBlockArgNames(inputKeyValue, getBlockArgName);
+        Value inputBase = getFourStateClockBase(inputCanonical);
+        if (!inputBase)
+          inputBase = getFourStateClockBase(i1Input);
+        if (inputBase)
+          inputBase = canonicalizeFourStateClockBase(inputBase);
+
+        for (auto [idx, explicitClock] : llvm::enumerate(explicitClocks)) {
+          bool explicitInvert = false;
+          std::optional<std::string> explicitKey;
+          if (auto arg = dyn_cast<BlockArgument>(explicitClock))
+            if (arg.getOwner() == hwModule.getBodyBlock())
+              if (auto name = getBlockArgName(arg); !name.empty())
+                explicitKey = ("port:" + name).str();
+
+          Value explicitCanonical;
+          Value explicitBase;
+          if (Value explicitI1 = getExistingClockInputI1(explicitClock)) {
+            if (explicitI1.getType() != builder.getI1Type())
+              continue;
+            explicitCanonical =
+                canonicalizeClockValue(explicitI1, explicitInvert);
+            Value explicitKeyValue =
+                canonicalizeClockKeyValue(explicitCanonical);
+            if (auto key = getI1ValueKeyWithBlockArgNames(explicitKeyValue,
+                                                          getBlockArgName))
+              explicitKey = *key;
+            explicitBase = getFourStateClockBase(explicitCanonical);
+            if (!explicitBase)
+              explicitBase = getFourStateClockBase(explicitI1);
+            if (explicitBase)
+              explicitBase = canonicalizeFourStateClockBase(explicitBase);
+          }
+
+          if (inputKey && explicitKey && *inputKey == *explicitKey &&
+              inputInvert == explicitInvert)
+            return idx;
+          if (explicitCanonical) {
+            if (equivalence.isEquivalent(inputCanonical, explicitCanonical) &&
+                inputInvert == explicitInvert)
+              return idx;
+            if (inputBase && explicitBase && inputBase == explicitBase &&
+                inputInvert == explicitInvert)
+              return idx;
+            if (auto assumeInvert =
+                    getAssumeEqInvert(inputCanonical, explicitCanonical)) {
+              if ((inputInvert ^ *assumeInvert) == explicitInvert)
+                return idx;
+            }
+          }
+        }
+        return std::nullopt;
+      };
+
+      if (!allowMultiClock && hasExplicitClockInput && !clockInputs.empty()) {
+        llvm::erase_if(clockInputs, [&](const ClockInputInfo &info) {
+          return lookupExplicitClockIndex(info.value).has_value();
+        });
+      }
 
       if (!allowMultiClock && hasExplicitClockInput && !clockInputs.empty()) {
         hwModule.emitError("designs with multiple clocks not yet supported");
@@ -1327,6 +1506,13 @@ void LowerToBMCPass::runOnOperation() {
       for (auto toClockOp : toClockOps) {
         auto idx = lookupClockInputIndex(toClockOp.getInput());
         if (!idx) {
+          if (hasExplicitClockInput) {
+            if (auto explicitIdx = lookupExplicitClockIndex(toClockOp.getInput())) {
+              toClockOp.replaceAllUsesWith(explicitClocks[*explicitIdx]);
+              toClockOp.erase();
+              continue;
+            }
+          }
           toClockOp.emitError("failed to map derived clock input");
           return signalPassFailure();
         }
@@ -1344,7 +1530,8 @@ void LowerToBMCPass::runOnOperation() {
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
           if (hasExplicitClockInput)
-            continue;
+            if (lookupExplicitClockIndex(clockOp.getClock()))
+              continue;
           clockOp.emitError("failed to map clocked property input");
           return signalPassFailure();
         }
