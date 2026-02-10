@@ -6524,6 +6524,7 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      "matrix.global_filter_lec_unknown_mutants_sum", 0.0);
     appendUniqueRule(opts.failIfDeltaGtRules,
                      "matrix.global_filter_bmc_unknown_mutants_sum", 0.0);
+    appendUniqueRule(opts.failIfDeltaGtRules, "matrix.lanes_skip", 0.0);
     appendUniqueRule(opts.failIfDeltaLtRules, "matrix.detected_mutants_sum",
                      0.0);
     return true;
