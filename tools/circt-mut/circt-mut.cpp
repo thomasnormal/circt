@@ -29,12 +29,14 @@
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -1705,6 +1707,7 @@ struct CoverNativePrequalifyConfig {
   std::string workDir = "mutation-cover-results";
   std::string createMutatedScript;
   std::string mutantFormat = "il";
+  uint64_t jobs = 1;
   uint64_t mutationLimit = 0;
   std::string pairFile;
   std::string generateLogFile;
@@ -1882,6 +1885,14 @@ static bool parseCoverNativePrequalifyConfig(
         return false;
       continue;
     }
+    if (arg == "--jobs" || arg.starts_with("--jobs=")) {
+      std::string raw;
+      if (!consumeValue("--jobs", raw))
+        return false;
+      if (!parseUIntArg(raw, "--jobs", cfg.jobs))
+        return false;
+      continue;
+    }
     if (arg == "--create-mutated-script" ||
         arg.starts_with("--create-mutated-script=")) {
       if (!consumeValue("--create-mutated-script", cfg.createMutatedScript))
@@ -1920,6 +1931,11 @@ static bool parseCoverNativePrequalifyConfig(
                    "native prequalification: ") +
              cfg.mutantFormat + " (expected il|v|sv).")
                 .str();
+    return false;
+  }
+  if (cfg.jobs == 0) {
+    error = "circt-mut cover: invalid --jobs value for native prequalification: "
+            "0 (expected positive integer).";
     return false;
   }
 
@@ -2101,17 +2117,6 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     return 1;
   }
 
-  std::error_code pairEC;
-  raw_fd_ostream pairOut(cfg.pairFile, pairEC, sys::fs::OF_Text);
-  if (pairEC) {
-    errs() << "circt-mut cover: failed to open prequalification pair file: "
-           << cfg.pairFile << ": " << pairEC.message() << "\n";
-    return 1;
-  }
-  pairOut
-      << "mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\t"
-         "propagate_exit\tnote\n";
-
   std::string prequalifyRoot = joinPath2(cfg.workDir, "native_global_filter_prequalify");
   std::error_code mkdirEC = sys::fs::create_directories(prequalifyRoot);
   if (mkdirEC) {
@@ -2120,20 +2125,42 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     return 1;
   }
 
-  uint64_t prequalifyTotalMutants = 0;
-  uint64_t prequalifyNotPropagatedMutants = 0;
-  uint64_t prequalifyPropagatedMutants = 0;
-  uint64_t prequalifyCreateMutatedErrorMutants = 0;
-  uint64_t prequalifyProbeErrorMutants = 0;
+  struct PrequalifyRowResult {
+    std::string mutationID;
+    std::string propagation = "propagated";
+    int propagateRC = -1;
+    std::string note = "global_filter_propagated;native_prequalify=1";
+    bool createMutatedError = false;
+    bool probeError = false;
+  };
 
-  for (const MutationRow &row : rows) {
-    ++prequalifyTotalMutants;
+  std::vector<PrequalifyRowResult> rowResults(rows.size());
+  std::atomic<size_t> nextIndex{0};
+  std::atomic<bool> failed{false};
+  std::string fatalError;
+  std::mutex fatalMutex;
+  auto setFatalError = [&](StringRef message) {
+    std::lock_guard<std::mutex> lock(fatalMutex);
+    if (fatalError.empty())
+      fatalError = message.str();
+    failed.store(true);
+  };
+
+  auto processRow = [&](size_t idx) {
+    if (failed.load())
+      return;
+    const MutationRow &row = rows[idx];
+    PrequalifyRowResult result;
+    result.mutationID = row.id;
+
     std::string mutationRoot = joinPath2(prequalifyRoot, row.id);
     std::error_code rowEC = sys::fs::create_directories(mutationRoot);
     if (rowEC) {
-      errs() << "circt-mut cover: failed to create mutation prequalification "
-             << "directory: " << mutationRoot << ": " << rowEC.message() << "\n";
-      return 1;
+      setFatalError((Twine("circt-mut cover: failed to create mutation "
+                           "prequalification directory: ") +
+                     mutationRoot + ": " + rowEC.message())
+                        .str());
+      return;
     }
     std::string mutationInput = joinPath2(mutationRoot, "mutation_input.txt");
     std::string mutantDesign =
@@ -2145,16 +2172,13 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
       std::error_code inputEC;
       raw_fd_ostream inputOut(mutationInput, inputEC, sys::fs::OF_Text);
       if (inputEC) {
-        errs() << "circt-mut cover: failed to write mutation input: "
-               << mutationInput << ": " << inputEC.message() << "\n";
-        return 1;
+        setFatalError((Twine("circt-mut cover: failed to write mutation input: ") +
+                       mutationInput + ": " + inputEC.message())
+                          .str());
+        return;
       }
       inputOut << row.id << " " << row.spec << "\n";
     }
-
-    std::string propagation = "propagated";
-    int propagateRC = -1;
-    std::string note = "global_filter_propagated;native_prequalify=1";
 
     SmallVector<std::string, 16> createCmd;
     createCmd.push_back(cfg.createMutatedScript);
@@ -2168,12 +2192,12 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
     std::string createError;
     if (!runArgvToLog(createCmd, createLog, /*timeoutSeconds=*/0, createRC,
                       createError)) {
-      note += ";native_prequalify_create_mutated_exec_error=1";
-      ++prequalifyCreateMutatedErrorMutants;
+      result.note += ";native_prequalify_create_mutated_exec_error=1";
+      result.createMutatedError = true;
     } else if (createRC != 0) {
-      propagateRC = createRC;
-      note += ";native_prequalify_create_mutated_error=1";
-      ++prequalifyCreateMutatedErrorMutants;
+      result.propagateRC = createRC;
+      result.note += ";native_prequalify_create_mutated_error=1";
+      result.createMutatedError = true;
     } else {
       CoverGlobalFilterProbeConfig probeCfg = cfg.probeCfg;
       probeCfg.mutantDesign = mutantDesign;
@@ -2181,26 +2205,86 @@ static int runNativeCoverGlobalFilterPrequalifyAndDispatch(
       CoverGlobalFilterProbeOutcome outcome;
       std::string probeError;
       if (!executeNativeCoverGlobalFilterProbe(probeCfg, outcome, probeError)) {
-        note += ";native_prequalify_probe_exec_error=1";
+        result.note += ";native_prequalify_probe_exec_error=1";
+        result.probeError = true;
       } else if (outcome.classification == "not_propagated") {
-        propagation = "not_propagated";
-        propagateRC = outcome.finalRC;
-        note = "global_filter_not_propagated;native_prequalify=1";
-        ++prequalifyNotPropagatedMutants;
+        result.propagation = "not_propagated";
+        result.propagateRC = outcome.finalRC;
+        result.note = "global_filter_not_propagated;native_prequalify=1";
       } else if (outcome.classification == "propagated") {
-        propagation = "propagated";
-        propagateRC = outcome.finalRC;
-        ++prequalifyPropagatedMutants;
+        result.propagation = "propagated";
+        result.propagateRC = outcome.finalRC;
       } else {
-        propagation = "propagated";
-        propagateRC = outcome.finalRC;
-        note += ";native_prequalify_probe_error=1";
-        ++prequalifyProbeErrorMutants;
+        result.propagation = "propagated";
+        result.propagateRC = outcome.finalRC;
+        result.note += ";native_prequalify_probe_error=1";
+        result.probeError = true;
       }
     }
 
-    pairOut << row.id << "\t-\tactivated\t" << propagation
-            << "\t-1\t" << propagateRC << "\t" << note << "\n";
+    rowResults[idx] = std::move(result);
+  };
+
+  auto worker = [&]() {
+    while (true) {
+      size_t idx = nextIndex.fetch_add(1);
+      if (idx >= rows.size())
+        return;
+      processRow(idx);
+      if (failed.load())
+        return;
+    }
+  };
+
+  size_t workerCount =
+      std::min<size_t>(static_cast<size_t>(cfg.jobs), rows.size());
+  if (workerCount == 0)
+    workerCount = 1;
+  if (workerCount == 1) {
+    worker();
+  } else {
+    std::vector<std::thread> workers;
+    workers.reserve(workerCount);
+    for (size_t i = 0; i < workerCount; ++i)
+      workers.emplace_back(worker);
+    for (std::thread &thread : workers)
+      thread.join();
+  }
+
+  if (failed.load()) {
+    errs() << fatalError << "\n";
+    return 1;
+  }
+
+  uint64_t prequalifyTotalMutants = rows.size();
+  uint64_t prequalifyNotPropagatedMutants = 0;
+  uint64_t prequalifyPropagatedMutants = 0;
+  uint64_t prequalifyCreateMutatedErrorMutants = 0;
+  uint64_t prequalifyProbeErrorMutants = 0;
+  for (const PrequalifyRowResult &result : rowResults) {
+    if (result.propagation == "not_propagated")
+      ++prequalifyNotPropagatedMutants;
+    else
+      ++prequalifyPropagatedMutants;
+    if (result.createMutatedError)
+      ++prequalifyCreateMutatedErrorMutants;
+    if (result.probeError)
+      ++prequalifyProbeErrorMutants;
+  }
+
+  std::error_code pairEC;
+  raw_fd_ostream pairOut(cfg.pairFile, pairEC, sys::fs::OF_Text);
+  if (pairEC) {
+    errs() << "circt-mut cover: failed to open prequalification pair file: "
+           << cfg.pairFile << ": " << pairEC.message() << "\n";
+    return 1;
+  }
+  pairOut
+      << "mutation_id\ttest_id\tactivation\tpropagation\tactivate_exit\t"
+         "propagate_exit\tnote\n";
+  for (const PrequalifyRowResult &result : rowResults) {
+    pairOut << result.mutationID << "\t-\tactivated\t" << result.propagation
+            << "\t-1\t" << result.propagateRC << "\t" << result.note << "\n";
   }
   pairOut.close();
 

@@ -352,6 +352,7 @@ circt-mut cover \
   --design /path/to/design.il \
   --mutations-file /path/to/mutations.txt \
   --native-global-filter-prequalify \
+  --jobs 8 \
   --formal-global-propagate-circt-chain auto \
   --work-dir /tmp/mutation-cover
 ```
@@ -555,6 +556,9 @@ Execution controls:
   - `--native-global-filter-prequalify-only` runs the same native batch
     classification but skips test dispatch and prints prequalification summary
     counters (`prequalify_*`) to stdout.
+  - native prequalification now honors `--jobs <N>` for parallel per-mutant
+    classification in both dispatch and prequalify-only modes while preserving
+    deterministic pair-row output order.
   - native prequalification rejects explicit `--reuse-pair-file`, and does not
     support `--formal-global-propagate-cmd`.
   - unresolved tool paths fail fast in `circt-mut` with direct diagnostics
