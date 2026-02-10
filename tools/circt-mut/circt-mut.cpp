@@ -81,6 +81,8 @@ static void printGenerateHelp(raw_ostream &os) {
   os << "  --modes CSV               Comma-separated mutate modes\n";
   os << "  --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)\n";
   os << "  --mode-counts CSV         Comma-separated NAME=COUNT mode allocations\n";
+  os << "  --mode-weight NAME=WEIGHT Relative weight for a mode (repeatable)\n";
+  os << "  --mode-weights CSV        Comma-separated NAME=WEIGHT mode weights\n";
   os << "  --profile NAME            Named mutation profile (repeatable)\n";
   os << "  --profiles CSV            Comma-separated named mutation profiles\n";
   os << "  --cfg KEY=VALUE           Mutate config entry (repeatable)\n";
@@ -1937,6 +1939,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                               "--mutations-modes");
       appendOptionalConfigArg(args, cfg.cover, "mutations_mode_counts",
                               "--mutations-mode-counts");
+      appendOptionalConfigArg(args, cfg.cover, "mutations_mode_weights",
+                              "--mutations-mode-weights");
       appendOptionalConfigArg(args, cfg.cover, "mutations_profiles",
                               "--mutations-profiles");
       appendOptionalConfigArg(args, cfg.cover, "mutations_cfg", "--mutations-cfg");
@@ -2105,6 +2109,8 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                             "--default-mutations-modes");
     appendOptionalConfigArg(args, cfg.matrix, "default_mutations_mode_counts",
                             "--default-mutations-mode-counts");
+    appendOptionalConfigArg(args, cfg.matrix, "default_mutations_mode_weights",
+                            "--default-mutations-mode-weights");
     appendOptionalConfigArg(args, cfg.matrix, "default_mutations_profiles",
                             "--default-mutations-profiles");
     appendOptionalConfigArg(args, cfg.matrix, "default_mutations_cfg",
@@ -3623,6 +3629,7 @@ struct GenerateOptions {
   std::string yosys = "yosys";
   SmallVector<std::string, 8> modeList;
   SmallVector<std::string, 8> modeCountList;
+  SmallVector<std::string, 8> modeWeightList;
   SmallVector<std::string, 8> profileList;
   SmallVector<std::string, 8> cfgList;
   SmallVector<std::string, 8> selectList;
@@ -3732,6 +3739,22 @@ static GenerateParseResult parseGenerateArgs(ArrayRef<StringRef> args) {
       if (!v)
         return result;
       splitCSV(*v, result.opts.modeCountList);
+      continue;
+    }
+    if (arg == "--mode-weight") {
+      auto v = requireValue(arg);
+      if (!v)
+        return result;
+      StringRef entry = v->trim();
+      if (!entry.empty())
+        result.opts.modeWeightList.push_back(entry.str());
+      continue;
+    }
+    if (arg == "--mode-weights") {
+      auto v = requireValue(arg);
+      if (!v)
+        return result;
+      splitCSV(*v, result.opts.modeWeightList);
       continue;
     }
     if (arg == "--profile") {
@@ -4056,6 +4079,62 @@ static int runNativeGenerate(const GenerateOptions &opts) {
            << ") must match --count (" << opts.count << ")\n";
     return 1;
   }
+  bool modeWeightsEnabled = false;
+  uint64_t modeWeightsTotal = 0;
+  SmallVector<std::string, 8> modeWeightKeys;
+  StringMap<uint64_t> modeWeightByMode;
+  for (const std::string &entry : opts.modeWeightList) {
+    StringRef ref(entry);
+    auto split = ref.split('=');
+    StringRef modeName = split.first.trim();
+    StringRef weightRef = split.second.trim();
+    if (modeName.empty() || weightRef == split.first) {
+      errs() << "circt-mut generate: invalid --mode-weight entry: " << entry
+             << " (expected NAME=WEIGHT)\n";
+      return 1;
+    }
+    uint64_t modeWeightValue = 0;
+    if (!parsePositiveUInt(weightRef, modeWeightValue)) {
+      errs() << "circt-mut generate: invalid --mode-weight weight for "
+             << modeName << ": " << weightRef
+             << " (expected positive integer)\n";
+      return 1;
+    }
+    if (!modeWeightByMode.count(modeName))
+      modeWeightKeys.push_back(modeName.str());
+    modeWeightByMode[modeName] += modeWeightValue;
+    modeWeightsTotal += modeWeightValue;
+    modeWeightsEnabled = true;
+  }
+  if (modeCountsEnabled && modeWeightsEnabled) {
+    errs() << "circt-mut generate: use either --mode-count(s) or "
+              "--mode-weight(s), not both\n";
+    return 1;
+  }
+  if (modeWeightsEnabled) {
+    if (modeWeightsTotal == 0) {
+      errs() << "circt-mut generate: mode-weight total must be positive\n";
+      return 1;
+    }
+    modeCountsEnabled = true;
+    modeCountsTotal = 0;
+    modeCountKeys = modeWeightKeys;
+    for (const std::string &modeName : modeWeightKeys) {
+      uint64_t modeWeightValue = modeWeightByMode[modeName];
+      uint64_t modeCountValue = (opts.count * modeWeightValue) / modeWeightsTotal;
+      modeCountByMode[modeName] = modeCountValue;
+      modeCountsTotal += modeCountValue;
+    }
+    uint64_t modeRemainder = opts.count - modeCountsTotal;
+    if (modeRemainder > 0 && !modeWeightKeys.empty()) {
+      uint64_t start = opts.seed % modeWeightKeys.size();
+      for (uint64_t i = 0; i < modeRemainder; ++i) {
+        const std::string &modeName =
+            modeWeightKeys[(start + i) % modeWeightKeys.size()];
+        modeCountByMode[modeName] += 1;
+      }
+    }
+  }
 
   SmallVector<std::string, 16> combinedModes;
   combinedModes.append(profileModes.begin(), profileModes.end());
@@ -4193,6 +4272,7 @@ static int runNativeGenerate(const GenerateOptions &opts) {
 
     std::string modePayload = joinWithTrailingNewline(finalModes);
     std::string modeCountPayload = joinWithTrailingNewline(opts.modeCountList);
+    std::string modeWeightPayload = joinWithTrailingNewline(opts.modeWeightList);
     std::string profilePayload = joinWithTrailingNewline(opts.profileList);
     std::string cfgPayload = joinWithTrailingNewline(cfgEntries);
     std::string selectPayload = joinWithTrailingNewline(finalSelects);
@@ -4207,6 +4287,7 @@ static int runNativeGenerate(const GenerateOptions &opts) {
     cachePayloadOS << "yosys_bin=" << yosysExec << "\n";
     cachePayloadOS << "modes=" << modePayload;
     cachePayloadOS << "mode_counts=" << modeCountPayload;
+    cachePayloadOS << "mode_weights=" << modeWeightPayload;
     cachePayloadOS << "profiles=" << profilePayload;
     cachePayloadOS << "cfg=" << cfgPayload;
     cachePayloadOS << "select=" << selectPayload;

@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+//
+// RUN: not %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 5 --mode-weights arith=2,control=bad 2> %t/log1.txt
+// RUN: FileCheck %s --check-prefix=ERR_WEIGHT < %t/log1.txt
+//
+// ERR_WEIGHT: Invalid --mode-weight weight for control: bad
+//
+// RUN: not %S/../../utils/generate_mutations_yosys.sh --design %t/design.v --out %t/mutations.txt --count 5 --mode-counts arith=3,control=2 --mode-weights arith=1,control=1 2> %t/log2.txt
+// RUN: FileCheck %s --check-prefix=ERR_CONFLICT < %t/log2.txt
+//
+// ERR_CONFLICT: Use either --mode-count(s) or --mode-weight(s), not both.

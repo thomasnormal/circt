@@ -8,7 +8,7 @@ usage: run_mutation_matrix.sh [options]
 
 Required:
   --lanes-tsv FILE          Lane config TSV:
-                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]<TAB>[bmc_orig_cache_max_age_seconds]<TAB>[bmc_orig_cache_eviction_policy]<TAB>[skip_baseline]<TAB>[fail_on_undetected]<TAB>[fail_on_errors]<TAB>[global_propagate_timeout_seconds]<TAB>[global_propagate_lec_timeout_seconds]<TAB>[global_propagate_bmc_timeout_seconds]
+                              lane_id<TAB>design<TAB>mutations_file<TAB>tests_manifest<TAB>activate_cmd<TAB>propagate_cmd<TAB>coverage_threshold<TAB>[generate_count]<TAB>[mutations_top]<TAB>[mutations_seed]<TAB>[mutations_yosys]<TAB>[reuse_pair_file]<TAB>[reuse_summary_file]<TAB>[mutations_modes]<TAB>[global_propagate_cmd]<TAB>[global_propagate_circt_lec]<TAB>[global_propagate_circt_bmc]<TAB>[global_propagate_bmc_args]<TAB>[global_propagate_bmc_bound]<TAB>[global_propagate_bmc_module]<TAB>[global_propagate_bmc_run_smtlib]<TAB>[global_propagate_bmc_z3]<TAB>[global_propagate_bmc_assume_known_inputs]<TAB>[global_propagate_bmc_ignore_asserts_until]<TAB>[global_propagate_circt_lec_args]<TAB>[global_propagate_c1]<TAB>[global_propagate_c2]<TAB>[global_propagate_z3]<TAB>[global_propagate_assume_known_inputs]<TAB>[global_propagate_accept_xprop_only]<TAB>[mutations_cfg]<TAB>[mutations_select]<TAB>[mutations_profiles]<TAB>[mutations_mode_counts]<TAB>[global_propagate_circt_chain]<TAB>[bmc_orig_cache_max_entries]<TAB>[bmc_orig_cache_max_bytes]<TAB>[bmc_orig_cache_max_age_seconds]<TAB>[bmc_orig_cache_eviction_policy]<TAB>[skip_baseline]<TAB>[fail_on_undetected]<TAB>[fail_on_errors]<TAB>[global_propagate_timeout_seconds]<TAB>[global_propagate_lec_timeout_seconds]<TAB>[global_propagate_bmc_timeout_seconds]<TAB>[mutations_mode_weights]
 
 Optional:
   --out-dir DIR             Matrix output dir (default: ./mutation-matrix-results)
@@ -30,6 +30,8 @@ Optional:
                             families: arith,control,balanced,all)
   --default-mutations-mode-counts CSV
                             Default --mutations-mode-counts for generated-mutation lanes
+  --default-mutations-mode-weights CSV
+                            Default --mutations-mode-weights for generated-mutation lanes
   --default-mutations-profiles CSV
                             Default --mutations-profiles for generated-mutation lanes
   --default-mutations-cfg CSV
@@ -169,6 +171,7 @@ DEFAULT_REUSE_PAIR_FILE=""
 DEFAULT_REUSE_SUMMARY_FILE=""
 DEFAULT_MUTATIONS_MODES=""
 DEFAULT_MUTATIONS_MODE_COUNTS=""
+DEFAULT_MUTATIONS_MODE_WEIGHTS=""
 DEFAULT_MUTATIONS_PROFILES=""
 DEFAULT_MUTATIONS_CFG=""
 DEFAULT_MUTATIONS_SELECT=""
@@ -220,6 +223,7 @@ while [[ $# -gt 0 ]]; do
     --default-reuse-summary-file) DEFAULT_REUSE_SUMMARY_FILE="$2"; shift 2 ;;
     --default-mutations-modes) DEFAULT_MUTATIONS_MODES="$2"; shift 2 ;;
     --default-mutations-mode-counts) DEFAULT_MUTATIONS_MODE_COUNTS="$2"; shift 2 ;;
+    --default-mutations-mode-weights) DEFAULT_MUTATIONS_MODE_WEIGHTS="$2"; shift 2 ;;
     --default-mutations-profiles) DEFAULT_MUTATIONS_PROFILES="$2"; shift 2 ;;
     --default-mutations-cfg) DEFAULT_MUTATIONS_CFG="$2"; shift 2 ;;
     --default-mutations-select) DEFAULT_MUTATIONS_SELECT="$2"; shift 2 ;;
@@ -396,6 +400,7 @@ declare -a REUSE_PAIR_FILE
 declare -a REUSE_SUMMARY_FILE
 declare -a MUTATIONS_MODES
 declare -a MUTATIONS_MODE_COUNTS
+declare -a MUTATIONS_MODE_WEIGHTS
 declare -a MUTATIONS_PROFILES
 declare -a MUTATIONS_CFG
 declare -a MUTATIONS_SELECT
@@ -457,7 +462,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" ]] && continue
   [[ "${line:0:1}" == "#" ]] && continue
 
-  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes bmc_orig_cache_max_age_seconds bmc_orig_cache_eviction_policy lane_skip_baseline lane_fail_on_undetected lane_fail_on_errors global_propagate_timeout_seconds global_propagate_lec_timeout_seconds global_propagate_bmc_timeout_seconds _ <<< "$line"
+  IFS=$'\t' read -r lane_id design mutations_file tests_manifest activate_cmd propagate_cmd threshold generate_count mutations_top mutations_seed mutations_yosys reuse_pair_file reuse_summary_file mutations_modes global_propagate_cmd global_propagate_circt_lec global_propagate_circt_bmc global_propagate_bmc_args global_propagate_bmc_bound global_propagate_bmc_module global_propagate_bmc_run_smtlib global_propagate_bmc_z3 global_propagate_bmc_assume_known_inputs global_propagate_bmc_ignore_asserts_until global_propagate_circt_lec_args global_propagate_c1 global_propagate_c2 global_propagate_z3 global_propagate_assume_known_inputs global_propagate_accept_xprop_only mutations_cfg mutations_select mutations_profiles mutations_mode_counts global_propagate_circt_chain bmc_orig_cache_max_entries bmc_orig_cache_max_bytes bmc_orig_cache_max_age_seconds bmc_orig_cache_eviction_policy lane_skip_baseline lane_fail_on_undetected lane_fail_on_errors global_propagate_timeout_seconds global_propagate_lec_timeout_seconds global_propagate_bmc_timeout_seconds mutations_mode_weights _ <<< "$line"
   if [[ -z "$lane_id" || -z "$design" || -z "$mutations_file" || -z "$tests_manifest" ]]; then
     echo "Malformed lane config line: $line" >&2
     parse_failures=$((parse_failures + 1))
@@ -479,6 +484,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   REUSE_SUMMARY_FILE+=("${reuse_summary_file:--}")
   MUTATIONS_MODES+=("${mutations_modes:--}")
   MUTATIONS_MODE_COUNTS+=("${mutations_mode_counts:--}")
+  MUTATIONS_MODE_WEIGHTS+=("${mutations_mode_weights:--}")
   MUTATIONS_PROFILES+=("${mutations_profiles:--}")
   MUTATIONS_CFG+=("${mutations_cfg:--}")
   MUTATIONS_SELECT+=("${mutations_select:--}")
@@ -564,6 +570,7 @@ lane_cache_schedule_key() {
   local lane_mutations_yosys="${MUTATIONS_YOSYS[$i]}"
   local lane_mutations_modes="${MUTATIONS_MODES[$i]}"
   local lane_mutations_mode_counts="${MUTATIONS_MODE_COUNTS[$i]}"
+  local lane_mutations_mode_weights="${MUTATIONS_MODE_WEIGHTS[$i]}"
   local lane_mutations_profiles="${MUTATIONS_PROFILES[$i]}"
   local lane_mutations_cfg="${MUTATIONS_CFG[$i]}"
   local lane_mutations_select="${MUTATIONS_SELECT[$i]}"
@@ -599,6 +606,9 @@ lane_cache_schedule_key() {
   if [[ "$lane_mutations_mode_counts" == "-" || -z "$lane_mutations_mode_counts" ]]; then
     lane_mutations_mode_counts="$DEFAULT_MUTATIONS_MODE_COUNTS"
   fi
+  if [[ "$lane_mutations_mode_weights" == "-" || -z "$lane_mutations_mode_weights" ]]; then
+    lane_mutations_mode_weights="$DEFAULT_MUTATIONS_MODE_WEIGHTS"
+  fi
   if [[ "$lane_mutations_profiles" == "-" || -z "$lane_mutations_profiles" ]]; then
     lane_mutations_profiles="$DEFAULT_MUTATIONS_PROFILES"
   fi
@@ -619,6 +629,7 @@ seed=$lane_mutations_seed
 yosys=$lane_mutations_yosys
 modes=$lane_mutations_modes
 mode_counts=$lane_mutations_mode_counts
+mode_weights=$lane_mutations_mode_weights
 profiles=$lane_mutations_profiles
 cfg=$lane_mutations_cfg
 select=$lane_mutations_select
@@ -695,6 +706,7 @@ run_lane() {
   local lane_reuse_summary_file=""
   local lane_mutations_modes=""
   local lane_mutations_mode_counts=""
+  local lane_mutations_mode_weights=""
   local lane_mutations_profiles=""
   local lane_mutations_cfg=""
   local lane_mutations_select=""
@@ -829,6 +841,10 @@ run_lane() {
     if [[ "$lane_mutations_mode_counts" == "-" || -z "$lane_mutations_mode_counts" ]]; then
       lane_mutations_mode_counts="$DEFAULT_MUTATIONS_MODE_COUNTS"
     fi
+    lane_mutations_mode_weights="${MUTATIONS_MODE_WEIGHTS[$i]}"
+    if [[ "$lane_mutations_mode_weights" == "-" || -z "$lane_mutations_mode_weights" ]]; then
+      lane_mutations_mode_weights="$DEFAULT_MUTATIONS_MODE_WEIGHTS"
+    fi
     lane_mutations_profiles="${MUTATIONS_PROFILES[$i]}"
     if [[ "$lane_mutations_profiles" == "-" || -z "$lane_mutations_profiles" ]]; then
       lane_mutations_profiles="$DEFAULT_MUTATIONS_PROFILES"
@@ -859,6 +875,9 @@ run_lane() {
     fi
     if [[ -n "$lane_mutations_mode_counts" ]]; then
       cmd+=(--mutations-mode-counts "$lane_mutations_mode_counts")
+    fi
+    if [[ -n "$lane_mutations_mode_weights" ]]; then
+      cmd+=(--mutations-mode-weights "$lane_mutations_mode_weights")
     fi
     if [[ -n "$lane_mutations_profiles" ]]; then
       cmd+=(--mutations-profiles "$lane_mutations_profiles")
