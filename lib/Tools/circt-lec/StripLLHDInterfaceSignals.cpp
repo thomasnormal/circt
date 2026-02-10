@@ -3498,7 +3498,7 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
     if (isa<llhd::LLHDDialect>(op->getDialect()))
       hasLLHD = true;
   });
-  if (hasLLHD) {
+  if (hasLLHD && requireNoLLHD) {
     module.emitError("LLHD operations are not supported by circt-lec");
     return signalPassFailure();
   }

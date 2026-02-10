@@ -43,6 +43,7 @@
 #include "circt/Support/SMTModel.h"
 #include "circt/Support/Version.h"
 #include "circt/Tools/circt-bmc/Passes.h"
+#include "circt/Tools/circt-lec/Passes.h"
 #include "circt/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -795,6 +796,10 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   });
 
   if (hasLLHD) {
+    LowerLLHDRefPortsOptions lowerRefOpts;
+    lowerRefOpts.strict = false;
+    pm.addPass(createLowerLLHDRefPorts(lowerRefOpts));
+
     LlhdToCorePipelineOptions llhdOptions;
     pm.addNestedPass<hw::HWModuleOp>(llhd::createWrapProceduralOpsPass());
     pm.addPass(mlir::createSCFToControlFlowPass());
@@ -822,6 +827,7 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
     llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
     llhdPostPM.addPass(mlir::createCSEPass());
     llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
+
     llhdPostPM.addPass(createMapArithToCombPass(true));
     llhdPostPM.addPass(llhd::createCombineDrivesPass());
     llhdPostPM.addPass(llhd::createSig2Reg());
@@ -832,6 +838,11 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
       llhdPostPM.addPass(mlir::createCSEPass());
       llhdPostPM.addPass(createBottomUpSimpleCanonicalizerPass());
     }
+
+    StripLLHDInterfaceSignalsOptions stripLLHDOpts;
+    stripLLHDOpts.strict = false;
+    stripLLHDOpts.requireNoLLHD = false;
+    pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
   }
   pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());

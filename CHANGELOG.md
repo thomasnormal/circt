@@ -1,5 +1,48 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 868 - February 10, 2026
+
+### BMC Semantic Closure: LLHD Interface-Strip Integration (Narrow)
+
+1. Extended `strip-llhd-interface-signals` configurability in
+   `circt-lec` transforms:
+   - added pass option:
+     `require-no-llhd` (default `true`), allowing callers to keep residual
+     LLHD intentionally.
+   - files:
+     - `include/circt/Tools/circt-lec/Passes.td`
+     - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+2. Integrated targeted LLHD preprocessing into `circt-bmc` LLHD path:
+   - added `lower-llhd-ref-ports` (`strict=false`)
+   - added `strip-llhd-interface-signals`
+     (`strict=false`, `require-no-llhd=false`)
+   - intentionally did **not** add full `lower-lec-llvm` in BMC path (it
+     caused major runtime overhead in this flow).
+   - files:
+     - `tools/circt-bmc/circt-bmc.cpp`
+     - `tools/circt-bmc/CMakeLists.txt`
+
+### Tests and Validation
+
+- Added regression test:
+  - `test/Tools/circt-lec/lec-strip-llhd-allow-residual.mlir`
+- Lit validation:
+  - `build/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-allow-residual.mlir test/Conversion/SMTToZ3LLVM/smt-to-z3-llvm-int-bridge-casts.mlir`: PASS
+- BMC semantic candidate revalidation:
+  - `OUT=/tmp/bmc-single-16.15-fail.txt INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 TEST_FILTER='^16\\.15--property-iff-uvm-fail$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - summary: `total=1 pass=1 fail=0 error=0 timeout=0`
+  - `OUT=/tmp/bmc-single-16.10-seq.txt INCLUDE_UVM_TAGS=1 FORCE_BMC=1 ALLOW_MULTI_CLOCK=1 TEST_FILTER='^16\\.10--sequence-local-var-uvm$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - summary: `total=1 pass=0 fail=1 error=0 timeout=0` (now real FAIL classification, not backend ERROR)
+  - Direct `circt-bmc` checks on the 6-case expansion set (`--allow-multi-clock`):
+    - `16.10--property-local-var-uvm`: `BMC_RESULT=SAT`
+    - `16.10--sequence-local-var-uvm`: `BMC_RESULT=SAT`
+    - `16.11--sequence-subroutine-uvm`: `BMC_RESULT=SAT`
+    - `16.15--property-iff-uvm`: `BMC_RESULT=SAT`
+    - `16.15--property-iff-uvm-fail`: `BMC_RESULT=SAT` (expected-fail case passes)
+    - remaining blocker:
+      `16.13--sequence-multiclock-uvm` fails with:
+      `multi-clock BMC requires named clock entries in bmc_reg_clocks or valid entries in bmc_reg_clock_sources`.
+
 ## Iteration 867 - February 10, 2026
 
 ### `circt-mut` Cmd-Mode Telemetry: Source Attribution for Probe/Prequalify

@@ -69,7 +69,10 @@ def StripLLHDInterfaceSignals
   let options = [
     Option<"strict", "strict-llhd", "bool",
            /*default=*/"false",
-           "Fail when LLHD interface stripping would require abstraction.">
+           "Fail when LLHD interface stripping would require abstraction.">,
+    Option<"requireNoLLHD", "require-no-llhd", "bool",
+           /*default=*/"true",
+           "Fail if LLHD operations remain after stripping.">
   ];
 
   let dependentDialects = [
