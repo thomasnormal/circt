@@ -54,6 +54,12 @@ def parse_lec_diag(text: str) -> str | None:
         return None
     return match.group(1)
 
+def parse_lec_diag_assume_known_result(text: str) -> str | None:
+    match = re.search(r"LEC_DIAG_ASSUME_KNOWN_RESULT=(UNSAT|SAT|UNKNOWN)", text)
+    if not match:
+        return None
+    return match.group(1)
+
 
 def parse_xprop_summary_counts(text: str) -> dict[str, int]:
     # circt-lec prints a single diagnostics line in this form:
@@ -131,7 +137,8 @@ def main() -> int:
         default=os.environ.get("OUT_XPROP_SUMMARY", ""),
         help=(
             "Optional TSV output path for XPROP diagnostic rows "
-            "(implementation, mode, diag, result, counters, log_dir)."
+            "(implementation, mode, diag, result, counters, log_dir, "
+            "assume_known_result)."
         ),
     )
     args = parser.parse_args()
@@ -271,7 +278,7 @@ def main() -> int:
 
     failures = 0
     case_rows: list[tuple[str, str, str, str, str]] = []
-    xprop_rows: list[tuple[str, str, str, str, str, str, str]] = []
+    xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     try:
         print(
             f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
@@ -362,6 +369,7 @@ def main() -> int:
 
             result: str | None = None
             diag: str | None = None
+            assume_known_result: str | None = None
             summary_counts: dict[str, int] = {}
             try:
                 run_and_log(verilog_cmd, impl_dir / "circt-verilog.log")
@@ -376,6 +384,7 @@ def main() -> int:
                     combined = lec_log_text + "\n" + lec_stdout
                     result = parse_lec_result(combined)
                     diag = parse_lec_diag(combined)
+                    assume_known_result = parse_lec_diag_assume_known_result(combined)
                     if diag == "XPROP_ONLY":
                         summary_counts = parse_xprop_summary_counts(combined)
                     if result in ("NEQ", "UNKNOWN"):
@@ -396,6 +405,7 @@ def main() -> int:
                                     result or "",
                                     encode_summary_counts(summary_counts),
                                     str(impl_dir),
+                                    assume_known_result or "",
                                 )
                             )
                             continue
@@ -415,6 +425,8 @@ def main() -> int:
                         result = parse_lec_result(combined)
                     if diag is None:
                         diag = parse_lec_diag(combined)
+                    if assume_known_result is None:
+                        assume_known_result = parse_lec_diag_assume_known_result(combined)
                     if diag == "XPROP_ONLY":
                         summary_counts = parse_xprop_summary_counts(combined)
                     if diag:
@@ -436,6 +448,7 @@ def main() -> int:
                             result or "",
                             encode_summary_counts(summary_counts),
                             str(impl_dir),
+                            assume_known_result or "",
                         )
                     )
 
