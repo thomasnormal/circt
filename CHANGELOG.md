@@ -1,5 +1,30 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 926 - February 10, 2026
+
+### BMC Strict-Gate Hardening: Track/Gate Drop-Remark Drift in Formal Sweep
+
+1. Updated `utils/run_formal_all.sh` to ingest dropped-syntax telemetry from
+   `run_sv_tests_circt_bmc.sh` logs:
+   - captures `sv-tests dropped-syntax summary: drop_remark_cases=<N> ...`
+   - appends normalized metric `bmc_drop_remark_cases=<N>` to BMC lane summary
+     for:
+     - `sv-tests/BMC`
+     - `sv-tests-uvm/BMC_SEMANTICS`
+2. Added strict-gate control:
+   - new flag `--fail-on-new-bmc-drop-remark-cases`
+   - compares `bmc_drop_remark_cases` against baseline-window minima and fails
+     on growth.
+   - `--strict-gate` now enables this check by default.
+3. Added regression:
+   - `test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test`
+   - verifies baseline capture + strict-gate failure on
+     `bmc_drop_remark_cases` increase (`1 -> 2`).
+4. Validation:
+   - `bash -n utils/run_formal_all.sh`
+   - `llvm-lit -sv test/Tools/run-formal-all-strict-gate-bmc-drop-remark-cases.test test/Tools/run-formal-all-strict-gate-bmc-timeout-unknown.test test/Tools/run-formal-all-strict-gate-bmc-abstraction-provenance-records.test`
+     -> `3 passed`.
+
 ## Iteration 925 - February 10, 2026
 
 ### BMC Harness No-Drop Guardrail: Track/Gate Frontend Drop Remarks
