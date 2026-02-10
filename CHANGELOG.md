@@ -1,5 +1,35 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 939 - February 10, 2026
+
+### BMC Syntax Closure: Side-Effect-Free Explicit Clock Matching
+
+1. Updated `lib/Tools/circt-bmc/LowerToBMC.cpp` explicit-clock matching in
+   mixed/derived clock mode to avoid mutating IR during lookup:
+   - `lookupExplicitClockIndex` no longer materializes fresh
+     `seq.from_clock` ops for top-level explicit clocks just to compare keys.
+   - explicit clock matching now prefers stable port-key matching
+     (`port:<name>`) and only uses existing i1 materializations for deeper
+     equivalence/4-state/assumption checks.
+2. This prevents accidental duplicate `seq.from_clock` creation on explicit
+   clock paths while preserving assumption-aware dedup behavior.
+3. Strengthened regression coverage:
+   - `test/Tools/circt-bmc/lower-to-bmc-mixed-clock-inputs.mlir`
+   - added `CHECK-NOT: seq.from_clock [[EXPLICIT]]` between explicit capture
+     and first `ltl.clock` use.
+4. Validation:
+   - `ninja -C build circt-opt`
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-mixed-clock-inputs.mlir`
+     -> `1 passed`.
+   - `build/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc*.mlir`
+     -> `30 passed`, `1 xfail`.
+   - External BMC lane sweep:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-bmc-explicit-match-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^(sv-tests|verilator-verification|yosys/tests/sva)/BMC$'`
+       -> `sv-tests/BMC pass=26 fail=0`,
+          `verilator-verification/BMC pass=12 fail=5`,
+          `yosys/tests/sva/BMC pass=7 fail=5 skip=2`
+          (existing nonzero fail counts unchanged).
+
 ## Iteration 938 - February 10, 2026
 
 ### BMC Single-Clock Hardening: Remove Struct-Field Presence False Positives

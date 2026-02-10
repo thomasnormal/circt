@@ -7,6 +7,7 @@
 // CHECK: verif.bmc
 // CHECK: ^bb0([[SYNTH:%.+]]: !seq.clock, [[EXPLICIT:%.+]]: !seq.clock, [[CLK_STRUCT:%.+]]: !hw.struct<clk: !seq.clock>, [[SIG:%.+]]: i1):
 // CHECK: [[EXPLICIT_I1:%.+]] = seq.from_clock [[EXPLICIT]]
+// CHECK-NOT: seq.from_clock [[EXPLICIT]]
 // CHECK: ltl.clock {{.*}}, posedge [[EXPLICIT_I1]]{{.*}} : !ltl.sequence
 // CHECK: [[STRUCT_CLK:%.+]] = hw.struct_extract [[CLK_STRUCT]]{{\[}}"clk"{{\]}}
 // CHECK: [[STRUCT_I1:%.+]] = seq.from_clock [[STRUCT_CLK]]
