@@ -1,5 +1,39 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 974 - February 10, 2026
+
+### `circt-mut report`: Dedicated Matrix Lane-Drift Policy Bundles
+
+1. Extended `tools/circt-mut/circt-mut.cpp` with two dedicated lane-drift
+   governance profiles:
+   - `formal-regression-matrix-lane-drift-nightly`
+   - `formal-regression-matrix-lane-drift-strict`
+2. Profile behavior:
+   - nightly gates:
+     - `matrix.prequalify_drift_comparable >= 1`
+     - `matrix.prequalify_drift_nonzero_metrics <= 0`
+     - `matrix.prequalify_drift_lane_rows_mismatch <= 0`
+     - `matrix.prequalify_drift_lane_rows_missing_in_results <= 0`
+     - `matrix.prequalify_drift_lane_rows_missing_in_native <= 0`
+   - strict gates:
+     - all nightly gates, plus
+     - `matrix.prequalify_drift_lane_rows_compared >= 1`
+3. Updated report help and invalid-profile diagnostics to include the new
+   policy names.
+4. Added regression tests:
+   - `test/Tools/circt-mut-report-policy-matrix-lane-drift-nightly-fail.test`
+   - `test/Tools/circt-mut-report-policy-matrix-lane-drift-strict-requires-comparable.test`
+
+### Tests and Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-help.test test/Tools/circt-mut-report-policy-invalid-profile.test test/Tools/circt-mut-report-policy-matrix-lane-drift-nightly-fail.test test/Tools/circt-mut-report-policy-matrix-lane-drift-strict-requires-comparable.test`: PASS (4/4)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-report-*.test`: PASS (58/58)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-*.test`: PASS (178/178)
+- Filtered external formal cadence:
+  - `utils/run_formal_all.sh --out-dir /tmp/formal-all-lane-drift-policy-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --sv-tests-bmc-test-filter 'basic02|assert_fell' --sv-tests-lec-test-filter 'basic02|assert_fell' --verilator-bmc-test-filter 'assert_fell' --verilator-lec-test-filter 'assert_fell' --yosys-bmc-test-filter 'basic02' --yosys-lec-test-filter 'basic02' --lec-accept-xprop-only`
+  - Snapshot: sv-tests BMC/LEC PASS (filtered empty), verilator/yosys BMC FAIL, verilator/yosys/opentitan LEC PASS, AVIP compile FAIL on `axi4Lite_avip` + `uart_avip`.
+
 ## Iteration 973 - February 10, 2026
 
 ### LEC Producer Hardening: Eliminate Avoidable Missing `diag` Rows

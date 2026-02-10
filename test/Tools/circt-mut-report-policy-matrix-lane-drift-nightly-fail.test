@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix
+// RUN: printf 'lane_id\tstatus\tcoverage_percent\tgate_status\tprequalify_summary_present\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\nlane1\tPASS\t80.0\tPASS\t1\t5\t2\t3\t0\t0\t0\t0\t0\t0\t0\t0\n' > %t/proj/out/matrix/results.tsv
+// RUN: printf 'lane_id\tpair_file\tlog_file\thas_summary\tprequalify_total_mutants\tprequalify_not_propagated_mutants\tprequalify_propagated_mutants\tprequalify_create_mutated_error_mutants\tprequalify_probe_error_mutants\tprequalify_cmd_token_not_propagated_mutants\tprequalify_cmd_token_propagated_mutants\tprequalify_cmd_rc_not_propagated_mutants\tprequalify_cmd_rc_propagated_mutants\tprequalify_cmd_timeout_propagated_mutants\tprequalify_cmd_error_mutants\nlane1\t-\t-\t1\t5\t1\t4\t0\t0\t0\t0\t0\t0\t0\t0\n' > %t/proj/out/matrix/native_matrix_prequalify_summary.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --policy-profile formal-regression-matrix-lane-drift-nightly > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-lane-drift-nightly
+// CHECK-DAG: matrix.prequalify_drift_lane_rows_mismatch{{[[:space:]]}}1
+// CHECK-DAG: value_gate.status{{[[:space:]]}}fail
+// CHECK: matrix.prequalify_drift_lane_rows_mismatch value=1.00 > 0.00

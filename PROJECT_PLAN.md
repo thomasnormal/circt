@@ -122,12 +122,13 @@ See CHANGELOG.md on recent progress.
 
 ### Active Formal Gaps (Near-Term)
 - Mutation/report governance closure (next long-term mutation tranche):
-  - `--fail-on-prequalify-drift` is now lane-aware, but native matrix lane
-    scheduling is still script-dispatched; migrate lane execution/retry/status
-    loops into native `circt-mut matrix` to remove script coupling.
-  - Promote lane-level prequalification drift counters to first-class CI gates
-    in nightly/strict policy bundles (currently exposed in report rows, not
-    wired into dedicated lane drift policy profiles).
+  - Dedicated lane-drift policy bundles are now available
+    (`formal-regression-matrix-lane-drift-nightly|strict`), but native matrix
+    lane scheduling is still script-dispatched; migrate lane
+    execution/retry/status loops into native `circt-mut matrix` to remove
+    script coupling.
+  - Wire the lane-drift policy bundles into CI defaults for nightly/strict
+    matrix report jobs.
   - Add bounded-history defaults to matrix report jobs in CI bootstrap wiring
     (`--history --history-bootstrap --history-max-runs`) for stable trend data.
 - Lane-state:

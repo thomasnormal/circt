@@ -152,6 +152,8 @@ static void printReportHelp(raw_ostream &os) {
   os << "                           formal-regression-matrix-guard-smoke|\n";
   os << "                           formal-regression-matrix-guard-nightly|\n";
   os << "                           formal-regression-matrix-guard-strict|\n";
+  os << "                           formal-regression-matrix-lane-drift-nightly|\n";
+  os << "                           formal-regression-matrix-lane-drift-strict|\n";
   os << "                           formal-regression-matrix-lane-trend-nightly|\n";
   os << "                           formal-regression-matrix-lane-trend-strict\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
@@ -5965,6 +5967,38 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
                      1.0);
     return true;
   }
+  if (profile == "formal-regression-matrix-lane-drift-nightly") {
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
+                     1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_nonzero_metrics", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_mismatch", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_drift_lane_rows_missing_in_results", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_missing_in_native",
+                     0.0);
+    return true;
+  }
+  if (profile == "formal-regression-matrix-lane-drift-strict") {
+    appendUniqueRule(opts.failIfValueLtRules, "matrix.prequalify_drift_comparable",
+                     1.0);
+    appendUniqueRule(opts.failIfValueLtRules,
+                     "matrix.prequalify_drift_lane_rows_compared", 1.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_nonzero_metrics", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_mismatch", 0.0);
+    appendUniqueRule(
+        opts.failIfValueGtRules,
+        "matrix.prequalify_drift_lane_rows_missing_in_results", 0.0);
+    appendUniqueRule(opts.failIfValueGtRules,
+                     "matrix.prequalify_drift_lane_rows_missing_in_native",
+                     0.0);
+    return true;
+  }
   if (profile == "formal-regression-matrix-lane-trend-nightly") {
     opts.failOnPrequalifyDrift = true;
     appendUniqueRule(
@@ -6015,6 +6049,8 @@ static bool applyPolicyProfile(StringRef profile, ReportOptions &opts,
            "formal-regression-matrix-guard-smoke|"
            "formal-regression-matrix-guard-nightly|"
            "formal-regression-matrix-guard-strict|"
+           "formal-regression-matrix-lane-drift-nightly|"
+           "formal-regression-matrix-lane-drift-strict|"
            "formal-regression-matrix-lane-trend-nightly|"
            "formal-regression-matrix-lane-trend-strict)")
               .str();

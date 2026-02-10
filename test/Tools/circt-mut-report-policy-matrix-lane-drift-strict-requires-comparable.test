@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/matrix
+// RUN: printf 'lane_id\tstatus\tcoverage_percent\tgate_status\nlane1\tPASS\t90.0\tPASS\n' > %t/proj/out/matrix/results.tsv
+// RUN: not circt-mut report --project-dir %t/proj --mode matrix --policy-profile formal-regression-matrix-lane-drift-strict > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+
+// CHECK-DAG: policy.profile_1{{[[:space:]]}}formal-regression-matrix-lane-drift-strict
+// CHECK-DAG: matrix.prequalify_drift_comparable{{[[:space:]]}}0
+// CHECK-DAG: value_gate.status{{[[:space:]]}}fail
+// CHECK: matrix.prequalify_drift_comparable value=0.00 < 1.00
