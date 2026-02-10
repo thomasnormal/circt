@@ -8,7 +8,11 @@
 // CHECK: --matrix-out-dir
 // CHECK: --compare
 // CHECK: --compare-history-latest
+// CHECK: --trend-history
+// CHECK: --trend-window
 // CHECK: --append-history
 // CHECK: --fail-if-delta-gt
 // CHECK: --fail-if-delta-lt
+// CHECK: --fail-if-trend-delta-gt
+// CHECK: --fail-if-trend-delta-lt
 // CHECK: --out

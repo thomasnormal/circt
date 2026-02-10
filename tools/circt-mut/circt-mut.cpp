@@ -34,6 +34,7 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <optional>
 #include <string>
 #include <thread>
@@ -130,10 +131,18 @@ static void printReportHelp(raw_ostream &os) {
   os << "  --compare FILE           Compare against baseline report TSV\n";
   os << "  --compare-history-latest FILE\n";
   os << "                           Compare against latest snapshot in history TSV\n";
+  os << "  --trend-history FILE     Compute trend summary from history TSV\n";
+  os << "  --trend-window N         Use latest N history runs for trends (0=all)\n";
   os << "  --append-history FILE    Append current report rows to history TSV\n";
   os << "  --fail-if-delta-gt RULE  Fail if numeric delta exceeds threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
   os << "  --fail-if-delta-lt RULE  Fail if numeric delta is below threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
+  os << "  --fail-if-trend-delta-gt RULE\n";
+  os << "                           Fail if trend delta exceeds threshold\n";
+  os << "                           RULE format: <metric>=<value>\n";
+  os << "  --fail-if-trend-delta-lt RULE\n";
+  os << "                           Fail if trend delta is below threshold\n";
   os << "                           RULE format: <metric>=<value>\n";
   os << "  --out FILE               Write report TSV to FILE (also prints to stdout)\n";
   os << "  -h, --help               Show help\n";
@@ -2208,9 +2217,13 @@ struct ReportOptions {
   std::string matrixOutDir;
   std::string compareFile;
   std::string compareHistoryLatestFile;
+  std::string trendHistoryFile;
+  uint64_t trendWindowRuns = 0;
   std::string appendHistoryFile;
   SmallVector<DeltaGateRule, 8> failIfDeltaGtRules;
   SmallVector<DeltaGateRule, 8> failIfDeltaLtRules;
+  SmallVector<DeltaGateRule, 8> failIfTrendDeltaGtRules;
+  SmallVector<DeltaGateRule, 8> failIfTrendDeltaLtRules;
   std::string outFile;
 };
 
@@ -2546,12 +2559,163 @@ static bool appendHistorySnapshot(
   for (const auto &row : rows) {
     StringRef key = row.first;
     if (key.starts_with("compare.") || key.starts_with("diff.") ||
-        key.starts_with("history.") || key == "report.file")
+        key.starts_with("history.") || key.starts_with("trend.") ||
+        key == "report.file")
       continue;
     os << runID << "\t" << timestampUTC << "\t" << row.first << "\t"
        << row.second << "\n";
   }
   return true;
+}
+
+struct HistorySnapshot {
+  uint64_t runID = 0;
+  std::string timestampUTC;
+  StringMap<std::string> values;
+};
+
+static bool loadHistorySnapshots(StringRef path,
+                                 std::vector<HistorySnapshot> &snapshots,
+                                 std::string &error) {
+  auto bufferOrErr = MemoryBuffer::getFile(path);
+  if (!bufferOrErr) {
+    error = (Twine("circt-mut report: unable to read history file: ") + path).str();
+    return false;
+  }
+
+  std::map<uint64_t, HistorySnapshot> byRunID;
+  SmallVector<StringRef, 256> lines;
+  bufferOrErr.get()->getBuffer().split(lines, '\n', /*MaxSplit=*/-1,
+                                       /*KeepEmpty=*/false);
+  SmallVector<StringRef, 8> fields;
+  for (StringRef rawLine : lines) {
+    StringRef line = rawLine.rtrim("\r").trim();
+    if (line.empty() || line.starts_with("#"))
+      continue;
+    splitTSVLine(line, fields);
+    if (fields.size() < 4)
+      continue;
+    StringRef runIDField = fields[0].trim();
+    if (runIDField.empty() || runIDField == "run_id")
+      continue;
+    uint64_t runID = 0;
+    if (runIDField.getAsInteger(10, runID)) {
+      error = (Twine("circt-mut report: invalid history run_id '") + runIDField +
+               "' in " + path)
+                  .str();
+      return false;
+    }
+    StringRef timestamp = fields[1].trim();
+    StringRef key = fields[2].trim();
+    StringRef value = fields[3].trim();
+    if (key.empty())
+      continue;
+    HistorySnapshot &snapshot = byRunID[runID];
+    snapshot.runID = runID;
+    if (snapshot.timestampUTC.empty() && !timestamp.empty())
+      snapshot.timestampUTC = timestamp.str();
+    snapshot.values[key] = value.str();
+  }
+
+  snapshots.clear();
+  snapshots.reserve(byRunID.size());
+  for (auto &it : byRunID)
+    snapshots.push_back(std::move(it.second));
+  if (snapshots.empty()) {
+    error = (Twine("circt-mut report: no history snapshots found in: ") + path).str();
+    return false;
+  }
+  return true;
+}
+
+static void appendTrendRows(
+    ArrayRef<std::pair<std::string, std::string>> currentRows,
+    ArrayRef<HistorySnapshot> allSnapshots, StringRef historyPath,
+    uint64_t windowRunsRequested,
+    std::vector<std::pair<std::string, std::string>> &rows,
+    StringMap<double> &trendDeltas) {
+  size_t totalRuns = allSnapshots.size();
+  size_t startIndex = 0;
+  if (windowRunsRequested > 0 && windowRunsRequested < totalRuns)
+    startIndex = totalRuns - static_cast<size_t>(windowRunsRequested);
+  ArrayRef<HistorySnapshot> selected = allSnapshots.drop_front(startIndex);
+
+  rows.emplace_back("trend.history_file", historyPath.str());
+  rows.emplace_back("trend.history_runs_available", std::to_string(totalRuns));
+  rows.emplace_back("trend.history_runs_selected",
+                    std::to_string(selected.size()));
+  rows.emplace_back("trend.history_window_requested",
+                    std::to_string(windowRunsRequested));
+  if (!selected.empty()) {
+    rows.emplace_back("trend.history_run_id_min",
+                      std::to_string(selected.front().runID));
+    rows.emplace_back("trend.history_run_id_max",
+                      std::to_string(selected.back().runID));
+  }
+
+  SmallVector<std::pair<std::string, double>, 64> numericCurrentRows;
+  for (const auto &row : currentRows) {
+    StringRef key = row.first;
+    if (key.starts_with("compare.") || key.starts_with("diff.") ||
+        key.starts_with("history.") || key.starts_with("trend.") ||
+        key == "report.file")
+      continue;
+    auto currentNum = parseOptionalDouble(row.second);
+    if (!currentNum)
+      continue;
+    numericCurrentRows.emplace_back(key.str(), *currentNum);
+  }
+
+  uint64_t numericKeys = 0;
+  for (const auto &currentRow : numericCurrentRows) {
+    StringRef key = currentRow.first;
+    double currentValue = currentRow.second;
+    double sum = 0.0;
+    double minValue = 0.0;
+    double maxValue = 0.0;
+    double latestValue = 0.0;
+    uint64_t samples = 0;
+    for (const auto &snapshot : selected) {
+      auto it = snapshot.values.find(key);
+      if (it == snapshot.values.end())
+        continue;
+      auto maybeNum = parseOptionalDouble(it->second);
+      if (!maybeNum)
+        continue;
+      double value = *maybeNum;
+      if (samples == 0) {
+        minValue = value;
+        maxValue = value;
+      } else {
+        minValue = std::min(minValue, value);
+        maxValue = std::max(maxValue, value);
+      }
+      latestValue = value;
+      sum += value;
+      ++samples;
+    }
+    if (samples == 0)
+      continue;
+    ++numericKeys;
+    double mean = sum / static_cast<double>(samples);
+    double delta = currentValue - mean;
+    trendDeltas[key] = delta;
+    rows.emplace_back((Twine("trend.") + key + ".samples").str(),
+                      std::to_string(samples));
+    rows.emplace_back((Twine("trend.") + key + ".mean").str(), formatDouble2(mean));
+    rows.emplace_back((Twine("trend.") + key + ".min").str(),
+                      formatDouble2(minValue));
+    rows.emplace_back((Twine("trend.") + key + ".max").str(),
+                      formatDouble2(maxValue));
+    rows.emplace_back((Twine("trend.") + key + ".latest").str(),
+                      formatDouble2(latestValue));
+    rows.emplace_back((Twine("trend.") + key + ".delta_vs_mean").str(),
+                      formatDouble2(delta));
+    rows.emplace_back((Twine("trend.") + key + ".pct_vs_mean").str(),
+                      mean != 0.0 ? formatDouble2((100.0 * delta) / mean)
+                                  : std::string("-"));
+  }
+  rows.emplace_back("trend.numeric_keys", std::to_string(numericKeys));
 }
 
 static bool collectCoverReport(StringRef coverWorkDir,
@@ -2970,6 +3134,28 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       result.opts.compareHistoryLatestFile = v->str();
       continue;
     }
+    if (arg == "--trend-history" || arg.starts_with("--trend-history=")) {
+      auto v = consumeValue(i, arg, "--trend-history");
+      if (!v)
+        return result;
+      result.opts.trendHistoryFile = v->str();
+      continue;
+    }
+    if (arg == "--trend-window" || arg.starts_with("--trend-window=")) {
+      auto v = consumeValue(i, arg, "--trend-window");
+      if (!v)
+        return result;
+      uint64_t parsed = 0;
+      if (StringRef(*v).trim().getAsInteger(10, parsed)) {
+        result.error =
+            (Twine("circt-mut report: invalid --trend-window value: ") + *v +
+             " (expected non-negative integer)")
+                .str();
+        return result;
+      }
+      result.opts.trendWindowRuns = parsed;
+      continue;
+    }
     if (arg == "--append-history" || arg.starts_with("--append-history=")) {
       auto v = consumeValue(i, arg, "--append-history");
       if (!v)
@@ -2995,6 +3181,30 @@ static ReportParseResult parseReportArgs(ArrayRef<StringRef> args) {
       if (!parseDeltaGateRule(*v, "--fail-if-delta-lt", rule, result.error))
         return result;
       result.opts.failIfDeltaLtRules.push_back(rule);
+      continue;
+    }
+    if (arg == "--fail-if-trend-delta-gt" ||
+        arg.starts_with("--fail-if-trend-delta-gt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-trend-delta-gt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-trend-delta-gt", rule,
+                              result.error))
+        return result;
+      result.opts.failIfTrendDeltaGtRules.push_back(rule);
+      continue;
+    }
+    if (arg == "--fail-if-trend-delta-lt" ||
+        arg.starts_with("--fail-if-trend-delta-lt=")) {
+      auto v = consumeValue(i, arg, "--fail-if-trend-delta-lt");
+      if (!v)
+        return result;
+      DeltaGateRule rule;
+      if (!parseDeltaGateRule(*v, "--fail-if-trend-delta-lt", rule,
+                              result.error))
+        return result;
+      result.opts.failIfTrendDeltaLtRules.push_back(rule);
       continue;
     }
     if (arg == "--out" || arg.starts_with("--out=")) {
@@ -3104,8 +3314,16 @@ static int runNativeReport(const ReportOptions &opts) {
               "require --compare or --compare-history-latest\n";
     return 1;
   }
+  if (opts.trendHistoryFile.empty() &&
+      (!opts.failIfTrendDeltaGtRules.empty() ||
+       !opts.failIfTrendDeltaLtRules.empty())) {
+    errs() << "circt-mut report: --fail-if-trend-delta-gt/"
+              "--fail-if-trend-delta-lt require --trend-history\n";
+    return 1;
+  }
 
   StringMap<double> numericDeltas;
+  StringMap<double> trendDeltas;
   if (!opts.compareFile.empty()) {
     std::string baselinePath = resolveRelativeTo(opts.projectDir, opts.compareFile);
     if (!sys::fs::exists(baselinePath)) {
@@ -3140,6 +3358,21 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("compare.history_baseline_run_id",
                       std::to_string(baselineRunID));
   }
+  if (!opts.trendHistoryFile.empty()) {
+    std::string historyPath = resolveRelativeTo(opts.projectDir, opts.trendHistoryFile);
+    if (!sys::fs::exists(historyPath)) {
+      errs() << "circt-mut report: trend history file not found: " << historyPath
+             << "\n";
+      return 1;
+    }
+    std::vector<HistorySnapshot> snapshots;
+    if (!loadHistorySnapshots(historyPath, snapshots, error)) {
+      errs() << error << "\n";
+      return 1;
+    }
+    appendTrendRows(rows, snapshots, historyPath, opts.trendWindowRuns, rows,
+                    trendDeltas);
+  }
 
   if (!opts.failIfDeltaGtRules.empty() || !opts.failIfDeltaLtRules.empty()) {
     SmallVector<std::string, 8> failures;
@@ -3148,7 +3381,7 @@ static int runNativeReport(const ReportOptions &opts) {
       if (it == numericDeltas.end()) {
         errs() << "circt-mut report: numeric delta missing for gate rule key '"
                << rule.key
-               << "' (run with --compare and numeric baseline values)\n";
+               << "' (run with --compare/--compare-history-latest and numeric baseline values)\n";
         return false;
       }
       double delta = it->second;
@@ -3177,6 +3410,49 @@ static int runNativeReport(const ReportOptions &opts) {
     rows.emplace_back("compare.gate_status", failures.empty() ? "pass" : "fail");
     for (size_t i = 0; i < failures.size(); ++i)
       rows.emplace_back((Twine("compare.gate_failure_") + Twine(i + 1)).str(),
+                        failures[i]);
+    if (!failures.empty())
+      finalRC = 2;
+  }
+  if (!opts.failIfTrendDeltaGtRules.empty() ||
+      !opts.failIfTrendDeltaLtRules.empty()) {
+    SmallVector<std::string, 8> failures;
+    auto evaluateTrendRule = [&](const DeltaGateRule &rule,
+                                 bool isUpperBound) -> bool {
+      auto it = trendDeltas.find(rule.key);
+      if (it == trendDeltas.end()) {
+        errs() << "circt-mut report: trend delta missing for gate rule key '"
+               << rule.key
+               << "' (run with --trend-history and numeric history values)\n";
+        return false;
+      }
+      double delta = it->second;
+      if ((isUpperBound && delta > rule.threshold) ||
+          (!isUpperBound && delta < rule.threshold)) {
+        failures.push_back((Twine(rule.key) + " trend_delta=" +
+                            formatDouble2(delta) +
+                            (isUpperBound ? " > " : " < ") +
+                            formatDouble2(rule.threshold))
+                               .str());
+      }
+      return true;
+    };
+
+    for (const auto &rule : opts.failIfTrendDeltaGtRules)
+      if (!evaluateTrendRule(rule, /*isUpperBound=*/true))
+        return 1;
+    for (const auto &rule : opts.failIfTrendDeltaLtRules)
+      if (!evaluateTrendRule(rule, /*isUpperBound=*/false))
+        return 1;
+
+    rows.emplace_back("trend.gate_rules_total",
+                      std::to_string(opts.failIfTrendDeltaGtRules.size() +
+                                     opts.failIfTrendDeltaLtRules.size()));
+    rows.emplace_back("trend.gate_failure_count",
+                      std::to_string(failures.size()));
+    rows.emplace_back("trend.gate_status", failures.empty() ? "pass" : "fail");
+    for (size_t i = 0; i < failures.size(); ++i)
+      rows.emplace_back((Twine("trend.gate_failure_") + Twine(i + 1)).str(),
                         failures[i]);
     if (!failures.empty())
       finalRC = 2;

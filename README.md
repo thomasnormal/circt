@@ -280,6 +280,16 @@ circt-mut report \
   --append-history reports/history.tsv
 ```
 
+Compute rolling trend summaries from history:
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --trend-history reports/history.tsv \
+  --trend-window 10
+```
+
 Gate regressions directly in report mode:
 
 ```sh
@@ -300,6 +310,25 @@ circt-mut report \
 Gate rules require `--compare` or `--compare-history-latest` with numeric
 baseline values for the gated keys.
 On gate failure, `circt-mut report` exits with code `2`.
+
+Gate against trend deltas (`current - mean(window)`):
+
+```sh
+circt-mut report \
+  --project-dir mut-campaign \
+  --mode all \
+  --trend-history reports/history.tsv \
+  --trend-window 10 \
+  --fail-if-trend-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-trend-delta-lt cover.detected_mutants=0
+```
+
+Trend gate rows:
+- `trend.gate_rules_total`
+- `trend.gate_failure_count`
+- `trend.gate_status` (`pass`/`fail`)
+- `trend.gate_failure_<n>`
+Trend gates require `--trend-history`.
 
 Run a single mutation campaign:
 
@@ -550,6 +579,10 @@ circt-mut report \
   --compare-history-latest /tmp/mutation-history.tsv \
   --fail-if-delta-gt cover.global_filter_timeout_mutants=0 \
   --fail-if-delta-lt cover.detected_mutants=0 \
+  --trend-history /tmp/mutation-history.tsv \
+  --trend-window 10 \
+  --fail-if-trend-delta-gt cover.global_filter_timeout_mutants=0 \
+  --fail-if-trend-delta-lt cover.detected_mutants=0 \
   --append-history /tmp/mutation-history.tsv \
   --out /tmp/mutation-report.tsv
 ```
