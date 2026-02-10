@@ -386,6 +386,25 @@ struct LTLPropertyLowerer {
     return {Value(), Value()};
   }
 
+  std::optional<bool> getI1Constant(Value value) {
+    if (!value)
+      return std::nullopt;
+    if (auto hwConst = value.getDefiningOp<hw::ConstantOp>()) {
+      APInt bits = hwConst.getValue();
+      if (bits.getBitWidth() == 1)
+        return bits.isOne();
+    }
+    if (auto arithConst = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto boolAttr = dyn_cast<BoolAttr>(arithConst.getValue()))
+        return boolAttr.getValue();
+      if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
+        if (intAttr.getType().isInteger(1))
+          return intAttr.getValue().isOne();
+      }
+    }
+    return std::nullopt;
+  }
+
   PropertyResult lowerDisableIff(ltl::OrOp orOp, Value clock,
                                  ltl::ClockEdge edge) {
     auto inputs = orOp.getInputs();
@@ -413,6 +432,12 @@ struct LTLPropertyLowerer {
     }
 
     Value savedDisable = disable;
+    if (auto disableConst = getI1Constant(disableInput)) {
+      auto trueVal =
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      if (*disableConst)
+        return {trueVal, trueVal};
+    }
     Value combinedDisable = disableInput;
     if (disable) {
       combinedDisable = comb::OrOp::create(
@@ -594,8 +619,10 @@ struct LTLPropertyLowerer {
       // properties. Sequences already model their own cycle alignment.
       if (!clock && normalizedClock &&
           isa<ltl::PropertyType>(clockOp.getInput().getType())) {
-        result.safety = shiftValue(result.safety, 1, normalizedClock);
-        result.finalCheck = shiftValue(result.finalCheck, 1, normalizedClock);
+        if (!getI1Constant(result.safety).value_or(false))
+          result.safety = shiftValue(result.safety, 1, normalizedClock);
+        if (!getI1Constant(result.finalCheck).value_or(false))
+          result.finalCheck = shiftValue(result.finalCheck, 1, normalizedClock);
       }
       return result;
     }

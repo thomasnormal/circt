@@ -129,7 +129,7 @@ See CHANGELOG.md on recent progress.
     validation evidence).
   - Extend checkpoint granularity below lane-level where ROI is high.
 - BMC capability closure:
-  - Close known local-variable and `disable iff` semantic mismatches.
+  - Close remaining local-variable and `disable iff` semantic mismatches.
   - Reduce multi-clock edge-case divergence.
   - Expand full (not filtered) regular closure cadence on core suites.
 - LEC capability closure:
@@ -246,6 +246,15 @@ See CHANGELOG.md on recent progress.
       `16.11--sequence-subroutine-uvm`,
       `16.13--sequence-multiclock-uvm`,
       `16.15--property-iff-uvm`.
+25. `disable iff` closure progress (February 10, 2026, current branch):
+    - Fixed constant-guard `disable iff` handling in LTL-to-core lowering to
+      avoid a spurious first-sample violation when the disable guard is
+      statically true.
+    - Added dedicated regression:
+      `test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir`.
+    - Revalidated sv-tests pair:
+      `16.15--property-disable-iff` now PASS and
+      `16.15--property-disable-iff-fail` now FAIL under BMC.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

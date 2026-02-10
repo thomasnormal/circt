@@ -5,4 +5,4 @@
 // RUN:   BOUND=1 IGNORE_ASSERTS_UNTIL=0 \
 // RUN:   %S/../../../utils/run_sv_tests_circt_bmc.sh \
 // RUN:   %S/Inputs/sv-tests-mini | FileCheck %s
-// CHECK: sv-tests SVA summary: total=1 pass=0 fail=0 xfail=1 xpass=0 error=0 skip={{[0-9]+}}
+// CHECK: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip={{[0-9]+}}
