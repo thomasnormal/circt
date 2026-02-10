@@ -575,8 +575,27 @@ See CHANGELOG.md on recent progress.
       still mostly `unclassified` by current name/path heuristics.
 72. Next long-term closure feature from this point:
     - add backend- or harness-emitted semantic bucket tags (instead of
-      name/path regex only) so strict-gate counters reflect true semantic
-      classes for `verilator`/`yosys` fail-like rows.
+    name/path regex only) so strict-gate counters reflect true semantic
+    classes for `verilator`/`yosys` fail-like rows.
+73. Tag-aware semantic bucket classifier landed (February 10, 2026):
+    - `run_formal_all.sh` semantic bucket summarization now accepts explicit
+      per-case bucket tags from result rows (for example
+      `semantic_buckets=disable_iff,multiclock`, `bucket=four_state`) and
+      falls back to name/path regex only when tags are absent.
+    - New counters now split attribution source:
+      `bmc_semantic_bucket_classified_cases`,
+      `bmc_semantic_bucket_tagged_cases`,
+      `bmc_semantic_bucket_regex_cases`.
+74. Updated limitation snapshot after tag-aware classifier:
+    - current real suite rows still report `tagged_cases=0` across
+      `sv-tests`, `sv-tests-uvm`, `verilator`, and `yosys`; coverage remains
+      regex-driven/unclassified until runners or backend diagnostics emit
+      explicit semantic tags.
+75. Next concrete implementation target:
+    - add first-class semantic-tag emission in BMC runners (or backend
+      diagnostics) for known closure categories (`disable iff`, local-var,
+      multiclock, 4-state) so strict-gate can track semantic drift without
+      relying on filename heuristics.
 
 ### Non-Smoke OpenTitan End-to-End Parity Plan
 

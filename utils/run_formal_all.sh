@@ -6731,11 +6731,38 @@ bucket_case_sets = {
     "four_state": set(),
 }
 all_fail_like_cases = set()
+tagged_cases = 0
+regex_classified_cases = 0
 
 disable_iff_re = re.compile(r"(disable[-_ ]iff|(^|[^a-z0-9])iff([^a-z0-9]|$))")
 local_var_re = re.compile(r"(local[-_ ]var|local[-_ ]variable|localvar)")
 multiclock_re = re.compile(r"(multi[-_ ]clock|multiclock)")
 four_state_re = re.compile(r"(xprop|x[-_ ]prop|4[-_ ]state|four[-_ ]state|x[_-]z)")
+
+bucket_aliases = {
+    "disable_iff": "disable_iff",
+    "disableiff": "disable_iff",
+    "disable-iff": "disable_iff",
+    "local_var": "local_var",
+    "localvar": "local_var",
+    "local-var": "local_var",
+    "multiclock": "multiclock",
+    "multi_clock": "multiclock",
+    "multi-clock": "multiclock",
+    "four_state": "four_state",
+    "fourstate": "four_state",
+    "four-state": "four_state",
+    "xprop": "four_state",
+    "x_prop": "four_state",
+    "x-prop": "four_state",
+}
+
+def normalize_bucket_token(token: str):
+    token = token.strip().lower()
+    if not token:
+        return None
+    token = token.replace(" ", "_")
+    return bucket_aliases.get(token)
 
 for line in path.open(encoding="utf-8"):
     line = line.rstrip("\n")
@@ -6749,15 +6776,63 @@ for line in path.open(encoding="utf-8"):
     case_path = parts[2].strip() if len(parts) > 2 else ""
     case_key = (case_id, case_path)
     all_fail_like_cases.add(case_key)
+    explicit_buckets = set()
+    for raw_field in parts[5:]:
+        raw_field = raw_field.strip()
+        if not raw_field:
+            continue
+        candidates = []
+        if ":" in raw_field and raw_field.split(":", 1)[0].strip().lower() in {
+            "semantic_bucket",
+            "semantic_buckets",
+            "bucket",
+            "buckets",
+            "bmc_semantic_bucket",
+            "bmc_semantic_buckets",
+        }:
+            candidates.extend(
+                item.strip()
+                for item in re.split(r"[,;|]", raw_field.split(":", 1)[1])
+            )
+        elif "=" in raw_field and raw_field.split("=", 1)[0].strip().lower() in {
+            "semantic_bucket",
+            "semantic_buckets",
+            "bucket",
+            "buckets",
+            "bmc_semantic_bucket",
+            "bmc_semantic_buckets",
+        }:
+            candidates.extend(
+                item.strip()
+                for item in re.split(r"[,;|]", raw_field.split("=", 1)[1])
+            )
+        else:
+            candidates.append(raw_field)
+        for candidate in candidates:
+            normalized = normalize_bucket_token(candidate)
+            if normalized is not None:
+                explicit_buckets.add(normalized)
+    if explicit_buckets:
+        tagged_cases += 1
+        for bucket in explicit_buckets:
+            bucket_case_sets[bucket].add(case_key)
+        continue
     haystack = f"{case_id} {case_path}".lower()
+    matched_regex_bucket = False
     if disable_iff_re.search(haystack):
         bucket_case_sets["disable_iff"].add(case_key)
+        matched_regex_bucket = True
     if local_var_re.search(haystack):
         bucket_case_sets["local_var"].add(case_key)
+        matched_regex_bucket = True
     if multiclock_re.search(haystack):
         bucket_case_sets["multiclock"].add(case_key)
+        matched_regex_bucket = True
     if four_state_re.search(haystack):
         bucket_case_sets["four_state"].add(case_key)
+        matched_regex_bucket = True
+    if matched_regex_bucket:
+        regex_classified_cases += 1
 
 classified_cases = set()
 for values in bucket_case_sets.values():
@@ -6767,6 +6842,9 @@ unclassified_cases = len(all_fail_like_cases - classified_cases)
 
 parts = [
     f"bmc_semantic_bucket_fail_like_cases={len(all_fail_like_cases)}",
+    f"bmc_semantic_bucket_classified_cases={len(classified_cases)}",
+    f"bmc_semantic_bucket_tagged_cases={tagged_cases}",
+    f"bmc_semantic_bucket_regex_cases={regex_classified_cases}",
     f"bmc_semantic_bucket_disable_iff_cases={len(bucket_case_sets['disable_iff'])}",
     f"bmc_semantic_bucket_local_var_cases={len(bucket_case_sets['local_var'])}",
     f"bmc_semantic_bucket_multiclock_cases={len(bucket_case_sets['multiclock'])}",
