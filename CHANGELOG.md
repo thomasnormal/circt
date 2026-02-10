@@ -1,5 +1,43 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 934 - February 10, 2026
+
+### OpenTitan LEC No-Drop Parity + LEC_STRICT Gate Coverage
+
+1. Extended `utils/run_opentitan_circt_lec.py` with dropped-syntax telemetry:
+   - new optional outputs:
+     - `LEC_DROP_REMARK_CASES_OUT`
+     - `LEC_DROP_REMARK_REASONS_OUT`
+   - per-implementation drop reasons are normalized with stable formatting
+     (location-prefix stripping, whitespace collapse, digit normalization).
+2. Extended `utils/run_formal_all.sh` OpenTitan LEC orchestration:
+   - `run_opentitan_lec_lane` now wires lane-local drop artifacts for:
+     - `opentitan/LEC`
+     - `opentitan/LEC_STRICT`
+   - baseline/strict-gate LEC drop-case collectors now include OpenTitan
+     LEC/LEC_STRICT artifacts.
+   - LEC drop strict-gate checks now apply to all `LEC*` modes
+     (`LEC` and `LEC_STRICT`) for:
+     - case count drift (`--fail-on-new-lec-drop-remark-cases`)
+     - case ID drift (`--fail-on-new-lec-drop-remark-case-ids`)
+     - case+reason drift (`--fail-on-new-lec-drop-remark-case-reasons`)
+3. Added OpenTitan regression:
+   - `test/Tools/run-formal-all-strict-gate-lec-drop-remark-case-reasons-opentitan-strict.test`
+   validates strict-gate failure on new dropped-syntax reason tuple in
+   `opentitan/LEC_STRICT`.
+4. Validation:
+   - `bash -n utils/run_formal_all.sh`
+   - `python3 -m py_compile utils/run_opentitan_circt_lec.py`
+   - `build/bin/llvm-lit -sv test/Tools/run-formal-all-strict-gate*.test test/Tools/run-sv-tests-circt-lec-drop-remarks.test test/Tools/run-verilator-verification-circt-lec-drop-remarks.test test/Tools/run-yosys-sva-circt-lec-drop-remarks.test test/Tools/run-verilator-verification-circt-bmc-drop-remarks.test test/Tools/run-yosys-sva-bmc-drop-remarks.test test/Tools/run-formal-all-help.test`
+     -> `35 passed`.
+   - OpenTitan LEC suite compatibility:
+     - `build/bin/llvm-lit -sv test/Tools/run-opentitan-lec*.test test/Tools/run-formal-all-opentitan-lec*.test test/Tools/run-formal-all-strict-gate-opentitan-lec*.test`
+       -> `20 passed`.
+   - Real strict lane run:
+     - `utils/run_formal_all.sh --out-dir /tmp/formal-opentitan-lec-drop-20260210 --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan-lec-strict --opentitan /home/thomas-ahle/opentitan --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --include-lane-regex '^opentitan/LEC_STRICT$'`
+       -> `opentitan/LEC_STRICT total=1 pass=1 fail=0`; drop artifacts emitted
+          (`opentitan-lec-strict-drop-remark-{cases,reasons}.tsv`, both empty).
+
 ## Iteration 933 - February 10, 2026
 
 ### Formal No-Drop Parity: Extend Drop-Remark Governance from BMC to LEC

@@ -1163,6 +1163,19 @@ See CHANGELOG.md on recent progress.
       (enabled by `--strict-gate`).
 19. Current no-drop limitation after LEC parity:
     - OpenTitan LEC lanes are still governed via strict X-prop counters/keys,
-      not drop-remark case/reason artifacts.
+    not drop-remark case/reason artifacts.
     - Both BMC and LEC reason telemetry remain warning-pattern/log-derived
-      rather than first-class lowering provenance tags.
+    rather than first-class lowering provenance tags.
+20. OpenTitan LEC no-drop parity landed (February 10, 2026):
+    - `run_opentitan_circt_lec.py` now exports optional dropped-syntax
+      artifacts:
+      `LEC_DROP_REMARK_CASES_OUT`, `LEC_DROP_REMARK_REASONS_OUT`.
+    - `run_formal_all.sh` now wires these for:
+      `opentitan/LEC` and `opentitan/LEC_STRICT`.
+    - LEC drop-remark strict-gate case/reason checks now apply to all
+      `LEC*` modes (including `LEC_STRICT`), not just plain `LEC`.
+21. Updated no-drop limitation after OpenTitan LEC parity:
+    - OpenTitan E2E lanes remain governed by E2E status/mode-diff gates,
+      not dropped-syntax case/reason artifacts.
+    - Drop reasons are still log-derived; long-term target remains
+      first-class lowering provenance tags.
