@@ -1,5 +1,70 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 833 - February 10, 2026
+
+### Weighted Mutation Mode Allocation (`mode-weights`)
+
+1. Added weighted mutation allocation support in generation flows:
+   - `generate_mutations_yosys.sh`:
+     - `--mode-weight NAME=WEIGHT` (repeatable)
+     - `--mode-weights CSV`
+   - native `circt-mut generate`:
+     - `--mode-weight NAME=WEIGHT` (repeatable)
+     - `--mode-weights CSV`
+2. Semantics:
+   - weights are normalized to `--count` / `--generate-mutations`.
+   - integer floor allocation per mode, with deterministic seed-rotated
+     remainder assignment for reproducibility and fairness.
+   - `--mode-count(s)` and `--mode-weight(s)` are mutually exclusive.
+3. Extended cover/matrix pass-through and `circt-mut run` config mapping:
+   - cover:
+     - `--mutations-mode-weights`
+     - `[cover] mutations_mode_weights = "..."`
+   - matrix:
+     - `--default-mutations-mode-weights`
+     - lane TSV optional trailing column: `mutations_mode_weights`
+     - `[matrix] default_mutations_mode_weights = "..."`
+4. Updated cache/scheduling payloads to include mode-weight settings so
+   generated-mutation cache behavior and cache-aware scheduling remain stable
+   under weighted generation configuration.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/run-mutation-generate-mode-weights.test`
+  - `test/Tools/run-mutation-generate-mode-weights-invalid.test`
+  - `test/Tools/circt-mut-generate-native-mode-weights.test`
+  - `test/Tools/circt-mut-generate-native-mode-weights-invalid.test`
+  - `test/Tools/run-mutation-cover-generate-mode-weights.test`
+  - `test/Tools/run-mutation-matrix-generate-mode-weights.test`
+- Updated:
+  - `test/Tools/run-mutation-generate-help.test`
+  - `test/Tools/circt-mut-generate-help.test`
+  - `test/Tools/run-mutation-cover-help.test`
+  - `test/Tools/run-mutation-matrix-help.test`
+  - `test/Tools/circt-mut-run-cover-generate-config.test`
+  - `test/Tools/circt-mut-run-matrix-config.test`
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `bash -n utils/generate_mutations_yosys.sh`: PASS
+- `bash -n utils/run_mutation_cover.sh`: PASS
+- `bash -n utils/run_mutation_matrix.sh`: PASS
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-generate*.test test/Tools/run-mutation-cover-generate*.test test/Tools/run-mutation-matrix-generate*.test test/Tools/circt-mut-generate*.test test/Tools/circt-mut-run-cover-generate-config.test test/Tools/circt-mut-run-matrix-config.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix-help.test`: PASS (36/36)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test`: PASS (85/85)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover*.test test/Tools/run-mutation-matrix*.test`: PASS (83/83)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-mode-weights --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 832 - February 10, 2026
 
 ### Seed-Rotated Remainder Allocation for Mutation Generation

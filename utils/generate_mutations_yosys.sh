@@ -23,6 +23,8 @@ Optional:
   --modes CSV               Comma-separated mutate modes (alternative to repeated --mode)
   --mode-count NAME=COUNT   Explicit mutation count for a mode (repeatable)
   --mode-counts CSV         Comma-separated NAME=COUNT mode allocations
+  --mode-weight NAME=WEIGHT Relative weight for a mode (repeatable)
+  --mode-weights CSV        Comma-separated NAME=WEIGHT mode weights
   --profile NAME            Named mutation profile (repeatable)
   --profiles CSV            Comma-separated named mutation profiles
   --cfg KEY=VALUE           Mutate config entry (repeatable, becomes -cfg KEY VALUE)
@@ -45,11 +47,13 @@ YOSYS_BIN="yosys"
 CACHE_DIR=""
 MODES_CSV=""
 MODE_COUNTS_CSV=""
+MODE_WEIGHTS_CSV=""
 PROFILES_CSV=""
 CFGS_CSV=""
 SELECTS_CSV=""
 declare -a MODE_LIST=()
 declare -a MODE_COUNT_LIST=()
+declare -a MODE_WEIGHT_LIST=()
 declare -a PROFILE_LIST=()
 declare -a CFG_LIST=()
 declare -a SELECT_LIST=()
@@ -84,6 +88,8 @@ while [[ $# -gt 0 ]]; do
     --modes) MODES_CSV="$2"; shift 2 ;;
     --mode-count) MODE_COUNT_LIST+=("$2"); shift 2 ;;
     --mode-counts) MODE_COUNTS_CSV="$2"; shift 2 ;;
+    --mode-weight) MODE_WEIGHT_LIST+=("$2"); shift 2 ;;
+    --mode-weights) MODE_WEIGHTS_CSV="$2"; shift 2 ;;
     --profile) PROFILE_LIST+=("$2"); shift 2 ;;
     --profiles) PROFILES_CSV="$2"; shift 2 ;;
     --cfg) CFG_LIST+=("$2"); shift 2 ;;
@@ -267,6 +273,15 @@ if [[ -n "$MODE_COUNTS_CSV" ]]; then
     MODE_COUNT_LIST+=("$mode_count")
   done
 fi
+if [[ -n "$MODE_WEIGHTS_CSV" ]]; then
+  IFS=',' read -r -a mode_weights_from_csv <<< "$MODE_WEIGHTS_CSV"
+  for mode_weight in "${mode_weights_from_csv[@]}"; do
+    mode_weight="${mode_weight#"${mode_weight%%[![:space:]]*}"}"
+    mode_weight="${mode_weight%"${mode_weight##*[![:space:]]}"}"
+    [[ -z "$mode_weight" ]] && continue
+    MODE_WEIGHT_LIST+=("$mode_weight")
+  done
+fi
 if [[ -n "$PROFILES_CSV" ]]; then
   IFS=',' read -r -a profiles_from_csv <<< "$PROFILES_CSV"
   for profile in "${profiles_from_csv[@]}"; do
@@ -375,6 +390,10 @@ declare -a MODE_COUNT_KEYS=()
 declare -A MODE_COUNT_BY_MODE=()
 mode_counts_enabled=0
 mode_counts_total=0
+declare -a MODE_WEIGHT_KEYS=()
+declare -A MODE_WEIGHT_BY_MODE=()
+mode_weights_enabled=0
+mode_weights_total=0
 for mode_count in "${MODE_COUNT_LIST[@]}"; do
   mode_name="${mode_count%%=*}"
   mode_value="${mode_count#*=}"
@@ -406,6 +425,63 @@ done
 if [[ "$mode_counts_enabled" -eq 1 && "$mode_counts_total" -ne "$COUNT" ]]; then
   echo "Mode-count total ($mode_counts_total) must match --count ($COUNT)." >&2
   exit 1
+fi
+for mode_weight in "${MODE_WEIGHT_LIST[@]}"; do
+  mode_name="${mode_weight%%=*}"
+  mode_value="${mode_weight#*=}"
+  if [[ -z "$mode_name" || "$mode_value" == "$mode_weight" ]]; then
+    echo "Invalid --mode-weight entry: $mode_weight (expected NAME=WEIGHT)." >&2
+    exit 1
+  fi
+  mode_name="${mode_name#"${mode_name%%[![:space:]]*}"}"
+  mode_name="${mode_name%"${mode_name##*[![:space:]]}"}"
+  mode_value="${mode_value#"${mode_value%%[![:space:]]*}"}"
+  mode_value="${mode_value%"${mode_value##*[![:space:]]}"}"
+  if [[ -z "$mode_name" ]]; then
+    echo "Invalid --mode-weight entry: $mode_weight (empty mode name)." >&2
+    exit 1
+  fi
+  if [[ ! "$mode_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid --mode-weight weight for $mode_name: $mode_value (expected positive integer)." >&2
+    exit 1
+  fi
+  if [[ -z "${MODE_WEIGHT_BY_MODE[$mode_name]+x}" ]]; then
+    MODE_WEIGHT_KEYS+=("$mode_name")
+    MODE_WEIGHT_BY_MODE["$mode_name"]="$mode_value"
+  else
+    MODE_WEIGHT_BY_MODE["$mode_name"]="$((MODE_WEIGHT_BY_MODE[$mode_name] + mode_value))"
+  fi
+  mode_weights_total=$((mode_weights_total + mode_value))
+  mode_weights_enabled=1
+done
+if [[ "$mode_counts_enabled" -eq 1 && "$mode_weights_enabled" -eq 1 ]]; then
+  echo "Use either --mode-count(s) or --mode-weight(s), not both." >&2
+  exit 1
+fi
+if [[ "$mode_weights_enabled" -eq 1 ]]; then
+  if [[ "$mode_weights_total" -le 0 ]]; then
+    echo "Mode-weight total must be positive." >&2
+    exit 1
+  fi
+  mode_counts_enabled=1
+  mode_counts_total=0
+  MODE_COUNT_KEYS=("${MODE_WEIGHT_KEYS[@]}")
+  for mode_name in "${MODE_WEIGHT_KEYS[@]}"; do
+    mode_value="${MODE_WEIGHT_BY_MODE[$mode_name]}"
+    mode_count_value=$((COUNT * mode_value / mode_weights_total))
+    MODE_COUNT_BY_MODE["$mode_name"]="$mode_count_value"
+    mode_counts_total=$((mode_counts_total + mode_count_value))
+  done
+  mode_remainder=$((COUNT - mode_counts_total))
+  mode_weight_key_count="${#MODE_WEIGHT_KEYS[@]}"
+  if [[ "$mode_remainder" -gt 0 && "$mode_weight_key_count" -gt 0 ]]; then
+    mode_remainder_start=$((SEED % mode_weight_key_count))
+    for ((i=0; i<mode_remainder; ++i)); do
+      key_idx=$(( (mode_remainder_start + i) % mode_weight_key_count ))
+      mode_name="${MODE_WEIGHT_KEYS[$key_idx]}"
+      MODE_COUNT_BY_MODE["$mode_name"]="$((MODE_COUNT_BY_MODE[$mode_name] + 1))"
+    done
+  fi
 fi
 if [[ "$mode_counts_enabled" -eq 1 ]]; then
   COMBINED_MODE_LIST+=("${MODE_COUNT_KEYS[@]}")
@@ -476,6 +552,7 @@ if [[ -n "$CACHE_DIR" ]]; then
   design_hash="$(hash_file "$DESIGN")"
   mode_payload="$(printf "%s\n" "${MODE_LIST[@]}")"
   mode_count_payload="$(printf "%s\n" "${MODE_COUNT_LIST[@]}")"
+  mode_weight_payload="$(printf "%s\n" "${MODE_WEIGHT_LIST[@]}")"
   profile_payload="$(printf "%s\n" "${PROFILE_LIST[@]}")"
   cfg_payload="$(printf "%s\n" "${CFG_LIST[@]}")"
   select_payload="$(printf "%s\n" "${SELECT_LIST[@]}")"
@@ -489,6 +566,7 @@ seed=$SEED
 yosys_bin=$yosys_resolved
 modes=$mode_payload
 mode_counts=$mode_count_payload
+mode_weights=$mode_weight_payload
 profiles=$profile_payload
 cfg=$cfg_payload
 select=$select_payload

@@ -20,6 +20,7 @@
 // CHECK-DAG: --generate-mutations
 // CHECK-DAG: --mutations-modes
 // CHECK-DAG: --mutations-mode-counts
+// CHECK-DAG: --mutations-mode-weights
 // CHECK-DAG: --mutations-profiles
 // CHECK-DAG: --mutations-cfg
 // CHECK-DAG: --mutations-select

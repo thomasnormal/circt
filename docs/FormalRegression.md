@@ -135,7 +135,8 @@ preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
 For `[cover]`, config now supports either:
 - `mutations_file = "..."`, or
 - `generate_mutations = <N>` with generator controls
-  (`mutations_modes`, `mutations_mode_counts`, `mutations_profiles`,
+  (`mutations_modes`, `mutations_mode_counts`, `mutations_mode_weights`,
+  `mutations_profiles`,
   `mutations_cfg`, `mutations_select`, `mutations_yosys`, `mutations_seed`,
   `mutations_top`).
 Those modes are mutually exclusive and validated natively before script
@@ -562,6 +563,10 @@ Execution controls:
 - `--mutations-mode-counts <csv>`: explicit mode allocation for
   auto-generation (`generate_mutations_yosys.sh --mode-counts`), e.g.
   `arith=700,control=300` (sum must match `--generate-mutations`).
+- `--mutations-mode-weights <csv>`: weighted mode allocation for
+  auto-generation (`generate_mutations_yosys.sh --mode-weights`), e.g.
+  `arith=3,control=1`; normalized to `--generate-mutations` with
+  deterministic seed-rotated remainder assignment.
 - `--mutations-profiles <csv>`: pass-through named profile presets for
   auto-generation (`generate_mutations_yosys.sh --profiles`), e.g.
   `arith-depth`, `control-depth`, `balanced-depth`, `cover`.
@@ -812,6 +817,8 @@ Execution controls:
   `run_mutation_cover.sh --mutations-modes` for generated-mutation lanes.
 - `--default-mutations-mode-counts <csv>`: default
   `run_mutation_cover.sh --mutations-mode-counts` for generated-mutation lanes.
+- `--default-mutations-mode-weights <csv>`: default
+  `run_mutation_cover.sh --mutations-mode-weights` for generated-mutation lanes.
 - `--default-mutations-profiles <csv>`: default
   `run_mutation_cover.sh --mutations-profiles` for generated-mutation lanes.
 - `--default-mutations-cfg <csv>`: default
@@ -894,7 +901,7 @@ Execution controls:
 Lane TSV schema (tab-separated):
 
 ```text
-lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]    [global_propagate_timeout_seconds]    [global_propagate_lec_timeout_seconds]    [global_propagate_bmc_timeout_seconds]
+lane_id    design    mutations_file    tests_manifest    activate_cmd    propagate_cmd    coverage_threshold    [generate_count]    [mutations_top]    [mutations_seed]    [mutations_yosys]    [reuse_pair_file]    [reuse_summary_file]    [mutations_modes]    [global_propagate_cmd]    [global_propagate_circt_lec]    [global_propagate_circt_bmc]    [global_propagate_bmc_args]    [global_propagate_bmc_bound]    [global_propagate_bmc_module]    [global_propagate_bmc_run_smtlib]    [global_propagate_bmc_z3]    [global_propagate_bmc_assume_known_inputs]    [global_propagate_bmc_ignore_asserts_until]    [global_propagate_circt_lec_args]    [global_propagate_c1]    [global_propagate_c2]    [global_propagate_z3]    [global_propagate_assume_known_inputs]    [global_propagate_accept_xprop_only]    [mutations_cfg]    [mutations_select]    [mutations_profiles]    [mutations_mode_counts]    [global_propagate_circt_chain]    [bmc_orig_cache_max_entries]    [bmc_orig_cache_max_bytes]    [bmc_orig_cache_max_age_seconds]    [bmc_orig_cache_eviction_policy]    [skip_baseline]    [fail_on_undetected]    [fail_on_errors]    [global_propagate_timeout_seconds]    [global_propagate_lec_timeout_seconds]    [global_propagate_bmc_timeout_seconds]    [mutations_mode_weights]
 ```
 
 Notes:
@@ -917,6 +924,8 @@ Notes:
   a generated-mutation lane.
 - `mutations_mode_counts` (optional) overrides
   `--default-mutations-mode-counts` for a generated-mutation lane.
+- `mutations_mode_weights` (optional) overrides
+  `--default-mutations-mode-weights` for a generated-mutation lane.
 - `mutations_yosys` (optional) overrides `--default-mutations-yosys` for a
   generated-mutation lane.
 - `global_propagate_cmd` (optional) overrides

@@ -12,6 +12,7 @@
 // CHECK: --default-reuse-summary-file
 // CHECK: --default-mutations-modes
 // CHECK: --default-mutations-mode-counts
+// CHECK: --default-mutations-mode-weights
 // CHECK: --default-mutations-profiles
 // CHECK: --default-mutations-cfg
 // CHECK: --default-mutations-select

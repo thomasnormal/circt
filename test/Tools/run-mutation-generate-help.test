@@ -11,6 +11,8 @@
 // CHECK: --modes
 // CHECK: --mode-count
 // CHECK: --mode-counts
+// CHECK: --mode-weight
+// CHECK: --mode-weights
 // CHECK: --profile
 // CHECK: --profiles
 // CHECK: --cfg

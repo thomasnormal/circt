@@ -225,7 +225,7 @@ preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
 `run` now supports both cover mutation sources from config:
 - `mutations_file = "..."` (prebuilt list), or
 - `generate_mutations = <N>` (+ `mutations_modes`/`mutations_profiles`/
-  `mutations_mode_counts`/`mutations_cfg`/`mutations_select`/
+  `mutations_mode_counts`/`mutations_mode_weights`/`mutations_cfg`/`mutations_select`/
   `mutations_yosys`/`mutations_seed`).
 These two modes are mutually exclusive and validated natively before dispatch.
 `run` also now forwards strict boolean controls from config
@@ -445,6 +445,7 @@ circt-mut cover \
   --generate-mutations 1000 \
   --mutations-yosys yosys \
   --mutations-modes arith,control \
+  --mutations-mode-weights arith=3,control=1 \
   --mutations-seed 1
 ```
 

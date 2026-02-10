@@ -5,6 +5,8 @@
 // CHECK: --out
 // CHECK: --mode
 // CHECK: --mode-count
+// CHECK: --mode-weight
+// CHECK: --mode-weights
 // CHECK: --profile
 // CHECK: --cfg
 // CHECK: --select

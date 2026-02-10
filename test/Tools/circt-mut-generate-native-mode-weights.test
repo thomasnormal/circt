@@ -1,0 +1,21 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input a, output y); assign y = a; endmodule\n' > %t/design.v
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nscript="${@: -1}"\nwhile IFS= read -r line; do\n  out=$(sed -n "s/.*-o \\\"\\([^\\\"]*\\)\\\".*/\\1/p" <<< "$line")\n  mode=$(sed -n "s/.*-mode \\([^ ]*\\).*/\\1/p" <<< "$line")\n  count=$(sed -n "s/.*mutate -list \\([0-9][0-9]*\\).*/\\1/p" <<< "$line")\n  : > "$out"\n  for ((i=1; i<=count; ++i)); do\n    echo "$i M_${mode}_$i" >> "$out"\n  done\ndone < <(grep "^mutate -list " "$script")\n' > %t/fake-yosys.sh
+// RUN: chmod +x %t/fake-yosys.sh
+//
+// RUN: circt-mut generate --design %t/design.v --out %t/mutations-seed7.txt --count 5 --seed 7 --modes arith,control --mode-weights arith=1,control=1 --yosys %t/fake-yosys.sh
+// RUN: circt-mut generate --design %t/design.v --out %t/mutations-seed8.txt --count 5 --seed 8 --modes arith,control --mode-weights arith=1,control=1 --yosys %t/fake-yosys.sh
+// RUN: FileCheck %s --check-prefix=SEED7 < %t/mutations-seed7.txt
+// RUN: FileCheck %s --check-prefix=SEED8 < %t/mutations-seed8.txt
+//
+// SEED7: 1 M_inv_1
+// SEED7: 2 M_const0_1
+// SEED7: 3 M_cnot0_1
+// SEED7: 4 M_cnot0_2
+// SEED7: 5 M_cnot1_1
+//
+// SEED8: 1 M_inv_1
+// SEED8: 2 M_const0_1
+// SEED8: 3 M_const1_1
+// SEED8: 4 M_cnot0_1
+// SEED8: 5 M_cnot1_1
