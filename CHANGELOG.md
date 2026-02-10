@@ -1,5 +1,46 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 831 - February 10, 2026
+
+### `circt-mut run` Cover Formal Boolean Config Fix
+
+1. Fixed `circt-mut run --mode cover` config forwarding for formal boolean keys
+   so they map to flag-only CLI options instead of `--flag <value>` pairs:
+   - `formal_global_propagate_assume_known_inputs`
+   - `formal_global_propagate_accept_xprop_only`
+   - `formal_global_propagate_bmc_run_smtlib`
+   - `formal_global_propagate_bmc_assume_known_inputs`
+2. Added strict boolean validation for these keys using the existing accepted
+   set (`1|0|true|false|yes|no|on|off`) with native diagnostics on invalid
+   values.
+3. This removes a robustness gap where cover formal toggles in
+   `circt-mut.toml` could be mis-forwarded and then rejected downstream by
+   `run_mutation_cover.sh` as unknown options.
+
+### Tests, Docs, and Plan
+
+- Added:
+  - `test/Tools/circt-mut-run-cover-config-formal-bool-flags.test`
+  - `test/Tools/circt-mut-run-cover-config-formal-bool-invalid.test`
+- Updated:
+  - `README.md`
+  - `docs/FormalRegression.md`
+  - `PROJECT_PLAN.md`
+
+### Validation
+
+- `ninja -C build circt-mut`: PASS
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut-run-cover-config.test test/Tools/circt-mut-run-cover-config-bool-flags.test test/Tools/circt-mut-run-cover-config-bool-invalid.test test/Tools/circt-mut-run-cover-config-formal-bool-flags.test test/Tools/circt-mut-run-cover-config-formal-bool-invalid.test`: PASS (5/5)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/circt-mut*.test`: PASS (82/82)
+- `build/bin/llvm-lit -sv -j 1 test/Tools/run-mutation-cover-global*.test test/Tools/run-mutation-cover-help.test test/Tools/run-mutation-matrix*.test`: PASS (68/68)
+- External filtered cadence:
+  - `TEST_FILTER='basic02|assert_fell' BMC_SMOKE_ONLY=1 LEC_SMOKE_ONLY=1 LEC_ACCEPT_XPROP_ONLY=1 utils/run_formal_all.sh --out-dir /tmp/formal-all-circt-mut-run-cover-formal-bool-fix --sv-tests /home/thomas-ahle/sv-tests --verilator /home/thomas-ahle/verilator-verification --yosys /home/thomas-ahle/yosys/tests/sva --with-opentitan --opentitan /home/thomas-ahle/opentitan --with-avip --avip-glob '/home/thomas-ahle/mbit/*avip*' --circt-verilog /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-avip /home/thomas-ahle/circt/build/bin/circt-verilog --circt-verilog-opentitan /home/thomas-ahle/circt/build/bin/circt-verilog --lec-accept-xprop-only`
+  - summary:
+    - sv-tests/verilator/yosys/opentitan selected lanes: PASS.
+    - AVIP compile PASS: `ahb_avip`, `apb_avip`, `axi4_avip`, `i2s_avip`,
+      `i3c_avip`, `jtag_avip`, `spi_avip`.
+    - AVIP compile FAIL (known): `axi4Lite_avip`, `uart_avip`.
+
 ## Iteration 830 - February 10, 2026
 
 ### `circt-mut report` Built-In Policy Profiles

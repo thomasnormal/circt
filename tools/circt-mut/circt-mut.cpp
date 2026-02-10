@@ -2006,27 +2006,37 @@ static int runNativeRun(const char *argv0, const RunOptions &opts) {
                             "--formal-global-propagate-c2");
     appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_z3",
                                 "--formal-global-propagate-z3", opts.projectDir);
-    appendOptionalConfigArg(args, cfg.cover,
-                            "formal_global_propagate_assume_known_inputs",
-                            "--formal-global-propagate-assume-known-inputs");
-    appendOptionalConfigArg(args, cfg.cover,
-                            "formal_global_propagate_accept_xprop_only",
-                            "--formal-global-propagate-accept-xprop-only");
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.cover, "formal_global_propagate_assume_known_inputs",
+            "--formal-global-propagate-assume-known-inputs", "cover", error) ||
+        !appendOptionalConfigBoolFlagArg(
+            args, cfg.cover, "formal_global_propagate_accept_xprop_only",
+            "--formal-global-propagate-accept-xprop-only", "cover", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
     appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_args",
                             "--formal-global-propagate-circt-bmc-args");
     appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_bound",
                             "--formal-global-propagate-bmc-bound");
     appendOptionalConfigArg(args, cfg.cover, "formal_global_propagate_bmc_module",
                             "--formal-global-propagate-bmc-module");
-    appendOptionalConfigArg(args, cfg.cover,
-                            "formal_global_propagate_bmc_run_smtlib",
-                            "--formal-global-propagate-bmc-run-smtlib");
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.cover, "formal_global_propagate_bmc_run_smtlib",
+            "--formal-global-propagate-bmc-run-smtlib", "cover", error)) {
+      errs() << error << "\n";
+      return 1;
+    }
     appendOptionalConfigPathArg(args, cfg.cover, "formal_global_propagate_bmc_z3",
                                 "--formal-global-propagate-bmc-z3",
                                 opts.projectDir);
-    appendOptionalConfigArg(args, cfg.cover,
-                            "formal_global_propagate_bmc_assume_known_inputs",
-                            "--formal-global-propagate-bmc-assume-known-inputs");
+    if (!appendOptionalConfigBoolFlagArg(
+            args, cfg.cover, "formal_global_propagate_bmc_assume_known_inputs",
+            "--formal-global-propagate-bmc-assume-known-inputs", "cover",
+            error)) {
+      errs() << error << "\n";
+      return 1;
+    }
     appendOptionalConfigArg(args, cfg.cover,
                             "formal_global_propagate_bmc_ignore_asserts_until",
                             "--formal-global-propagate-bmc-ignore-asserts-until");

@@ -228,9 +228,16 @@ preflight-backed `cover` and/or `matrix` flows (`--mode cover|matrix|all`).
   `mutations_mode_counts`/`mutations_cfg`/`mutations_select`/
   `mutations_yosys`/`mutations_seed`).
 These two modes are mutually exclusive and validated natively before dispatch.
-`run` also now forwards boolean gate controls from config for cover/matrix:
-`resume`, `skip_baseline`, `fail_on_undetected`, `fail_on_errors`,
-`stop_on_fail` (`1|0|true|false|yes|no|on|off`).
+`run` also now forwards strict boolean controls from config
+(`1|0|true|false|yes|no|on|off`):
+- cover/matrix gate toggles:
+  `resume`, `skip_baseline`, `fail_on_undetected`, `fail_on_errors`,
+  `stop_on_fail`.
+- cover formal toggles:
+  `formal_global_propagate_assume_known_inputs`,
+  `formal_global_propagate_accept_xprop_only`,
+  `formal_global_propagate_bmc_run_smtlib`,
+  `formal_global_propagate_bmc_assume_known_inputs`.
 
 Aggregate campaign results (cover/matrix/all) into one normalized TSV summary:
 

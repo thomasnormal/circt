@@ -140,9 +140,16 @@ For `[cover]`, config now supports either:
   `mutations_top`).
 Those modes are mutually exclusive and validated natively before script
 dispatch.
-`circt-mut run` now also accepts boolean gate toggles in config for cover and
-matrix (`resume`, `skip_baseline`, `fail_on_undetected`, `fail_on_errors`,
-`stop_on_fail`) using `1|0|true|false|yes|no|on|off`.
+`circt-mut run` now also accepts strict boolean config toggles
+(`1|0|true|false|yes|no|on|off`) for:
+- cover/matrix gate toggles:
+  `resume`, `skip_baseline`, `fail_on_undetected`, `fail_on_errors`,
+  `stop_on_fail`.
+- cover formal toggles:
+  `formal_global_propagate_assume_known_inputs`,
+  `formal_global_propagate_accept_xprop_only`,
+  `formal_global_propagate_bmc_run_smtlib`,
+  `formal_global_propagate_bmc_assume_known_inputs`.
 
 Aggregate campaign results:
 

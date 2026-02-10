@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/proj %t/scripts
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho SCRIPT:run_mutation_cover.sh\nfor a in "$@"; do echo ARG:$a; done\n' > %t/scripts/run_mutation_cover.sh
+// RUN: chmod +x %t/scripts/run_mutation_cover.sh
+// RUN: printf '[cover]\ndesign = "d.il"\nmutations_file = "m.txt"\ntests_manifest = "t.tsv"\nwork_dir = "out/cover"\nformal_global_propagate_assume_known_inputs = "yes"\nformal_global_propagate_accept_xprop_only = "on"\nformal_global_propagate_bmc_run_smtlib = "1"\nformal_global_propagate_bmc_assume_known_inputs = "true"\n' > %t/proj/circt-mut.toml
+// RUN: env CIRCT_MUT_SCRIPTS_DIR=%t/scripts circt-mut run --project-dir %t/proj --mode cover > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: SCRIPT:run_mutation_cover.sh
+// CHECK-DAG: ARG:--formal-global-propagate-assume-known-inputs
+// CHECK-DAG: ARG:--formal-global-propagate-accept-xprop-only
+// CHECK-DAG: ARG:--formal-global-propagate-bmc-run-smtlib
+// CHECK-DAG: ARG:--formal-global-propagate-bmc-assume-known-inputs
+// CHECK-NOT: ARG:yes
+// CHECK-NOT: ARG:on
+// CHECK-NOT: ARG:1
+// CHECK-NOT: ARG:true
