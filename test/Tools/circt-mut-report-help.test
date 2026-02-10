@@ -13,6 +13,9 @@
 // CHECK: --policy-profile
 // CHECK: formal-regression-matrix-guard
 // CHECK: formal-regression-matrix-trend-guard
+// CHECK: formal-regression-matrix-guard-smoke
+// CHECK: formal-regression-matrix-guard-nightly
+// CHECK: formal-regression-matrix-guard-strict
 // CHECK: --append-history
 // CHECK: --fail-if-value-gt
 // CHECK: --fail-if-value-lt
