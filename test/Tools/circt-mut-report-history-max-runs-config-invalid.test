@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t/proj/out/cover
+// RUN: printf 'total_mutants\t1\nrelevant_mutants\t1\ndetected_mutants\t0\npropagated_not_detected_mutants\t0\nnot_propagated_mutants\t1\nnot_activated_mutants\t0\nerrors\t0\nmutation_coverage_percent\t0.00\n' > %t/proj/out/cover/metrics.tsv
+// RUN: printf '[report]\nappend_history = "history.tsv"\nhistory_max_runs = "oops"\n' > %t/proj/circt-mut.toml
+// RUN: not circt-mut report --project-dir %t/proj --mode cover 2>&1 | FileCheck %s
+//
+// CHECK: circt-mut report: invalid [report] key 'history_max_runs' value 'oops' (expected positive integer)
