@@ -1,5 +1,27 @@
 # CIRCT UVM Parity Changelog
 
+## Iteration 971 - February 10, 2026
+
+### `run_formal_all`: LEC Missing-Diag Strict-Gate Hardening
+
+1. Extended `utils/run_formal_all.sh` with dedicated LEC diag-missing strict
+   gate controls:
+   - `--fail-on-new-lec-diag-missing-cases`
+   - `--fail-on-any-lec-diag-missing-cases`
+2. `--strict-gate` now enables
+   `--fail-on-new-lec-diag-missing-cases` by default.
+3. Added regression tests:
+   - `test/Tools/run-formal-all-strict-gate-lec-diag-missing-any.test`
+   - `test/Tools/run-formal-all-strict-gate-lec-diag-missing-defaults.test`
+4. Updated help coverage:
+   - `test/Tools/run-formal-all-help.test`
+
+### Tests and Validation
+
+- `bash -n utils/run_formal_all.sh`: PASS
+- `build/bin/llvm-lit -sv test/Tools/run-formal-all-help.test test/Tools/run-formal-all-strict-gate-lec-diag-missing-any.test test/Tools/run-formal-all-strict-gate-lec-diag-missing-defaults.test`: PASS (3/3)
+- `build/bin/llvm-lit -sv --max-failures=5 test/Tools/run-formal-all-*.test`: PASS (73/73)
+
 ## Iteration 970 - February 10, 2026
 
 ### `run_formal_all` Lit Migration: Explicit Caller Filters Everywhere

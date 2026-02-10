@@ -187,6 +187,9 @@ See CHANGELOG.md on recent progress.
     `--fail-on-new-lec-diag-path-fallback-cases` (enabled by `--strict-gate`)
     and optional absolute zero gate
     `--fail-on-any-lec-diag-path-fallback-cases`.
+  - Strict-gate now also tracks missing explicit LEC diag rows via
+    `--fail-on-new-lec-diag-missing-cases` (enabled by `--strict-gate`) and
+    optional absolute zero gate `--fail-on-any-lec-diag-missing-cases`.
   - Remaining diagnostics gap: keep phasing out `#DIAG` path-tag fallback in
     favor of fully explicit per-case diag fields for all producers/fixtures.
   - Keep optional absolute no-drop gates available for closure runs:
